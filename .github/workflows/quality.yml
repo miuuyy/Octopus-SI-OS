@@ -119,6 +119,7 @@ jobs:
           node registry/interface/world_operator_chat/test_home_state.cjs
           node registry/interface/world_operator_chat/test_maintenance_client.cjs
           python3 registry/verifier/tool_result_correspondence/tests/test_verify.py
+          python3 registry/verifier/pre_tool_use_guard/tests/test_verify.py
           python3 registry/interface/world_slack/tests/test_slack_contract.py
           node registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/configure-transport.test.cjs
           node registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/setup-host.test.cjs

@@ -18,6 +18,7 @@
   },
   "default_params": {
     "denied_tools": [],
-    "denied_command_substrings": []
+    "denied_command_substrings": [],
+    "allowed_commands": []
   }
 }

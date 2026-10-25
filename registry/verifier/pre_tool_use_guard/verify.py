@@ -50,6 +50,47 @@ def _collect_command_text(body):
     return " ".join(parts).lower()
 
 
+# Any of these in a command string means the shell does more than run one named program:
+# chaining, pipes, substitution, expansion, redirection, quoting, escapes, globs, comments.
+SHELL_METACHARACTERS = set(";&|`$(){}[]<>\\'\"*?~#!\n\r\t")
+_NO_COMMAND = object()
+
+
+def _find_command(body):
+    """The command a call will run: `command` or `cmd`, at the top level or under `arguments`
+    or `args`. Returns _NO_COMMAND when the call carries none (it is not a command call)."""
+    holders = [body] + [body.get(key) for key in ("arguments", "args") if isinstance(body.get(key), dict)]
+    for holder in holders:
+        for key in ("command", "cmd"):
+            if key in holder:
+                return holder[key]
+    return _NO_COMMAND
+
+
+def _check_allowed(command, allowed):
+    """None when `command` runs one program named in `allowed`, else the reason it doesn't.
+
+    A string is a shell script, so it must be a single plain command: no shell
+    metacharacters at all, and its first word an exact listed name. An argv array runs
+    without a shell, so only its first element is checked, and it must be an exact name.
+    """
+    if isinstance(command, str):
+        if not command.strip():
+            return "command is empty"
+        if any(ch in SHELL_METACHARACTERS for ch in command):
+            return "command string uses shell features, which allowed_commands does not admit"
+        program = command.split()[0]
+    elif isinstance(command, list):
+        if not command or not all(isinstance(part, str) for part in command) or not command[0]:
+            return "command argv must be a non-empty array of strings"
+        program = command[0]
+    else:
+        return "command must be a string or an argv array"
+    if program not in allowed:
+        return f"{program!r} is not in allowed_commands"
+    return None
+
+
 def main():
     try:
         request = json.load(sys.stdin)
@@ -79,6 +120,12 @@ def main():
     if not isinstance(denied_tools, list) or not isinstance(denied_substrings, list):
         print(json.dumps(_fail("guard params denied_tools/denied_command_substrings must be arrays")))
         return
+    allowed_commands = params.get("allowed_commands") or []
+    if not isinstance(allowed_commands, list) or not all(
+        isinstance(name, str) and name and "/" not in name for name in allowed_commands
+    ):
+        print(json.dumps(_fail("guard param allowed_commands must be an array of bare program names")))
+        return
 
     tool = body.get("tool")
     if not isinstance(tool, str) or not tool:
@@ -98,6 +145,17 @@ def main():
                 matched=needle,
             )))
             return
+
+    if allowed_commands:
+        command = _find_command(body)
+        if command is not _NO_COMMAND:
+            reason = _check_allowed(command, allowed_commands)
+            if reason is not None:
+                print(json.dumps(_fail(
+                    f"tool call is outside allowed_commands: {reason}",
+                    tool=tool,
+                )))
+                return
 
     print(json.dumps(_pass(tool=tool)))
 
