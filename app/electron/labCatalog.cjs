@@ -155,8 +155,15 @@ async function readApplicationManifest(registryRoot, applicationId) {
   const document = await readJson(path.join(interfaceRoot, "application.json"));
   if (!document) return null;
   const manifest = parseApplicationManifest(document, applicationId, path.join(interfaceRoot, "application.json"));
+  const descriptors = {};
+  for (const interfaceId of manifest.interfaces) {
+    const descriptor = await readJson(path.join(registryRoot, "interface", interfaceId, "interface.json"));
+    if (!descriptor) throw new Error(`application '${applicationId}' interface '${interfaceId}' has no descriptor in the bundled registry`);
+    descriptors[interfaceId] = descriptor;
+  }
   return {
     ...manifest,
+    descriptors,
     logo_data_url: await readApplicationLogoAsset(interfaceRoot, manifest.logo, `application logo ${applicationId}`),
     logo_dark_data_url: manifest.logo_dark
       ? await readApplicationLogoAsset(interfaceRoot, manifest.logo_dark, `application dark logo ${applicationId}`)

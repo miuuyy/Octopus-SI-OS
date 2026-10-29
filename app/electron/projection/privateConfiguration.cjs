@@ -1,4 +1,4 @@
-module.exports = { applicationLogoFileName, atomicWritePrivateEnvironment, mutateApplicationPrivateConfiguration, mutateApplicationPrivateConfigurationUnlocked, readApplicationLogoAsset, readInterfaceEnvironmentDeclarations, readInterfacePrivateConfigurationProjection, readInterfacePrivateEnvironmentDocument, resolveJsonPointer, validInterfaceEnvironmentName, validateInterfacePrivateDirectory, validateInterfacePrivateFileStat, validateOwnerOnlyStat };
+module.exports = { applicationLogoFileName, atomicWritePrivateEnvironment, mutateApplicationPrivateConfiguration, mutateApplicationPrivateConfigurationUnlocked, readApplicationLogoAsset, readInterfaceEnvironmentDeclarations, readInterfacePrivateConfigurationProjection, readInterfacePrivateEnvironmentDocument, resolveJsonPointer, validInterfaceEnvironmentName, validateInterfacePrivateDirectory, validateInterfacePrivateFileStat, validateOwnerOnlyStat, writeInterfacePrivateValues };
 
 const fs = require("node:fs/promises");
 const crypto = require("node:crypto");
@@ -366,6 +366,52 @@ async function mutateApplicationPrivateConfigurationUnlocked(registryRootValue, 
     documentDigest: committed.digest,
     configuredFields: committed.values.size,
   };
+}
+
+async function writeInterfacePrivateValues(interfacePrivateDirectory, interfaceId, declaredNames, changes) {
+  const run = applicationPrivateConfigurationMutationTail.then(() => (
+    writeInterfacePrivateValuesUnlocked(interfacePrivateDirectory, interfaceId, declaredNames, changes)
+  ));
+  applicationPrivateConfigurationMutationTail = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function writeInterfacePrivateValuesUnlocked(interfacePrivateDirectory, interfaceId, declaredNames, changes) {
+  if (!isPlainRecord(changes)) throw new Error(`interface '${interfaceId}' private values must be an object of names`);
+  const updates = new Map();
+  for (const [name, value] of Object.entries(changes)) {
+    if (!declaredNames.has(name)) throw new Error(`interface '${interfaceId}' does not declare private value '${name}'`);
+    if (value !== null && (typeof value !== "string" || value.length === 0 || value.includes("\0") || Buffer.byteLength(value) > INTERFACE_PRIVATE_ENVIRONMENT_MAX_BYTES)) {
+      throw new Error(`interface '${interfaceId}' private value '${name}' must be a non-empty string or null`);
+    }
+    updates.set(name, value);
+  }
+  await validateInterfacePrivateDirectory(interfacePrivateDirectory, true);
+  const current = await readInterfacePrivateEnvironmentDocument(interfacePrivateDirectory, interfaceId, declaredNames);
+  const values = new Map(current.values);
+  for (const [name, value] of updates) {
+    if (value === null) values.delete(name);
+    else values.set(name, value);
+  }
+  const file = path.join(interfacePrivateDirectory, INTERFACE_PRIVATE_ENVIRONMENT_FILE);
+  if (values.size === 0) {
+    if (current.present) {
+      await fs.unlink(file);
+      await syncDirectory(interfacePrivateDirectory);
+    }
+    return new Map();
+  }
+  const document = {
+    schema_version: 1,
+    interface: interfaceId,
+    values: Object.fromEntries([...values.entries()].sort(([left], [right]) => left.localeCompare(right))),
+  };
+  const body = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
+  if (body.byteLength > INTERFACE_PRIVATE_ENVIRONMENT_MAX_BYTES) {
+    throw new Error(`interface private environment '${interfaceId}' exceeds ${INTERFACE_PRIVATE_ENVIRONMENT_MAX_BYTES} bytes`);
+  }
+  await atomicWritePrivateEnvironment(file, body, current.present ? current.digest : null, interfaceId, declaredNames);
+  return (await readInterfacePrivateEnvironmentDocument(interfacePrivateDirectory, interfaceId, declaredNames)).values;
 }
 
 async function atomicWritePrivateEnvironment(file, body, expectedDigest, interfaceId, declaredNames) {

@@ -170,6 +170,10 @@ declare global {
       clientSetupResume(request: { operationId: string; stopBefore?: "provider" }): Promise<OctopusClientSetupState>;
       mutateScheduledInterface(request: OctopusScheduledMutationRequest): Promise<OctopusScheduledMutationOutcome>;
       mutateApplicationPrivateConfiguration(request: OctopusApplicationPrivateConfigurationMutation): Promise<OctopusApplicationPrivateConfigurationOutcome>;
+      applicationConnectionProbe(request: { applicationId: string }): Promise<OctopusApplicationConnectionProbe>;
+      applicationConnectionConnect(request: OctopusApplicationConnectionRequest): Promise<OctopusApplicationConnectionState>;
+      applicationConnectionCancel(request: { operationId: string }): Promise<{ cancelled: boolean }>;
+      applicationConnectionDisconnect(request: { applicationId: string; interfaceId: string }): Promise<OctopusApplicationConnectionState>;
       mutateOctopusOsWorkspace(request: OctopusOsWorkspaceMutationRequest): Promise<OctopusOsWorkspaceMutationOutcome>;
       clientBrowser(request: ClientBrowserRequest): Promise<ClientBrowserState | null>;
       onClientBrowserState(listener: (state: ClientBrowserState) => void): () => void;
@@ -263,6 +267,7 @@ declare global {
       onClientSurfaceDocumentsChanged(listener: (change: OctopusClientSurfaceDocumentChange) => void): () => void;
       onClientExtensionsChanged(listener: (change: OctopusClientExtensionChange) => void): () => void;
       onApplicationLifecycleProgress(listener: (progress: OctopusApplicationLifecycleProgress) => void): () => void;
+      onApplicationConnectionProgress(listener: (progress: OctopusApplicationConnectionProgress) => void): () => void;
       onWorkspaceSetupProgress(listener: (progress: OctopusWorkspaceSetupProgress) => void): () => void;
       onClientSetupProgress(listener: (progress: OctopusClientSetupProgress) => void): () => void;
     };
@@ -1517,6 +1522,33 @@ export type OctopusApplicationPrivateConfigurationMutation = {
   expectedDigest: string | null;
   updates: Record<string, string>;
   clears: string[];
+};
+
+export type OctopusApplicationConnectionState = {
+  state: "connected" | "not_connected" | "expired" | "error";
+  account?: { label: string; detail?: string };
+  message?: string;
+};
+
+export type OctopusApplicationConnectionProbe = {
+  applicationId: string;
+  interfaces: Array<{ interfaceId: string; state: OctopusApplicationConnectionState }>;
+};
+
+export type OctopusApplicationConnectionRequest = {
+  operationId: string;
+  applicationId: string;
+  interfaceId: string;
+  input: Record<string, string>;
+};
+
+export type OctopusApplicationConnectionProgress = {
+  operationId: string;
+  applicationId: string;
+  interfaceId: string;
+  message: string;
+  url?: string;
+  code?: string;
 };
 
 export type OctopusApplicationPrivateConfigurationOutcome = {

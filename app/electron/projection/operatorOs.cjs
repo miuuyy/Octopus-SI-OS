@@ -518,6 +518,12 @@ function operatorOsProjection(store) {
           partially_connected_run_ids: partiallyConnectedRunIds,
           project_states: projectStates,
           configuration,
+          connection_interfaces: installed
+            ? interfaceIds.filter((interfaceId) => Object.prototype.hasOwnProperty.call(
+                objectOrEmpty(objectOrEmpty(descriptorsByInterface.get(interfaceId)?.interface_driver_config).private_config),
+                "client_connection",
+              ))
+            : [],
         }];
       }).sort((left, right) => (
         stringValue(left.category).localeCompare(stringValue(right.category))

@@ -826,12 +826,17 @@ function applicationPrivateConfigurationProjection(manifest, interfaceIds, descr
         digest: stringValue(configuration.document_digest),
       });
       for (const { presentation, declaration: projected } of resolved) {
+        const authoredIndex = authoredFields.indexOf(presentation);
         fields.push({
+          order: authoredIndex >= 0 ? authoredIndex : authoredFields.length,
           interface_id: interfaceId,
           name: stringValue(projected.name),
           label: stringValue(presentation.label),
           kind: stringValue(presentation.kind),
           required: presentation.required === true,
+          authored: presented.length > 0,
+          placeholder: stringValue(presentation.placeholder),
+          help: stringValue(presentation.help),
           configured: projected.configured === true,
           private_saved: projected.private_saved === true,
           source: stringValue(projected.source) || "unknown",
@@ -841,7 +846,10 @@ function applicationPrivateConfigurationProjection(manifest, interfaceIds, descr
       errors.push(error.message);
     }
   }
-  fields.sort((left, right) => left.interface_id.localeCompare(right.interface_id) || left.name.localeCompare(right.name));
+  fields.sort((left, right) => left.order - right.order
+    || left.interface_id.localeCompare(right.interface_id)
+    || left.name.localeCompare(right.name));
+  for (const field of fields) delete field.order;
   const requiredFields = fields.filter((field) => field.required);
   const conflict = fields.some((field) => field.source === "conflict");
   const provenMissing = requiredFields.some((field) => field.source === "missing");

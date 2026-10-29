@@ -159,6 +159,7 @@ function parseApplicationManifest(value, interfaceId, file) {
       "artifact_bindings",
       "task_capabilities",
       "setup",
+      "connection",
     ],
     ["schema_version", "id", "name", "description", "category", "developer", "version", "logo", "interfaces"],
     `application manifest ${file}`,
@@ -223,6 +224,7 @@ function parseApplicationManifest(value, interfaceId, file) {
     file,
   );
   const setup = parseApplicationSetup(value.setup, interfaces, file);
+  const connection = parseApplicationConnection(value.connection, file);
   return {
     schema_version: 3,
     id,
@@ -238,7 +240,48 @@ function parseApplicationManifest(value, interfaceId, file) {
     artifact_bindings: artifactBindings,
     task_capabilities: taskCapabilities,
     setup,
+    connection,
   };
+}
+
+function parseApplicationConnection(value, file) {
+  if (value === undefined) return { disclosure: [], help: null };
+  exactObjectKeys(value, ["disclosure", "help"], [], `application manifest connection ${file}`);
+  if (value.disclosure !== undefined && (!Array.isArray(value.disclosure) || value.disclosure.length > 4)) {
+    throw new Error(`application manifest connection disclosure must list at most 4 statements: ${file}`);
+  }
+  const disclosure = (value.disclosure ?? []).map((statement, index) => (
+    applicationPresentationText(statement, 160, `application connection disclosure ${index}`, file)
+  ));
+  let help = null;
+  if (value.help !== undefined) {
+    exactObjectKeys(value.help, ["label", "url"], ["label", "url"], `application manifest connection help ${file}`);
+    help = {
+      label: applicationPresentationText(value.help.label, 48, "application connection help label", file),
+      url: applicationHttpsUrl(value.help.url, "application connection help url", file),
+    };
+  }
+  return { disclosure, help };
+}
+
+function applicationPresentationText(value, limit, label, file) {
+  if (typeof value !== "string" || !value.trim() || value.trim() !== value || value.length > limit || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error(`${label} must be plain text of 1..${limit} characters: ${file}`);
+  }
+  return value;
+}
+
+function applicationHttpsUrl(value, label, file) {
+  let url;
+  try {
+    url = typeof value === "string" && value.length <= 2048 ? new URL(value) : null;
+  } catch {
+    url = null;
+  }
+  if (!url || url.protocol !== "https:" || url.username || url.password) {
+    throw new Error(`${label} must be an https URL without credentials: ${file}`);
+  }
+  return url.href;
 }
 
 function parseApplicationTaskCapabilities(value, file) {
@@ -284,7 +327,7 @@ function parseApplicationSetup(value, interfaces, file) {
   const fields = value.fields.map((candidate, index) => {
     exactObjectKeys(
       candidate,
-      ["interface", "pointer", "label", "kind", "required"],
+      ["interface", "pointer", "label", "kind", "required", "placeholder", "help"],
       ["interface", "pointer", "label", "kind", "required"],
       `application manifest setup field ${index}`,
     );
@@ -304,6 +347,12 @@ function parseApplicationSetup(value, interfaces, file) {
       label,
       kind,
       required: requiredBoolean(candidate.required, `application setup field ${index} required`),
+      ...(candidate.placeholder === undefined ? {} : {
+        placeholder: applicationPresentationText(candidate.placeholder, 96, `application setup field ${index} placeholder`, file),
+      }),
+      ...(candidate.help === undefined ? {} : {
+        help: applicationPresentationText(candidate.help, 160, `application setup field ${index} help`, file),
+      }),
     };
   });
   const identities = fields.map((field) => `${field.interface}\0${field.pointer}`);

@@ -1149,9 +1149,17 @@ function parseApplicationSetup(value, interfaces, owner, file) {
   }
   const interfaceIds = new Set(interfaces);
   const fields = value.fields.map((entry, index) => {
+    const presentation = ["placeholder", "help"].filter((key) => isRecord(entry) && Object.prototype.hasOwnProperty.call(entry, key));
     if (
       !isRecord(entry)
-      || Object.keys(entry).sort().join("\0") !== ["interface", "kind", "label", "pointer", "required"].join("\0")
+      || Object.keys(entry).filter((key) => !presentation.includes(key)).sort().join("\0") !== ["interface", "kind", "label", "pointer", "required"].join("\0")
+      || presentation.some((key) => (
+        typeof entry[key] !== "string"
+        || !entry[key].trim()
+        || entry[key].trim() !== entry[key]
+        || entry[key].length > (key === "placeholder" ? 96 : 160)
+        || /[\u0000-\u001f\u007f]/u.test(entry[key])
+      ))
     ) {
       throw new Error(`application manifest '${owner}' setup field ${index} is invalid`);
     }

@@ -79,6 +79,7 @@ const { createClientExtensionStore, readClientExtensionFilesystemSource } = requ
 const { createClientSetupStore } = require("./clientSetup.cjs");
 const { createChatgptSignIn } = require("./chatgptSignIn.cjs");
 const { createClientProviderMetadata, validateProviderModelSelection } = require("./clientProviderMetadata.cjs");
+const { createApplicationConnectionHost, createRegistryConnectionTargets } = require("./applicationConnection.cjs");
 const { runClientDoctor } = require("./clientDoctor.cjs");
 const { createClientSupportHost } = require("./clientSupport.cjs");
 const {
@@ -137,6 +138,7 @@ let clientAccessController = null;
 let clientArtifactStreamStore = null;
 let clientAttachmentStagingStore = null;
 let cdpViewerManager = null;
+let applicationConnectionHost = null;
 let nativeBrowserHost = null;
 let nativeBrowserStartup = null;
 let nativeBrowserStartupError = null;
@@ -2616,6 +2618,7 @@ function startClientQuitCleanup() {
 
 function closeClientResources() {
   chatgptSignIn?.dispose();
+  applicationConnectionHost?.dispose();
   clearGlobalDictationShortcut();
   cdpViewerManager?.closeAll();
   processViewerManager?.closeAll();
@@ -3855,6 +3858,8 @@ ipcMain.handle("octopus:scheduled-interface-mutate", async (_event, token, reque
 });
 
 ipcMain.handle("octopus:application-private-configuration-mutate", async (_event, token, request) => {
+  const { profile } = getClientAccessController().requireSession(token);
+  if (profile === "lab") return getProjectionStore("lab").mutateApplicationPrivateConfiguration(request);
   getClientAccessController().requireSession(token, ["live"]);
   await initializeRuntimeHost();
   const octopusHome = resolveOctopusHome();
@@ -3866,6 +3871,82 @@ ipcMain.handle("octopus:application-private-configuration-mutate", async (_event
   getProjectionStore("live").invalidate(false);
   return outcome;
 });
+
+function getApplicationConnectionHost() {
+  applicationConnectionHost ??= createApplicationConnectionHost({
+    resolveTargets: createRegistryConnectionTargets({
+      registryRoot: () => path.join(resolveOctopusHome(), "registry"),
+      octopusHome: resolveOctopusHome,
+      launchEnvironment: () => ({ ...process.env, ...resolveRuntimeLaunchEnv() }),
+      openExternal: (url) => shell.openExternal(url),
+    }),
+    scope: resolveOctopusHome,
+  });
+  return applicationConnectionHost;
+}
+
+async function applicationConnectionOperation(token, operation, { writes = false } = {}) {
+  let live = false;
+  try {
+    const { profile } = getClientAccessController().requireSession(token);
+    if (profile !== "lab") {
+      getClientAccessController().requireSession(token, ["live"]);
+      await initializeRuntimeHost();
+      live = true;
+    }
+    return { contract: "octopus.application-connection.v1", ok: true, value: await operation(live ? null : getProjectionStore("lab")) };
+  } catch (error) {
+    return {
+      contract: "octopus.application-connection.v1",
+      ok: false,
+      error: {
+        message: error instanceof Error && error.message ? error.message : "Octopus couldn't finish the connection.",
+        code: error?.code === "cancelled" ? "cancelled" : "failed",
+      },
+    };
+  } finally {
+    if (writes && live) getProjectionStore("live").invalidate(false);
+  }
+}
+
+ipcMain.handle("octopus:application-connection-probe", (_event, token, request) => applicationConnectionOperation(token, (lab) => (
+  lab ? lab.applicationConnectionProbe(request) : getApplicationConnectionHost().probe(request)
+)));
+
+ipcMain.handle("octopus:application-connection-connect", (event, token, request) => applicationConnectionOperation(token, async (lab) => {
+  const sender = event.sender;
+  const cancel = () => {
+    const operationId = { operationId: request?.operationId };
+    if (lab) lab.applicationConnectionCancel(operationId);
+    else getApplicationConnectionHost().cancel(operationId);
+  };
+  const navigation = (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) cancel();
+  };
+  sender.once("destroyed", cancel);
+  sender.on("render-process-gone", cancel);
+  sender.on("did-start-navigation", navigation);
+  const options = {
+    onProgress: (progress) => {
+      if (!sender.isDestroyed()) sender.send("octopus:application-connection-progress", progress);
+    },
+  };
+  try {
+    return await (lab ? lab.applicationConnectionConnect(request, options) : getApplicationConnectionHost().connect(request, options));
+  } finally {
+    sender.removeListener("destroyed", cancel);
+    sender.removeListener("render-process-gone", cancel);
+    sender.removeListener("did-start-navigation", navigation);
+  }
+}, { writes: true }));
+
+ipcMain.handle("octopus:application-connection-cancel", (_event, token, request) => applicationConnectionOperation(token, (lab) => (
+  lab ? lab.applicationConnectionCancel(request) : getApplicationConnectionHost().cancel(request)
+)));
+
+ipcMain.handle("octopus:application-connection-disconnect", (_event, token, request) => applicationConnectionOperation(token, (lab) => (
+  lab ? lab.applicationConnectionDisconnect(request) : getApplicationConnectionHost().disconnect(request)
+), { writes: true }));
 
 ipcMain.handle("octopus:os-workspace-mutate", async (event, token, request) => {
   getClientAccessController().requireSession(token, ["live"]);

@@ -103,7 +103,8 @@ test("a pending quit keeps account reads alive until approved resource cleanup",
     const resolveOperatorCodexHome = () => "/fixture/codex", resolveOctopusHome = () => "/fixture/home";
     const clearGlobalDictationShortcut = () => {};
     const cdpViewerManager = null, processViewerManager = null, clientSurfaceDocumentStore = null,
-      clientExtensionStore = null, clientArtifactStreamStore = null, clientAttachmentStagingStore = null;
+      clientExtensionStore = null, clientArtifactStreamStore = null, clientAttachmentStagingStore = null,
+      applicationConnectionHost = null;
     const projectionStores = new Map();
     ${declarations.map((node) => node.getText(main)).join("\n")}
     return { getChatgptSignIn, closeClientResources };

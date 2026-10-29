@@ -39,6 +39,10 @@ import type {
   OctopusApplicationLifecycleProgress,
   OctopusApplicationPrivateConfigurationMutation,
   OctopusApplicationPrivateConfigurationOutcome,
+  OctopusApplicationConnectionProbe,
+  OctopusApplicationConnectionProgress,
+  OctopusApplicationConnectionRequest,
+  OctopusApplicationConnectionState,
   OctopusWorkspaceSetupProgress,
   OctopusWorkspaceSetupState,
   OctopusClientSetupBeginRequest,
@@ -114,6 +118,38 @@ export async function mutateApplicationPrivateConfiguration(
     throw new Error("Application configuration is available only in the live desktop client.");
   }
   return host.mutateApplicationPrivateConfiguration(request);
+}
+
+export function canConnectApplications(): boolean {
+  return Boolean(window.octopusTransport?.applicationConnectionProbe);
+}
+
+export async function probeApplicationConnection(applicationId: string): Promise<OctopusApplicationConnectionProbe> {
+  const host = window.octopusTransport;
+  if (!host?.applicationConnectionProbe) throw new Error("Connecting applications is available only in the desktop client.");
+  return host.applicationConnectionProbe({ applicationId });
+}
+
+export async function connectApplicationInterface(request: OctopusApplicationConnectionRequest): Promise<OctopusApplicationConnectionState> {
+  const host = window.octopusTransport;
+  if (!host?.applicationConnectionConnect) throw new Error("Connecting applications is available only in the desktop client.");
+  return host.applicationConnectionConnect(request);
+}
+
+export async function cancelApplicationConnection(operationId: string): Promise<{ cancelled: boolean }> {
+  const host = window.octopusTransport;
+  if (!host?.applicationConnectionCancel) return { cancelled: false };
+  return host.applicationConnectionCancel({ operationId });
+}
+
+export async function disconnectApplicationInterface(applicationId: string, interfaceId: string): Promise<OctopusApplicationConnectionState> {
+  const host = window.octopusTransport;
+  if (!host?.applicationConnectionDisconnect) throw new Error("Connecting applications is available only in the desktop client.");
+  return host.applicationConnectionDisconnect({ applicationId, interfaceId });
+}
+
+export function onApplicationConnectionProgress(listener: (progress: OctopusApplicationConnectionProgress) => void): () => void {
+  return window.octopusTransport?.onApplicationConnectionProgress?.(listener) ?? (() => {});
 }
 
 export async function mutateOctopusOsWorkspace(request: OctopusOsWorkspaceMutationRequest): Promise<OctopusOsWorkspaceMutationOutcome> {

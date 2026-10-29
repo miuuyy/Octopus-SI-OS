@@ -54,6 +54,18 @@ function unwrapClientExtensionActionResult(result) {
   throw error;
 }
 
+function unwrapApplicationConnectionResult(result) {
+  if (result?.contract === "octopus.application-connection.v1" && result.ok === true) return result.value;
+  const error = new Error(result?.contract === "octopus.application-connection.v1"
+    && typeof result.error?.message === "string"
+    && result.error.message.trim()
+    ? result.error.message
+    : "Octopus couldn't finish the connection.");
+  error.name = "OctopusApplicationConnectionError";
+  error.code = result?.error?.code === "cancelled" ? "cancelled" : "failed";
+  throw error;
+}
+
 const inheritedAccessClaim = process.argv.find((argument) => argument.startsWith("--octopus-access-claim="))?.slice("--octopus-access-claim=".length) ?? "";
 let accessToken = inheritedAccessClaim ? ipcRenderer.sendSync("octopus:access-inherit", inheritedAccessClaim) : "";
 let runtimeEventListenerCount = 0;
@@ -464,6 +476,18 @@ contextBridge.exposeInMainWorld("octopusTransport", {
   mutateApplicationPrivateConfiguration(request) {
     return invokeAccess("octopus:application-private-configuration-mutate", request);
   },
+  async applicationConnectionProbe(request) {
+    return unwrapApplicationConnectionResult(await invokeAccess("octopus:application-connection-probe", request));
+  },
+  async applicationConnectionConnect(request) {
+    return unwrapApplicationConnectionResult(await invokeAccess("octopus:application-connection-connect", request));
+  },
+  async applicationConnectionCancel(request) {
+    return unwrapApplicationConnectionResult(await invokeAccess("octopus:application-connection-cancel", request));
+  },
+  async applicationConnectionDisconnect(request) {
+    return unwrapApplicationConnectionResult(await invokeAccess("octopus:application-connection-disconnect", request));
+  },
   mutateOctopusOsWorkspace(request) {
     return invokeAccess("octopus:os-workspace-mutate", request);
   },
@@ -781,6 +805,11 @@ contextBridge.exposeInMainWorld("octopusTransport", {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on("octopus:client-extensions-changed", wrapped);
     return () => ipcRenderer.removeListener("octopus:client-extensions-changed", wrapped);
+  },
+  onApplicationConnectionProgress(listener) {
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on("octopus:application-connection-progress", wrapped);
+    return () => ipcRenderer.removeListener("octopus:application-connection-progress", wrapped);
   },
   onApplicationLifecycleProgress(listener) {
     const wrapped = (_event, payload) => listener(payload);

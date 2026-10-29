@@ -3,6 +3,9 @@ const DAY_MS = 86_400_000;
 const { parseProjectionReadRequest } = require("./projectionReadContract.cjs");
 const { operatorActivityRows } = require("./operatorActivity.cjs");
 const { createLabCatalog } = require("./labCatalog.cjs");
+const { connectionContext, connectionInput, createApplicationConnectionHost } = require("./applicationConnection.cjs");
+const fixtureConnectionModule = require("./fixtureConnectionModule.cjs");
+const { resolveJsonPointer } = require("./projection/privateConfiguration.cjs");
 
 const FIXTURE_ROOT_EE_ID = "lab_ee_home";
 const FIXTURE_PRIMARY_PROJECT_ID = "lab_project_lumen";
@@ -11,6 +14,7 @@ const FIXTURE_OPERATIONS_PROJECT_ID = "lab_project_operations";
 const FIXTURE_WORKSPACE_ROOT = "/workspace/lumen";
 const LAB_CONTEXT_WINDOW = 272_000;
 const LAB_RUNTIME_ENDPOINT = "lab://isolated";
+const LAB_CONNECTION_APPLICATION_ID = "world_lumen_mail";
 const LAB_CHAT_APPLICATIONS = {
   lab_run_2: ["world_mcp_github"],
   lab_run_4: ["world_slack", "world_cron"],
@@ -65,8 +69,10 @@ function createFixtureProjectionStore(options = {}) {
     const lab = await catalog.load();
     if (appliedCatalog !== lab) {
       data.providers = lab.providers;
-      data.catalogErrors = lab.errors;
-      data.applications = labApplicationRows(lab.applications, data);
+      data.catalogErrors = [...lab.errors];
+      data.applicationSources = new Map([...lab.applications, labFixtureConnectionApplication()].map((entry) => [entry.manifest.id, entry]));
+      data.privateValues = labSeedPrivateValues(data.applicationSources, data.catalogErrors);
+      data.applications = labApplicationRows([...data.applicationSources.values()], data);
       data.drivers = labDriverRows(lab.drivers, data);
       const preferred = lab.providers[0];
       for (const chat of data.chats) {
@@ -702,6 +708,79 @@ function createFixtureProjectionStore(options = {}) {
     return outcome;
   }
 
+  function labApplicationSource(applicationId, interfaceId) {
+    const source = data.applicationSources?.get(applicationId);
+    const row = data.applications.find((candidate) => candidate.id === applicationId);
+    if (!source || row?.installed !== true) throw new Error(`Test application '${applicationId}' is not installed.`);
+    if (interfaceId !== null && !source.manifest.interfaces.includes(interfaceId)) {
+      throw new Error(`Application '${applicationId}' does not include interface '${interfaceId}'.`);
+    }
+    return { source, row };
+  }
+
+  function labWritePrivateValues(applicationId, interfaceId, names, changes) {
+    const { source, row } = labApplicationSource(applicationId, interfaceId);
+    const current = { ...(data.privateValues[interfaceId] ?? {}) };
+    for (const [name, value] of Object.entries(changes ?? {})) {
+      if (!names.has(name)) throw new Error(`interface '${interfaceId}' does not declare private value '${name}'`);
+      if (value === null) delete current[name];
+      else if (typeof value === "string" && value.length > 0 && !value.includes("\0")) current[name] = value;
+      else throw new Error(`interface '${interfaceId}' private value '${name}' must be a non-empty string or null`);
+    }
+    data.privateValues[interfaceId] = current;
+    row.configuration = labApplicationConfiguration(source.manifest, source.manifest.descriptors, true, data.privateValues);
+    return new Map(Object.entries(current));
+  }
+
+  const labConnections = createApplicationConnectionHost({
+    resolveTargets: async (applicationId, interfaceId) => {
+      await withCatalog();
+      const { source, row } = labApplicationSource(applicationId, interfaceId);
+      const interfaceIds = interfaceId === null ? row.connection_interfaces : [interfaceId];
+      return interfaceIds.map((id) => {
+        if (!row.connection_interfaces.includes(id)) throw new Error(`Interface '${id}' declares no client connection module.`);
+        const names = new Set(labSetupFields(source.manifest, source.manifest.descriptors, id).map(({ name }) => name));
+        return {
+          interfaceId: id,
+          module: fixtureConnectionModule,
+          source: "Test connection module",
+          createContext: async ({ kind, input, signal, progress }) => connectionContext({
+            descriptor: source.manifest.descriptors[id],
+            interfaceId: id,
+            values: data.privateValues[id] ?? {},
+            input: kind === "connect" ? connectionInput(input, names, id) : {},
+            privateDirectory: `/lab/interfaces/${id}`,
+            signal,
+            progress,
+            saveValues: async (changes) => labWritePrivateValues(applicationId, id, names, changes),
+            launchEnvironment: (name) => { throw new Error(`The Test profile has no runtime launch environment for '${String(name)}'.`); },
+            openExternal: async () => { throw new Error("The Test profile does not open external links."); },
+          }),
+        };
+      });
+    },
+  });
+
+  async function mutateApplicationPrivateConfiguration(request) {
+    await withCatalog();
+    const applicationId = requiredString(request?.applicationId, "applicationId");
+    const interfaceId = requiredString(request?.interfaceId, "interfaceId");
+    const { source } = labApplicationSource(applicationId, interfaceId);
+    const names = new Set(labSetupFields(source.manifest, source.manifest.descriptors, interfaceId).map(({ name }) => name));
+    if ((labPrivateValuesDigest(data.privateValues[interfaceId]) || null) !== (request?.expectedDigest ?? null)) {
+      throw new Error(`application private configuration '${interfaceId}' changed before the edit could be committed`);
+    }
+    const updates = Object.entries(request?.updates ?? {});
+    const clears = Array.isArray(request?.clears) ? request.clears : [];
+    if (!updates.length && !clears.length) throw new Error("application private configuration mutation contains no changes");
+    const values = labWritePrivateValues(applicationId, interfaceId, names, {
+      ...Object.fromEntries(clears.map((name) => [name, null])),
+      ...Object.fromEntries(updates),
+    });
+    const digest = labPrivateValuesDigest(data.privateValues[interfaceId]);
+    return { interfaceId, documentStatus: digest ? "valid" : "absent", documentDigest: digest || null, configuredFields: values.size };
+  }
+
   function runtimeHostState() {
     return {
       phase: "ready",
@@ -732,6 +811,11 @@ function createFixtureProjectionStore(options = {}) {
     },
     workspaceFiles: () => Object.fromEntries(fixtureWorkspaceEntries().filter((entry) => entry.kind === "file").map((entry) => [entry.path, entry.text])),
     mutateScheduledInterface,
+    mutateApplicationPrivateConfiguration,
+    applicationConnectionProbe: (request) => labConnections.probe(request),
+    applicationConnectionConnect: (request, options) => labConnections.connect(request, options),
+    applicationConnectionCancel: (request) => labConnections.cancel(request),
+    applicationConnectionDisconnect: (request) => labConnections.disconnect(request),
     submitChatTurn,
     submitChatSteer,
     submitInterfaceArtifact,
@@ -2229,6 +2313,7 @@ function fixtureCheckpoints(run, runIndex, at) {
 function fixtureApplicationProject(environment) {
   return fixtureRow({
     ee_id: environment.ee_id,
+    name: fixtureEnvironmentDisplayName(environment.ee_id),
     goal: fixtureEnvironmentDisplayName(environment.ee_id),
     parent_ee_id: environment.parent_ee_id,
     record_digest: environment.record_digest,
@@ -2243,8 +2328,148 @@ function fixtureEnvironmentDisplayName(eeId) {
   return eeId;
 }
 
+function labFixtureConnectionApplication() {
+  const id = LAB_CONNECTION_APPLICATION_ID;
+  const digest = crypto.createHash("sha256").update(id).digest("hex");
+  const logo = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#2f6fed"/><path d="M15 21h34a3 3 0 0 1 3 3v17a3 3 0 0 1-3 3H15a3 3 0 0 1-3-3V24a3 3 0 0 1 3-3Z" fill="#fff"/><path d="m13 23 19 13 19-13" fill="none" stroke="#2f6fed" stroke-width="3" stroke-linejoin="round"/></svg>`;
+  return {
+    record: {
+      id,
+      product_id: id,
+      installed: true,
+      available: true,
+      release_status: "optional",
+      manifest_digest: digest,
+      installed_digest: digest,
+      source_digest: digest,
+      source_file_count: 1,
+      receipt_state: "valid",
+      receipt_digest: digest,
+      install_packages: [],
+    },
+    manifest: {
+      schema_version: 3,
+      id,
+      name: "Lumen Mail",
+      description: "Search, read and send email from the tasks you connect.",
+      category: "connector",
+      developer: "Lumen",
+      version: "1.0.0",
+      icon: "email",
+      logo: "application-logo.svg",
+      logo_dark: "",
+      interfaces: [id],
+      artifact_bindings: [],
+      task_capabilities: { tools: [] },
+      setup: {
+        fields: [{
+          interface: id,
+          pointer: "/interface_driver_config/private_config/environment/address_env",
+          label: "Email address",
+          kind: "text",
+          required: true,
+          placeholder: "name@example.com",
+          help: "Use the address you sign in with.",
+        }],
+      },
+      connection: {
+        disclosure: [
+          "Lumen Mail reads and sends messages only in tasks you connect to it.",
+          "Your sign-in stays in this Octopus Home. Disconnect anytime to remove it.",
+        ],
+        help: { label: "About Lumen Mail", url: "https://example.com/" },
+      },
+      logo_data_url: `data:image/svg+xml;base64,${Buffer.from(logo).toString("base64")}`,
+      logo_dark_data_url: "",
+      descriptors: {
+        [id]: {
+          id,
+          interface_type: "world",
+          role: "user",
+          direction: "bidirectional",
+          source_names: ["lumen_mail"],
+          interface_driver_config: {
+            private_config: {
+              environment: { address_env: "LUMEN_MAIL_ADDRESS" },
+              client_connection: { schema_version: 1, module: `interface://${id}/packages/connection.cjs` },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function labSetupFields(manifest, descriptors, interfaceId = "") {
+  return manifest.setup.fields.flatMap((field) => {
+    if (interfaceId && field.interface !== interfaceId) return [];
+    const name = resolveJsonPointer(descriptors[field.interface] ?? {}, field.pointer);
+    if (typeof name !== "string" || !name) {
+      throw new Error(`Test application '${manifest.id}' setup field '${field.label}' does not name an environment value`);
+    }
+    return [{ field, name }];
+  });
+}
+
+function labSeedPrivateValues(sources, errors) {
+  const inUse = new Set([...Object.values(LAB_CHAT_APPLICATIONS), ...Object.values(LAB_DEFAULT_APPLICATIONS)].flat());
+  const values = {};
+  for (const { record, manifest } of sources.values()) {
+    try {
+      for (const { field, name } of labSetupFields(manifest, manifest.descriptors)) {
+        values[field.interface] ??= {};
+        if (record.installed === true && inUse.has(manifest.id) && field.required) values[field.interface][name] = "test-profile-value";
+      }
+    } catch (error) {
+      errors.push(String(error?.message ?? error));
+    }
+  }
+  return values;
+}
+
+function labApplicationConfiguration(manifest, descriptors, installed, privateValues) {
+  if (!installed) return { status: "not_installed", fields: [], documents: [], error: "" };
+  let entries;
+  try {
+    entries = labSetupFields(manifest, descriptors);
+  } catch (error) {
+    return { status: "issue", fields: [], documents: [], error: String(error?.message ?? error) };
+  }
+  const fields = entries.map(({ field, name }) => {
+    const saved = typeof privateValues[field.interface]?.[name] === "string";
+    return {
+      interface_id: field.interface,
+      name,
+      label: field.label,
+      kind: field.kind,
+      required: field.required,
+      authored: true,
+      placeholder: field.placeholder ?? "",
+      help: field.help ?? "",
+      configured: saved,
+      private_saved: saved,
+      source: saved ? "private" : "missing",
+    };
+  });
+  const documents = [...new Set(fields.map((field) => field.interface_id))].map((interfaceId) => {
+    const digest = labPrivateValuesDigest(privateValues[interfaceId]);
+    return { interface_id: interfaceId, status: digest ? "valid" : "absent", digest };
+  });
+  return {
+    status: fields.some((field) => field.required && !field.configured) ? "required" : "configured",
+    fields,
+    documents,
+    error: "",
+  };
+}
+
+function labPrivateValuesDigest(values) {
+  const entries = Object.entries(values ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  return entries.length ? crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex") : "";
+}
+
 function labApplicationRows(entries, data) {
-  return entries.map(({ record, manifest }) => {
+  return entries.map(({ record, manifest: { descriptors, ...manifest } }) => {
     const installed = record.installed === true;
     const managed = record.release_status === "system";
     const connected = installed
@@ -2252,6 +2477,10 @@ function labApplicationRows(entries, data) {
       : [];
     return fixtureRow({
       ...manifest,
+      configuration: labApplicationConfiguration(manifest, descriptors, installed, data.privateValues),
+      connection_interfaces: installed && manifest.id === LAB_CONNECTION_APPLICATION_ID
+        ? manifest.interfaces.filter((interfaceId) => Object.prototype.hasOwnProperty.call(descriptors[interfaceId]?.interface_driver_config?.private_config ?? {}, "client_connection"))
+        : [],
       installed,
       materialized: installed,
       partially_materialized: false,
