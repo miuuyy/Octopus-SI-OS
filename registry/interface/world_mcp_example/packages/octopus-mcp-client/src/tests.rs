@@ -510,22 +510,7 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         .canonicalize()
         .unwrap();
     let repository_root = registry_root.parent().unwrap();
-    let expected: [(&str, &str, Option<&str>, usize); 3] = [
-        ("world_mcp_example", "mcp.example", None, 22),
-        (
-            "world_mcp_firecrawl",
-            "firecrawl",
-            Some("artifact-application-mcp-firecrawl-context"),
-            21,
-        ),
-        (
-            "world_mcp_github",
-            "github",
-            Some("artifact-application-mcp-github-context"),
-            21,
-        ),
-    ];
-    let generic_operations = [
+    let generic_operations: &[&str] = &[
         "call_tool",
         "cancel_request",
         "close",
@@ -548,17 +533,52 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         "subscribe_resource",
         "unsubscribe_resource",
     ];
+    let tool_filtered_operations: &[&str] = &["call_tool", "close", "list_tools", "status"];
+    let expected: [(&str, &str, Option<&str>, usize, &[&str]); 4] = [
+        (
+            "world_mcp_example",
+            "mcp.example",
+            None,
+            22,
+            generic_operations,
+        ),
+        (
+            "world_mcp_firecrawl",
+            "firecrawl",
+            Some("artifact-application-mcp-firecrawl-context"),
+            21,
+            generic_operations,
+        ),
+        (
+            "world_mcp_github",
+            "github",
+            Some("artifact-application-mcp-github-context"),
+            21,
+            generic_operations,
+        ),
+        (
+            "world_gmail",
+            "gmail",
+            Some("artifact-application-gmail-context"),
+            4,
+            tool_filtered_operations,
+        ),
+    ];
     let mut total = 0;
-    for (interface, prefix, artifact_id, expected_count) in expected {
+    for (interface, prefix, artifact_id, expected_count, operations) in expected {
         let interface_dir = registry_root.join("interface").join(interface);
         let bytes = std::fs::read(interface_dir.join("interface.json")).unwrap();
         let descriptor: InterfaceDescriptor = octopus_descriptors::parse_strict(&bytes).unwrap();
         assert_eq!(descriptor.id.as_str(), interface);
         assert_eq!(descriptor.interface_driver_ref, "mcp_client");
+        load_interface_config(&interface_dir, &descriptor.id).unwrap();
+        octopus_interface_transport::validate_spawn_life_config(&registry_root, &descriptor.id)
+            .unwrap()
+            .expect("remote MCP interface declares its life");
         let catalog = load_operation_catalog(&interface_dir, &descriptor).unwrap();
         assert_eq!(catalog.operations.len(), expected_count, "{interface}");
         assert_eq!(catalog.affordances.len(), expected_count, "{interface}");
-        for suffix in generic_operations {
+        for suffix in operations {
             assert!(
                 catalog
                     .operations
@@ -654,7 +674,7 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         }
         total += catalog.operations.len();
     }
-    assert_eq!(total, 64);
+    assert_eq!(total, 68);
 }
 
 #[test]
@@ -715,4 +735,304 @@ fn reconnect_replay_never_duplicates_effectful_operations() {
     .replay_safe_after_reconnect());
     assert!(!McpOperation::Respond.replay_safe_after_reconnect());
     assert!(!McpOperation::SendProgress.replay_safe_after_reconnect());
+}
+
+type RecordedRequests = Arc<std::sync::Mutex<Vec<Value>>>;
+
+fn spawn_account_mcp_server(
+    unauthorized: Arc<std::sync::atomic::AtomicBool>,
+) -> (String, RecordedRequests) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let requests: RecordedRequests = Arc::default();
+    let recorded = Arc::clone(&requests);
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_len = loop {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break None;
+                }
+                buf.extend_from_slice(&chunk[..read]);
+                if let Some(end) = find_headers_end(&buf) {
+                    break Some(end);
+                }
+            };
+            let Some(header_len) = header_len else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&buf[..header_len]).to_string();
+            let header = |name: &str| {
+                head.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case(name)
+                        .then(|| value.trim().to_string())
+                })
+            };
+            let length = header("content-length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            while buf.len() < header_len + length {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..read]);
+            }
+            let request: Value = serde_json::from_slice(&buf[header_len..]).unwrap_or(Value::Null);
+            recorded.lock().unwrap().push(json!({
+                "method": request["method"],
+                "tool": request.pointer("/params/name"),
+                "authorization": header("authorization"),
+                "account": header("chatgpt-account-id"),
+            }));
+            let reply = |status: &str, body: Option<Value>| match body {
+                Some(body) => {
+                    let body = serde_json::to_vec(&body).unwrap();
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        String::from_utf8(body).unwrap()
+                    )
+                }
+                None => {
+                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                }
+            };
+            let response = if unauthorized.load(std::sync::atomic::Ordering::SeqCst) {
+                reply("401 Unauthorized", None)
+            } else if request.get("id").is_none() {
+                reply("202 Accepted", None)
+            } else {
+                let result = match request["method"].as_str().unwrap_or_default() {
+                    "initialize" => json!({
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": { "tools": {}, "resources": {} },
+                        "serverInfo": { "name": "plugin-runtime-mock", "version": "1" }
+                    }),
+                    "tools/list" => json!({ "tools": [
+                        { "name": "mail.search", "inputSchema": { "type": "object" },
+                          "_meta": { "connector_id": "connector_mail", "link_id": "link_1" } },
+                        { "name": "other.post", "inputSchema": { "type": "object" },
+                          "_meta": { "connector_id": "connector_other" } },
+                        { "name": "bare", "inputSchema": { "type": "object" } }
+                    ] }),
+                    "tools/call" => json!({
+                        "content": [{ "type": "text", "text": request["params"]["name"] }],
+                        "isError": false
+                    }),
+                    other => json!({ "echo": other }),
+                };
+                reply(
+                    "200 OK",
+                    Some(json!({ "jsonrpc": "2.0", "id": request["id"], "result": result })),
+                )
+            };
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (base, requests)
+}
+
+fn write_account_registry(root: &Path, base_url: &str, auth_file_env: &str) -> McpOperationCatalog {
+    let interface_dir = root.join("registry/interface/world_account_mail");
+    let operations = interface_dir.join("operations");
+    std::fs::create_dir_all(&operations).unwrap();
+    let descriptor = json!({
+        "id": "world_account_mail",
+        "interface_type": "world",
+        "role": "service",
+        "direction": "bidirectional",
+        "source_names": ["mcp"],
+        "interface_driver_ref": "mcp_client",
+        "interface_driver_config": {
+            "private_config": {
+                "protocol_versions": ["2025-11-25"],
+                "client_name": "octopus-mcp-client-test",
+                "client_version": "1",
+                "operation_catalog_dir": "operations",
+                "operation_catalog_label": "mcp.operation_catalog",
+                "operation_request_label": "mcp.operation.request",
+                "max_catalog_pages": 8,
+                "max_catalog_items": 64,
+                "max_catalog_bytes": 65536,
+                "event_journal_segment_bytes": 1048576,
+                "event_journal_retained_segments": 8,
+                "reconnect_backoff_ms": 20,
+                "auth": {
+                    "mode": "chatgpt_account",
+                    "auth_file_env": auth_file_env,
+                    "account_header": "ChatGPT-Account-ID"
+                },
+                "tool_filter": { "meta_key": "connector_id", "values": ["connector_mail"] }
+            },
+            "transport": { "base_url": base_url, "wire": "mcp_streamable_http" }
+        }
+    });
+    std::fs::write(
+        interface_dir.join("interface.json"),
+        serde_json::to_vec(&descriptor).unwrap(),
+    )
+    .unwrap();
+    for (operation, output_label) in [
+        ("call_tool", "mcp.tool.result"),
+        ("list_tools", "mcp.result"),
+        ("list_resources", "mcp.result"),
+    ] {
+        let id = format!("mail.{operation}");
+        std::fs::write(
+            operations.join(format!("{id}.json")),
+            serde_json::to_vec(&json!({
+                "id": id,
+                "request_label": "mcp.operation.request",
+                "output_label": output_label,
+                "handler_config": { "operation": operation },
+                "description": operation,
+                "input_schema": { "type": "object" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let descriptor =
+        load_interface_descriptor(&interface_dir, &InterfaceId::new("world_account_mail")).unwrap();
+    load_operation_catalog(&interface_dir, &descriptor).unwrap()
+}
+
+async fn run_operation(
+    process: &McpInterfaceProcess,
+    catalog: &McpOperationCatalog,
+    root: &Path,
+    sequence: u64,
+    operation: &str,
+    arguments: Value,
+) -> Value {
+    let spec = catalog.operations.get(operation).unwrap();
+    let envelope = direct_tool_envelope(root, sequence, operation, arguments);
+    let artifact = process_artifact(process.receive(spec, envelope, &root.join("results")).await);
+    serde_json::from_slice(&artifact.read_payload_bytes().unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn chatgpt_account_auth_and_tool_filter_gate_the_remote_surface() {
+    let unauthorized = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (base, requests) = spawn_account_mcp_server(Arc::clone(&unauthorized));
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let auth_file_env = "OCTOPUS_MCP_CLIENT_TEST_CHATGPT_AUTH_FILE";
+    let auth_file = root.join("auth.json");
+    std::env::set_var(auth_file_env, &auth_file);
+    let write_auth = |payload: &str| {
+        let document = json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": format!("e30.{payload}.sig"),
+                "account_id": "account-1",
+                "refresh_token": "refresh-never-used"
+            }
+        });
+        std::fs::write(&auth_file, serde_json::to_vec(&document).unwrap()).unwrap();
+    };
+    let catalog = write_account_registry(root, &base, auth_file_env);
+    let interface = InterfaceId::new("world_account_mail");
+    let config = load_interface_config(
+        &root.join("registry/interface/world_account_mail"),
+        &interface,
+    )
+    .unwrap();
+    let process = mcp_interface_process(interface, config, root.join("var/remote-mcp"));
+
+    write_auth("eyJleHAiOjF9");
+    let expired = run_operation(&process, &catalog, root, 1, "mail.list_tools", json!({})).await;
+    assert_eq!(
+        expired["error"]["code"], "account_sign_in_expired",
+        "{expired}"
+    );
+    assert!(
+        requests.lock().unwrap().is_empty(),
+        "an expired sign-in reached the network"
+    );
+
+    write_auth("eyJleHAiOjQxMDI0NDQ4MDB9");
+    let signed_in = std::fs::read(&auth_file).unwrap();
+    let listed = run_operation(&process, &catalog, root, 2, "mail.list_tools", json!({})).await;
+    assert_eq!(
+        listed["result"]["tools"],
+        json!([{
+            "name": "mail.search", "inputSchema": { "type": "object" },
+            "_meta": { "connector_id": "connector_mail", "link_id": "link_1" }
+        }])
+    );
+    let call = |name: &str| json!({ "name": name, "arguments": {} });
+    let called = run_operation(
+        &process,
+        &catalog,
+        root,
+        3,
+        "mail.call_tool",
+        call("mail.search"),
+    )
+    .await;
+    assert_eq!(
+        called["result"]["content"][0]["text"], "mail.search",
+        "{called}"
+    );
+    let refused = run_operation(
+        &process,
+        &catalog,
+        root,
+        4,
+        "mail.call_tool",
+        call("other.post"),
+    )
+    .await;
+    assert_eq!(refused["error"]["code"], "tool_not_admitted", "{refused}");
+    let resources = run_operation(
+        &process,
+        &catalog,
+        root,
+        5,
+        "mail.list_resources",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        resources["error"]["code"], "surface_not_admitted",
+        "{resources}"
+    );
+    {
+        let requests = requests.lock().unwrap();
+        assert!(requests.iter().all(|request| {
+            request["authorization"] == json!("Bearer e30.eyJleHAiOjQxMDI0NDQ4MDB9.sig")
+                && request["account"] == json!("account-1")
+        }));
+        let called = requests
+            .iter()
+            .filter(|request| request["method"] == "tools/call")
+            .map(|request| request["tool"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(called, vec![json!("mail.search")]);
+    }
+
+    unauthorized.store(true, std::sync::atomic::Ordering::SeqCst);
+    let rejected = run_operation(
+        &process,
+        &catalog,
+        root,
+        6,
+        "mail.call_tool",
+        call("mail.search"),
+    )
+    .await;
+    assert_eq!(
+        rejected["error"]["code"], "account_sign_in_expired",
+        "{rejected}"
+    );
+    assert_eq!(
+        rejected["error"]["message"],
+        "ChatGPT sign-in expired — sign in again in Octopus"
+    );
+    assert_eq!(std::fs::read(&auth_file).unwrap(), signed_in);
 }

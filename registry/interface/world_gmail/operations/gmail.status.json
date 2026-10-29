@@ -1,0 +1,13 @@
+{
+  "id": "gmail.status",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "status"
+  },
+  "description": "Inspect the Gmail connection: negotiated capabilities, ChatGPT sign-in state and the declared tool filter.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

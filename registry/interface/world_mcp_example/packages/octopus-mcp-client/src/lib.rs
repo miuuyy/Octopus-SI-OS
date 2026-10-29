@@ -11,14 +11,18 @@ use octopus_interfaces::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::account_auth::AccountAuthSettings;
 use crate::mcp_client::{resolve_base_url, McpClient, McpClientError};
 use crate::oauth::{
     authorization_status, complete_authorization, start_authorization, OAuthSettings,
 };
+use crate::tool_filter::ToolMetaFilter;
 
+mod account_auth;
 mod life;
 mod mcp_client;
 mod oauth;
+mod tool_filter;
 pub use life::{catalog_interface_life, operation_interface_life};
 
 const MCP_TOOL_RESULT_LABEL: &str = "mcp.tool.result";
@@ -50,6 +54,8 @@ pub(crate) struct McpInterfaceConfig {
     event_journal_retained_segments: usize,
     reconnect_backoff: std::time::Duration,
     oauth: Option<OAuthSettings>,
+    account_auth: Option<AccountAuthSettings>,
+    tool_filter: Option<ToolMetaFilter>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -845,7 +851,7 @@ pub(crate) async fn emit_catalog_as_inbound_artifacts(
         .await?;
     }
 
-    if client.capabilities().resources {
+    if client.capabilities().resources && config.tool_filter.is_none() {
         let mut templates = Vec::new();
         let mut template_bytes = 0;
         let mut cursor = None;
@@ -944,7 +950,7 @@ pub(crate) async fn emit_catalog_as_inbound_artifacts(
         )
         .await?;
     }
-    if client.capabilities().prompts {
+    if client.capabilities().prompts && config.tool_filter.is_none() {
         let mut prompts = Vec::new();
         let mut prompt_bytes = 0;
         let mut cursor = None;
@@ -1386,6 +1392,34 @@ pub(crate) fn load_interface_config_from_descriptor(
     if let Some(oauth) = oauth.as_ref() {
         oauth.validate().map_err(|error| error.to_string())?;
     }
+    let account_auth = match config.private_config.get("auth") {
+        None => None,
+        Some(value) => {
+            let settings =
+                serde_json::from_value::<AccountAuthSettings>(value.clone()).map_err(|error| {
+                    format!(
+                        "MCP interface '{}' private_config.auth is malformed: {error}",
+                        interface
+                    )
+                })?;
+            settings
+                .validate()
+                .map_err(|error| format!("MCP interface '{}' {error}", interface))?;
+            if oauth.is_some() || transport.auth_env_key.is_some() {
+                return Err(format!(
+                    "MCP interface '{}' private_config.auth excludes private_config.oauth and transport.auth_env_key",
+                    interface
+                ));
+            }
+            Some(settings)
+        }
+    };
+    let tool_filter = config
+        .private_config
+        .get("tool_filter")
+        .map(ToolMetaFilter::parse)
+        .transpose()
+        .map_err(|error| format!("MCP interface '{}' {error}", interface))?;
     Ok(McpInterfaceConfig {
         transport,
         protocol_versions,
@@ -1398,6 +1432,8 @@ pub(crate) fn load_interface_config_from_descriptor(
         event_journal_retained_segments,
         reconnect_backoff: std::time::Duration::from_millis(reconnect_backoff_ms),
         oauth,
+        account_auth,
+        tool_filter,
     })
 }
 

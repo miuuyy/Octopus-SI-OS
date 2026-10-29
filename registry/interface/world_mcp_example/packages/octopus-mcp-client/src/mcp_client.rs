@@ -12,7 +12,9 @@ use serde_json::{json, Map, Value};
 use tokio::sync::oneshot;
 use tokio::sync::{mpsc, Mutex};
 
+use crate::account_auth::AccountAuthSettings;
 use crate::oauth::{OAuthClient, OAuthError};
+use crate::tool_filter::ToolMetaFilter;
 use crate::McpInterfaceConfig;
 
 pub const MCP_STREAMABLE_HTTP_WIRE: &str = "mcp_streamable_http";
@@ -73,6 +75,16 @@ pub enum McpClientError {
         earliest_available: u64,
         latest: u64,
     },
+    #[error("ChatGPT sign-in is required: {0}; sign in to ChatGPT in Octopus")]
+    AccountSignInRequired(String),
+    #[error("ChatGPT sign-in expired — sign in again in Octopus")]
+    AccountSignInExpired,
+    #[error("ChatGPT sign-in cannot be used: {0}")]
+    AccountCredential(String),
+    #[error("MCP tool '{0}' is outside this interface's declared tool filter")]
+    ToolNotAdmitted(String),
+    #[error("MCP {0} is outside this interface's declared tool filter")]
+    SurfaceNotAdmitted(String),
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +166,11 @@ impl McpClientError {
             Self::OAuth(error) => error.code(),
             Self::Journal(_) => "event_journal",
             Self::EventCursorGap { .. } => "event_cursor_gap",
+            Self::AccountSignInRequired(_) => "account_sign_in_required",
+            Self::AccountSignInExpired => "account_sign_in_expired",
+            Self::AccountCredential(_) => "account_credential",
+            Self::ToolNotAdmitted(_) => "tool_not_admitted",
+            Self::SurfaceNotAdmitted(_) => "surface_not_admitted",
         }
     }
 
@@ -336,6 +353,9 @@ pub struct McpClient {
     closed: AtomicBool,
     in_flight: std::sync::Mutex<BTreeSet<i64>>,
     cancelled: std::sync::Mutex<BTreeSet<i64>>,
+    tool_filter: Option<ToolMetaFilter>,
+    admitted_tools: std::sync::Mutex<BTreeSet<String>>,
+    max_catalog_pages: usize,
 }
 
 struct InFlightRequest<'a> {
@@ -416,6 +436,9 @@ impl McpClient {
             closed: AtomicBool::new(false),
             in_flight: std::sync::Mutex::new(BTreeSet::new()),
             cancelled: std::sync::Mutex::new(BTreeSet::new()),
+            tool_filter: config.tool_filter.clone(),
+            admitted_tools: std::sync::Mutex::new(BTreeSet::new()),
+            max_catalog_pages: config.max_catalog_pages,
         };
         let preferred = config
             .protocol_versions
@@ -454,6 +477,7 @@ impl McpClient {
         timeout_ms: Option<u64>,
     ) -> Result<Value, McpClientError> {
         self.require(self.capabilities.tools, "tools/call", "tools")?;
+        self.admit_tool(name).await?;
         let mut params = json!({ "name": name, "arguments": arguments });
         insert_progress_token(&mut params, progress_token)?;
         self.request_with_optional_timeout("tools/call", params, timeout_ms)
@@ -462,10 +486,105 @@ impl McpClient {
 
     pub async fn list_tools(&self, cursor: Option<&str>) -> Result<Value, McpClientError> {
         self.require(self.capabilities.tools, "tools/list", "tools")?;
-        self.request("tools/list", cursor_params(cursor)).await
+        let page = self.request("tools/list", cursor_params(cursor)).await?;
+        match &self.tool_filter {
+            Some(filter) => self.filter_tool_page(filter, page),
+            None => Ok(page),
+        }
+    }
+
+    fn filter_tool_page(
+        &self,
+        filter: &ToolMetaFilter,
+        mut page: Value,
+    ) -> Result<Value, McpClientError> {
+        let tools = page
+            .get_mut("tools")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| McpClientError::Protocol {
+                method: "tools/list".to_string(),
+                reason: "tools/list result has no tools array".to_string(),
+            })?;
+        tools.retain(|tool| filter.admits(tool));
+        let mut admitted = self
+            .admitted_tools
+            .lock()
+            .map_err(|_| McpClientError::Protocol {
+                method: "tools/list".to_string(),
+                reason: "admitted tool set is poisoned".to_string(),
+            })?;
+        for tool in tools.iter() {
+            let name = tool.get("name").and_then(Value::as_str).ok_or_else(|| {
+                McpClientError::Protocol {
+                    method: "tools/list".to_string(),
+                    reason: "an admitted tool has no name".to_string(),
+                }
+            })?;
+            admitted.insert(name.to_string());
+        }
+        Ok(page)
+    }
+
+    fn tool_is_admitted(&self, name: &str) -> Result<bool, McpClientError> {
+        Ok(self
+            .admitted_tools
+            .lock()
+            .map_err(|_| McpClientError::Protocol {
+                method: "tools/call".to_string(),
+                reason: "admitted tool set is poisoned".to_string(),
+            })?
+            .contains(name))
+    }
+
+    async fn admit_tool(&self, name: &str) -> Result<(), McpClientError> {
+        if self.tool_filter.is_none() || self.tool_is_admitted(name)? {
+            return Ok(());
+        }
+        let mut cursor: Option<String> = None;
+        let mut seen = BTreeSet::new();
+        for _ in 0..self.max_catalog_pages {
+            let page = self.list_tools(cursor.as_deref()).await?;
+            if self.tool_is_admitted(name)? {
+                return Ok(());
+            }
+            cursor = match page.get("nextCursor") {
+                None | Some(Value::Null) => {
+                    return Err(McpClientError::ToolNotAdmitted(name.into()))
+                }
+                Some(Value::String(next)) if !next.trim().is_empty() => Some(next.trim().into()),
+                Some(_) => {
+                    return Err(McpClientError::Protocol {
+                        method: "tools/list".to_string(),
+                        reason: "nextCursor is not a non-empty string or null".to_string(),
+                    });
+                }
+            };
+            if !seen.insert(cursor.clone()) {
+                return Err(McpClientError::Protocol {
+                    method: "tools/list".to_string(),
+                    reason: "tools/list repeated a cursor while admitting a tool".to_string(),
+                });
+            }
+        }
+        Err(McpClientError::Protocol {
+            method: "tools/list".to_string(),
+            reason: format!(
+                "tools/list exceeded the {}-page boundary while admitting tool '{name}'",
+                self.max_catalog_pages
+            ),
+        })
+    }
+
+    fn require_unfiltered(&self, method: &str) -> Result<(), McpClientError> {
+        if self.tool_filter.is_some() {
+            Err(McpClientError::SurfaceNotAdmitted(method.to_string()))
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn list_resources(&self, cursor: Option<&str>) -> Result<Value, McpClientError> {
+        self.require_unfiltered("resources/list")?;
         self.require(self.capabilities.resources, "resources/list", "resources")?;
         self.request("resources/list", cursor_params(cursor)).await
     }
@@ -474,6 +593,7 @@ impl McpClient {
         &self,
         cursor: Option<&str>,
     ) -> Result<Value, McpClientError> {
+        self.require_unfiltered("resources/templates/list")?;
         self.require(
             self.capabilities.resources,
             "resources/templates/list",
@@ -484,11 +604,13 @@ impl McpClient {
     }
 
     pub async fn read_resource(&self, uri: &str) -> Result<Value, McpClientError> {
+        self.require_unfiltered("resources/read")?;
         self.require(self.capabilities.resources, "resources/read", "resources")?;
         self.request("resources/read", json!({ "uri": uri })).await
     }
 
     pub async fn subscribe_resource(&self, uri: &str) -> Result<Value, McpClientError> {
+        self.require_unfiltered("resources/subscribe")?;
         self.require(
             self.capabilities.resources_subscribe,
             "resources/subscribe",
@@ -499,6 +621,7 @@ impl McpClient {
     }
 
     pub async fn unsubscribe_resource(&self, uri: &str) -> Result<Value, McpClientError> {
+        self.require_unfiltered("resources/unsubscribe")?;
         self.require(
             self.capabilities.resources_subscribe,
             "resources/unsubscribe",
@@ -509,11 +632,13 @@ impl McpClient {
     }
 
     pub async fn list_prompts(&self, cursor: Option<&str>) -> Result<Value, McpClientError> {
+        self.require_unfiltered("prompts/list")?;
         self.require(self.capabilities.prompts, "prompts/list", "prompts")?;
         self.request("prompts/list", cursor_params(cursor)).await
     }
 
     pub async fn get_prompt(&self, name: &str, arguments: Value) -> Result<Value, McpClientError> {
+        self.require_unfiltered("prompts/get")?;
         self.require(self.capabilities.prompts, "prompts/get", "prompts")?;
         self.request(
             "prompts/get",
@@ -528,6 +653,7 @@ impl McpClient {
         argument: Value,
         context: Option<Value>,
     ) -> Result<Value, McpClientError> {
+        self.require_unfiltered("completion/complete")?;
         self.require(
             self.capabilities.completions,
             "completion/complete",
@@ -714,6 +840,7 @@ impl McpClient {
             "event_journal": journal.path(),
             "closed": self.closed.load(Ordering::Acquire),
             "in_flight_request_ids": self.in_flight.lock().map(|ids| ids.iter().copied().collect::<Vec<_>>()).unwrap_or_default(),
+            "tool_filter": self.tool_filter.as_ref().map(ToolMetaFilter::as_value),
         })
     }
 
@@ -996,6 +1123,12 @@ impl RemoteTransport {
 struct HttpAuth {
     static_header: Option<(HeaderName, HeaderValue)>,
     oauth: Option<Arc<Mutex<OAuthClient>>>,
+    account: Option<AccountAuth>,
+}
+
+struct AccountAuth {
+    settings: AccountAuthSettings,
+    applied: std::sync::Mutex<Option<blake3::Hash>>,
 }
 
 impl HttpAuth {
@@ -1008,6 +1141,13 @@ impl HttpAuth {
                 "oauth and transport.auth_env_key are mutually exclusive".to_string(),
             ));
         }
+        if config.account_auth.is_some()
+            && (config.oauth.is_some() || config.transport.auth_env_key.is_some())
+        {
+            return Err(McpClientError::Config(
+                "private_config.auth excludes oauth and transport.auth_env_key".to_string(),
+            ));
+        }
         let static_header = resolve_auth_header(&config.transport)?;
         let oauth = match config.oauth.clone() {
             Some(settings) => {
@@ -1018,10 +1158,27 @@ impl HttpAuth {
             }
             None => None,
         };
+        let account = config.account_auth.clone().map(|settings| AccountAuth {
+            settings,
+            applied: std::sync::Mutex::new(None),
+        });
         Ok(Self {
             static_header,
             oauth,
+            account,
         })
+    }
+
+    fn owned_header_names(&self) -> Result<Vec<HeaderName>, McpClientError> {
+        let mut names = self
+            .static_header
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        if let Some(account) = &self.account {
+            names.extend(account.settings.owned_header_names()?);
+        }
+        Ok(names)
     }
 
     async fn apply(&self, headers: &mut HeaderMap) -> Result<(), McpClientError> {
@@ -1035,10 +1192,30 @@ impl HttpAuth {
             })?;
             headers.insert(HeaderName::from_static("authorization"), value);
         }
+        if let Some(account) = &self.account {
+            let credential = account.settings.read_credential()?;
+            for (name, value) in credential.headers {
+                headers.insert(name, value);
+            }
+            *account.applied.lock().map_err(|_| {
+                McpClientError::AccountCredential("applied credential state is poisoned".into())
+            })? = Some(credential.fingerprint);
+        }
         Ok(())
     }
 
     async fn recover_unauthorized(&self) -> Result<bool, McpClientError> {
+        if let Some(account) = &self.account {
+            let current = account.settings.read_credential()?;
+            let applied = *account.applied.lock().map_err(|_| {
+                McpClientError::AccountCredential("applied credential state is poisoned".into())
+            })?;
+            return if applied == Some(current.fingerprint) {
+                Err(McpClientError::AccountSignInExpired)
+            } else {
+                Ok(true)
+            };
+        }
         match &self.oauth {
             Some(oauth) => Ok(oauth.lock().await.refresh_after_unauthorized().await?),
             None => Ok(false),
@@ -1046,6 +1223,9 @@ impl HttpAuth {
     }
 
     async fn status(&self) -> Value {
+        if let Some(account) = &self.account {
+            return account.settings.status();
+        }
         match &self.oauth {
             Some(oauth) => oauth.lock().await.status(),
             None => json!({ "configured": false, "static_bearer": self.static_header.is_some() }),
@@ -1073,7 +1253,7 @@ impl StreamableHttpClient {
         let url = resolve_base_url(transport)?;
         validate_remote_url(&url)?;
         let max_response_bytes = max_response_bytes(transport)?;
-        let extra_headers = resolve_extra_headers(transport, auth.static_header.as_ref())?;
+        let extra_headers = resolve_extra_headers(transport, &auth.owned_header_names()?)?;
         Ok(Self {
             http,
             url,
@@ -1114,6 +1294,9 @@ impl StreamableHttpClient {
             {
                 retried_auth = true;
                 continue;
+            }
+            if response.status().as_u16() == 401 && self.auth.account.is_some() {
+                return Err(McpClientError::AccountSignInExpired);
             }
             return self.decode_response(method, response, expected_id).await;
         }
@@ -1331,7 +1514,7 @@ impl LegacySseClient {
         let source_url = resolve_base_url(transport)?;
         validate_remote_url(&source_url)?;
         let max_response_bytes = max_response_bytes(transport)?;
-        let extra_headers = resolve_extra_headers(transport, auth.static_header.as_ref())?;
+        let extra_headers = resolve_extra_headers(transport, &auth.owned_header_names()?)?;
         let mut retried_auth = false;
         let response = loop {
             let mut headers = extra_headers.clone();
@@ -2878,7 +3061,7 @@ fn resolve_auth_header(
 
 fn resolve_extra_headers(
     transport: &InterfaceTransportConfig,
-    auth: Option<&(HeaderName, HeaderValue)>,
+    auth_owned: &[HeaderName],
 ) -> Result<HeaderMap, McpClientError> {
     let mut headers = HeaderMap::new();
     for (raw_name, raw_value) in &transport.headers {
@@ -2888,7 +3071,7 @@ fn resolve_extra_headers(
         if matches!(
             name.as_str(),
             "content-type" | "accept" | PROTOCOL_HEADER | SESSION_HEADER | LAST_EVENT_ID_HEADER
-        ) || auth.is_some_and(|(auth_name, _)| auth_name == &name)
+        ) || auth_owned.contains(&name)
         {
             return Err(McpClientError::Config(format!(
                 "header '{}' is owned by the transport contract",
@@ -3127,6 +3310,8 @@ mod tests {
             event_journal_retained_segments: 8,
             reconnect_backoff: Duration::from_millis(10),
             oauth: None,
+            account_auth: None,
+            tool_filter: None,
         }
     }
 

@@ -1,0 +1,54 @@
+{
+  "id": "world_gmail",
+  "interface_type": "world",
+  "role": "service",
+  "direction": "bidirectional",
+  "source_names": [
+    "mcp"
+  ],
+  "interface_driver_ref": "mcp_client",
+  "interface_driver_config": {
+    "private_config": {
+      "protocol_versions": [
+        "2025-11-25",
+        "2025-06-18"
+      ],
+      "client_name": "octopus-mcp-client",
+      "client_version": "1",
+      "operation_catalog_dir": "operations",
+      "operation_catalog_label": "mcp.operation_catalog",
+      "operation_request_label": "mcp.operation.request",
+      "max_catalog_pages": 64,
+      "max_catalog_items": 4096,
+      "max_catalog_bytes": 16777216,
+      "event_journal_segment_bytes": 16777216,
+      "event_journal_retained_segments": 64,
+      "reconnect_backoff_ms": 2000,
+      "auth": {
+        "mode": "chatgpt_account",
+        "auth_file_env": "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+        "account_header": "ChatGPT-Account-ID"
+      },
+      "tool_filter": {
+        "meta_key": "connector_id",
+        "values": [
+          "connector_2128aebfecb84f64a069897515042a44"
+        ]
+      },
+      "connector_link": {
+        "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+        "name": "Gmail"
+      },
+      "client_connection": {
+        "schema_version": 1,
+        "module": "interface://world_gmail/packages/connection.cjs"
+      }
+    },
+    "transport": {
+      "base_url": "https://chatgpt.com/backend-api/ps/mcp",
+      "wire": "mcp_streamable_http",
+      "request_timeout_ms": 120000,
+      "max_response_bytes": 33554432
+    }
+  }
+}

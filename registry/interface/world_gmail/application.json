@@ -1,0 +1,37 @@
+{
+  "schema_version": 3,
+  "id": "world_gmail",
+  "name": "Gmail",
+  "description": "Search, read, draft and send email with the Gmail app connected to your ChatGPT account.",
+  "category": "plugin",
+  "developer": "Octopus",
+  "version": "1.0.0",
+  "icon": "mail",
+  "logo": "application-logo.svg",
+  "interfaces": [
+    "world_gmail"
+  ],
+  "artifact_bindings": [
+    {
+      "artifact_id": "artifact-application-gmail-context",
+      "label": "Gmail capability contract"
+    }
+  ],
+  "task_capabilities": {
+    "tools": [
+      {
+        "tool": "artifact.send",
+        "interface": "system_room",
+        "worker_environment_kind": "system_room"
+      }
+    ]
+  },
+  "connection": {
+    "disclosure": [
+      "Uses the Gmail app connected to your ChatGPT account. Octopus reads your ChatGPT sign-in on this Mac and keeps no Google password or token of its own.",
+      "Tasks you connect to Gmail can search and read your email, threads, labels, drafts and attachments, and pass what they read to their model.",
+      "Those tasks can also draft, send, forward, label, archive and delete email when their work calls for it.",
+      "Gmail stays linked in ChatGPT. Manage or disconnect it in ChatGPT under Settings, Apps."
+    ]
+  }
+}
