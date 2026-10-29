@@ -231,6 +231,7 @@
 .oc-dialog[data-oc-dialog-size="narrow"] { width: 380px; }
 .oc-dialog[data-oc-dialog-size="feature"] { width: 400px; }
 .oc-dialog[data-oc-dialog-size="compact"] { width: 420px; }
+.oc-dialog[data-oc-dialog-size="setup"] { width: 480px; }
 .oc-dialog[data-oc-dialog-size="default"] { width: 520px; }
 .oc-dialog[data-oc-dialog-size="wide"] { width: 600px; }
 .oc-dialog[data-oc-dialog-size="xwide"] { width: 680px; }

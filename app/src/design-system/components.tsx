@@ -1429,7 +1429,7 @@ export function OcSlider({
   );
 }
 
-export type OcDialogSize = "narrow" | "feature" | "compact" | "default" | "wide" | "xwide" | "xxwide" | "editor";
+export type OcDialogSize = "narrow" | "feature" | "compact" | "setup" | "default" | "wide" | "xwide" | "xxwide" | "editor";
 
 export type OcDialogProps = {
   open: boolean;

@@ -11,6 +11,7 @@ import {
   type RefObject,
 } from "react";
 import type {
+  OctopusApplicationConnectionState,
   OctopusApplicationLifecycleProgress,
   OctopusClientAccessProfile,
   OctopusClientSetupState,
@@ -22,11 +23,14 @@ import {
 } from "../extensions/incidents";
 import { useClientExtensions } from "../extensions/useClientExtensions";
 import {
+  canConnectApplications,
+  disconnectApplicationInterface,
   formatProjectionError,
   hasProjectionBridge,
   mutateApplicationPrivateConfiguration,
   mutateOctopusOsWorkspace,
   onApplicationLifecycleProgress,
+  probeApplicationConnection,
   readCurrentClientSetup,
   readProjection,
 } from "../projectionClient";
@@ -44,6 +48,21 @@ import {
   OcSwitch,
   cx,
 } from "../design-system/components";
+import { ApplicationAvailabilityList, type ApplicationAvailabilityChange } from "./applications/ApplicationAvailability";
+import { ApplicationConnectDialog, type ApplicationConnectMode } from "./applications/ApplicationConnectDialog";
+import { ApplicationConnectionControl } from "./applications/ApplicationConnectionControl";
+import { ApplicationLogo, ApplicationMiniLogo } from "./applications/ApplicationLogo";
+import {
+  applicationConnectionSummary,
+  configurationFieldKey,
+  type ApplicationCategory,
+  type ApplicationConfigurationField,
+  type ApplicationConnectionProbeState,
+  type ApplicationConnectionSummary,
+  type ApplicationProject,
+  type ApplicationProjectState,
+  type ApplicationRecord,
+} from "./applications/applicationModel";
 import {
   CatalogInstalledRail,
   CatalogRouteTransition,
@@ -53,86 +72,6 @@ import { Glyph, type GlyphName } from "./IconGlyphs";
 import { OctopusLoadingState } from "./OctopusLoadingLogo";
 import { SetupDialogShell } from "./SetupDialogShell";
 import { useAppErrorToast } from "../toasts";
-
-type ApplicationCategory = "provider" | "connector" | "plugin" | "artifact";
-
-type ApplicationProjectState = {
-  ee_id: string;
-  is_root: boolean;
-  policy_allowed: boolean;
-  ceiling_allowed: boolean;
-  selected_by_default: boolean;
-  record_digest: string;
-};
-
-type ApplicationConfigurationField = {
-  interface_id: string;
-  name: string;
-  label: string;
-  kind: "text" | "url" | "secret";
-  required: boolean;
-  configured: boolean;
-  private_saved: boolean;
-  source: "private" | "environment" | "both" | "conflict" | "missing" | "unknown";
-};
-
-type ApplicationConfiguration = {
-  status: "not_installed" | "configured" | "required" | "unknown" | "issue";
-  fields: ApplicationConfigurationField[];
-  documents: Array<{ interface_id: string; status: string; digest: string }>;
-  error: string;
-};
-
-type ApplicationRecord = {
-  id: string;
-  name: string;
-  description: string;
-  category: ApplicationCategory;
-  developer: string;
-  version: string;
-  icon: string;
-  logo: string;
-  logo_dark: string;
-  logo_data_url: string;
-  logo_dark_data_url: string;
-  interfaces: string[];
-  artifact_bindings: Array<{ artifact_id: string; label?: string }>;
-  installed: boolean;
-  materialized: boolean;
-  partially_materialized: boolean;
-  valid: boolean;
-  missing_interface_ids: string[];
-  descriptor_path: string;
-  manifest_path: string;
-  manifest_digest: string;
-  package_id: string;
-  installed_digest: string;
-  source_available: boolean;
-  source_kind: "local" | "none";
-  source_digest: string;
-  install_packages: Array<{ id: string; name: string; source_digest: string; installed: boolean; receipt_state: string }>;
-  source_file_count: number;
-  receipt_state: string;
-  receipt_digest: string;
-  managed: boolean;
-  install_block_reason: string;
-  removal_allowed: boolean;
-  removal_block_reason: string;
-  connected_run_ids: string[];
-  partially_connected_run_ids?: string[];
-  project_states: ApplicationProjectState[];
-  configuration?: ApplicationConfiguration;
-};
-
-type ApplicationProject = {
-  ee_id: string;
-  name: string;
-  icon: string;
-  color: string;
-  goal: string;
-  parent_ee_id: string;
-  record_digest: string;
-};
 
 type ApplicationsProjection = {
   status?: string;
@@ -192,9 +131,6 @@ type LocalPackagesProjection = {
   packs?: ApplicationPackRecord[];
   errors?: unknown[];
 };
-
-type SetupDraft = Record<string, { available: boolean; selected: boolean }>;
-type ConfigurationDraft = Record<string, { value: string; clear: boolean }>;
 
 type ApplicationLifecycleOperation = {
   operationId: string;
@@ -260,11 +196,14 @@ export function ApplicationsView({
   const [selectedPackId, setSelectedPackId] = useState("");
   const [highlightedId, setHighlightedId] = useState("");
   const [packRecommendedSelections, setPackRecommendedSelections] = useState<Record<string, string[]>>({});
-  const [setupId, setSetupId] = useState("");
-  const [setupDraft, setSetupDraft] = useState<SetupDraft>({});
-  const [configurationDraft, setConfigurationDraft] = useState<ConfigurationDraft>({});
-  const [saving, setSaving] = useState(false);
+  const [connectTarget, setConnectTarget] = useState<{ applicationId: string; mode: ApplicationConnectMode; session: number } | null>(null);
+  const [connectionProbes, setConnectionProbes] = useState<Record<string, ApplicationConnectionProbeState>>({});
+  const [disconnectingId, setDisconnectingId] = useState("");
+  const [availabilitySaving, setAvailabilitySaving] = useState<{ applicationId: string; eeId: string } | null>(null);
+  const [configurationSaving, setConfigurationSaving] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
+  const probeRequests = useRef(new Map<string, number>());
+  const connectAvailable = canConnectApplications();
   const [removeId, setRemoveId] = useState("");
   const [installReview, setInstallReview] = useState<ApplicationRecord | null>(null);
   const [lifecycleOperations, setLifecycleOperations] = useState<Record<string, ApplicationLifecycleOperation>>({});
@@ -395,8 +334,31 @@ export function ApplicationsView({
   }, [applicationPacks, browseQuery]);
   const selected = applications.find((application) => application.id === selectedId) ?? null;
   const selectedPack = applicationPacks.find((pack) => pack.id === selectedPackId) ?? null;
-  const setupApplication = applications.find((application) => application.id === setupId) ?? null;
+  const connectApplication = connectTarget ? applications.find((application) => application.id === connectTarget.applicationId) ?? null : null;
   const removeApplication = applications.find((application) => application.id === removeId) ?? null;
+  const connectionSummaries = useMemo(() => new Map(applications.map((application) => [
+    application.id,
+    applicationConnectionSummary(application, connectionProbes[application.id]),
+  ])), [applications, connectionProbes]);
+  const summaryOf = (application: ApplicationRecord) => connectionSummaries.get(application.id) ?? applicationConnectionSummary(application, undefined);
+  const probeKey = loaded
+    ? applications
+        .filter((application) => application.installed && (application.connection_interfaces?.length ?? 0) > 0)
+        .map((application) => `${application.id}:${(application.connection_interfaces ?? []).join(",")}:${application.installed_digest}`)
+        .join("|")
+    : "";
+
+  useEffect(() => {
+    probeRequests.current.clear();
+    setConnectionProbes({});
+  }, [accessProfile]);
+
+  useEffect(() => {
+    if (!probeKey) return;
+    for (const application of applications) {
+      if (application.installed && (application.connection_interfaces?.length ?? 0) > 0) refreshConnection(application);
+    }
+  }, [probeKey]);
   const groups = CATEGORY_ORDER.flatMap((category) => {
     const rows = visible.filter((application) => application.category === category);
     return rows.length ? [{ category, rows }] : [];
@@ -454,17 +416,49 @@ export function ApplicationsView({
     )?.scrollIntoView({ block: "nearest" });
   }
 
-  function openSetup(application: ApplicationRecord) {
+  function refreshConnection(application: ApplicationRecord) {
+    const interfaces = application.connection_interfaces ?? [];
+    if (!interfaces.length) return;
+    const request = (probeRequests.current.get(application.id) ?? 0) + 1;
+    probeRequests.current.set(application.id, request);
+    const settle = (states: Record<string, OctopusApplicationConnectionState>) => {
+      if (probeRequests.current.get(application.id) !== request) return;
+      setConnectionProbes((current) => ({ ...current, [application.id]: { checking: false, interfaces: states } }));
+    };
+    setConnectionProbes((current) => ({ ...current, [application.id]: { checking: true, interfaces: current[application.id]?.interfaces ?? {} } }));
+    if (!connectAvailable) {
+      settle(Object.fromEntries(interfaces.map((interfaceId) => [interfaceId, { state: "error", message: "Connect applications from the Octopus desktop client." }])));
+      return;
+    }
+    probeApplicationConnection(application.id).then(
+      (result) => settle(Object.fromEntries(result.interfaces.map((entry) => [entry.interfaceId, entry.state]))),
+      (failure) => {
+        const message = formatProjectionError(failure);
+        settle(Object.fromEntries(interfaces.map((interfaceId) => [interfaceId, { state: "error", message }])));
+      },
+    );
+  }
+
+  function openConnect(application: ApplicationRecord, mode: ApplicationConnectMode) {
     if (!application.installed || !application.valid) return;
-    setSetupDraft(Object.fromEntries(application.project_states.map((state) => [
-      state.ee_id,
-      { available: state.policy_allowed, selected: state.selected_by_default },
-    ])));
-    setConfigurationDraft(Object.fromEntries(applicationConfiguration(application).fields.map((field) => [
-      configurationFieldKey(field),
-      { value: "", clear: false },
-    ])));
-    setSetupId(application.id);
+    setConnectTarget((current) => ({ applicationId: application.id, mode, session: (current?.session ?? 0) + 1 }));
+  }
+
+  function connectionChanged(applicationId: string) {
+    setReloadTick((current) => current + 1);
+    const application = applications.find((candidate) => candidate.id === applicationId);
+    if (application) refreshConnection(application);
+  }
+
+  function connectionActions(application: ApplicationRecord): ApplicationConnectionActions {
+    return {
+      summary: summaryOf(application),
+      connectAvailable,
+      disconnecting: disconnectingId === application.id,
+      onConnect: (mode) => openConnect(application, mode),
+      onDisconnect: () => void disconnectApplication(application),
+      onCheck: () => connectionChanged(application.id),
+    };
   }
 
   function openApplication(id: string, returnView: ApplicationCatalogView = catalogView) {
@@ -474,6 +468,8 @@ export function ApplicationsView({
     setRouteDirection("forward");
     setSelectedPackId("");
     setSelectedId(id);
+    const application = applications.find((candidate) => candidate.id === id);
+    if (application?.installed && connectionProbes[id] && !connectionProbes[id].checking) refreshConnection(application);
   }
 
   function openApplicationPack(id: string) {
@@ -534,87 +530,83 @@ export function ApplicationsView({
     window.requestAnimationFrame(() => document.getElementById("applications-browse-manage")?.focus());
   }
 
-  async function saveConfiguration(interfaceId: string) {
-    if (!setupApplication || accessProfile !== "live") return;
-    const configuration = applicationConfiguration(setupApplication);
-    const document = configuration.documents.find((candidate) => candidate.interface_id === interfaceId);
-    if (!document) return;
-    const fields = configuration.fields.filter((field) => field.interface_id === interfaceId);
-    const updates = Object.fromEntries(fields.flatMap((field) => {
-      const next = configurationDraft[configurationFieldKey(field)];
-      return next && !next.clear && next.value.length > 0 ? [[field.name, next.value]] : [];
-    }));
-    const clears = fields.flatMap((field) => (
-      configurationDraft[configurationFieldKey(field)]?.clear ? [field.name] : []
-    ));
-    if (Object.keys(updates).length === 0 && clears.length === 0) return;
-    setSaving(true);
+  async function saveConfiguration(application: ApplicationRecord, interfaceId: string, updates: Record<string, string>, clears: string[]) {
+    const document = application.configuration?.documents.find((candidate) => candidate.interface_id === interfaceId);
+    if (!document || (Object.keys(updates).length === 0 && clears.length === 0)) return;
+    setConfigurationSaving(application.id);
     try {
       await mutateApplicationPrivateConfiguration({
-        applicationId: setupApplication.id,
+        applicationId: application.id,
         interfaceId,
         expectedDigest: document.status === "valid" && document.digest ? document.digest : null,
         updates,
         clears,
       });
-      setConfigurationDraft((current) => ({
-        ...current,
-        ...Object.fromEntries(fields.map((field) => [configurationFieldKey(field), { value: "", clear: false }])),
-      }));
-      setReloadTick((current) => current + 1);
     } catch (failure) {
       setError(formatProjectionError(failure));
     } finally {
-      setSaving(false);
+      setConfigurationSaving("");
+      setReloadTick((current) => current + 1);
     }
   }
 
-  async function saveSetup() {
-    if (!setupApplication) return;
-    if (accessProfile !== "live") {
-      setApplications((current) => current.map((application) => application.id !== setupApplication.id
-        ? application
-        : {
-            ...application,
-            project_states: application.project_states.map((state) => {
-              const next = setupDraft[state.ee_id];
-              return next ? {
-                ...state,
-                policy_allowed: next.available,
-                selected_by_default: next.available && next.selected,
-              } : state;
-            }),
-          }));
-      setSetupId("");
-      return;
-    }
-    setSaving(true);
+  async function disconnectApplication(application: ApplicationRecord) {
+    const summary = summaryOf(application);
+    setDisconnectingId(application.id);
     try {
-      const changedProjects = setupApplication.project_states.flatMap((state) => {
-        const next = setupDraft[state.ee_id];
-        if (!next || (
-          next.available === state.policy_allowed
-          && next.selected === state.selected_by_default
-        )) return [];
-        return [{
-          eeId: state.ee_id,
-          available: next.available,
-          selectedByDefault: next.selected,
-          expectedDigest: state.record_digest,
-        }];
-      });
-      if (changedProjects.length) {
-        await mutateOctopusOsWorkspace({
-          action: "configure_application",
-          applicationId: setupApplication.id,
-          projects: changedProjects,
+      for (const interfaceId of summary.moduleInterfaces) {
+        await disconnectApplicationInterface(application.id, interfaceId);
+      }
+      for (const interfaceId of summary.fieldInterfaces) {
+        const saved = summary.fields.filter((field) => field.interface_id === interfaceId && field.private_saved).map((field) => field.name);
+        const document = application.configuration?.documents.find((candidate) => candidate.interface_id === interfaceId);
+        if (!saved.length || !document) continue;
+        await mutateApplicationPrivateConfiguration({
+          applicationId: application.id,
+          interfaceId,
+          expectedDigest: document.status === "valid" && document.digest ? document.digest : null,
+          updates: {},
+          clears: saved,
         });
       }
-      setReloadTick((current) => current + 1);
     } catch (failure) {
       setError(formatProjectionError(failure));
     } finally {
-      setSaving(false);
+      setDisconnectingId("");
+      connectionChanged(application.id);
+    }
+  }
+
+  async function changeAvailability(application: ApplicationRecord, state: ApplicationProjectState, next: ApplicationAvailabilityChange) {
+    if (accessProfile !== "live") {
+      setApplications((current) => current.map((candidate) => candidate.id !== application.id
+        ? candidate
+        : {
+            ...candidate,
+            project_states: candidate.project_states.map((projectState) => projectState.ee_id !== state.ee_id
+              ? projectState
+              : { ...projectState, policy_allowed: next.available, selected_by_default: next.available && next.selected }),
+          }));
+      return;
+    }
+    if (next.available === state.policy_allowed && next.selected === state.selected_by_default) return;
+    setAvailabilitySaving({ applicationId: application.id, eeId: state.ee_id });
+    try {
+      await mutateOctopusOsWorkspace({
+        action: "configure_application",
+        applicationId: application.id,
+        projects: [{
+          eeId: state.ee_id,
+          available: next.available,
+          selectedByDefault: next.available && next.selected,
+          expectedDigest: state.record_digest,
+        }],
+      });
+    } catch (failure) {
+      setError(formatProjectionError(failure));
+    } finally {
+      setAvailabilitySaving(null);
+      setReloadTick((current) => current + 1);
     }
   }
 
@@ -848,7 +840,7 @@ export function ApplicationsView({
                     ) : catalogView === "manage" ? (
                       <>
                         {manageApplications.length ? (
-                          <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} highlightedId={highlightedId} lifecycleOperations={lifecycleOperations} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} onSetup={openSetup} setupStatusByInterface={setupStatusByInterface} />
+                          <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} connectionFor={connectionActions} highlightedId={highlightedId} lifecycleOperations={lifecycleOperations} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} setupStatusByInterface={setupStatusByInterface} />
                         ) : <SurfaceState compact title={`No ${CATEGORY_COPY[manageCategory].title.toLowerCase()} found`} />}
                       </>
                     ) : (
@@ -901,7 +893,7 @@ export function ApplicationsView({
                             items={rows}
                             key={category}
                             renderCard={(application) => (
-                              <ApplicationCard accessProfile={accessProfile} application={application} highlighted={highlightedId === application.id} lifecycle={lifecycleOperations[application.id]} onInstall={() => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "browse")} onRemove={() => setRemoveId(application.id)} onSetup={() => openSetup(application)} setRef={(node) => {
+                              <ApplicationCard accessProfile={accessProfile} application={application} connection={connectionActions(application)} highlighted={highlightedId === application.id} lifecycle={lifecycleOperations[application.id]} onInstall={() => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "browse")} onRemove={() => setRemoveId(application.id)} setRef={(node) => {
                                 if (node) browseCardRefs.current.set(application.id, node);
                                 else browseCardRefs.current.delete(application.id);
                               }} setupStatus={applicationSetupStatus(application, setupStatusByInterface)} />
@@ -940,23 +932,38 @@ export function ApplicationsView({
                 setupStatus={applicationPackSetupStatus(selectedPack, setupStatusByInterface)}
               />
             ) : selected ? (
-              <ApplicationDetail accessProfile={accessProfile} application={selected} lifecycle={lifecycleOperations[selected.id]} onBack={closeApplication} onInstall={() => void installOrRepairApplication(selected)} onRemove={() => setRemoveId(selected.id)} onSetup={() => openSetup(selected)} projects={projects} rootEeId={rootEeId} setupStatus={applicationSetupStatus(selected, setupStatusByInterface)} />
+              <ApplicationDetail
+                accessProfile={accessProfile}
+                application={selected}
+                availabilitySavingEeId={availabilitySaving?.applicationId === selected.id ? availabilitySaving.eeId : ""}
+                configurationSaving={configurationSaving === selected.id}
+                connection={connectionActions(selected)}
+                lifecycle={lifecycleOperations[selected.id]}
+                onAvailabilityChange={(state, next) => void changeAvailability(selected, state, next)}
+                onBack={closeApplication}
+                onInstall={() => void installOrRepairApplication(selected)}
+                onRemove={() => setRemoveId(selected.id)}
+                onSaveConfiguration={(interfaceId, updates, clears) => void saveConfiguration(selected, interfaceId, updates, clears)}
+                projects={projects}
+                rootEeId={rootEeId}
+                setupStatus={applicationSetupStatus(selected, setupStatusByInterface)}
+              />
             ) : <div className="h-full min-h-0" />}
           </CatalogRouteTransition>
         </div>
       </div>
-      <ApplicationSetupDialog
-        application={setupApplication}
-        configurationDraft={configurationDraft}
-        draft={setupDraft}
-        onCancel={() => setSetupId("")}
-        onChange={setSetupDraft}
-        onConfigurationChange={setConfigurationDraft}
-        onConfigurationSave={(interfaceId) => void saveConfiguration(interfaceId)}
-        onSave={saveSetup}
+      <ApplicationConnectDialog
+        application={connectApplication}
+        availabilitySavingEeId={connectApplication && availabilitySaving?.applicationId === connectApplication.id ? availabilitySaving.eeId : ""}
+        mode={connectTarget?.mode ?? "connect"}
+        moduleStates={connectApplication ? connectionProbes[connectApplication.id]?.interfaces ?? {} : {}}
+        onAvailabilityChange={(application, state, next) => void changeAvailability(application, state, next)}
+        onChanged={connectionChanged}
+        onClose={() => setConnectTarget(null)}
         projects={projects}
         rootEeId={rootEeId}
-        saving={saving}
+        sessionKey={connectTarget?.session ?? 0}
+        summary={connectApplication ? summaryOf(connectApplication) : null}
       />
       <ApplicationRemovalDialog application={removeApplication} lifecycle={removeApplication ? lifecycleOperations[removeApplication.id] : undefined} onCancel={() => setRemoveId("")} onConfirm={() => removeApplication && void removeInstalledApplication(removeApplication)} />
       <SetupDialogShell ariaLabel="Review required packages" busy={false} open={Boolean(installReview)} onClose={() => setInstallReview(null)}>
@@ -1236,16 +1243,25 @@ function ApplicationPackFactBadges({ clientSetup, clientSetupError, compact = fa
   );
 }
 
-function ManageApplicationsList({ accessProfile, applicationRefs, applications, highlightedId, lifecycleOperations, onInstall, onOpen, onRemove, onSetup, setupStatusByInterface }: {
+type ApplicationConnectionActions = {
+  summary: ApplicationConnectionSummary;
+  connectAvailable: boolean;
+  disconnecting: boolean;
+  onConnect: (mode: ApplicationConnectMode) => void;
+  onDisconnect: () => void;
+  onCheck: () => void;
+};
+
+function ManageApplicationsList({ accessProfile, applicationRefs, applications, connectionFor, highlightedId, lifecycleOperations, onInstall, onOpen, onRemove, setupStatusByInterface }: {
   accessProfile: OctopusClientAccessProfile;
   applicationRefs: RefObject<Map<string, HTMLElement>>;
   applications: ApplicationRecord[];
+  connectionFor: (application: ApplicationRecord) => ApplicationConnectionActions;
   highlightedId: string;
   lifecycleOperations: Record<string, ApplicationLifecycleOperation>;
   onInstall: (application: ApplicationRecord) => void;
   onOpen: (id: string) => void;
   onRemove: (application: ApplicationRecord) => void;
-  onSetup: (application: ApplicationRecord) => void;
   setupStatusByInterface: Map<string, ClientExtensionActionStatus>;
 }) {
   return (
@@ -1254,13 +1270,13 @@ function ManageApplicationsList({ accessProfile, applicationRefs, applications, 
         <ApplicationCard
           accessProfile={accessProfile}
           application={application}
+          connection={connectionFor(application)}
           highlighted={highlightedId === application.id}
           key={application.id}
           lifecycle={lifecycleOperations[application.id]}
           onInstall={() => onInstall(application)}
           onOpen={onOpen}
           onRemove={() => onRemove(application)}
-          onSetup={() => onSetup(application)}
           setupStatus={applicationSetupStatus(application, setupStatusByInterface)}
           view="manage"
           setRef={(node) => {
@@ -1276,24 +1292,24 @@ function ManageApplicationsList({ accessProfile, applicationRefs, applications, 
 function ApplicationCard({
   accessProfile,
   application,
+  connection,
   highlighted,
   lifecycle,
   onInstall,
   onOpen,
   onRemove,
-  onSetup,
   setupStatus,
   setRef,
   view = "browse",
 }: {
   accessProfile: OctopusClientAccessProfile;
   application: ApplicationRecord;
+  connection: ApplicationConnectionActions;
   highlighted: boolean;
   lifecycle?: ApplicationLifecycleOperation;
   onInstall: () => void;
   onOpen: (id: string) => void;
   onRemove: () => void;
-  onSetup?: () => void;
   setupStatus?: ClientExtensionActionStatus;
   setRef?: (node: HTMLDivElement | null) => void;
   view?: ApplicationCatalogView;
@@ -1312,21 +1328,23 @@ function ApplicationCard({
         <span className={cx("flex min-w-0 flex-1 flex-col justify-center", view === "browse" ? "gap-px" : "gap-0.5")}>
           <span className="block truncate font-medium text-default">{application.name}</span>
           <span className="block line-clamp-1 text-sm leading-relaxed text-text-description">{application.description}</span>
-          <ApplicationCardMeta application={application} setupStatus={setupStatus} />
+          <ApplicationCardMeta application={application} setupStatus={setupStatus} summary={connection.summary} />
         </span>
       </button>
-      {onSetup ? <ApplicationCardActions accessProfile={accessProfile} application={application} lifecycle={lifecycle} onInstall={onInstall} onRemove={onRemove} onSetup={onSetup} /> : null}
+      <ApplicationCardActions accessProfile={accessProfile} application={application} connection={connection} lifecycle={lifecycle} onInstall={onInstall} onOpen={() => onOpen(application.id)} onRemove={onRemove} view={view} />
     </div>
   );
 }
 
-function ApplicationCardActions({ accessProfile, application, lifecycle, onInstall, onRemove, onSetup }: {
+function ApplicationCardActions({ accessProfile, application, connection, lifecycle, onInstall, onOpen, onRemove, view }: {
   accessProfile: OctopusClientAccessProfile;
   application: ApplicationRecord;
+  connection: ApplicationConnectionActions;
   lifecycle?: ApplicationLifecycleOperation;
   onInstall: () => void;
+  onOpen: () => void;
   onRemove: () => void;
-  onSetup: () => void;
+  view: ApplicationCatalogView;
 }) {
   const available = application.project_states.some((state) => state.policy_allowed);
   const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
@@ -1356,19 +1374,32 @@ function ApplicationCardActions({ accessProfile, application, lifecycle, onInsta
     <div className="flex shrink-0 flex-col items-end gap-1">
       <div className="flex items-center gap-1">
         {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : null}
-        <OcButton
-          className="shrink-0"
-          disabled={!application.valid || Boolean(busy)}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSetup();
-          }}
-          size="xs"
-          variant="ghost"
-        >
-          {!application.valid ? "View issue" : available ? "Manage" : "Set up"}
-        </OcButton>
-        {!application.managed ? <OcIconButton disabled={Boolean(busy) || accessProfile !== "live" || !application.removal_allowed} glyph="trash" label={`Remove ${application.name}`} onClick={(event) => {
+        {!application.valid || connection.summary.status === "none" ? (
+          <OcButton
+            className="shrink-0"
+            disabled={Boolean(busy)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpen();
+            }}
+            size="xs"
+            variant="ghost"
+          >
+            {!application.valid ? "View issue" : available ? "Manage" : "Set up"}
+          </OcButton>
+        ) : busy ? null : (
+          <ApplicationConnectionControl
+            connectAvailable={connection.connectAvailable}
+            disconnecting={connection.disconnecting}
+            name={application.name}
+            onCheck={connection.onCheck}
+            onConnect={connection.onConnect}
+            onDisconnect={connection.onDisconnect}
+            placement="card"
+            summary={connection.summary}
+          />
+        )}
+        {view === "manage" && !application.managed ? <OcIconButton disabled={Boolean(busy) || accessProfile !== "live" || !application.removal_allowed} glyph="trash" label={`Remove ${application.name}`} onClick={(event) => {
           event.stopPropagation();
           onRemove();
         }} size="xs" title={accessProfile !== "live" ? "Remove applications from the Administrator profile." : application.removal_block_reason || `Remove ${application.name}`} variant="ghost" /> : null}
@@ -1381,37 +1412,41 @@ function ApplicationCardActions({ accessProfile, application, lifecycle, onInsta
 function ApplicationDetail({
   accessProfile,
   application,
+  availabilitySavingEeId,
+  configurationSaving,
+  connection,
   lifecycle,
+  onAvailabilityChange,
   onBack,
   onInstall,
   onRemove,
-  onSetup,
+  onSaveConfiguration,
   projects,
   rootEeId,
   setupStatus,
 }: {
   accessProfile: OctopusClientAccessProfile;
   application: ApplicationRecord;
+  availabilitySavingEeId: string;
+  configurationSaving: boolean;
+  connection: ApplicationConnectionActions;
   lifecycle?: ApplicationLifecycleOperation;
+  onAvailabilityChange: (state: ApplicationProjectState, next: ApplicationAvailabilityChange) => void;
   onBack: () => void;
   onInstall: () => void;
   onRemove: () => void;
-  onSetup: () => void;
+  onSaveConfiguration: (interfaceId: string, updates: Record<string, string>, clears: string[]) => void;
   projects: ApplicationProject[];
   rootEeId: string;
   setupStatus?: ClientExtensionActionStatus;
 }) {
-  const availableProjects = application.project_states.filter((state) => state.policy_allowed);
-  const defaultProjects = application.project_states.filter((state) => state.selected_by_default);
+  const summary = connection.summary;
   const partiallyConnectedRunCount = application.partially_connected_run_ids?.length ?? 0;
-  const projectById = new Map(projects.map((project) => [project.ee_id, project]));
   const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
   const repairable = Boolean(applicationRepairExpectation(application));
-  const actionLabel = !application.installed
-    ? lifecycle?.phase === "failed"
-      ? `Retry ${repairable ? "repair" : "install"}`
-      : repairable ? "Repair" : "Install"
-    : !application.valid ? "View issue" : availableProjects.length ? "Manage" : "Set up";
+  const usable = application.installed && application.valid;
+  const environmentFields = (application.configuration?.fields ?? []).filter((field) => field.authored === false);
+  const help = application.connection?.help ?? null;
   return (
     <section className="flex h-full min-h-0 flex-col text-base select-none">
       <header className="surface-titlebar-spacer flex h-toolbar shrink-0 items-center px-panel">
@@ -1432,11 +1467,22 @@ function ApplicationDetail({
                   <div className="text-base text-secondary">{application.description}</div>
                 </div>
                 <div className="flex max-w-full shrink-0 items-center gap-2">
-                  <ApplicationFactBadges application={application} setupStatus={setupStatus} />
+                  <ApplicationFactBadges application={application} setupStatus={setupStatus} summary={summary} />
                   {application.installed ? (
                     <>
                       <OcButton disabled={Boolean(busy) || accessProfile !== "live" || !application.removal_allowed} onClick={onRemove} size="sm" title={accessProfile !== "live" ? "Remove applications from the Administrator profile." : application.removal_block_reason || `Remove ${application.name}`} tone="danger" variant="ghost">Remove</OcButton>
-                      <OcButton disabled={Boolean(busy) || !application.valid} onClick={onSetup} size="sm" variant="primary">{busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : actionLabel}</OcButton>
+                      {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : usable ? (
+                        <ApplicationConnectionControl
+                          connectAvailable={connection.connectAvailable}
+                          disconnecting={connection.disconnecting}
+                          name={application.name}
+                          onCheck={connection.onCheck}
+                          onConnect={connection.onConnect}
+                          onDisconnect={connection.onDisconnect}
+                          placement="detail"
+                          summary={summary}
+                        />
+                      ) : null}
                     </>
                   ) : (
                     <OcButton
@@ -1449,7 +1495,9 @@ function ApplicationDetail({
                         : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
                       variant="primary"
                     >
-                      {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : actionLabel}
+                      {busy && lifecycle
+                        ? <ApplicationLifecycleProgress operation={lifecycle} />
+                        : lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
                     </OcButton>
                   )}
                 </div>
@@ -1461,45 +1509,79 @@ function ApplicationDetail({
                 <div className="mt-1 whitespace-pre-wrap text-xs opacity-90">{lifecycle.error}</div>
               </div>
             ) : null}
-            <DetailSection title="Setup">
-              <div className="flex flex-col gap-2">
-                <DetailRow label="Installed" value={application.installed
-                  ? "Package installed in Octopus Home."
-                  : application.materialized || application.partially_materialized
-                    ? "Package files were found, but Octopus could not verify one complete installation."
-                    : "Available to install. No interfaces or task bindings have been added."} />
-                {application.configuration && application.configuration.fields.length ? <DetailRow label="Configuration" value={applicationConfigurationDetail(application.configuration)} /> : null}
-                {setupStatus && application.installed ? <DetailRow label="Provider setup" value={setupStatus.message} /> : null}
-                <DetailRow label="Enabled in" value={availableProjects.length ? availableProjects.map((state) => projectLabel(projectById.get(state.ee_id), state.ee_id, rootEeId)).join(", ") : "Not enabled yet. Choose Home or a project in Set up."} />
-                <DetailRow label="Default for new tasks" value={defaultProjects.length ? defaultProjects.map((state) => projectLabel(projectById.get(state.ee_id), state.ee_id, rootEeId)).join(", ") : "Not selected by default in any project."} />
-                <DetailRow label="Connected" value={partiallyConnectedRunCount
-                  ? `Connection incomplete in ${partiallyConnectedRunCount} task${partiallyConnectedRunCount === 1 ? "" : "s"}.`
-                  : application.connected_run_ids.length
-                    ? `Connected to ${application.connected_run_ids.length} task${application.connected_run_ids.length === 1 ? "" : "s"}.`
-                    : "Not connected to a task."} />
-                {application.source_kind === "local" ? null : <DetailRow label="Package source" value="This build ships no package for it, so it cannot be repaired or updated." />}
-                {application.installed && application.removal_block_reason ? <DetailRow label="Removal" value={application.removal_block_reason} /> : null}
-                {!application.valid ? <DetailRow label="Installation issue" value={application.missing_interface_ids.length
-                  ? `Missing interfaces: ${application.missing_interface_ids.join(", ")}`
-                  : application.receipt_state && application.receipt_state !== "valid"
-                    ? "The package files do not have one matching install receipt."
-                    : "The package manifest could not be admitted."} /> : null}
-              </div>
-            </DetailSection>
+            {usable && summary.status !== "none" ? (
+              <DetailSection title="Connection">
+                <DetailRow label="Status" value={<ConnectionStatusValue summary={summary} />} />
+                {summary.account ? <DetailRow label="Account" value={summary.account.detail ? `${summary.account.label} · ${summary.account.detail}` : summary.account.label} /> : null}
+                {summary.fields.map((field) => (
+                  <DetailRow
+                    action={field.private_saved && summary.fieldInterfaces.includes(field.interface_id) ? (
+                      <OcButton disabled={configurationSaving || connection.disconnecting} onClick={() => onSaveConfiguration(field.interface_id, {}, [field.name])} size="xs" variant="ghost">Clear</OcButton>
+                    ) : null}
+                    key={configurationFieldKey(field)}
+                    label={field.label}
+                    value={configurationFieldStatus(field)}
+                  />
+                ))}
+                {help ? (
+                  <DetailRow label="Help" value={<a className="cursor-interaction text-default underline underline-offset-2" href={help.url} rel="noreferrer" target="_blank">{help.label}</a>} />
+                ) : null}
+              </DetailSection>
+            ) : null}
+            {usable ? (
+              <DetailSection title="Available in">
+                <ApplicationAvailabilityList
+                  application={application}
+                  onChange={onAvailabilityChange}
+                  projects={projects}
+                  rootEeId={rootEeId}
+                  savingEeId={availabilitySavingEeId}
+                  variant="page"
+                />
+                <div className="px-2 pt-1 text-xs text-secondary">Existing tasks don't change. New tasks started where New tasks is on include {application.name}.</div>
+              </DetailSection>
+            ) : null}
+            {usable && environmentFields.length ? (
+              <DetailSection title="Environment">
+                <div className="px-2 pb-1 text-xs text-secondary">Private values for this application's processes. A value you don't set here comes from the environment Octopus starts with.</div>
+                {environmentFields.map((field) => (
+                  <EnvironmentFieldRow
+                    field={field}
+                    key={configurationFieldKey(field)}
+                    onSave={(updates, clears) => onSaveConfiguration(field.interface_id, updates, clears)}
+                    saving={configurationSaving}
+                  />
+                ))}
+              </DetailSection>
+            ) : null}
             <DetailSection title="Included">
-              <div className="flex flex-col gap-2">
-                {application.interfaces.map((interfaceId) => <DetailRow key={interfaceId} label="Interface" value={interfaceId} />)}
-                {application.artifact_bindings.map((binding) => <DetailRow key={binding.artifact_id} label="Guide for the model" value={binding.label?.trim() || binding.artifact_id} />)}
-                <DetailRow label="Task access" value="A task gets it only when you connect it to that task." />
-              </div>
+              {application.interfaces.map((interfaceId) => <DetailRow key={interfaceId} label="Interface" value={interfaceId} />)}
+              {application.artifact_bindings.map((binding) => <DetailRow key={binding.artifact_id} label="Guide for the model" value={binding.label?.trim() || binding.artifact_id} />)}
+              <DetailRow label="Task access" value="A task gets it only when you connect it to that task." />
+              <DetailRow label="Tasks" value={partiallyConnectedRunCount
+                ? `Connection incomplete in ${partiallyConnectedRunCount} task${partiallyConnectedRunCount === 1 ? "" : "s"}.`
+                : application.connected_run_ids.length
+                  ? `Used in ${application.connected_run_ids.length} task${application.connected_run_ids.length === 1 ? "" : "s"}.`
+                  : "Not used in a task yet."} />
             </DetailSection>
             <DetailSection title="Information">
-              <div className="flex flex-col gap-1">
-                <DetailRow label="Developer" value={application.developer} />
-                <DetailRow label="Category" value={CATEGORY_COPY[application.category].title} />
-                <DetailRow label="Version" value={application.version} />
-                <DetailRow label="Manifest" value={application.manifest_path} />
-              </div>
+              <DetailRow label="Installed" value={application.installed
+                ? "Package installed in Octopus Home."
+                : application.materialized || application.partially_materialized
+                  ? "Package files were found, but Octopus could not verify one complete installation."
+                  : "Available to install. No interfaces or task bindings have been added."} />
+              {!application.valid ? <DetailRow label="Installation issue" value={application.missing_interface_ids.length
+                ? `Missing interfaces: ${application.missing_interface_ids.join(", ")}`
+                : application.receipt_state && application.receipt_state !== "valid"
+                  ? "The package files do not have one matching install receipt."
+                  : "The package manifest could not be admitted."} /> : null}
+              {setupStatus && application.installed ? <DetailRow label="Provider setup" value={setupStatus.message} /> : null}
+              {application.installed && application.removal_block_reason ? <DetailRow label="Removal" value={application.removal_block_reason} /> : null}
+              {application.source_kind === "local" ? null : <DetailRow label="Package source" value="This build ships no package for it, so it cannot be repaired or updated." />}
+              <DetailRow label="Developer" value={application.developer} />
+              <DetailRow label="Category" value={CATEGORY_COPY[application.category].title} />
+              <DetailRow label="Version" value={application.version} />
+              <DetailRow label="Manifest" value={application.manifest_path} />
             </DetailSection>
           </div>
         </div>
@@ -1508,147 +1590,84 @@ function ApplicationDetail({
   );
 }
 
-function ApplicationSetupDialog({
-  application,
-  configurationDraft,
-  draft,
-  onCancel,
-  onChange,
-  onConfigurationChange,
-  onConfigurationSave,
-  onSave,
-  projects,
-  rootEeId,
-  saving,
-}: {
-  application: ApplicationRecord | null;
-  configurationDraft: ConfigurationDraft;
-  draft: SetupDraft;
-  onCancel: () => void;
-  onChange: (draft: SetupDraft) => void;
-  onConfigurationChange: (draft: ConfigurationDraft) => void;
-  onConfigurationSave: (interfaceId: string) => void;
-  onSave: () => void;
-  projects: ApplicationProject[];
-  rootEeId: string;
+function ConnectionStatusValue({ summary }: { summary: ApplicationConnectionSummary }) {
+  const label = summary.status === "checking"
+    ? "Checking…"
+    : summary.status === "connected"
+      ? "Connected"
+      : summary.status === "expired"
+        ? "Reconnect required"
+        : summary.status === "error"
+          ? "Connection issue"
+          : "Not connected";
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden="true" className={cx(
+          "size-1.5 shrink-0 rounded-full",
+          summary.status === "connected" ? "bg-token-charts-green"
+            : summary.status === "expired" ? "bg-token-charts-orange"
+              : summary.status === "error" ? "bg-token-charts-red"
+                : "bg-token-description-foreground",
+        )} />
+        {label}
+      </span>
+      {summary.message && summary.status !== "connected" ? <span className="text-xs text-secondary whitespace-pre-line">{summary.message}</span> : null}
+    </span>
+  );
+}
+
+function EnvironmentFieldRow({ field, onSave, saving }: {
+  field: ApplicationConfigurationField;
+  onSave: (updates: Record<string, string>, clears: string[]) => void;
   saving: boolean;
 }) {
-  const projectById = new Map(projects.map((project) => [project.ee_id, project]));
-  const configuration = application ? applicationConfiguration(application) : applicationConfiguration(null);
-  const availabilityDirty = application?.project_states.some((state) => {
-    const current = draft[state.ee_id];
-    return current && (current.available !== state.policy_allowed || current.selected !== state.selected_by_default);
-  }) ?? false;
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  function close() {
+    setEditing(false);
+    setValue("");
+  }
   return (
-    <SetupDialogShell ariaLabel={application ? `Set up ${application.name}` : "Set up application"} busy={saving} onClose={onCancel} open={Boolean(application)} panelClassName="max-h-[min(720px,calc(100vh-48px))]" size="wide">
-      {application ? (
-        <>
-        <div className="flex items-start gap-4 px-6 pt-8 pb-6">
-          <ApplicationLogo application={application} className="size-[60px] overflow-hidden rounded-2xl border border-default bg-transparent" logoSize={28} />
-          <div className="min-w-0 flex-1">
-            <h2 className="heading-base text-token-foreground electron:heading-lg">Set up {application.name}</h2>
-            <p className="mt-1 text-sm leading-5 text-token-text-secondary">Add the details this application needs, then choose where it is available. Existing tasks will not change.</p>
-          </div>
-          <OcIconButton disabled={saving} glyph="close" label="Close" onClick={onCancel} variant="ghost" />
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-          {configuration.fields.length ? (
-            <section className="mb-6">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-medium text-token-foreground">Configuration</h3>
-                <ConfigurationStatus status={configuration.status} />
-              </div>
-              <div className="space-y-4 rounded-2xl border border-token-border/60 p-4">
-                {configuration.documents.map((document, documentIndex) => {
-                  const fields = configuration.fields.filter((field) => field.interface_id === document.interface_id);
-                  const dirty = fields.some((field) => {
-                    const value = configurationDraft[configurationFieldKey(field)];
-                    return Boolean(value?.clear || value?.value.length);
-                  });
-                  const conflictsResolved = fields.every((field) => (
-                    field.source !== "conflict"
-                    || (field.private_saved && configurationDraft[configurationFieldKey(field)]?.clear === true)
-                  ));
-                  const documentEditable = ["valid", "absent"].includes(document.status);
-                  return (
-                    <div className={cx(documentIndex > 0 && "border-t border-token-border/40 pt-4")} key={document.interface_id}>
-                      <div className="space-y-3">
-                      {fields.map((field) => {
-                        const key = configurationFieldKey(field);
-                        const current = configurationDraft[key] ?? { value: "", clear: false };
-                        return <label className="block" key={key}>
-                      <span className="mb-1.5 flex items-center justify-between gap-3 text-xs font-medium text-token-text-secondary">
-                        <span>{field.label}{field.required ? " · Required" : ""}</span>
-                        <span className={cx(field.source === "conflict" && "text-token-error-foreground")}>{configurationFieldStatus(field)}</span>
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          autoComplete="off"
-                          className="h-9 min-w-0 flex-1 rounded-lg border border-token-border bg-token-input-background px-3 text-sm text-token-foreground outline-none placeholder:text-token-input-placeholder-foreground focus:border-token-focus-border disabled:opacity-50"
-                          disabled={saving || current.clear || field.source === "conflict"}
-                          onChange={(event) => onConfigurationChange({
-                            ...configurationDraft,
-                            [key]: { value: event.currentTarget.value, clear: false },
-                          })}
-                          placeholder={configurationFieldPlaceholder(field)}
-                          type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"}
-                          value={current.value}
-                        />
-                        {field.private_saved ? (
-                          <OcButton disabled={saving} onClick={() => onConfigurationChange({
-                            ...configurationDraft,
-                            [key]: { value: "", clear: !current.clear },
-                          })} size="sm" tone={current.clear ? "danger" : "neutral"} variant="ghost">{current.clear ? "Keep" : "Clear"}</OcButton>
-                        ) : null}
-                      </div>
-                      {current.clear ? <span className="mt-1 block text-xs text-token-error-foreground">Saved value will be cleared.</span> : null}
-                        </label>;
-                      })}
-                      </div>
-                      <div className="mt-3 flex justify-end">
-                        <OcButton disabled={saving || !dirty || !documentEditable || !conflictsResolved} onClick={() => onConfigurationSave(document.interface_id)} size="sm" variant="secondary">Save connection details</OcButton>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {configuration.status === "issue" && configuration.error ? <p className="mt-2 text-xs text-token-error-foreground">{configuration.error}</p> : null}
-            </section>
-          ) : null}
-          <h3 className="mb-2 text-sm font-medium text-token-foreground">Available in</h3>
-          <div className="overflow-hidden rounded-2xl border border-token-border/60">
-            {application.project_states.map((state, index) => {
-              const current = draft[state.ee_id] ?? { available: state.policy_allowed, selected: state.selected_by_default };
-              const project = projectById.get(state.ee_id);
-              return (
-                <div className={cx("flex items-center gap-4 px-4 py-3", index > 0 && "border-t border-token-border/40")} key={state.ee_id}>
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-token-foreground/5 text-token-text-secondary"><Glyph name="project" size={17} /></span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-token-foreground">{projectLabel(project, state.ee_id, rootEeId)}</div>
-                    <div className="truncate text-xs text-token-description-foreground">{state.ee_id === rootEeId ? "Root life area" : "Project"}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-4">
-                    <OcSwitch checked={current.available} disabled={saving || (!state.ceiling_allowed && !current.available)} label={state.ceiling_allowed ? "Available" : current.available ? "Remove" : "Not supported here"} onCheckedChange={(available) => onChange({
-                      ...draft,
-                      [state.ee_id]: { available, selected: available ? current.selected : false },
-                    })} showLabel />
-                    <OcSwitch checked={current.selected} disabled={saving || !current.available} label="New task default" onCheckedChange={(selected) => onChange({
-                      ...draft,
-                      [state.ee_id]: { ...current, selected },
-                    })} showLabel />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <footer className="flex min-h-[76px] shrink-0 items-center justify-end gap-2 border-t border-token-border/40 px-6 py-4 [padding-bottom:max(1rem,env(safe-area-inset-bottom))]">
-          <OcButton disabled={saving} onClick={onCancel} variant="ghost">Cancel</OcButton>
-          <OcButton disabled={saving || !availabilityDirty} onClick={onSave} variant="primary">{saving ? "Saving…" : "Save availability"}</OcButton>
-        </footer>
-        </>
-      ) : null}
-    </SetupDialogShell>
+    <div className="grid min-h-9 grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] items-center gap-4 rounded-lg px-2 py-1.5 hover:bg-token-foreground/3">
+      <span className="truncate font-mono text-xs text-token-text-secondary" title={field.label === field.name ? field.name : `${field.label} (${field.name})`}>{field.name}</span>
+      {editing ? (
+        <form className="flex min-w-0 items-center gap-1" onSubmit={(event) => {
+          event.preventDefault();
+          if (!value) return;
+          onSave({ [field.name]: value }, []);
+          close();
+        }}>
+          <input
+            aria-label={field.label}
+            autoComplete="off"
+            autoFocus
+            className="h-7 min-w-0 flex-1 rounded-md border border-primary-outline bg-primary-soft px-2 text-sm text-default outline-none placeholder:text-tertiary focus:border-ring"
+            onChange={(event) => setValue(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                close();
+              }
+            }}
+            placeholder={field.private_saved ? "New value" : "Value"}
+            spellCheck={false}
+            type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"}
+            value={value}
+          />
+          <OcButton disabled={!value || saving} size="xs" type="submit" variant="secondary">Save</OcButton>
+          <OcButton onClick={close} size="xs" variant="ghost">Cancel</OcButton>
+        </form>
+      ) : (
+        <span className="flex min-w-0 items-center justify-between gap-2 text-sm text-default">
+          <span className="min-w-0 truncate">{configurationFieldStatus(field)}</span>
+          <span className="flex shrink-0 items-center gap-1">
+            {field.private_saved ? <OcButton disabled={saving} onClick={() => onSave({}, [field.name])} size="xs" variant="ghost">Clear</OcButton> : null}
+            {field.source === "conflict" ? null : <OcButton disabled={saving} onClick={() => setEditing(true)} size="xs" variant="ghost">{field.private_saved ? "Change" : "Set"}</OcButton>}
+          </span>
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -1749,115 +1768,71 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({ action, label, value }: { action?: ReactNode; label: string; value: ReactNode }) {
   return (
     <div className="grid min-h-9 grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] items-start gap-4 rounded-lg px-2 py-1.5 hover:bg-token-foreground/3">
       <span className="text-sm text-token-text-secondary">{label}</span>
-      <span className="min-w-0 text-sm text-default select-text [overflow-wrap:anywhere]">{value}</span>
+      <span className="flex min-w-0 items-center justify-between gap-3">
+        <span className="min-w-0 text-sm text-default select-text [overflow-wrap:anywhere]">{value}</span>
+        {action ? <span className="-my-1 shrink-0">{action}</span> : null}
+      </span>
     </div>
   );
 }
 
-function ApplicationFactBadges({ application, setupStatus }: { application: ApplicationRecord; setupStatus?: ClientExtensionActionStatus }) {
-  const facts = applicationFacts(application, setupStatus);
-  return (
-    <span className="flex min-w-0 flex-wrap items-center gap-1">
-      {facts.map((fact) => <OcStatus key={fact.label} label={fact.label} tone={fact.tone} />)}
-    </span>
-  );
+function ApplicationFactBadges({ application, setupStatus, summary }: { application: ApplicationRecord; setupStatus?: ClientExtensionActionStatus; summary: ApplicationConnectionSummary }) {
+  const attention = applicationAttention(application, summary, setupStatus);
+  return attention ? <OcStatus label={attention.label} tone={attention.tone} /> : null;
 }
 
-function ApplicationCardMeta({ application, setupStatus }: { application: ApplicationRecord; setupStatus?: ClientExtensionActionStatus }) {
-  const status = applicationCardStatus(application, setupStatus);
-  const availableHome = application.project_states.some((state) => state.is_root && state.policy_allowed);
-  const availableProjects = application.project_states.filter((state) => !state.is_root && state.policy_allowed).length;
-  const scope = [
-    availableHome ? "Home" : "",
-    availableProjects ? `${availableProjects} project${availableProjects === 1 ? "" : "s"}` : "",
-  ].filter(Boolean).join(" + ");
+function ApplicationCardMeta({ application, setupStatus, summary }: { application: ApplicationRecord; setupStatus?: ClientExtensionActionStatus; summary: ApplicationConnectionSummary }) {
+  const attention = applicationAttention(application, summary, setupStatus);
+  if (!attention) return null;
   return (
     <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-4 text-token-description-foreground">
       <i aria-hidden="true" className={cx(
         "size-1.5 shrink-0 rounded-full",
-        status.tone === "success" ? "bg-token-charts-green"
-          : status.tone === "warning" ? "bg-token-charts-orange"
-            : status.tone === "danger" ? "bg-token-charts-red"
-              : "bg-token-description-foreground",
+        attention.tone === "warning" ? "bg-token-charts-orange"
+          : attention.tone === "danger" ? "bg-token-charts-red"
+            : "bg-token-description-foreground",
       )} />
       <span className={cx(
-        "shrink-0",
-        status.tone === "warning" && "text-token-charts-orange",
-        status.tone === "danger" && "text-token-charts-red",
-      )}>{status.label}</span>
-      {scope ? <><span aria-hidden="true">·</span><span className="truncate">{scope}</span></> : null}
+        "truncate",
+        attention.tone === "warning" && "text-token-charts-orange",
+        attention.tone === "danger" && "text-token-charts-red",
+      )}>{attention.label}</span>
     </span>
   );
 }
 
-function applicationCardStatus(application: ApplicationRecord, setupStatus?: ClientExtensionActionStatus): { label: string; tone: "neutral" | "success" | "warning" | "danger" } {
+function applicationAttention(
+  application: ApplicationRecord,
+  summary: ApplicationConnectionSummary,
+  setupStatus?: ClientExtensionActionStatus,
+): { label: string; tone: "neutral" | "warning" | "danger" } | null {
   const materializationIncomplete = !application.installed && (
     application.materialized
     || application.partially_materialized
     || application.receipt_state === "stale"
   );
   if (materializationIncomplete || (application.installed && !application.valid)) return { label: "Needs repair", tone: "danger" };
-  if (application.configuration?.status === "issue") return { label: "Check settings", tone: "danger" };
+  if (!application.installed) return application.source_available ? null : { label: "Unavailable", tone: "danger" };
   if (application.partially_connected_run_ids?.length) return { label: "Connection incomplete", tone: "danger" };
   if (setupStatus?.state === "unavailable") return { label: "Setup unavailable", tone: "danger" };
   if (setupStatus?.state === "repair_available" || setupStatus?.state === "sign_in_required") return { label: "Sign in required", tone: "warning" };
-  if (application.configuration?.status === "required") return { label: "Needs setup", tone: "warning" };
   if (setupStatus?.state === "waiting_for_interface") return { label: "Finishing setup", tone: "neutral" };
-  if (application.installed && !application.project_states.some((state) => state.policy_allowed)) return { label: "Not enabled", tone: "neutral" };
-  if (application.installed) return { label: "Enabled", tone: "success" };
-  return application.source_available
-    ? { label: "Not installed", tone: "neutral" }
-    : { label: "Unavailable", tone: "danger" };
-}
-
-function applicationFacts(application: ApplicationRecord, setupStatus?: ClientExtensionActionStatus): Array<{ label: string; tone: "neutral" | "success" | "warning" | "danger" }> {
-  const facts = [applicationCardStatus(application, setupStatus)];
-  const connected = application.connected_run_ids.length;
-  if (connected) facts.push({ label: `Connected to ${connected} task${connected === 1 ? "" : "s"}`, tone: "success" });
-  return facts;
-}
-
-function applicationConfiguration(application: ApplicationRecord | null): ApplicationConfiguration {
-  return application?.configuration ?? { status: "not_installed", fields: [], documents: [], error: "" };
-}
-
-function applicationConfigurationDetail(configuration: ApplicationConfiguration): string {
-  if (configuration.status === "issue") return configuration.error || "Configuration could not be verified.";
-  if (configuration.status === "required") return "Setup required before the application can use its external service.";
-  if (configuration.status === "unknown") return "Octopus cannot see the runtime environment here, so it cannot tell whether these details are set.";
-  if (configuration.fields.some((field) => field.private_saved)) return "Saved in Octopus. A task shows whether the service answers.";
-  if (configuration.fields.some((field) => ["environment", "both"].includes(field.source))) return "Set in the environment Octopus starts with.";
-  return "Nothing to configure.";
-}
-
-function configurationFieldKey(field: ApplicationConfigurationField): string {
-  return `${field.interface_id}\0${field.name}`;
+  if (summary.status === "none" && application.configuration?.status === "issue") return { label: "Check settings", tone: "danger" };
+  if (summary.status === "none" && application.configuration?.status === "required") return { label: "Needs setup", tone: "warning" };
+  if (summary.status !== "not_connected" && !application.project_states.some((state) => state.policy_allowed)) return { label: "Not enabled", tone: "neutral" };
+  return null;
 }
 
 function configurationFieldStatus(field: ApplicationConfigurationField): string {
-  if (field.source === "conflict") return "Configuration issue";
+  if (field.source === "conflict") return "Saved value conflicts with the environment Octopus starts with";
   if (field.private_saved) return "Saved";
   if (field.source === "environment") return "Set in environment";
   if (field.source === "unknown") return "Not checked";
-  return field.required ? "Not configured" : "Optional";
-}
-
-function configurationFieldPlaceholder(field: ApplicationConfigurationField): string {
-  if (field.private_saved) return "Leave blank to keep saved value";
-  if (field.source === "environment") return "Configured outside Octopus";
-  if (field.source === "conflict") return "Resolve the conflicting external value first";
-  return field.required ? `Enter ${field.label.toLowerCase()}` : `Optional ${field.label.toLowerCase()}`;
-}
-
-function ConfigurationStatus({ status }: { status: ApplicationConfiguration["status"] }) {
-  if (status === "issue") return <OcStatus label="Configuration issue" tone="danger" />;
-  if (status === "required") return <OcStatus label="Setup required" tone="warning" />;
-  if (status === "unknown") return <OcStatus label="Not checked" tone="neutral" />;
-  return <OcStatus label="Configured" tone="neutral" />;
+  return field.required ? "Not set" : "Optional";
 }
 
 function applicationSetupStatus(
@@ -1869,30 +1844,6 @@ function applicationSetupStatus(
     if (status) return status;
   }
   return byInterface.get(application.id);
-}
-
-function ApplicationLogo({ application, className, logoSize }: { application: ApplicationRecord; className?: string; logoSize: number }) {
-  const lightArtwork = application.logo_data_url?.trim();
-  const darkArtwork = application.logo_dark_data_url?.trim();
-  const artwork = lightArtwork || darkArtwork;
-  const hasThemeArtwork = Boolean(lightArtwork && darkArtwork && lightArtwork !== darkArtwork);
-  return (
-    <span className={cx(
-      "flex shrink-0 items-center justify-center text-secondary",
-      className,
-    )}>
-      {artwork ? (
-        <>
-          <img alt="" className={cx("size-full rounded-2xs object-contain", hasThemeArtwork && "application-artwork-light")} draggable={false} src={artwork} />
-          {hasThemeArtwork ? <img alt="" className="application-artwork-dark size-full rounded-2xs object-contain" draggable={false} src={darkArtwork} /> : null}
-        </>
-      ) : <Glyph name={applicationGlyph(application)} size={logoSize} />}
-    </span>
-  );
-}
-
-function ApplicationMiniLogo({ application }: { application: ApplicationRecord }) {
-  return <ApplicationLogo application={application} className="size-[13px] overflow-hidden rounded-[4px] bg-surface ring-1 ring-border ring-inset" logoSize={8} />;
 }
 
 function SurfaceState({ title, detail = "", compact = false, actionLabel = "", onAction }: { title: string; detail?: string; compact?: boolean; actionLabel?: string; onAction?: () => void }) {
@@ -1916,19 +1867,6 @@ function ApplicationProjectionIssue({ detail }: { detail: string }) {
   );
 }
 
-function applicationGlyph(application: ApplicationRecord): GlyphName {
-  const known = new Set<GlyphName>(["plugins", "image", "voice", "file", "artifact", "interfaces", "binding", "chat", "send", "scheduled", "folder"]);
-  const candidate = application.icon as GlyphName;
-  if (known.has(candidate)) return candidate;
-  if (application.icon === "message") return "chat";
-  if (application.icon === "email") return "send";
-  if (application.icon === "files") return "folder";
-  if (application.icon === "calendar") return "scheduled";
-  if (application.category === "plugin") return "plugins";
-  if (application.category === "artifact") return "artifact";
-  return "interfaces";
-}
-
 function applicationSearchText(application: ApplicationRecord): string {
   return [
     application.id,
@@ -1938,11 +1876,6 @@ function applicationSearchText(application: ApplicationRecord): string {
     application.developer,
     ...application.interfaces,
   ].join(" ").toLowerCase();
-}
-
-function projectLabel(project: ApplicationProject | undefined, eeId: string, rootEeId: string): string {
-  if (eeId === rootEeId) return "Home";
-  return project?.name || "Untitled project";
 }
 
 function applicationPackKey(packId: string): string {

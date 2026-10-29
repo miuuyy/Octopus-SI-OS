@@ -138,13 +138,14 @@ test("page loaders show only the centered logo until the catalog settles", async
   for (const name of ["ApplicationsView", "DriversView"]) {
     const pending = new Map();
     const Component = loader({
-      "../projectionClient": { hasProjectionBridge: () => true, onApplicationLifecycleProgress: () => noop, formatProjectionError: String, readProjection: key => new Promise((resolve, reject) => pending.set(key, { resolve, reject })) },
+      "../projectionClient": { canConnectApplications: () => false, hasProjectionBridge: () => true, onApplicationLifecycleProgress: () => noop, formatProjectionError: String, readProjection: key => new Promise((resolve, reject) => pending.set(key, { resolve, reject })) },
       "../projectionLive": { useProjectionStructureGeneration: () => 0 },
       "../extensions/useClientExtensions": { useClientExtensions: () => ({ extensions: [], actionStatuses: [] }) },
       "../extensions/incidents": { subscribeClientExtensionIncidents: () => noop, clientExtensionIncidentSnapshot: () => incidents },
       "../toasts": { useAppErrorToast: noop },
       "./catalog": { CatalogRouteTransition: ({ children }) => children, CatalogSection: () => null },
       "./SetupDialogShell": { SetupDialogShell: () => null },
+      "./applications/ApplicationConnectDialog": { ApplicationConnectDialog: () => null },
     })(`src/components/${name}.tsx`)[name];
     const view = await mount(Component, { accessProfile: "live", searchFocusTick: 0 });
     try {
