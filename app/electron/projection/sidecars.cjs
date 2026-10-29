@@ -274,7 +274,7 @@ function applicationPresentationText(value, limit, label, file) {
 function applicationHttpsUrl(value, label, file) {
   let url;
   try {
-    url = typeof value === "string" && value.length <= 2048 ? new URL(value) : null;
+    url = typeof value === "string" && value.length <= 4096 ? new URL(value) : null;
   } catch {
     url = null;
   }

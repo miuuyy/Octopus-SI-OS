@@ -51,6 +51,7 @@ jobs:
           npm run test:files-contracts
           npm run test:workspace-setup
           node --test scripts/test-chatgpt-account.cjs scripts/test-client-provider-metadata.cjs
+          node --test scripts/test-application-connection.cjs
           node scripts/test-home-experience.cjs
           node scripts/test-home-voice-contracts.cjs
           node --test scripts/test-dashboard-presentation.cjs scripts/test-topology-performance.cjs

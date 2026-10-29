@@ -213,17 +213,20 @@ and [Drivers](contracts/ENVIRONMENTS.md#in-the-app).
 Installation and access are separate:
 
 1. **Install** materializes the package and its required dependencies.
-2. **Configure** supplies the required account, endpoint, device, or folder.
+2. **Connect** supplies the required account, key, or device. Where the
+   application declares a connection check, the client verifies what you enter
+   against the real service, walks you through browser sign-in or pairing, and
+   shows the connected account.
 3. **Make available** admits it within Home or the chosen Project's ceiling.
 4. **Select/connect** gives a task the relevant bindings. A default for new
    tasks is not evidence that an existing task already uses it.
 
-An installed package grants no authority by itself. Each card shows one
-status: **Not installed**, **Needs setup** (details such as an API key are
-missing), **Not enabled** (installed but not yet available in Home or a
-project), **Enabled**, **Needs repair** or **Check settings**, followed by how
-many tasks are connected. Removal can be blocked while live records depend on
-it.
+An installed package grants no authority by itself. Each card offers the next
+step — **Install**, **Repair** or **Connect** — or shows **Connected** with a
+menu to reconnect or disconnect; **Reconnect required** and **Connection
+issue** appear only when the check fails. The detail page shows the connected
+account, where the application is available, and how many tasks use it.
+Removal can be blocked while live records depend on it.
 
 ### Client Extensions
 
