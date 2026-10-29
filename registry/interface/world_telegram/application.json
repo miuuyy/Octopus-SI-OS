@@ -1,0 +1,72 @@
+{
+  "schema_version": 3,
+  "id": "world_telegram",
+  "name": "Telegram",
+  "description": "Message the tasks you connect to Telegram from your phone, and let them answer you there.",
+  "category": "connector",
+  "developer": "Octopus",
+  "version": "2.0.0",
+  "icon": "message",
+  "logo": "application-logo.png",
+  "interfaces": [
+    "world_telegram"
+  ],
+  "artifact_bindings": [
+    {
+      "artifact_id": "artifact-application-telegram-context",
+      "label": "Telegram connection contract"
+    }
+  ],
+  "task_capabilities": {
+    "tools": [
+      {
+        "tool": "artifact.send",
+        "interface": "system_room",
+        "worker_environment_kind": "system_room"
+      }
+    ]
+  },
+  "setup": {
+    "fields": [
+      {
+        "interface": "world_telegram",
+        "pointer": "/interface_driver_config/private_config/environment/bot_token_env",
+        "label": "Bot token",
+        "kind": "secret",
+        "required": true,
+        "placeholder": "123456789:AAH…",
+        "help": "Create a bot with @BotFather and paste its token"
+      },
+      {
+        "interface": "world_telegram",
+        "pointer": "/interface_driver_config/private_config/environment/allowed_user_ids_env",
+        "label": "Allowed user IDs",
+        "kind": "text",
+        "required": false,
+        "placeholder": "Filled in when you press Start",
+        "help": "Numeric Telegram user IDs, separated by commas. Leave empty to pair your account by pressing Start in Telegram."
+      },
+      {
+        "interface": "world_telegram",
+        "pointer": "/interface_driver_config/private_config/environment/home_chat_env",
+        "label": "Home chat ID",
+        "kind": "text",
+        "required": false,
+        "placeholder": "Your private chat",
+        "help": "Where a task's message goes when it names no chat. Pairing sets it to your private chat."
+      }
+    ]
+  },
+  "connection": {
+    "disclosure": [
+      "Messages that allowed Telegram users send your bot reach the tasks you connect to Telegram.",
+      "Connected tasks can reply, edit, react and send files as your bot.",
+      "Photos, voice messages and files sent to the bot are downloaded to this computer.",
+      "The bot token stays on this computer; Telegram still delivers the bot's messages through its servers."
+    ],
+    "help": {
+      "label": "Open BotFather",
+      "url": "https://t.me/BotFather"
+    }
+  }
+}

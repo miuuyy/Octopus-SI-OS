@@ -1,0 +1,23 @@
+{
+  "id": "world_telegram",
+  "interface_type": "world",
+  "role": "service",
+  "direction": "bidirectional",
+  "source_names": [
+    "telegram"
+  ],
+  "interface_driver_ref": "telegram_life",
+  "interface_driver_config": {
+    "private_config": {
+      "environment": {
+        "bot_token_env": "TELEGRAM_BOT_TOKEN",
+        "allowed_user_ids_env": "TELEGRAM_ALLOWED_USERS",
+        "home_chat_env": "TELEGRAM_HOME_CHAT"
+      },
+      "client_connection": {
+        "schema_version": 1,
+        "module": "interface://world_telegram/packages/connection.cjs"
+      }
+    }
+  }
+}

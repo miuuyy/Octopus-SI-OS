@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "ledger": {
+    "max_row_bytes": 1048576
+  },
+  "transport": {
+    "api_base_env": "OCTOPUS_TELEGRAM_API_BASE",
+    "api_base_default": "https://api.telegram.org",
+    "proxy_env": "OCTOPUS_TELEGRAM_PROXY",
+    "fallback_ips_env": "OCTOPUS_TELEGRAM_FALLBACK_IPS",
+    "fallback_ips": [
+      "149.154.167.220",
+      "149.154.166.110"
+    ],
+    "connect_timeout_ms": 10000,
+    "request_timeout_ms": 60000,
+    "max_response_bytes": 16777216,
+    "rate_limit_max_wait_ms": 60000,
+    "rate_limit_retries": 3,
+    "read_retry_limit": 3
+  },
+  "intake": {
+    "event_label": "telegram.event",
+    "allowed_updates": [
+      "message",
+      "edited_message",
+      "callback_query",
+      "message_reaction"
+    ],
+    "long_poll_timeout_s": 25,
+    "network_backoff_ms": 1000,
+    "network_backoff_cap_ms": 30000,
+    "conflict_backoff_ms": 5000,
+    "conflict_backoff_cap_ms": 60000,
+    "max_pending_events": 10000,
+    "pending_retry_cap_ms": 300000,
+    "pending_max_age_ms": 86400000,
+    "offset_max_idle_ms": 518400000,
+    "dedup_retention": 5000,
+    "media_group_quiet_ms": 1200,
+    "answer_callbacks": true,
+    "reply_context_chars": 1000
+  },
+  "authz": {
+    "allow_all_users": false,
+    "allow_all_users_env": "TELEGRAM_ALLOW_ALL_USERS",
+    "allowed_user_ids": [],
+    "allowed_chat_ids": [],
+    "allowed_chat_ids_env": "TELEGRAM_ALLOWED_CHATS",
+    "deny_unmatched": true
+  },
+  "gating": {
+    "respond_in_private": true,
+    "groups_require_address": true,
+    "address_by_mention": true,
+    "address_by_reply": true,
+    "address_by_command": true,
+    "free_response_chat_ids": [],
+    "free_response_chat_ids_env": "TELEGRAM_FREE_RESPONSE_CHATS",
+    "mention_patterns": [],
+    "accept_message_edits": true,
+    "accept_reactions": true,
+    "accept_bot_messages": false
+  },
+  "media": {
+    "download_enabled": true,
+    "max_download_bytes": 20971520,
+    "max_upload_bytes": 52428800,
+    "max_files_per_event": 10,
+    "text_preview_bytes": 102400,
+    "text_extensions": [
+      ".csv",
+      ".html",
+      ".js",
+      ".json",
+      ".jsonl",
+      ".log",
+      ".md",
+      ".py",
+      ".rs",
+      ".sh",
+      ".sql",
+      ".toml",
+      ".ts",
+      ".tsv",
+      ".txt",
+      ".xml",
+      ".yaml",
+      ".yml"
+    ],
+    "retention_days": 30
+  },
+  "outbound": {
+    "operation_label": "telegram.operation",
+    "delivery_label": "telegram.delivery.result",
+    "max_message_chars": 4096,
+    "max_caption_chars": 1024,
+    "max_text_chars": 65536,
+    "max_messages_per_operation": 16,
+    "max_manifest_bytes": 1048576,
+    "max_payload_bytes": 67108864,
+    "max_buttons": 100,
+    "link_previews": true,
+    "unsent_retry_window_ms": 900000,
+    "unsent_retry_backoff_cap_ms": 60000,
+    "bot_message_retention": 5000,
+    "typing": {
+      "enabled": true,
+      "refresh_ms": 4500,
+      "max_ms": 120000
+    },
+    "allowed_api_methods": [
+      "closeForumTopic",
+      "copyMessage",
+      "createForumTopic",
+      "editForumTopic",
+      "forwardMessage",
+      "getChat",
+      "getChatAdministrators",
+      "getChatMember",
+      "getChatMemberCount",
+      "pinChatMessage",
+      "reopenForumTopic",
+      "sendDice",
+      "sendLocation",
+      "sendPoll",
+      "stopPoll",
+      "unpinChatMessage"
+    ],
+    "retry_safe_api_methods": [
+      "getChat",
+      "getChatAdministrators",
+      "getChatMember",
+      "getChatMemberCount"
+    ]
+  }
+}

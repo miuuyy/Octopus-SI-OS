@@ -1,0 +1,27 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_telegram",
+  "version": "2.0.0",
+  "product_kind": "application",
+  "product_id": "world_telegram",
+  "release_status": "optional",
+  "display": {
+    "name": "Telegram",
+    "description": "Message the tasks you connect to Telegram from your phone, and let them answer you there.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "message"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_telegram",
+      "primary": true
+    },
+    {
+      "registry_kind": "artifact",
+      "owner": "artifact-application-telegram-context"
+    }
+  ]
+}
