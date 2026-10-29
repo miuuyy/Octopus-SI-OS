@@ -129,6 +129,15 @@ server, together with the context artifact that teaches the model its contract.
 Installation does not make the model call it automatically. An application pack groups packages for setup without
 introducing a new runtime identity.
 
+**Connect** is the client's own setup step, like signing in to a provider. An
+interface can declare a connection module under its `packages/` folder in
+`private_config.client_connection`; the client runs its `probe`, `connect` and
+`disconnect` to check what you enter against the real service, show the
+connected account and walk you through browser sign-in or pairing. Applications
+without a module are connected once their required setup fields are saved. The
+connection check is presentation only: the interface still refuses to work with
+bad credentials, and nothing is recorded in a run or the ledger.
+
 A configured local Home opens after local client unlock and verification by the
 existing setup owner of its complete aggregate receipt, followed by matching
 that receipt's operation and workspace request to the workspace receipt and

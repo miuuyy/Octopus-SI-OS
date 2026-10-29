@@ -131,6 +131,10 @@ jobs:
           node registry/interface/world_operator_chat/test_maintenance_client.cjs
           python3 registry/verifier/tool_result_correspondence/tests/test_verify.py
           python3 registry/interface/world_slack/tests/test_slack_contract.py
+          node registry/interface/world_slack/tests/test_connection.cjs
+          node registry/interface/world_mcp_example/packages/octopus-mcp-client/test_connection.cjs
+          node registry/interface/world_image_generation/packages/octopus-image-generation-interface/test_connection.cjs
+          node --test registry/interface/world_gmail/tests/test_connection.cjs
           python3 -m unittest discover -s registry/interface/world_cron/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_issues/tests -p 'test_*.py'
           node registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/configure-transport.test.cjs
