@@ -238,7 +238,7 @@ class SlackLifeTests(unittest.TestCase):
         self.assertEqual(len(handed), 1)
         label, payload, evidence = handed[0]
         self.assertEqual(label, "slack.event")
-        self.assertEqual((payload["channel_id"], payload["user_id"], payload["text"], payload["message_ts"]), ("D12345678", "U12345678", "deploy status?", "1720000000.000100"))
+        self.assertEqual((payload["channel_id"], payload["user_id"], payload["message"]["text"], payload["message_ts"]), ("D12345678", "U12345678", "deploy status?", "1720000000.000100"))
         self.assertNotIn("payload", payload)
         self.assertEqual(evidence[0]["label"], "slack.arrival.idempotency")
         self.assertFalse(os.listdir(self.life.PENDING_DIR))

@@ -161,6 +161,20 @@ def stderr(config, message):
     sys.stderr.flush()
 
 
+_DIAGNOSTIC_WINDOWS = {}
+DIAGNOSTIC_WINDOW_S = 3600
+
+
+def throttled_stderr(config, key, message):
+    now = time.monotonic()
+    started, suppressed = _DIAGNOSTIC_WINDOWS.get(key, (None, 0))
+    if started is not None and now - started < DIAGNOSTIC_WINDOW_S:
+        _DIAGNOSTIC_WINDOWS[key] = (started, suppressed + 1)
+        return
+    _DIAGNOSTIC_WINDOWS[key] = (now, 0)
+    stderr(config, f"{message} ({suppressed} similar suppressed)" if suppressed else message)
+
+
 def load_config():
     config = require_object(json.loads(read_bounded_regular(CONFIG_PATH, CONFIG_MAX_BYTES, "interface config")), "Slack config")
     descriptor = require_object(json.loads(read_bounded_regular(DESCRIPTOR_PATH, CONFIG_MAX_BYTES, "interface descriptor")), "Slack interface descriptor")
@@ -627,7 +641,7 @@ def normalized_event(api, config, envelope, record):
         except Exception as error:
             thread_context = [{"context_error": sanitize_external_error(error, config)}]
     value = {
-        "schema_version": 2,
+        "schema_version": 3,
         "event_key": record["key"],
         "envelope_type": envelope.get("type"),
         "event_type": event.get("type") if isinstance(event, dict) else None,
@@ -637,9 +651,11 @@ def normalized_event(api, config, envelope, record):
         "thread_ts": thread,
         "message_ts": ts,
         "user_id": event_user(envelope),
-        "text": text,
-        "rich_text": rich_text(blocks),
-        "files": media_rows(api, config, message or event, team_id=team),
+        "message": {
+            "text": text,
+            "rich_text": rich_text(blocks),
+            "files": media_rows(api, config, message or event, team_id=team),
+        },
         "thread_context": thread_context,
         "raw_event_sha256": record["raw_sha256"],
     }
@@ -685,7 +701,7 @@ def process_pending_event(api, config, record):
         return None
     admitted, reason = should_admit(config, envelope, load_state())
     if not admitted:
-        stderr(config, f"Slack event {record['key']} not admitted: {reason}")
+        throttled_stderr(config, f"not-admitted:{reason}", f"Slack event {record['key']} not admitted: {reason}")
         finish_pending(config, record)
         return None
     normalized = normalized_event(api, config, envelope, record)
