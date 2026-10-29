@@ -50,6 +50,7 @@ fn operation(max_image_bytes: u64) -> ImageOperation {
         revised_prompt_field: Some("revised_prompt".to_string()),
         media_label: "image.generated".to_string(),
         max_image_bytes: Some(max_image_bytes),
+        _client_connection: None,
     }
 }
 

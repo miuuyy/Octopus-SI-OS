@@ -24,7 +24,11 @@
       "max_catalog_bytes": 16777216,
       "event_journal_segment_bytes": 16777216,
       "event_journal_retained_segments": 64,
-      "reconnect_backoff_ms": 2000
+      "reconnect_backoff_ms": 2000,
+      "client_connection": {
+        "schema_version": 1,
+        "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"
+      }
     },
     "transport": {
       "base_url": "https://mcp.firecrawl.dev/v2/mcp",

@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_mcp_unity",
   "name": "Unity MCP",
-  "description": "Unity's MCP server: inspect, edit, test and run Unity projects. Set the URL of the MCP server the Unity Editor runs.",
+  "description": "Work in your open Unity project through the MCP for Unity server on this Mac.",
   "category": "plugin",
   "developer": "Octopus",
   "version": "1.0.1",
@@ -30,15 +30,15 @@
       }
     ]
   },
-  "setup": {
-    "fields": [
-      {
-        "interface": "world_mcp_unity",
-        "pointer": "/interface_driver_config/transport/base_url_env",
-        "label": "Server URL",
-        "kind": "url",
-        "required": true
-      }
-    ]
+  "connection": {
+    "disclosure": [
+      "Tasks you connect can inspect and edit scenes, assets and scripts in the open Unity Editor.",
+      "Octopus talks to the MCP for Unity server at 127.0.0.1:8080 on this Mac.",
+      "Start the server in Unity before connecting: Window \u203a MCP for Unity."
+    ],
+    "help": {
+      "label": "MCP for Unity",
+      "url": "https://github.com/CoplayDev/unity-mcp"
+    }
   }
 }

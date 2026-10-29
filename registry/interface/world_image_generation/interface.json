@@ -21,7 +21,11 @@
       "allowed_url_origins": [],
       "revised_prompt_field": "revised_prompt",
       "media_label": "image.generated",
-      "max_image_bytes": 33554432
+      "max_image_bytes": 33554432,
+      "client_connection": {
+        "schema_version": 1,
+        "module": "interface://world_image_generation/packages/octopus-image-generation-interface/connection.cjs"
+      }
     },
     "transport": {
       "base_url": "https://api.openai.com/v1/images/generations",

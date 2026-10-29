@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_slack",
   "name": "Slack",
-  "description": "Message the task you connect to Slack, and let it answer and post in Slack.",
+  "description": "Message the task you connect from Slack, and let it answer and post in Slack.",
   "category": "connector",
   "developer": "Octopus",
   "version": "2.0.0",
@@ -33,36 +33,56 @@
         "pointer": "/interface_driver_config/private_config/environment/bot_token_env",
         "label": "Bot token (xoxb-\u2026)",
         "kind": "secret",
-        "required": true
+        "required": true,
+        "placeholder": "xoxb-\u2026",
+        "help": "OAuth & Permissions \u203a Bot User OAuth Token, after installing the app."
       },
       {
         "interface": "world_slack",
         "pointer": "/interface_driver_config/private_config/environment/app_token_env",
         "label": "App-level token (xapp-\u2026)",
         "kind": "secret",
-        "required": true
+        "required": true,
+        "placeholder": "xapp-\u2026",
+        "help": "Basic Information \u203a App-Level Tokens, with the connections:write scope."
       },
       {
         "interface": "world_slack",
         "pointer": "/interface_driver_config/private_config/environment/allowed_user_ids_env",
         "label": "Allowed member IDs",
         "kind": "text",
-        "required": true
+        "required": true,
+        "placeholder": "U0123ABCDE, U0456FGHIJ",
+        "help": "Your member ID is in your Slack profile \u203a \u22ef \u203a Copy member ID."
       },
       {
         "interface": "world_slack",
         "pointer": "/interface_driver_config/private_config/environment/allowed_channel_ids_env",
         "label": "Allowed channel IDs",
         "kind": "text",
-        "required": false
+        "required": false,
+        "placeholder": "C0123ABCDE"
       },
       {
         "interface": "world_slack",
         "pointer": "/interface_driver_config/private_config/environment/home_channel_env",
         "label": "Default channel ID",
         "kind": "text",
-        "required": false
+        "required": false,
+        "placeholder": "C0123ABCDE",
+        "help": "Where replies go when a task names no channel."
       }
     ]
+  },
+  "connection": {
+    "disclosure": [
+      "Messages from the members you allow reach the tasks you connect to Slack.",
+      "Connected tasks reply and post in Slack as your bot.",
+      "Tokens stay on this Mac, readable only by the Slack interface."
+    ],
+    "help": {
+      "label": "Create the Slack app",
+      "url": "https://api.slack.com/apps?new_app=1&manifest_json=%7B%22_metadata%22%3A%7B%22major_version%22%3A1%2C%22minor_version%22%3A1%7D%2C%22display_information%22%3A%7B%22name%22%3A%22Octopus%22%2C%22description%22%3A%22Talk%20to%20Octopus%20tasks%20from%20Slack.%22%2C%22background_color%22%3A%22%23111111%22%7D%2C%22features%22%3A%7B%22app_home%22%3A%7B%22home_tab_enabled%22%3Atrue%2C%22messages_tab_enabled%22%3Atrue%2C%22messages_tab_read_only_enabled%22%3Afalse%7D%2C%22bot_user%22%3A%7B%22display_name%22%3A%22Octopus%22%2C%22always_online%22%3Atrue%7D%2C%22assistant_view%22%3A%7B%22assistant_description%22%3A%22Send%20Octopus%20a%20message%3B%20the%20task%20connected%20to%20Slack%20answers%20in%20the%20thread.%22%7D%2C%22slash_commands%22%3A%5B%7B%22command%22%3A%22%2Foctopus%22%2C%22description%22%3A%22Send%20a%20message%20to%20the%20Octopus%20task%20connected%20to%20Slack%22%2C%22usage_hint%22%3A%22help%22%2C%22should_escape%22%3Afalse%7D%5D%7D%2C%22oauth_config%22%3A%7B%22scopes%22%3A%7B%22bot%22%3A%5B%22app_mentions%3Aread%22%2C%22assistant%3Awrite%22%2C%22bookmarks%3Aread%22%2C%22bookmarks%3Awrite%22%2C%22channels%3Ahistory%22%2C%22channels%3Aread%22%2C%22chat%3Awrite%22%2C%22commands%22%2C%22files%3Aread%22%2C%22files%3Awrite%22%2C%22groups%3Ahistory%22%2C%22groups%3Aread%22%2C%22im%3Ahistory%22%2C%22im%3Aread%22%2C%22im%3Awrite%22%2C%22mpim%3Ahistory%22%2C%22mpim%3Aread%22%2C%22mpim%3Awrite%22%2C%22pins%3Aread%22%2C%22pins%3Awrite%22%2C%22reactions%3Aread%22%2C%22reactions%3Awrite%22%2C%22team%3Aread%22%2C%22usergroups%3Aread%22%2C%22users.profile%3Aread%22%2C%22users.profile%3Awrite%22%2C%22users%3Aread%22%5D%7D%7D%2C%22settings%22%3A%7B%22event_subscriptions%22%3A%7B%22bot_events%22%3A%5B%22app_home_opened%22%2C%22app_mention%22%2C%22assistant_thread_context_changed%22%2C%22assistant_thread_started%22%2C%22file_change%22%2C%22file_created%22%2C%22file_shared%22%2C%22member_joined_channel%22%2C%22member_left_channel%22%2C%22message.channels%22%2C%22message.groups%22%2C%22message.im%22%2C%22message.mpim%22%2C%22reaction_added%22%2C%22reaction_removed%22%2C%22team_join%22%5D%7D%2C%22interactivity%22%3A%7B%22is_enabled%22%3Atrue%7D%2C%22org_deploy_enabled%22%3Afalse%2C%22socket_mode_enabled%22%3Atrue%2C%22token_rotation_enabled%22%3Afalse%7D%7D"
+    }
   }
 }

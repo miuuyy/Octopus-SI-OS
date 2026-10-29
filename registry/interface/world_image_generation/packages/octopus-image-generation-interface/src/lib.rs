@@ -67,6 +67,8 @@ struct ImageOperation {
     media_label: String,
     #[serde(default)]
     max_image_bytes: Option<u64>,
+    #[serde(default, rename = "client_connection")]
+    _client_connection: Option<serde::de::IgnoredAny>,
 }
 
 #[derive(Debug, Deserialize)]

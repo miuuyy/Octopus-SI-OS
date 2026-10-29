@@ -33,15 +33,29 @@
         "pointer": "/interface_driver_config/transport/auth_env_key",
         "label": "API key",
         "kind": "secret",
-        "required": true
+        "required": true,
+        "placeholder": "sk-\u2026"
       },
       {
         "interface": "world_image_generation",
         "pointer": "/interface_driver_config/transport/base_url_env",
         "label": "API URL (optional)",
         "kind": "url",
-        "required": false
+        "required": false,
+        "placeholder": "https://api.openai.com/v1/images/generations",
+        "help": "Only for another OpenAI-compatible Images API."
       }
     ]
+  },
+  "connection": {
+    "disclosure": [
+      "Tasks you connect can create images from prompts.",
+      "Requests use your OpenAI API account and its billing.",
+      "The key stays on this Mac, readable only by the Image Generation interface."
+    ],
+    "help": {
+      "label": "Create an OpenAI API key",
+      "url": "https://platform.openai.com/api-keys"
+    }
   }
 }

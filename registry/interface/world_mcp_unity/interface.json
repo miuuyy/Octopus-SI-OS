@@ -24,11 +24,14 @@
       "max_catalog_bytes": 16777216,
       "event_journal_segment_bytes": 16777216,
       "event_journal_retained_segments": 64,
-      "reconnect_backoff_ms": 2000
+      "reconnect_backoff_ms": 2000,
+      "client_connection": {
+        "schema_version": 1,
+        "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"
+      }
     },
     "transport": {
-      "base_url": "",
-      "base_url_env": "WORLD_MCP_UNITY_URL",
+      "base_url": "http://127.0.0.1:8080/mcp",
       "wire": "mcp_streamable_http",
       "request_timeout_ms": 120000,
       "max_response_bytes": 8388608
