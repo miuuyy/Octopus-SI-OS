@@ -5,6 +5,7 @@ import { clientNavigationDestinations, type ClientNavigationSection } from "../.
 import type { ClientSurfaceDescriptor } from "../../shell/surfaceTypes";
 import type { RuntimeHostView } from "../../runtimeHost";
 import { AccountRailButton } from "./AccountRailButton";
+import { GestureRailIndicator } from "../gestures/GestureRailIndicator";
 import { MessageTooltip } from "../chat/MessageTooltip";
 
 export function NavigationRail({
@@ -52,6 +53,7 @@ export function NavigationRail({
           </div>
         ))}
       </div>
+      <GestureRailIndicator accessProfile={accessProfile} onOpenSettings={() => onOpenSettings("gestures")} />
       <AccountRailButton accessProfile={accessProfile} runtimeHost={runtimeHost} onLogOut={onLogOut} onOpenSettings={onOpenSettings} />
     </nav>
   );

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -14,22 +15,26 @@ import type {
   ClientExtensionCredentialCheck,
   ClientExtensionRecord,
   ClientExtensionRegistryState,
+  ClientExtensionSource,
   ClientExtensionSourceConfiguration,
 } from "../../extensions/types";
 import {
   OcAnimatedActionSlot,
   OcButton,
-  OcDialogFooter,
+  OcDialog,
   OcEmptyState,
   OcIconButton,
+  OcMenuItem,
   OcSearchField,
   OcSelect,
   OcStatus,
   OcTextField,
   cx,
 } from "../../design-system/components";
+import { OcDropdown } from "../../design-system/OcDropdown";
 import { appToast, useAppErrorToast } from "../../toasts";
 import { useClientPreferences, useSetClientPreferences } from "../../clientPreferences";
+import { builtinClientExtensionInputSection } from "../../extensions/builtinInputContributions";
 import {
   CatalogInstalledRail,
   CatalogLoadingState,
@@ -37,8 +42,9 @@ import {
   CatalogSection,
 } from "../catalog";
 import { Glyph } from "../IconGlyphs";
+import { ConnectLogoRow } from "../applications/ApplicationLogo";
 import { OctopusLoadingState } from "../navigation/OctopusLoadingState";
-import { SetupDialogShell } from "../SetupDialogShell";
+import { OctopusSpinner } from "../navigation/OctopusSpinner";
 import { SettingsHeading } from "./SettingsHeading";
 
 const CATEGORY_COPY: Record<ClientExtensionCategory, { title: string; description: string }> = {
@@ -60,11 +66,18 @@ const CATEGORY_COPY: Record<ClientExtensionCategory, { title: string; descriptio
   },
 };
 
+export type ClientExtensionDestination =
+  | { kind: "home" }
+  | { kind: "settings"; sectionId: string }
+  | { kind: "surface"; surfaceId: string };
+
 export function ExtensionsSection({
   accessProfile,
+  onOpenDestination,
   registry,
 }: {
   accessProfile: OctopusClientAccessProfile;
+  onOpenDestination: (destination: ClientExtensionDestination) => void;
   registry: ClientExtensionRegistryState;
 }) {
   const clientPreferences = useClientPreferences();
@@ -86,6 +99,7 @@ export function ExtensionsSection({
     credentials: Record<string, string>;
   } | null>(null);
   const [installId, setInstallId] = useState("");
+  const [readyId, setReadyId] = useState("");
   const [uninstallId, setUninstallId] = useState("");
   const [busyId, setBusyId] = useState("");
   const [actionError, setActionError] = useState("");
@@ -106,6 +120,7 @@ export function ExtensionsSection({
   const selected = registry.extensions.find((extension) => extension.manifest.id === selectedId) ?? null;
   const setup = registry.extensions.find((extension) => extension.manifest.id === setupId) ?? null;
   const install = registry.extensions.find((extension) => extension.manifest.id === installId) ?? null;
+  const ready = registry.extensions.find((extension) => extension.manifest.id === readyId) ?? null;
   const uninstall = registry.extensions.find((extension) => extension.manifest.id === uninstallId) ?? null;
   const detected = registry.extensions.find((extension) => (
     extension.admission === "pending" && extension.lifecycle.receiptState !== "invalid"
@@ -121,7 +136,7 @@ export function ExtensionsSection({
   }, [selected, selectedId]);
 
   useEffect(() => {
-    if (!registry.mutable || !detected || setupId || installId || uninstallId || busyId) return;
+    if (!registry.mutable || !detected || setupId || installId || readyId || uninstallId || busyId) return;
     const needsSetup = (detected.manifest.sources ?? []).some((source) => source.required)
       && !detected.configured;
     if (needsSetup) {
@@ -130,7 +145,7 @@ export function ExtensionsSection({
       return;
     }
     setInstallId(detected.manifest.id);
-  }, [busyId, detected, installId, registry.mutable, setupId, uninstallId]);
+  }, [busyId, detected, installId, readyId, registry.mutable, setupId, uninstallId]);
 
   function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     const renderedKeyboardIds = keyboardIds.filter((id) => cardRefs.current.get(id)?.isConnected);
@@ -171,14 +186,14 @@ export function ExtensionsSection({
       setSetupId(extension.manifest.id);
       return;
     }
-    if (extension.admission === "builtin") {
-      void perform(extension.manifest.id, async () => {
-        await registry.install(extension.manifest.id);
-        revealInstalledTab(extension, clientPreferences.hiddenSurfaceIds, setClientPreferences);
-      });
-      return;
-    }
     setInstallId(extension.manifest.id);
+  }
+
+  function finishInstall(extension: ClientExtensionRecord) {
+    revealInstalledTab(extension, clientPreferences.hiddenSurfaceIds, setClientPreferences);
+    setInstallId("");
+    setInstallSources(null);
+    if (clientExtensionDestination(extension)) setReadyId(extension.manifest.id);
   }
 
   function openDetail(id: string, returnView: "browse" | "manage" = catalogView) {
@@ -218,6 +233,7 @@ export function ExtensionsSection({
             mutable={registry.mutable}
             onBack={closeDetail}
             onInstall={() => requestInstall(selected)}
+            onOpenDestination={onOpenDestination}
             onSetup={() => {
               setInstallAfterSetup(false);
               setSetupId(selected.manifest.id);
@@ -296,11 +312,12 @@ export function ExtensionsSection({
         onSave={(sources, credentials) => {
           if (!setup) return;
           void perform(setup.manifest.id, async () => {
-            if (installAfterSetup) {
+            if (installAfterSetup && setup.admission === "pending") {
               setInstallSources({ extensionId: setup.manifest.id, value: sources, credentials });
               setInstallId(setup.manifest.id);
             } else {
-              await registry.configure(setup.manifest.id, sources, false, undefined, credentials);
+              await registry.configure(setup.manifest.id, sources, installAfterSetup, undefined, credentials);
+              if (installAfterSetup) finishInstall(setup);
             }
             setSetupId("");
             setInstallAfterSetup(false);
@@ -357,10 +374,20 @@ export function ExtensionsSection({
               await registry.configure(install.manifest.id, installSources.value, true, undefined, installSources.credentials);
             }
             else await registry.install(install.manifest.id);
-            revealInstalledTab(install, clientPreferences.hiddenSurfaceIds, setClientPreferences);
-            setInstallId("");
-            setInstallSources(null);
+            finishInstall(install);
           });
+        }}
+      />
+      <ExtensionReadyDialog
+        extension={ready}
+        onClose={() => setReadyId("")}
+        onOpenDestination={(destination) => {
+          setReadyId("");
+          onOpenDestination(destination);
+        }}
+        onViewDetails={(id) => {
+          setReadyId("");
+          openDetail(id, catalogView);
         }}
       />
     </section>
@@ -691,19 +718,30 @@ function ExtensionCard({
       role="button"
       tabIndex={0}
     >
-      <ExtensionVisual className={cx("border border-default", view === "browse" ? "size-9 bg-surface" : "size-10 bg-transparent")} extension={extension} size={19} />
-      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+      <ExtensionVisual className="size-10 border border-default bg-transparent" extension={extension} size={22} />
+      <div className={cx("flex min-w-0 flex-1 flex-col justify-center", view === "browse" ? "gap-px" : "gap-0.5")}>
         <div className="truncate font-medium text-default">{extension.manifest.name}</div>
-        <div className="line-clamp-2 text-sm leading-relaxed text-text-description">{extension.manifest.description}</div>
+        <div className="line-clamp-1 text-sm leading-relaxed text-text-description">{extension.manifest.description}</div>
         {extension.lifecycle.receiptState === "invalid" ? (
           <div className="mt-1 line-clamp-2 text-xs leading-4 text-token-error-foreground" title={extension.lifecycle.error}>
             {extension.lifecycle.error || "The installation receipt could not be verified."}
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
+      <div className="flex shrink-0 items-center gap-2">
         <ExtensionStateStatus busy={busy} extension={extension} />
-        {!extension.installed && onInstall ? (
+        {extension.installed ? (
+          <OcButton
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpen();
+            }}
+            size="xs"
+            variant="ghost"
+          >
+            Manage
+          </OcButton>
+        ) : onInstall ? (
           <OcAnimatedActionSlot>
             <OcButton
               disabled={busy || !mutable || extension.lifecycle.receiptState === "invalid"}
@@ -711,9 +749,9 @@ function ExtensionCard({
                 event.stopPropagation();
                 onInstall();
               }}
-              size="xs"
+              size="sm"
               title={extension.lifecycle.receiptState === "invalid" ? extension.lifecycle.error || "The installation receipt could not be verified." : undefined}
-              variant="secondary"
+              variant="outline"
             >
               {extensionInstallActionLabel(extension, busy)}
             </OcButton>
@@ -725,19 +763,12 @@ function ExtensionCard({
 }
 
 function ExtensionStateStatus({ busy = false, extension }: { busy?: boolean; extension: ClientExtensionRecord }) {
-  if (busy && !extension.installed) {
-    return <OcStatus className="shrink-0" label={extensionNeedsUpdate(extension) ? "Updating" : "Installing"} />;
-  }
+  if (busy && !extension.installed) return null;
   if (extension.lifecycle.receiptState === "invalid") {
     return <OcStatus className="shrink-0" label="Installation issue" tone="danger" />;
   }
   if (extension.installed) {
-    return (
-      <span className="flex shrink-0 flex-wrap justify-end gap-1">
-        <OcStatus label="Installed" tone="success" />
-        {!extension.configured ? <OcStatus label="Needs setup" tone="warning" /> : null}
-      </span>
-    );
+    return extension.configured ? null : <OcStatus className="shrink-0" label="Needs setup" tone="warning" />;
   }
   if (extension.admission === "pending") {
     return <OcStatus className="shrink-0" label={extensionNeedsUpdate(extension) ? "Review update" : "Review required"} tone="warning" />;
@@ -745,7 +776,7 @@ function ExtensionStateStatus({ busy = false, extension }: { busy?: boolean; ext
   if (extensionNeedsUpdate(extension)) {
     return <OcStatus className="shrink-0" label="Update available" tone="warning" />;
   }
-  return <OcStatus className="shrink-0" label="Available" />;
+  return null;
 }
 
 function extensionNeedsUpdate(extension: ClientExtensionRecord): boolean {
@@ -758,93 +789,137 @@ function extensionInstallActionLabel(extension: ClientExtensionRecord, busy: boo
   return extensionNeedsUpdate(extension) ? "Update" : "Install";
 }
 
-function ExtensionDetail({ busy, extension, mutable, onBack, onInstall, onSetup, onUninstall }: {
+function ExtensionDetail({ busy, extension, mutable, onBack, onInstall, onOpenDestination, onSetup, onUninstall }: {
   busy: boolean;
   extension: ClientExtensionRecord;
   mutable: boolean;
   onBack: () => void;
   onInstall: () => void;
+  onOpenDestination: (destination: ClientExtensionDestination) => void;
   onSetup: () => void;
   onUninstall: () => void;
 }) {
-  const sourceCount = (extension.manifest.sources?.length ?? 0) + (extension.surface?.document.sources?.length ?? 0);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const destination = clientExtensionDestination(extension);
+  const sources = extension.manifest.sources ?? [];
+  const surfaceSourceCount = extension.surface?.document.sources?.length ?? 0;
+  const needsSetup = extension.installed && !extension.configured;
+  const receiptIssue = extension.lifecycle.error || "The installation receipt could not be verified.";
   return (
     <div className="@container mx-auto flex w-full max-w-[var(--thread-content-max-width)] flex-col gap-[var(--detail-page-section-gap)] [--detail-page-inline-inset:var(--padding-row-x)] [--detail-page-section-gap:calc(var(--spacing)*6)]">
-      <button className="flex w-fit cursor-interaction items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-secondary hover:bg-primary-ghost-hover hover:text-default" onClick={onBack} type="button">
-        <Glyph name="arrowLeft" size={14} />
+      <button className="flex w-fit min-w-0 cursor-interaction items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-secondary hover:bg-primary-ghost-hover hover:text-default focus:outline-none" onClick={onBack} type="button">
         <span>Extensions</span>
+        <span className="text-tertiary">/</span>
+        <span className="truncate text-default">{extension.manifest.name}</span>
       </button>
       <header className="flex flex-col gap-4 px-[var(--detail-page-inline-inset,0px)]">
         <ExtensionVisual className="size-[60px] rounded-2xl border border-default bg-transparent" extension={extension} size={28} />
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
           <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1.5">
-            <h1 className="heading-base min-w-0 break-words text-default electron:heading-lg">{extension.manifest.name}</h1>
-            <p className="text-base text-secondary">{extension.manifest.description}</p>
+            <h1 className="heading-base electron:heading-lg flex min-w-0 items-center gap-2 text-default">
+              <span className="min-w-0 break-words">{extension.manifest.name}</span>
+              <ExtensionStateStatus busy={busy} extension={extension} />
+            </h1>
+            <p className="m-0 text-base text-secondary">By {extension.manifest.developer} • {extension.manifest.description}</p>
           </div>
           <div className="flex max-w-full shrink-0 items-center gap-2">
-            <ExtensionStateStatus busy={busy} extension={extension} />
-            {(extension.manifest.sources?.length ?? 0) > 0 ? (
-              <OcButton
-                disabled={busy || !mutable}
-                onClick={onSetup}
-                size="sm"
-                variant={extension.installed && !extension.configured ? "primary" : "secondary"}
-              >
-                {extension.configured ? "Edit setup" : "Set up"}
-              </OcButton>
-            ) : null}
             {extension.installed ? (
-              <OcButton disabled={busy || !mutable} onClick={onUninstall} size="sm" tone="danger" variant="ghost">Uninstall</OcButton>
+              <>
+                {sources.length ? (
+                  <OcButton disabled={busy || !mutable} onClick={onSetup} size="sm" variant={needsSetup ? "primary" : "outline"}>
+                    {extension.configured ? "Edit setup" : "Set up"}
+                  </OcButton>
+                ) : null}
+                {destination && !needsSetup ? (
+                  <OcButton onClick={() => onOpenDestination(destination)} size="sm" variant="primary">
+                    {extensionOpenLabel(extension)}
+                  </OcButton>
+                ) : null}
+                <OcIconButton buttonRef={moreRef} disabled={busy || !mutable} glyph="more" label="More actions" onClick={() => setMoreOpen(true)} variant="ghost" />
+                <OcDropdown align="end" anchorRef={moreRef} contentWidth="menu" onOpenChange={setMoreOpen} open={moreOpen}>
+                  <OcMenuItem label="Uninstall" leadingIcon="trash" onClick={() => { setMoreOpen(false); onUninstall(); }} role="menuitem" tone="danger" />
+                </OcDropdown>
+              </>
             ) : (
               <OcButton
                 disabled={busy || !mutable || extension.lifecycle.receiptState === "invalid"}
                 onClick={onInstall}
                 size="sm"
-                title={extension.lifecycle.receiptState === "invalid" ? extension.lifecycle.error || "The installation receipt could not be verified." : undefined}
+                title={extension.lifecycle.receiptState === "invalid" ? receiptIssue : undefined}
                 variant="primary"
               >
-                {extensionInstallActionLabel(extension, busy)}
+                <span className="flex items-center gap-2">
+                  {busy ? <OctopusSpinner className="icon-xs" /> : null}
+                  {extensionInstallActionLabel(extension, busy)}
+                </span>
               </OcButton>
             )}
           </div>
         </div>
       </header>
       {extension.lifecycle.receiptState === "invalid" ? (
-        <div className="mx-2 rounded-xl border border-token-error-foreground/25 bg-token-error-background px-4 py-3 text-sm text-token-error-foreground" role="alert">
+        <div className="mx-[var(--detail-page-inline-inset,0px)] rounded-xl border border-token-error-foreground/25 bg-token-error-background px-4 py-3 text-sm text-token-error-foreground" role="alert">
           <div className="font-medium">Installation issue</div>
-          <div className="mt-1 whitespace-pre-wrap text-xs opacity-90">{extension.lifecycle.error || "The installation receipt could not be verified."}</div>
+          <div className="mt-1 whitespace-pre-wrap text-xs opacity-90">{receiptIssue}</div>
         </div>
       ) : null}
-      <DetailSection title="About">
-        <DetailRow label="Type" value={extensionCategoryLabel(extension.manifest.category)} />
-        <DetailRow label="Adds" value={extensionDestinationLabel(extension.manifest.category)} />
-        <DetailRow label="Sources" value={sourceCount ? `${sourceCount} local source${sourceCount === 1 ? "" : "s"}` : "No setup needed"} />
+      <DetailSection title="Includes">
+        <DetailRow label={extensionCategoryLabel(extension.manifest.category)} value={extensionDestinationLabel(extension.manifest.category)} />
+        {sources.length === 0 && surfaceSourceCount === 0 ? <DetailRow label="Setup" value="No setup needed" /> : null}
+        {surfaceSourceCount ? <DetailRow label="Reads" value={`${surfaceSourceCount} local source${surfaceSourceCount === 1 ? "" : "s"}`} /> : null}
       </DetailSection>
-      {(extension.manifest.sources?.length ?? 0) > 0 ? (
-        <DetailSection title="Sources">
-          {extension.manifest.sources?.map((source) => {
-            const configuration = extension.sourceConfiguration[source.id];
-            return (
-              <DetailRow
-                key={source.id}
-                label={source.label}
-                value={source.kind === "filesystem"
-                  ? configuration?.path || (source.required ? "Required · not configured" : "Optional · not configured")
-                  : source.kind === "credential"
-                    ? extension.credentials[source.id]
-                      ? `Saved · sent only to ${credentialHost(source.origin)}`
-                      : source.required ? "Required · not configured" : "Optional · not configured"
-                    : configuration?.device_id || `${source.device} · system default`}
-                mono={source.kind === "filesystem" && Boolean(configuration?.path)}
-              />
-            );
-          })}
+      {sources.length ? (
+        <DetailSection title="Setup">
+          {sources.map((source) => <DetailRow key={source.id} label={source.label} mono={source.kind === "filesystem" && Boolean(extension.sourceConfiguration[source.id]?.path)} value={extensionSourceSummary(extension, source)} />)}
         </DetailSection>
       ) : null}
       <DetailSection title="Information">
+        <DetailRow label="Category" value={CATEGORY_COPY[extension.manifest.category].title} />
         <DetailRow label="Developer" value={extension.manifest.developer} />
         <DetailRow label="Version" value={extension.manifest.version} mono />
       </DetailSection>
+    </div>
+  );
+}
+
+function ExtensionDialogHeader({ extension, subtitle, title, titleId }: {
+  extension: ClientExtensionRecord;
+  subtitle?: ReactNode;
+  title: ReactNode;
+  titleId: string;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <ConnectLogoRow>
+        <ExtensionVisual className="size-14 rounded-xl border border-default shadow-sm" extension={extension} size={26} />
+      </ConnectLogoRow>
+      <div className="flex flex-col items-center gap-1 text-center">
+        <h2 className="heading-dialog m-0 font-semibold text-default" id={titleId}>{title}</h2>
+        {subtitle ? <div className="text-sm text-secondary">{subtitle}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function ExtensionDialogFrame({ busy, children, onClose }: { busy: boolean; children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="relative flex min-h-0 flex-col gap-6 overflow-hidden px-6 pt-8 pb-6">
+      <OcIconButton appearance="dialog-close" className="absolute top-4 right-4" disabled={busy} glyph="close" label="Close" onClick={onClose} />
+      {children}
+    </div>
+  );
+}
+
+function ExtensionDisclosure({ children }: { children: ReactNode }) {
+  return <div className="rounded-2xl border border-default px-4 py-2">{children}</div>;
+}
+
+function ExtensionDisclosureSection({ children, title }: { children: ReactNode; title?: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 border-b border-default py-3 last:border-none">
+      {title ? <div className="text-sm font-medium text-default">{title}</div> : null}
+      {children}
     </div>
   );
 }
@@ -868,6 +943,7 @@ function ExtensionSetupDialog({
   onRemoveCredential: (sourceId: string) => void;
   onSave: (sources: Record<string, ClientExtensionSourceConfiguration>, credentials: Record<string, string>) => void;
 }) {
+  const titleId = useId();
   const [draft, setDraft] = useState<Record<string, ClientExtensionSourceConfiguration>>({});
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [checks, setChecks] = useState<Record<string, { pending: boolean; message: string; ok: boolean }>>({});
@@ -945,119 +1021,121 @@ function ExtensionSetupDialog({
     && !isAbsoluteClientPath(draft[source.id]?.path ?? "")
   ));
   return (
-    <SetupDialogShell ariaLabel={extension ? `Set up ${extension.manifest.name}` : "Set up extension"} busy={busy} onClose={onCancel} open={Boolean(extension)} size="wide">
+    <OcDialog ariaLabelledBy={titleId} busy={busy} onClose={onCancel} open={Boolean(extension)} size="setup">
       {extension ? (
-        <>
-          <div className="flex items-start gap-4 px-6 pt-8 pb-6">
-            <ExtensionVisual className="size-[60px] rounded-2xl" extension={extension} size={28} />
-            <div className="min-w-0 flex-1">
-              <h2 className="heading-lg text-token-foreground">Set up {extension.manifest.name}</h2>
-              <p className="mt-1 text-sm leading-5 text-token-text-secondary">These sources stay on this device and are available only to {extension.manifest.name}.</p>
-            </div>
-            <OcIconButton disabled={busy} glyph="close" label="Close" onClick={onCancel} variant="ghost" />
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-            <div className="flex flex-col gap-5">
-              {extension.manifest.sources?.map((source) => source.kind === "filesystem" ? (
+        <ExtensionDialogFrame busy={busy} onClose={onCancel}>
+          <ExtensionDialogHeader extension={extension} subtitle={`Developed by ${extension.manifest.developer}`} title={`Set up ${extension.manifest.name}`} titleId={titleId} />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="flex flex-col gap-4">
+              {extension.manifest.sources?.map((source) => (
                 <div className="flex flex-col gap-2" key={source.id}>
-                  <div>
-                    <div className="text-sm font-medium text-token-foreground">{source.label}{source.required ? " · Required" : ""}</div>
-                    <div className="mt-0.5 text-sm text-token-description-foreground">{source.description}</div>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <OcTextField
-                      className="min-w-0 flex-1"
-                      disabled={busy}
-                      label={source.label}
-                      error={draft[source.id]?.path?.trim() && !isAbsoluteClientPath(draft[source.id]?.path ?? "") ? "Use an absolute path." : undefined}
-                      onChange={(event) => setDraft((current) => ({ ...current, [source.id]: { ...current[source.id], path: event.currentTarget.value } }))}
-                      placeholder={source.selection === "directory" ? "/path/to/folder" : "/path/to/file"}
-                      showLabel={false}
-                      value={draft[source.id]?.path ?? ""}
-                    />
-                    <OcButton disabled={busy || accessProfile !== "live"} onClick={() => void choosePath(source.id, source.selection, source.label)} size="sm" variant="secondary">Choose</OcButton>
-                  </div>
-                </div>
-              ) : source.kind === "credential" ? (
-                <div className="flex flex-col gap-2" key={source.id}>
-                  <div>
-                    <div className="text-sm font-medium text-token-foreground">{source.label}{source.required ? " · Required" : ""}</div>
-                    <div className="mt-0.5 text-sm text-token-description-foreground">{source.description}</div>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <OcTextField
-                      autoComplete="off"
-                      className="min-w-0 flex-1"
-                      disabled={busy}
-                      label={source.label}
-                      onChange={(event) => setSecrets((current) => ({ ...current, [source.id]: event.currentTarget.value }))}
-                      placeholder={extension.credentials[source.id] ? "Saved · paste a new key to replace it" : "Paste key"}
-                      showLabel={false}
-                      spellCheck={false}
-                      type="password"
-                      value={secrets[source.id] ?? ""}
-                    />
-                    {extension.credentials[source.id] ? (
-                      <>
-                        {source.check_path ? (
-                          <OcButton
-                            disabled={busy || checks[source.id]?.pending || accessProfile !== "live"}
-                            onClick={() => void checkCredential(source.id, credentialHost(source.origin))}
-                            size="sm"
-                            variant="secondary"
-                          >
-                            Check
-                          </OcButton>
-                        ) : null}
-                        <OcButton
-                          disabled={busy || accessProfile !== "live"}
-                          onClick={() => onRemoveCredential(source.id)}
-                          size="sm"
-                          tone="danger"
-                          variant="ghost"
-                        >
-                          Remove
-                        </OcButton>
-                      </>
-                    ) : null}
-                  </div>
-                  {checks[source.id]?.message ? (
-                    <div className={`text-sm ${checks[source.id]?.ok ? "text-token-description-foreground" : "text-token-error-foreground"}`}>
-                      {checks[source.id]?.message}
+                  <div className="text-sm font-medium text-default select-none">{source.label}</div>
+                  {source.kind === "filesystem" ? (
+                    <div className="flex items-start gap-2">
+                      <OcTextField
+                        className="min-w-0 flex-1"
+                        disabled={busy}
+                        label={source.label}
+                        error={draft[source.id]?.path?.trim() && !isAbsoluteClientPath(draft[source.id]?.path ?? "") ? "Use an absolute path." : undefined}
+                        onChange={(event) => {
+                          const path = event.currentTarget.value;
+                          setDraft((current) => ({ ...current, [source.id]: { ...current[source.id], path } }));
+                        }}
+                        placeholder={source.required ? source.selection === "directory" ? "/path/to/folder" : "/path/to/file" : "Optional"}
+                        showLabel={false}
+                        value={draft[source.id]?.path ?? ""}
+                      />
+                      <OcButton disabled={busy || accessProfile !== "live"} onClick={() => void choosePath(source.id, source.selection, source.label)} size="sm" variant="outline">Choose</OcButton>
                     </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2" key={source.id}>
-                  <div>
-                    <div className="text-sm font-medium text-token-foreground">{source.label}{source.required ? " · Required" : ""}</div>
-                    <div className="mt-0.5 text-sm text-token-description-foreground">{source.description}</div>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <OcSelect
-                      disabled={busy || !(devices[source.id]?.length)}
-                      label={source.label}
-                      onChange={(deviceId) => setDraft((current) => ({ ...current, [source.id]: { ...current[source.id], device_id: deviceId } }))}
-                      options={(devices[source.id] ?? []).map((device, index) => ({ value: device.deviceId, label: device.label || `${source.device} ${index + 1}` }))}
-                      placeholder={`Choose ${source.device}`}
-                      showLabel={false}
-                      stretch
-                      value={draft[source.id]?.device_id ?? ""}
-                    />
-                    <OcButton disabled={busy || accessProfile !== "live"} onClick={() => void requestDevice(source.id, source.device)} size="sm" variant="secondary">Allow</OcButton>
-                  </div>
+                  ) : source.kind === "credential" ? (
+                    <>
+                      <div className="flex items-start gap-2">
+                        <OcTextField
+                          autoComplete="off"
+                          className="min-w-0 flex-1"
+                          disabled={busy}
+                          label={source.label}
+                          onChange={(event) => {
+                            const secret = event.currentTarget.value;
+                            setSecrets((current) => ({ ...current, [source.id]: secret }));
+                          }}
+                          placeholder={extension.credentials[source.id] ? "Leave blank to keep the saved key" : source.required ? "Paste key" : "Optional"}
+                          showLabel={false}
+                          spellCheck={false}
+                          type="password"
+                          value={secrets[source.id] ?? ""}
+                        />
+                        {extension.credentials[source.id] ? (
+                          <>
+                            {source.check_path ? (
+                              <OcButton
+                                disabled={busy || checks[source.id]?.pending || accessProfile !== "live"}
+                                onClick={() => void checkCredential(source.id, credentialHost(source.origin))}
+                                size="sm"
+                                variant="outline"
+                              >
+                                Check
+                              </OcButton>
+                            ) : null}
+                            <OcButton
+                              disabled={busy || accessProfile !== "live"}
+                              onClick={() => onRemoveCredential(source.id)}
+                              size="sm"
+                              tone="danger"
+                              variant="ghost"
+                            >
+                              Remove
+                            </OcButton>
+                          </>
+                        ) : null}
+                      </div>
+                      {checks[source.id]?.message ? (
+                        <div className={cx("text-xs", checks[source.id]?.ok ? "text-secondary" : "text-token-error-foreground")}>
+                          {checks[source.id]?.message}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="flex items-start gap-2">
+                      <OcSelect
+                        disabled={busy || !(devices[source.id]?.length)}
+                        label={source.label}
+                        onChange={(deviceId) => setDraft((current) => ({ ...current, [source.id]: { ...current[source.id], device_id: deviceId } }))}
+                        options={(devices[source.id] ?? []).map((device, index) => ({ value: device.deviceId, label: device.label || `${source.device} ${index + 1}` }))}
+                        placeholder={`Choose ${source.device}`}
+                        showLabel={false}
+                        stretch
+                        value={draft[source.id]?.device_id ?? ""}
+                      />
+                      <OcButton disabled={busy || accessProfile !== "live"} onClick={() => void requestDevice(source.id, source.device)} size="sm" variant="outline">Allow</OcButton>
+                    </div>
+                  )}
+                  <div className="text-xs text-secondary">{source.description}</div>
                 </div>
               ))}
-              {localError ? <div className="text-sm text-token-error-foreground">{localError}</div> : null}
+              <ExtensionDisclosure>
+                <ExtensionDisclosureSection title="Stays on this device">
+                  <div className="text-xs text-secondary">These sources are saved privately in this Octopus Home and are available only to {extension.manifest.name}.</div>
+                </ExtensionDisclosureSection>
+              </ExtensionDisclosure>
+              {localError ? <div className="text-center text-sm text-token-error-foreground" role="alert">{localError}</div> : null}
             </div>
           </div>
-          <OcDialogFooter>
-            <OcButton disabled={busy} onClick={onCancel} variant="ghost">Cancel</OcButton>
-            <OcButton disabled={busy || accessProfile !== "live" || missingRequired || invalidFilesystem} onClick={() => onSave(draft, secrets)} variant="primary">{busy ? "Saving…" : installAfterSave ? "Save and install" : "Save"}</OcButton>
-          </OcDialogFooter>
-        </>
+          <OcButton
+            className="w-full justify-center rounded-full! px-5 py-2 text-base"
+            disabled={busy || accessProfile !== "live" || missingRequired || invalidFilesystem}
+            onClick={() => onSave(draft, secrets)}
+            size="md"
+            variant="primary"
+          >
+            <span className="flex items-center gap-2">
+              {busy ? <OctopusSpinner className="icon-xs" /> : null}
+              {busy ? "Saving…" : installAfterSave && extension.admission !== "pending" ? `Install ${extension.manifest.name}` : "Save"}
+            </span>
+          </OcButton>
+        </ExtensionDialogFrame>
       ) : null}
-    </SetupDialogShell>
+    </OcDialog>
   );
 }
 
@@ -1067,21 +1145,22 @@ function ExtensionUninstallDialog({ busy, extension, onCancel, onConfirm }: {
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const titleId = useId();
   return (
-    <SetupDialogShell ariaLabel={extension ? `Uninstall ${extension.manifest.name}` : "Uninstall extension"} busy={busy} onClose={onCancel} open={Boolean(extension)} panelClassName="max-w-md">
+    <OcDialog ariaLabelledBy={titleId} busy={busy} onClose={onCancel} open={Boolean(extension)} size="compact">
       {extension ? (
-        <>
-          <div className="px-6 pt-8 pb-6">
-            <h2 className="heading-lg text-token-foreground">Uninstall {extension.manifest.name}?</h2>
-            <p className="mt-2 text-sm leading-5 text-token-text-secondary">This removes the extension from Octopus. Its setup is kept so you can install it again later.</p>
+        <div className="flex flex-col gap-6 p-6">
+          <div className="flex flex-col gap-2">
+            <h2 className="heading-dialog m-0 font-semibold text-default" id={titleId}>Uninstall {extension.manifest.name}?</h2>
+            <p className="m-0 text-sm leading-5 text-secondary">This removes it from Octopus. Its setup is kept so you can install it again later.</p>
           </div>
-          <OcDialogFooter>
+          <div className="flex justify-end gap-2">
             <OcButton disabled={busy} onClick={onCancel} variant="ghost">Cancel</OcButton>
             <OcButton disabled={busy} onClick={onConfirm} tone="danger" variant="secondary">{busy ? "Uninstalling…" : "Uninstall"}</OcButton>
-          </OcDialogFooter>
-        </>
+          </div>
+        </div>
       ) : null}
-    </SetupDialogShell>
+    </OcDialog>
   );
 }
 
@@ -1091,52 +1170,107 @@ function ExtensionInstallDialog({ busy, extension, onCancel, onConfirm }: {
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const titleId = useId();
   const invalid = extension?.lifecycle.receiptState === "invalid";
   const updating = extension ? extensionNeedsUpdate(extension) : false;
+  const name = extension?.manifest.name ?? "";
+  const pending = extension?.admission === "pending";
+  const sources = extension?.manifest.sources ?? [];
   return (
-    <SetupDialogShell ariaLabel={extension ? `Install ${extension.manifest.name}` : "Install extension"} busy={busy} onClose={onCancel} open={Boolean(extension)} panelClassName="max-w-md">
+    <OcDialog ariaLabelledBy={titleId} busy={busy} onClose={onCancel} open={Boolean(extension)} size="setup">
       {extension ? (
-        <>
-          <div className="px-6 pt-8 pb-6">
-            <h2 className="heading-lg text-token-foreground">
-              {invalid
-                ? `Installation issue with ${extension.manifest.name}`
-                : extension.admission === "pending"
-                  ? `Review ${extension.manifest.name}${updating ? " update" : ""}?`
-                  : updating
-                    ? `Update ${extension.manifest.name}?`
-                    : `Install ${extension.manifest.name}?`}
-            </h2>
-            <p className="mt-2 text-sm leading-5 text-token-text-secondary">
-              {invalid
-                ? extension.lifecycle.error || "The installation receipt could not be verified."
-                : extension.admission === "pending"
-                ? "Octopus found a new local package revision. Review this exact version before installing it."
-                : extension.manifest.category === "repair"
-                  ? "This adds a guided repair that appears only when Octopus recognizes the matching problem and still waits for your confirmation."
-                  : `This adds ${extensionDestinationLabel(extension.manifest.category).toLowerCase()} and uses only the sources shown in its setup.`}
-            </p>
-            {extension.admission === "pending" ? (
-              <dl className="mt-5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 rounded-xl border border-token-border/50 bg-token-foreground/3 px-3 py-3 text-sm">
-                <dt className="text-token-text-secondary">Version</dt><dd className="min-w-0 truncate font-mono text-xs text-token-foreground" title={extension.manifest.version}>{extension.manifest.version}</dd>
-                <dt className="text-token-text-secondary">Package fingerprint</dt><dd className="min-w-0 truncate font-mono text-xs text-token-foreground" title={extension.sourceDigest}>{extension.sourceDigest}</dd>
-                <dt className="text-token-text-secondary">Adds</dt><dd className="min-w-0 truncate text-token-foreground">{extensionDestinationLabel(extension.manifest.category)}</dd>
-              </dl>
+        <ExtensionDialogFrame busy={busy} onClose={onCancel}>
+          <ExtensionDialogHeader
+            extension={extension}
+            subtitle={`Developed by ${extension.manifest.developer}`}
+            title={invalid ? `Installation issue with ${name}` : updating ? `Update ${name}` : `Install ${name}`}
+            titleId={titleId}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <ExtensionDisclosure>
+              <ExtensionDisclosureSection>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-sm font-medium text-default">{name}</div>
+                  <OcStatus label={extensionCategoryLabel(extension.manifest.category)} />
+                </div>
+                <div className="flex flex-col gap-1 text-sm text-secondary">
+                  <div>By {extension.manifest.developer}</div>
+                  <div>Version {extension.manifest.version}</div>
+                </div>
+              </ExtensionDisclosureSection>
+              <ExtensionDisclosureSection title="About">
+                <div className="text-sm text-secondary">{invalid ? extension.lifecycle.error || "The installation receipt could not be verified." : extension.manifest.description}</div>
+              </ExtensionDisclosureSection>
+              {invalid ? null : (
+                <ExtensionDisclosureSection title="Includes">
+                  <div className="text-sm text-secondary">
+                    {extension.manifest.category === "repair"
+                      ? "A guided repair that appears only when Octopus recognizes the matching problem and still waits for your confirmation."
+                      : `${extensionDestinationLabel(extension.manifest.category)}. ${sources.length ? "It uses only these sources:" : "It needs no setup."}`}
+                  </div>
+                  {sources.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {sources.map((source) => <OcStatus key={source.id} label={source.label} />)}
+                    </div>
+                  ) : null}
+                </ExtensionDisclosureSection>
+              )}
+              {pending && !invalid ? (
+                <ExtensionDisclosureSection title="New local revision">
+                  <div className="text-sm text-secondary">Octopus found a new local package revision. Review this exact version before installing it.</div>
+                  <div className="min-w-0 truncate font-mono text-xs text-tertiary" title={extension.sourceDigest}>{extension.sourceDigest}</div>
+                </ExtensionDisclosureSection>
+              ) : null}
+            </ExtensionDisclosure>
+          </div>
+          <div className="flex w-full flex-col gap-2">
+            <OcButton className="w-full justify-center rounded-full! px-5 py-2 text-base" disabled={busy || invalid} onClick={onConfirm} size="md" variant="primary">
+              <span className="flex items-center gap-2">
+                {busy ? <OctopusSpinner className="icon-xs" /> : null}
+                {busy ? updating ? `Updating ${name}` : `Installing ${name}` : updating ? `Update ${name}` : `Install ${name}`}
+              </span>
+            </OcButton>
+            {pending ? (
+              <OcButton className="w-full justify-center rounded-full! px-5 py-2 text-base" disabled={busy} onClick={onCancel} size="md" variant="ghost">Dismiss</OcButton>
             ) : null}
           </div>
-          <OcDialogFooter>
-            <OcButton disabled={busy} onClick={onCancel} variant="ghost">{invalid ? "Close" : extension.admission === "pending" ? "Dismiss" : "Cancel"}</OcButton>
-            <OcButton disabled={busy || invalid} onClick={onConfirm} variant="primary">
-              {busy
-                ? updating ? "Updating…" : "Installing…"
-                : extension.admission === "pending"
-                  ? updating ? "Review & update" : "Review & install"
-                  : updating ? "Update" : "Install"}
-            </OcButton>
-          </OcDialogFooter>
-        </>
+        </ExtensionDialogFrame>
       ) : null}
-    </SetupDialogShell>
+    </OcDialog>
+  );
+}
+
+function ExtensionReadyDialog({ extension, onClose, onOpenDestination, onViewDetails }: {
+  extension: ClientExtensionRecord | null;
+  onClose: () => void;
+  onOpenDestination: (destination: ClientExtensionDestination) => void;
+  onViewDetails: (id: string) => void;
+}) {
+  const titleId = useId();
+  const destination = extension ? clientExtensionDestination(extension) : null;
+  return (
+    <OcDialog ariaLabelledBy={titleId} onClose={onClose} open={Boolean(extension)} size="setup">
+      {extension ? (
+        <div className="relative flex max-h-full flex-col overflow-hidden">
+          <OcIconButton appearance="dialog-close" className="absolute top-5 right-5" glyph="close" label="Close" onClick={onClose} />
+          <div className="flex shrink-0 flex-col items-center gap-4 px-6 pt-9 pb-6">
+            <ConnectLogoRow>
+              <ExtensionVisual className="size-14 rounded-xl border border-default shadow-sm" extension={extension} size={26} />
+            </ConnectLogoRow>
+            <div className="flex flex-col items-center gap-1 text-center">
+              <h2 className="m-0 text-lg leading-6 font-semibold text-default" id={titleId}>{extension.manifest.name} is ready</h2>
+              <div className="max-w-[432px] text-sm leading-5 text-secondary">{extensionReadyCopy(extension.manifest.category)}</div>
+            </div>
+          </div>
+          <div className="flex h-[84px] shrink-0 items-center justify-end gap-2 bg-surface-elevated-secondary px-6 py-6">
+            <OcButton className="h-9 rounded-xl! px-3 py-2 text-sm leading-5" onClick={() => onViewDetails(extension.manifest.id)} variant="outline">View details</OcButton>
+            {destination ? (
+              <OcButton className="h-9 rounded-xl! px-3 py-2 text-sm leading-5" onClick={() => onOpenDestination(destination)} variant="primary">{extensionOpenLabel(extension)}</OcButton>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </OcDialog>
   );
 }
 
@@ -1164,9 +1298,9 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
 
 function DetailRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="grid min-h-9 grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] items-start gap-4 rounded-lg px-2 py-1.5 hover:bg-token-foreground/3">
-      <span className="text-sm text-token-text-secondary">{label}</span>
-      <span className={cx("min-w-0 text-sm text-token-foreground [overflow-wrap:anywhere]", mono && "font-mono text-xs")}>{value}</span>
+    <div className="grid min-h-[var(--height-token-row)] grid-cols-1 items-start gap-x-3 gap-y-0.5 py-[var(--padding-row-y)] text-base leading-5 [@container_(min-width:24rem)]:grid-cols-[var(--detail-property-label-width,120px)_minmax(0,1fr)] [@container_(min-width:24rem)]:items-center">
+      <span className="flex min-w-0 items-center gap-2 [overflow-wrap:anywhere] text-token-description-foreground">{label}</span>
+      <span className={cx("flex min-w-0 items-center text-default [overflow-wrap:anywhere]", mono && "font-mono text-xs")}>{value}</span>
     </div>
   );
 }
@@ -1227,6 +1361,38 @@ function revealInstalledTab(
   const surfaceId = contribution.kind === "builtin" ? contribution.surface_id : contribution.document.id;
   if (!hiddenSurfaceIds.includes(surfaceId)) return;
   setClientPreferences({ hiddenSurfaceIds: hiddenSurfaceIds.filter((id) => id !== surfaceId) });
+}
+
+export function clientExtensionDestination(extension: ClientExtensionRecord): ClientExtensionDestination | null {
+  const contribution = extension.manifest.contribution;
+  if (extension.manifest.category === "widget") return { kind: "home" };
+  if (contribution.kind === "builtin_input") {
+    const sectionId = builtinClientExtensionInputSection(contribution.input_id);
+    return sectionId ? { kind: "settings", sectionId } : null;
+  }
+  if (extension.manifest.category !== "tab" || contribution.kind === "builtin_action") return null;
+  return { kind: "surface", surfaceId: contribution.kind === "builtin" ? contribution.surface_id : contribution.document.id };
+}
+
+function extensionOpenLabel(extension: ClientExtensionRecord): string {
+  if (extension.manifest.category === "widget") return "Go to Home";
+  if (extension.manifest.category === "input") return "Open settings";
+  return `Open ${extension.manifest.name}`;
+}
+
+function extensionReadyCopy(category: ClientExtensionCategory): string {
+  if (category === "widget") return "It is on Home now. Move it or hide it there whenever you like.";
+  if (category === "tab") return "Find it in the sidebar. You can always hide it from Settings.";
+  if (category === "input") return "It works alongside the controls you already use.";
+  return "It waits until Octopus recognizes the matching problem.";
+}
+
+function extensionSourceSummary(extension: ClientExtensionRecord, source: ClientExtensionSource): string {
+  const configuration = extension.sourceConfiguration[source.id];
+  const missing = source.required ? "Required · not configured" : "Optional · not configured";
+  if (source.kind === "filesystem") return configuration?.path || missing;
+  if (source.kind === "credential") return extension.credentials[source.id] ? `Saved · sent only to ${credentialHost(source.origin)}` : missing;
+  return configuration?.device_id || `${source.device} · system default`;
 }
 
 function extensionCategoryLabel(category: ClientExtensionCategory): string {

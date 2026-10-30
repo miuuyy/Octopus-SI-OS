@@ -14,6 +14,7 @@ export type GestureShortcutPreferences = Readonly<{
   mirrorX: boolean;
   sensitivity: GestureSensitivity;
   spatialControl: boolean;
+  tourCompleted: boolean;
   mappings: Readonly<Record<AirHandGestureId, GestureCommandId>>;
   removedBuiltins: readonly AirHandGestureId[];
 }>;
@@ -30,6 +31,7 @@ const DEFAULT_PREFERENCES: GestureShortcutPreferences = Object.freeze({
   mirrorX: true,
   sensitivity: "balanced",
   spatialControl: true,
+  tourCompleted: false,
   mappings: Object.freeze({
     swipe_left: "navigate_back",
     swipe_right: "navigate_forward",
@@ -127,6 +129,7 @@ function updateStore(store: GestureStore, partial: Partial<GestureShortcutPrefer
     mirrorX: typeof partial.mirrorX === "boolean" ? partial.mirrorX : store.current.mirrorX,
     sensitivity: normalizeSensitivity(partial.sensitivity ?? store.current.sensitivity),
     spatialControl: typeof partial.spatialControl === "boolean" ? partial.spatialControl : store.current.spatialControl,
+    tourCompleted: typeof partial.tourCompleted === "boolean" ? partial.tourCompleted : store.current.tourCompleted,
     mappings,
     removedBuiltins: Object.freeze(normalizeRemoved(partial.removedBuiltins ?? store.current.removedBuiltins)),
   });
@@ -150,6 +153,7 @@ function readPreferences(profile: OctopusClientAccessProfile): GestureShortcutPr
       mirrorX: value.mirrorX !== false,
       sensitivity: normalizeSensitivity(value.sensitivity),
       spatialControl: value.spatialControl !== false,
+      tourCompleted: value.tourCompleted === true,
       mappings: normalizeMappings(value.mappings),
       removedBuiltins: Object.freeze(normalizeRemoved(value.removedBuiltins)),
     });

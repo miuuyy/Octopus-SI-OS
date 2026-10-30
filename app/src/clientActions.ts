@@ -31,7 +31,8 @@ export type ClientCommandId =
   | "previous_operator_message"
   | "next_operator_message"
   | "voice_primary"
-  | "voice_end";
+  | "voice_end"
+  | "toggle_gesture_control";
 
 export type ClientCommandSource = "keyboard" | "gesture" | "surface";
 
@@ -75,6 +76,7 @@ export const clientCommands: readonly ClientCommand[] = [
   { id: "next_operator_message", label: "Next operator message", detail: "Jump to the next operator turn in the active task" },
   { id: "voice_primary", label: "Start or mute Home voice", detail: "Start, mute, or unmute voice on the open Home surface" },
   { id: "voice_end", label: "End Home voice", detail: "End the active voice connection while Home is open" },
+  { id: "toggle_gesture_control", label: "Turn gesture control on or off", detail: "Start or stop camera hand tracking in this client" },
 ];
 
 export const CLIENT_COMMAND_EVENT = "octopus:client-command";

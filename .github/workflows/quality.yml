@@ -118,6 +118,7 @@ jobs:
           node scripts/test-files-lifecycle.cjs
           node scripts/test-mark-activity.cjs
           node scripts/test-client-actions.cjs
+          node scripts/test-client-experiments.cjs
           node scripts/test-projection-invalidation.cjs
           node scripts/test-air-hand-control.cjs
           node scripts/test-scheduled-ui.cjs

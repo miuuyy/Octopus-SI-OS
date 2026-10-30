@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { FileTree as FileTreeModel } from "@pierre/trees";
+import { OcStatus } from "../design-system/components";
 import { Glyph, type GlyphName } from "./IconGlyphs";
 import "./octopus-surface.css";
 
@@ -330,10 +331,7 @@ export function OctopusSurfaceShell({ children, glyph, status, statusTone = "mut
           {subtitle ? <span className="truncate text-xs text-token-text-secondary">{subtitle}</span> : null}
         </span>
         {status ? (
-          <span className="flex shrink-0 items-center gap-1.5 text-xs text-token-text-secondary">
-            <span className={`size-1.5 rounded-full ${statusTone === "active" ? "bg-token-charts-green" : statusTone === "error" ? "bg-token-charts-red" : "bg-token-description-foreground"}`} />
-            {status}
-          </span>
+          <OcStatus className="shrink-0" label={status} tone={statusTone === "active" ? "success" : statusTone === "error" ? "danger" : "neutral"} />
         ) : null}
       </header>
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">

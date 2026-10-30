@@ -250,9 +250,12 @@ Open **Settings → Extensions** to browse and manage additions to the client:
 - **Repairs** provide explicit maintenance actions, such as **Codex sign-in
   check** after an authentication failure.
 
-Review an extension's declared sources and actions before installing it, then
-complete any required setup. Adding a client view does not grant a run new
-tools or access to data.
+Opening an extension shows its page: what it adds, its setup and who made it.
+**Install** opens one dialog with the same facts, or a setup dialog first when
+the extension needs a folder, a key or a device. When it finishes, the dialog
+offers to open what you installed: the new tab, Home for a widget, or its
+settings for an input. Adding a client view does not grant a run new tools or
+access to data.
 
 Some extensions need a key. A key is a credential source: the manifest names
 the one origin it may be sent to, setup stores it with owner-only file
@@ -332,11 +335,29 @@ To add a capability, start with [Extending Octopus](contracts/EXTENSION_SURFACES
 To understand updates and local JSON changes, read
 [Source and Home](development.md#source-and-home).
 
+## Experiments
+
+**Settings → Experiments** lists small product ideas running in this client,
+each with its own switch and a count kept on this device:
+
+- **Gesture feedback** briefly shows which command a swipe or fist ran.
+- **What's new on Home** introduces one new capability with a card on Home.
+- **Shortcut coach** shows a command's keyboard shortcut after you have opened
+  it from the command menu three times.
+
+Experiments change presentation only. All three start on, in each profile
+separately, and nothing they count leaves the client.
+
 ## Experimental interaction and Test
 
 **Settings → Gestures** turns the camera into a second way to drive the
 client. It includes camera selection, command mappings, custom pose recording,
-and a live preview. Camera access is required. Hand tracking runs on the GPU in
+and a live preview. The first time you turn it on, a short tour asks for the
+camera and shows pointing, pinching and swipes; **Take the tour** repeats it.
+While gesture control is on, a hand button sits in the navigation rail. Its dot
+shows whether the camera is live, and its menu shows the preview and turns
+gesture control off. **Turn gesture control on or off** is also in the command
+menu and can be given a keyboard shortcut. Camera access is required. Hand tracking runs on the GPU in
 a background worker, off the thread that draws the client; if the GPU cannot
 start it, Settings shows that error instead of tracking on the CPU. Treat these
 controls as experimental, particularly across different cameras and lighting.

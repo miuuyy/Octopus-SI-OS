@@ -12,7 +12,7 @@ import {
   onApplicationConnectionProgress,
 } from "../../projectionClient";
 import { ApplicationAvailabilityList, type ApplicationAvailabilityChange } from "./ApplicationAvailability";
-import { ApplicationLogo, OctopusConnectMark } from "./ApplicationLogo";
+import { ApplicationLogo, ConnectLogoRow } from "./ApplicationLogo";
 import {
   configurationFieldKey,
   type ApplicationConfigurationField,
@@ -246,17 +246,9 @@ function ConnectDialogContent({
         : `Connect ${name}`;
   const header = (
     <div className="flex flex-col items-center gap-4">
-      <div className="flex items-center gap-3">
-        <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-black text-white shadow-sm">
-          <OctopusConnectMark className="size-10" />
-        </span>
-        <span aria-hidden="true" className="flex items-center gap-1">
-          <span className="size-1.5 rounded-full bg-border" />
-          <span className="size-1.5 rounded-full bg-border" />
-          <span className="size-1.5 rounded-full bg-border" />
-        </span>
+      <ConnectLogoRow>
         <ApplicationLogo application={application} className="size-14 overflow-hidden rounded-xl border border-default shadow-sm" logoSize={26} />
-      </div>
+      </ConnectLogoRow>
       <div className="flex flex-col items-center gap-1 text-center">
         <h2 className="heading-dialog m-0 font-semibold text-default" id={titleId}>
           {phase === "success" ? `${name} is now connected` : `Connect ${name}`}

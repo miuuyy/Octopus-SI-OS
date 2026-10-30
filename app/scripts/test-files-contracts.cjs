@@ -106,7 +106,8 @@ export const openArtifactFile = async () => {}; export const safeArtifactFilenam
   "src/design-system/components": `import { createElement } from "react";
 export function OcButton({ children, disabled, onClick }) { return createElement("button", { disabled, onClick, type: "button" }, children); }
 export function OcIconButton({ label, disabled, onClick }) { return createElement("button", { "aria-label": label, disabled, onClick, type: "button" }); }
-export function OcMenuItem({ label, disabled, onClick }) { return createElement("button", { role: "menuitem", disabled, onClick, type: "button" }, label); }`,
+export function OcMenuItem({ label, disabled, onClick }) { return createElement("button", { role: "menuitem", disabled, onClick, type: "button" }, label); }
+export function OcStatus({ label }) { return createElement("span", null, label); }`,
   "src/design-system/OcDropdown": `export function OcDropdown({ open, children }) { return open ? children : null; }`,
   "src/runtimeFormat": `export const copyText = async (value) => { globalThis.__files.copies.push(value); return true; };`,
   "src/toasts": `export const appToast = { danger() {}, success() {} };`,

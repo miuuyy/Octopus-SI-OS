@@ -65,6 +65,7 @@ import { applyHomeWidgetAction } from "../../client-surfaces/homeWidgetControls"
 import { useClientObservation } from "../../client-surfaces/useClientObservation";
 import { useAdmittedClientActions } from "../../shell/useAdmittedClientActions";
 import type { ClientSurfaceDescriptor } from "../../shell/surfaceTypes";
+import type { ClientExtensionDestination } from "../settings/ExtensionsSection";
 import {
   clientWindowChatStorageScope,
   clientWindowStateKey,
@@ -118,10 +119,12 @@ import type { HomeViewMode } from "../voice/VoiceView";
 import { useMarkActivity } from "../activity/useMarkActivity";
 import { dispatchClientCommand, subscribeClientCommands, type ClientCommandId } from "../../clientActions";
 import { clientDialogOwnsCommands, formatKeyboardShortcut, keyboardCommandConflictsWithEditing, keyboardCommandForEvent, keyboardTargetHasEditableOwner, keyboardTargetHasRichEditingOwner, useKeyboardShortcuts } from "../../keyboardShortcuts";
-import { subscribeAirHandGestures, useGestureShortcutPreferences } from "../../gestureShortcuts";
+import { subscribeAirHandGestures, useGestureShortcutPreferences, useSetGestureShortcutPreferences } from "../../gestureShortcuts";
 import { useCustomGestureDispatch } from "../../customGestures";
 import { useGestureFocus } from "../../gestureFocus";
+import { GestureCommandHud } from "../gestures/GestureCommandHud";
 import { GestureFocusRing } from "../gestures/GestureFocusRing";
+import { GestureTourHost } from "../gestures/GestureTourDialog";
 import { startGestureRecognition, stopGestureRecognition } from "../../gestureRecognition";
 import type { RuntimeHostView } from "../../runtimeHost";
 import type { ClientSurfaceActionEvent } from "../../client-surfaces/types";
@@ -229,6 +232,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   const taskOrganization = useClientTaskOrganization(accessProfile);
   const setClientPreferences = useSetClientPreferences();
   const gesturePreferences = useGestureShortcutPreferences(accessProfile);
+  const setGesturePreferences = useSetGestureShortcutPreferences(accessProfile);
   const keyboardShortcuts = useKeyboardShortcuts(accessProfile);
   const homeRunId = agentProjectWorkspace.homeRunId;
   const osRootEeId = agentProjectWorkspace.rootEeId;
@@ -1248,6 +1252,25 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     selectSurface(surface.id);
   }, [openNavigationSection, selectSurface]);
 
+  const openExtensionDestination = useCallback((destination: ClientExtensionDestination) => {
+    if (destination.kind === "settings") {
+      selectSettingsSection(destination.sectionId);
+      return;
+    }
+    if (destination.kind === "home") {
+      setSettingsOpen(false);
+      openVoice();
+      return;
+    }
+    const surface = surfaceRegistry.surfaces.find((candidate) => candidate.id === destination.surfaceId);
+    if (!surface) {
+      appToast.warning("This extension's tab is not available yet.");
+      return;
+    }
+    setSettingsOpen(false);
+    openPrimarySurface(surface, true);
+  }, [openPrimarySurface, openVoice, selectSettingsSection, setSettingsOpen, surfaceRegistry.surfaces]);
+
   const selectInboxItem = useCallback((item: MarkActivityItem, ids: readonly string[] = [item.id]) => {
     const current = markActivity.projectedItems.find((candidate) => candidate.id === item.id);
     if (!current) { appToast.warning("This notification is no longer available."); return; }
@@ -2118,6 +2141,10 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       if (settingsDestination?.sectionId) selectSettingsSection(settingsDestination.sectionId);
       return;
     }
+    if (command === "toggle_gesture_control") {
+      setGesturePreferences((current) => ({ enabled: !current.enabled }));
+      return;
+    }
     if (command === "toggle_pin_task") {
       const runId = activeClientSurfaceIdentity.runId;
       if (!runId) return;
@@ -2172,7 +2199,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     const direction = command === "previous_surface" ? -1 : 1;
     const next = (index + direction + shortcutNavigationDestinations.length) % shortcutNavigationDestinations.length;
     openNavigationSection(shortcutNavigationDestinations[next].id);
-  }), [accessProfile, activeClientSurfaceIdentity, activeNavigationSection, navigateSurfaceHistory, openChat, openNavigationSection, openSecondaryChatTab, openTerminalTab, openVoice, openWorkerEnvironmentPane, projectFilterEeId, selectSettingsSection, setSettingsOpen, shortcutNavigationDestinations, toggleSecondaryPane, workerEnvironmentActions]);
+  }), [accessProfile, activeClientSurfaceIdentity, activeNavigationSection, navigateSurfaceHistory, openChat, openNavigationSection, openSecondaryChatTab, openTerminalTab, openVoice, openWorkerEnvironmentPane, projectFilterEeId, selectSettingsSection, setGesturePreferences, setSettingsOpen, shortcutNavigationDestinations, toggleSecondaryPane, workerEnvironmentActions]);
 
   useEffect(() => {
     const handleClientSurfaceAction = (event: Event) => {
@@ -2482,6 +2509,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
               documents={surfaceRegistry.documents}
               extensions={surfaceRegistry.extensions}
               onClose={() => setSettingsOpen(false)}
+              onOpenExtensionDestination={openExtensionDestination}
               onSectionChange={selectSettingsSection}
               sectionId={activeDestination.settingsSection!}
               recordingId={settingsRecordingId}
@@ -2614,6 +2642,16 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         <BuiltinClientExtensionActionHost actions={surfaceRegistry.extensions.installedActions} />
       ) : null}
       <GestureFocusRing />
+      <GestureCommandHud accessProfile={accessProfile} />
+      {clientWindow.primary ? (
+        <GestureTourHost
+          accessProfile={accessProfile}
+          onOpenSettings={() => {
+            setSettingsOpen(true);
+            selectSettingsSection("gestures");
+          }}
+        />
+      ) : null}
     </ScheduledWorkspaceProvider>
   );
 }

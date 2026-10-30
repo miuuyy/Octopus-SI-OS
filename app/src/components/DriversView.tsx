@@ -40,6 +40,7 @@ import {
 } from "./catalog";
 import { Glyph, type GlyphName } from "./IconGlyphs";
 import { OctopusLoadingState } from "./OctopusLoadingLogo";
+import { PackageInstallReviewDialog } from "./applications/PackageInstallReviewDialog";
 import { SetupDialogShell } from "./SetupDialogShell";
 import { useAppErrorToast } from "../toasts";
 
@@ -644,12 +645,19 @@ export function DriversView({
 
   return (
     <>
-      <SetupDialogShell open={Boolean(installReview)} busy={false} onClose={() => setInstallReview(null)} ariaLabel="Install driver and required packages" panelClassName="max-w-md">
-        <div className="flex flex-col gap-3 p-5"><h2 className="text-lg font-medium">Install driver</h2><p className="text-sm text-token-text-secondary">The following packages are required:</p>
-          {installReview?.install_packages?.map((entry) => <div key={entry.id} className="text-sm">{entry.name}{entry.installed ? " · Installed" : ""}</div>)}
-          <OcDialogFooter><OcButton variant="secondary" onClick={() => setInstallReview(null)}>Cancel</OcButton><OcButton onClick={() => { if (installReview) void installDriver(installReview); setInstallReview(null); }}>Install</OcButton></OcDialogFooter>
-        </div>
-      </SetupDialogShell>
+      <PackageInstallReviewDialog
+        onCancel={() => setInstallReview(null)}
+        onConfirm={() => {
+          if (installReview) void installDriver(installReview);
+          setInstallReview(null);
+        }}
+        review={installReview ? {
+          logo: <DriverVisual driver={installReview} size="detail" />,
+          name: installReview.name,
+          note: "After installation, choose where it is available.",
+          packages: installReview.install_packages ?? [],
+        } : null}
+      />
       <SetupDialogShell open={Boolean(addingPreset)} busy={presetSaving} onClose={() => setAddingPreset(null)} ariaLabel="Add Agent preset" panelClassName="max-w-md">
         <div className="flex flex-col gap-4 p-5"><h2 className="text-lg font-medium">Add {addingPreset?.preset.name} Agent</h2>
           <OcSelect label="Project" value={presetProject} placeholder="Choose a Project" options={projects.filter((project) => addingPreset?.preset.project_ee_ids.includes(project.ee_id)).map((project) => ({ value: project.ee_id, label: project.name }))} onChange={setPresetProject} />
@@ -1096,18 +1104,7 @@ function DriverCardMeta({ driver }: { driver: DriverRecord }) {
   ].filter(Boolean).join(" + ");
   return (
     <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-4 text-token-description-foreground">
-      <i aria-hidden="true" className={cx(
-        "size-1.5 shrink-0 rounded-full",
-        status.tone === "success" ? "bg-token-charts-green"
-          : status.tone === "warning" ? "bg-token-charts-orange"
-            : status.tone === "danger" ? "bg-token-charts-red"
-              : "bg-token-description-foreground",
-      )} />
-      <span className={cx(
-        "shrink-0",
-        status.tone === "warning" && "text-token-charts-orange",
-        status.tone === "danger" && "text-token-charts-red",
-      )}>{status.label}</span>
+      <OcStatus className="shrink-0" label={status.label} tone={status.tone} />
       {scope ? <><span aria-hidden="true">·</span><span className="truncate">{scope}</span></> : null}
       {activeInstances ? <><span aria-hidden="true">·</span><span className="truncate text-token-charts-green">In use {activeInstances}</span></> : null}
     </span>

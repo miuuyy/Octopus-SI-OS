@@ -562,7 +562,6 @@ type OcStatusProps = {
 export function OcStatus({ label, detail, tone = "neutral", className }: OcStatusProps) {
   return (
     <ShellTooltip asChild disabled={!detail} label={detail ?? ""}><span className={cx("oc-status", `oc-tone-${tone}`, className)} aria-description={detail} data-oc-status>
-      <span aria-hidden="true" className="oc-status__dot" />
       <span className="oc-status__label">{label}</span>
     </span></ShellTooltip>
   );

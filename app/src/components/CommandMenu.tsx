@@ -3,7 +3,9 @@ import { isolateModalLayer, isTopmostModal, restoreModalFocus } from "../design-
 import { searchChatTaskMessages, type ChatRun, type ChatRunMessage } from "../chatRuns";
 import { requestChatMessageReveal } from "../chatMessageReveal";
 import { clientCommands, dispatchClientCommand, type ClientCommandId } from "../clientActions";
+import { clientExperimentEnabled, recordClientExperimentSignal, recordMenuCommandUse } from "../clientExperiments";
 import { formatKeyboardShortcuts, useKeyboardShortcuts } from "../keyboardShortcuts";
+import { appToast } from "../toasts";
 import type { OctopusClientAccessProfile } from "../electron";
 import {
   clientTaskTitle,
@@ -91,9 +93,19 @@ const commandPresentation: Partial<Record<ClientCommandId, { glyph: GlyphName; g
   open_side_task: { glyph: "splitPane", group: "Task" },
   previous_operator_message: { glyph: "chevronDown", group: "Navigation" },
   next_operator_message: { glyph: "chevronDown", group: "Navigation" },
+  toggle_gesture_control: { glyph: "hand", group: "App" },
   voice_primary: { glyph: "microphone", group: "Voice" },
   voice_end: { glyph: "phoneEnd", group: "Voice" },
 };
+
+const SHORTCUT_COACH_USES = 3;
+
+function coachShortcut(accessProfile: OctopusClientAccessProfile, command: { id: ClientCommandId; label: string }, shortcut: string) {
+  if (!shortcut || !clientExperimentEnabled(accessProfile, "shortcut_coach")) return;
+  if (recordMenuCommandUse(accessProfile, command.id) !== SHORTCUT_COACH_USES) return;
+  recordClientExperimentSignal(accessProfile, "shortcut_coach");
+  appToast.info(`${command.label}: ${shortcut}`, 6, { dedupeKey: `shortcut-coach:${command.id}` });
+}
 
 const groupOrder = ["Suggested", "Task", "Recent", "Surfaces", "Message results", "Recent tasks", "Navigation", "Panels", "Voice", "App"];
 
@@ -228,7 +240,10 @@ export function CommandMenu({
         group: presentation.group,
         glyph: presentation.glyph,
         shortcut: formatKeyboardShortcuts(keyboardShortcuts[command.id] ?? []) || undefined,
-        run: () => dispatchClientCommand(command.id, "surface"),
+        run: () => {
+          dispatchClientCommand(command.id, "surface");
+          coachShortcut(accessProfile, command, formatKeyboardShortcuts(keyboardShortcuts[command.id] ?? []));
+        },
       }];
     });
     const surfaceEntries = surfaces.map<CommandMenuEntry>((surface) => {

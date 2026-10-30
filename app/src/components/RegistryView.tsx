@@ -1,7 +1,7 @@
 import { OcLoadingRows, OcLoadingText } from "../design-system/LoadingSkeleton";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { OcButton, OcMenuItem, OcMenuSurface } from "../design-system/components";
+import { OcButton, OcMenuItem, OcMenuSurface, OcStatus } from "../design-system/components";
 import { useFloatingMenu } from "../design-system/useFloatingMenu";
 import type { OctopusClientAccessProfile, OctopusOsFile, OctopusOsFileEntry } from "../electron";
 import { useProjectionStructureGeneration } from "../projectionLive";
@@ -459,10 +459,7 @@ function RegistryInterfaceColumn({ accessProfile, activePath, onContextMenu, onS
                       <span className="truncate font-mono text-[9px] text-token-description-foreground">{item.id}</span>
                     </span>
                     <span className="flex max-w-28 shrink-0 flex-col items-end gap-1 text-[9px] text-token-description-foreground">
-                      <span className="flex max-w-full items-center gap-1" title={readiness.detail}>
-                        <span className={`size-1.5 shrink-0 rounded-full ${readiness.tone === "ready" ? "bg-token-charts-green" : readiness.tone === "error" ? "bg-token-charts-red" : "bg-token-description-foreground"}`} />
-                        <span className="truncate">{readiness.label}</span>
-                      </span>
+                      <OcStatus detail={readiness.detail} label={readiness.label} tone={readiness.tone === "ready" ? "success" : readiness.tone === "error" ? "danger" : "neutral"} />
                       <span>{item.bindingsProjected
                         ? item.bindings.length ? `${item.bindings.length} ${item.bindings.length === 1 ? "binding" : "bindings"}` : "No bindings"
                         : "Bindings unavailable"}</span>

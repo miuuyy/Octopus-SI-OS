@@ -1,31 +1,22 @@
 .oc-status {
-  --oc-status-background: color-mix(in oklab, var(--color-token-foreground) 10%, transparent);
-  --oc-status-foreground: var(--copy);
+  --oc-status-background: transparent;
+  --oc-status-border: var(--color-border);
+  --oc-status-foreground: var(--color-token-text-secondary);
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   max-width: 100%;
-  min-height: 20px;
-  padding: 0 8px;
+  padding: 4px 8px;
   box-sizing: border-box;
-  border: 0;
-  border-radius: 999px;
+  border: 1px solid var(--oc-status-border);
+  border-radius: 6px;
   background: var(--oc-status-background);
   color: var(--oc-status-foreground);
-  font-size: var(--text-xs, 11px);
+  font-size: var(--text-xs, 12px);
   font-weight: 500;
-  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
   vertical-align: middle;
   white-space: nowrap;
-}
-
-.oc-status__dot {
-  display: block;
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
 }
 
 .oc-status__label {
@@ -35,27 +26,36 @@
   text-overflow: ellipsis;
 }
 
+.oc-status.oc-tone-muted {
+  --oc-status-foreground: var(--color-token-text-tertiary);
+}
+
+.oc-status.oc-tone-accent,
+.oc-status.oc-tone-success,
+.oc-status.oc-tone-warning,
+.oc-status.oc-tone-danger {
+  min-height: 20px;
+  padding: 0 8px;
+  border-color: transparent;
+  border-radius: 999px;
+}
+
 .oc-status.oc-tone-accent {
-  --oc-status-background: color-mix(in oklab, var(--blue) 15%, transparent);
-  --oc-status-foreground: var(--blue);
+  --oc-status-background: color-mix(in srgb, var(--color-text-accent) 30%, transparent);
+  --oc-status-foreground: var(--color-text-accent);
 }
 
 .oc-status.oc-tone-success {
-  --oc-status-background: color-mix(in oklab, var(--green) 15%, transparent);
-  --oc-status-foreground: var(--green);
+  --oc-status-background: color-mix(in srgb, var(--color-text-success) 15%, transparent);
+  --oc-status-foreground: var(--color-text-success);
 }
 
 .oc-status.oc-tone-warning {
-  --oc-status-background: color-mix(in oklab, var(--amber) 18%, transparent);
-  --oc-status-foreground: var(--amber);
+  --oc-status-background: color-mix(in oklab, var(--color-text-warning) 16%, transparent);
+  --oc-status-foreground: var(--color-text-warning);
 }
 
 .oc-status.oc-tone-danger {
-  --oc-status-background: color-mix(in oklab, var(--danger) 18%, transparent);
-  --oc-status-foreground: var(--danger);
-}
-
-.oc-status.oc-tone-muted {
-  --oc-status-background: color-mix(in oklab, var(--color-token-foreground) 7%, transparent);
-  --oc-status-foreground: var(--dim);
+  --oc-status-background: color-mix(in oklab, var(--color-text-error) 16%, transparent);
+  --oc-status-foreground: var(--color-text-error);
 }

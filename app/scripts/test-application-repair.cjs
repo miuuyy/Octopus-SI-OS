@@ -103,12 +103,12 @@ test("install review uses dialog sections and a catalogue refresh preserves the 
   await until(install, () => "application offers Install");
   const heading = container.querySelector("h1");
   install().click();
-  await until(() => document.querySelector('[role="dialog"] footer'), () => "install review is open");
+  await until(() => document.querySelector('[role="dialog"] h2'), () => "install review is open");
   const dialog = document.querySelector('[role="dialog"]');
-  assert.match(dialog.querySelector("header").className, /px-6/);
-  assert.match(dialog.querySelector("ul").className, /px-6/);
-  assert.equal(dialog.querySelectorAll("li").length, 2);
-  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Install").click();
+  assert.match(dialog.querySelector("h2").textContent, /^Install /);
+  assert.match(dialog.textContent, /System Room/);
+  assert.match(dialog.textContent, /Application fresh/);
+  [...dialog.querySelectorAll("button")].find((button) => button.textContent === dialog.querySelector("h2").textContent).click();
   await until(() => reads.length === 1, () => "installation reload started");
   assert.equal(container.querySelector("h1"), heading);
   assert.equal(container.querySelector(".surface-content-loading-state"), null);

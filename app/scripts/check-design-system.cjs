@@ -51,11 +51,14 @@ if (cascadeOrder < 0 || (firstStylesheet >= 0 && cascadeOrder > firstStylesheet)
 if (!foundationCss.includes('@import "./design-system/status.css" layer(components);')) {
   failures.push("src/foundation.css: OcStatus must load in the components layer after Tailwind base");
 }
-if (!/\.oc-status\s*\{[\s\S]*?gap:\s*4px;[\s\S]*?padding:\s*0 8px;/.test(statusCss)) {
-  failures.push("src/design-system/status.css: OcStatus must keep an 8px edge inset and a 4px dot-to-label gap");
+if (!/\.oc-status\s*\{[\s\S]*?padding:\s*4px 8px;[\s\S]*?border-radius:\s*6px;/.test(statusCss)) {
+  failures.push("src/design-system/status.css: a neutral OcStatus must stay an outlined rounded-sm badge");
 }
-if (!/\.oc-status__dot\s*\{[\s\S]*?width:\s*6px;[\s\S]*?height:\s*6px;/.test(statusCss)) {
-  failures.push("src/design-system/status.css: OcStatus dot must remain 6px square");
+if (!/\.oc-status\.oc-tone-danger\s*\{[\s\S]*?min-height:\s*20px;[\s\S]*?border-radius:\s*999px;/.test(statusCss)) {
+  failures.push("src/design-system/status.css: a toned OcStatus must stay a 20px soft pill");
+}
+if (statusCss.includes("oc-status__dot") || fs.readFileSync(path.join(root, "design-system", "components.tsx"), "utf8").includes("oc-status__dot")) {
+  failures.push("src/design-system: OcStatus carries its state in the badge colour, not a second dot");
 }
 for (const file of walk(root)) {
   if (!/\.(tsx?|css)$/.test(file)) continue;

@@ -9,7 +9,7 @@ export function GesturesSection({ accessProfile }: { accessProfile: OctopusClien
   return (
     <section {...settingsTargetProps("gestures.controls")} className="settings-section">
       <SettingsHeading
-        description="Camera-based gesture control. Video is processed locally and never leaves this device."
+        description="Move through Octopus with your hands. Video is processed on this device and never leaves it."
         title="Gestures"
       />
       <GestureManager accessProfile={accessProfile} />

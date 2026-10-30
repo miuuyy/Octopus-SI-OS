@@ -146,6 +146,7 @@ test("page loaders show only the centered logo until the catalog settles", async
       "./catalog": { CatalogRouteTransition: ({ children }) => children, CatalogSection: () => null },
       "./SetupDialogShell": { SetupDialogShell: () => null },
       "./applications/ApplicationConnectDialog": { ApplicationConnectDialog: () => null },
+      "./applications/PackageInstallReviewDialog": { PackageInstallReviewDialog: () => null },
     })(`src/components/${name}.tsx`)[name];
     const view = await mount(Component, { accessProfile: "live", searchFocusTick: 0 });
     try {
@@ -342,6 +343,7 @@ test("opening Home activity retains the Home component and unsent draft", async 
     "../voice/VoiceView": { VoiceView: Home },
     "../voice/HomeAgentActivityView": { HomeAgentActivityView: () => React.createElement("section", { "data-home-activity": true }) },
     "../voice/useHomeActivityWorkspace": { useHomeRunActivity: () => ({ entries: [] }) },
+    "./HomeWhatsNew": { HomeWhatsNew: () => null },
   });
   const { HomeSurface } = load("src/components/shell/HomeSurface.tsx");
   const { WorkspacePaneHeaderActionsProvider } = load("src/components/shell/WorkspacePaneHeaderActions.tsx");

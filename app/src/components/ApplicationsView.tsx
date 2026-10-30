@@ -37,8 +37,6 @@ import {
 import { useProjectionStructureGeneration } from "../projectionLive";
 import {
   OcButton,
-  OcDialogFooter,
-  OcDialogHeader,
   OcEmptyState,
   OcIconButton,
   OcInlineProgress,
@@ -70,6 +68,7 @@ import {
 } from "./catalog";
 import { Glyph, type GlyphName } from "./IconGlyphs";
 import { OctopusLoadingState } from "./OctopusLoadingLogo";
+import { PackageInstallReviewDialog } from "./applications/PackageInstallReviewDialog";
 import { SetupDialogShell } from "./SetupDialogShell";
 import { useAppErrorToast } from "../toasts";
 
@@ -966,19 +965,21 @@ export function ApplicationsView({
         summary={connectApplication ? summaryOf(connectApplication) : null}
       />
       <ApplicationRemovalDialog application={removeApplication} lifecycle={removeApplication ? lifecycleOperations[removeApplication.id] : undefined} onCancel={() => setRemoveId("")} onConfirm={() => removeApplication && void removeInstalledApplication(removeApplication)} />
-      <SetupDialogShell ariaLabel="Review required packages" busy={false} open={Boolean(installReview)} onClose={() => setInstallReview(null)}>
-        <OcDialogHeader title={`Install ${installReview?.name ?? "application"}`} description="The following packages are required. After installation, choose where the application is available." />
-        <ul className="min-h-0 space-y-2 overflow-y-auto px-6 pb-6 text-sm">
-          {installReview?.install_packages.map((entry) => <li className="flex items-center justify-between gap-4" key={entry.id}>
-            <span>{entry.name}</span>
-            {entry.installed ? <span className="text-token-text-secondary">Installed</span> : null}
-          </li>)}
-        </ul>
-        <OcDialogFooter>
-          <OcButton variant="ghost" onClick={() => setInstallReview(null)}>Cancel</OcButton>
-          <OcButton variant="primary" onClick={() => { const application = installReview; setInstallReview(null); if (application) void installApplication(application); }}>Install</OcButton>
-        </OcDialogFooter>
-      </SetupDialogShell>
+      <PackageInstallReviewDialog
+        onCancel={() => setInstallReview(null)}
+        onConfirm={() => {
+          const application = installReview;
+          setInstallReview(null);
+          if (application) void installApplication(application);
+        }}
+        review={installReview ? {
+          developer: installReview.developer,
+          logo: <ApplicationLogo application={installReview} className="size-14 overflow-hidden rounded-xl border border-default shadow-sm" logoSize={26} />,
+          name: installReview.name,
+          note: "After installation, choose where it is available.",
+          packages: installReview.install_packages,
+        } : null}
+      />
     </>
   );
 }
@@ -1602,15 +1603,11 @@ function ConnectionStatusValue({ summary }: { summary: ApplicationConnectionSumm
           : "Not connected";
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
-      <span className="flex items-center gap-1.5">
-        <span aria-hidden="true" className={cx(
-          "size-1.5 shrink-0 rounded-full",
-          summary.status === "connected" ? "bg-token-charts-green"
-            : summary.status === "expired" ? "bg-token-charts-orange"
-              : summary.status === "error" ? "bg-token-charts-red"
-                : "bg-token-description-foreground",
-        )} />
-        {label}
+      <span>
+        <OcStatus
+          label={label}
+          tone={summary.status === "connected" ? "success" : summary.status === "expired" ? "warning" : summary.status === "error" ? "danger" : "neutral"}
+        />
       </span>
       {summary.message && summary.status !== "connected" ? <span className="text-xs text-secondary whitespace-pre-line">{summary.message}</span> : null}
     </span>
@@ -1789,18 +1786,8 @@ function ApplicationCardMeta({ application, setupStatus, summary }: { applicatio
   const attention = applicationAttention(application, summary, setupStatus);
   if (!attention) return null;
   return (
-    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-4 text-token-description-foreground">
-      <i aria-hidden="true" className={cx(
-        "size-1.5 shrink-0 rounded-full",
-        attention.tone === "warning" ? "bg-token-charts-orange"
-          : attention.tone === "danger" ? "bg-token-charts-red"
-            : "bg-token-description-foreground",
-      )} />
-      <span className={cx(
-        "truncate",
-        attention.tone === "warning" && "text-token-charts-orange",
-        attention.tone === "danger" && "text-token-charts-red",
-      )}>{attention.label}</span>
+    <span className="mt-1 flex min-w-0">
+      <OcStatus label={attention.label} tone={attention.tone} />
     </span>
   );
 }

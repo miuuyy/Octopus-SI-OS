@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cx } from "../../design-system/components";
 import { Glyph, type GlyphName } from "../IconGlyphs";
 import type { ApplicationRecord } from "./applicationModel";
@@ -42,6 +43,22 @@ export function OctopusConnectMark({ className }: { className?: string }) {
         maskSize: "contain",
       }}
     />
+  );
+}
+
+export function ConnectLogoRow({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-black text-white shadow-sm">
+        <OctopusConnectMark className="size-10" />
+      </span>
+      <span aria-hidden="true" className="flex items-center gap-1">
+        <span className="size-1.5 rounded-full bg-border" />
+        <span className="size-1.5 rounded-full bg-border" />
+        <span className="size-1.5 rounded-full bg-border" />
+      </span>
+      {children}
+    </div>
   );
 }
 

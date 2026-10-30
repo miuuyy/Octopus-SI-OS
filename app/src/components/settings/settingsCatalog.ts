@@ -12,6 +12,7 @@ export type SettingsSectionId =
   | "shortcuts"
   | "access"
   | "extensions"
+  | "experiments"
   | "connections"
   | "surfaces"
   | "worker-environments"
@@ -62,6 +63,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
   { id: "shortcuts", label: "Keyboard shortcuts", glyph: "keyboard", group: "Interaction" },
   { id: "access", label: "Access & Privacy", glyph: "dataControls", group: "Octopus" },
   { id: "extensions", label: "Extensions", glyph: "widgets", group: "Octopus" },
+  { id: "experiments", label: "Experiments", glyph: "flask", group: "Octopus" },
   { id: "connections", label: "Connections", glyph: "interfaces", group: "Octopus", profile: "live" },
   { id: "surfaces", label: "Surfaces", glyph: "descriptor", group: "Octopus" },
   { id: "worker-environments", label: "Worker Environments", glyph: "ee", group: "Octopus" },
@@ -102,6 +104,8 @@ export const SETTINGS_DESTINATIONS: readonly SettingsDestination[] = [
   destination("voice.floating-call", "voice-audio", "Floating call widget", "Choose whether an active call follows you outside Home.", "setting", ["voice", "home"]),
   destination("voice.incoming-audio", "voice-audio", "Incoming audio artifacts", "Choose how audio artifacts behave while a voice surface is open.", "setting", ["autoplay"]),
   destination("voice.recordings", "voice-audio", "Recent recordings", "Your last 20 recordings are saved on this device.", "destination", ["dictation", "history", "audio"]),
+
+  destination("experiments.list", "experiments", "Experiments", "Turn the product experiments running in this client on or off.", "setting", ["beta", "labs", "try"]),
 
   destination("gestures.controls", "gestures", "Gesture controls", "Configure local camera-based gesture mappings and sensitivity.", "setting", ["camera", "hand", "mapping", "sensitivity"]),
 

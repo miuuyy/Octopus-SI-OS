@@ -246,7 +246,7 @@ const glyphPackByName: Record<GlyphName, GlyphPackName> = {
   rocket: "chat",
   palette: "chat",
   book: "chat",
-  hand: "chat",
+  hand: "shell",
   retry: "worker",
   play: "worker",
   pause: "worker",

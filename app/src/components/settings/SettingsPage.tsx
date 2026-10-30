@@ -16,6 +16,7 @@ import type { ClientExtensionRegistryState } from "../../extensions/types";
 import type { ClientSurfaceDescriptor } from "../../shell/surfaceTypes";
 import type { AdmittedClientSurfaceDocument, ClientSurfaceAdmissionVerdict } from "../../client-surfaces/types";
 import type { OctopusClientAccessProfile } from "../../electron";
+import type { ClientExtensionDestination } from "./ExtensionsSection";
 import { SettingsSectionContent } from "./SettingsSectionContent";
 import {
   SETTINGS_SECTION_GROUPS,
@@ -34,6 +35,7 @@ export function SettingsPage({
   documents,
   extensions,
   onClose,
+  onOpenExtensionDestination,
   onSectionChange,
   sectionId,
   recordingId = "",
@@ -47,6 +49,7 @@ export function SettingsPage({
   documents: AdmittedClientSurfaceDocument[];
   extensions: ClientExtensionRegistryState;
   onClose: () => void;
+  onOpenExtensionDestination: (destination: ClientExtensionDestination) => void;
   onSectionChange: (sectionId: string) => void;
   sectionId: string;
   recordingId?: string;
@@ -296,6 +299,7 @@ export function SettingsPage({
                   documentVerdicts={documentVerdicts}
                   documents={documents}
                   extensions={extensions}
+                  onOpenExtensionDestination={onOpenExtensionDestination}
                   sectionId={activeSection}
                   dictationRecordingId={selectedRecordingId}
                   onShowAllRecordings={() => setSelectedRecordingId("")}

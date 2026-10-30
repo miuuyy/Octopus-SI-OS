@@ -71,6 +71,7 @@ export const clientSettingsSections = [
   "shortcuts",
   "access",
   "extensions",
+  "experiments",
   "connections",
   "surfaces",
   "worker-environments",
