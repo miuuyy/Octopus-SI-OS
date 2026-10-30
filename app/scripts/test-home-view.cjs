@@ -197,6 +197,16 @@ test("built-in Home widgets keep their declared slot classification", async () =
   assert.ok(Object.values(slots).every((slot) => slot === "right"), JSON.stringify(slots));
 });
 
+test("built-in Home widgets stay admitted however many rows a run projects", async () => {
+  const { buildVoiceWidgetDocuments } = await widgetBundle;
+  const rows = Array.from({ length: 80 }, (_, index) => ({ label: `row ${index}` }));
+  const documents = Object.fromEntries(buildVoiceWidgetDocuments({ ...widgetInput, context: rows, memory: rows, tools: rows })
+    .map(({ document }) => [document.id, document]));
+  const children = documents["builtin.voice.live-context"].render.root.children;
+  assert.equal(children.length, 24);
+  assert.deepEqual(children.at(-1), { type: "key_value", label: "More", tone: "muted", value: "57" });
+});
+
 test("saved widget positions survive slot changes and older layouts without a slot", async () => {
   const { ClientSurfaceRenderer, buildVoiceWidgetDocuments } = await widgetBundle;
   const documents = Object.fromEntries(buildVoiceWidgetDocuments(widgetInput).map((admitted) => [admitted.document.id, admitted]));

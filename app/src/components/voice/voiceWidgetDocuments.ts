@@ -32,6 +32,8 @@ export type InsightsWidget = {
   value: string;
 };
 
+const WIDGET_ROW_LIMIT = 24;
+
 export function buildVoiceWidgetDocuments(input: {
   context: VoiceWidgetItem[];
   goals: VoiceWidgetItem[];
@@ -71,7 +73,7 @@ export function buildVoiceWidgetDocuments(input: {
           type: "stack",
           gap: "md",
           children: [
-            ...input.context.map((item): ClientSurfaceNode => ({
+            ...widgetRows(input.context, (item) => ({
               type: "key_value",
               label: item.label,
               tone: item.tone,
@@ -249,7 +251,7 @@ export function buildVoiceWidgetDocuments(input: {
           type: "stack",
           gap: "none",
           children: [
-            ...input.tools.map((item): ClientSurfaceNode => ({
+            ...widgetRows(input.tools, (item) => ({
               type: "key_value",
               label: item.state || "Ready",
               tone: item.tone,
@@ -330,7 +332,7 @@ export function buildVoiceWidgetDocuments(input: {
             { type: "key_value", label: "Files", value: { path: "sources.vault.files", fallback: memorySummary(input.memory), format: "number" } },
             { type: "key_value", label: "Recent", value: { path: "sources.vault.entries.0.path", fallback: input.memory[0]?.label || "Nothing available" } },
             { type: "key_value", label: "Source", value: { path: "sources.vault.name", fallback: input.memory.length ? "Bound artifacts" : "Not configured" } },
-            ...input.memory.slice(1).map((item): ClientSurfaceNode => ({
+            ...widgetRows(input.memory.slice(1), (item) => ({
               type: "key_value",
               label: item.state || "Artifact",
               tone: item.tone,
@@ -341,6 +343,12 @@ export function buildVoiceWidgetDocuments(input: {
       },
     }),
   ];
+}
+
+function widgetRows(items: VoiceWidgetItem[], row: (item: VoiceWidgetItem) => ClientSurfaceNode): ClientSurfaceNode[] {
+  if (items.length <= WIDGET_ROW_LIMIT) return items.map(row);
+  const shown = items.slice(0, WIDGET_ROW_LIMIT - 1);
+  return [...shown.map(row), { type: "key_value", label: "More", tone: "muted", value: String(items.length - shown.length) }];
 }
 
 function compileWidget(document: ClientSurfaceDocument): AdmittedClientSurfaceDocument {
