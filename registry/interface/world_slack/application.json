@@ -5,7 +5,7 @@
   "description": "Message the task you connect from Slack, and let it answer and post in Slack.",
   "category": "connector",
   "developer": "Octopus",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "icon": "message",
   "logo": "application-logo.png",
   "interfaces": [
@@ -17,15 +17,6 @@
       "label": "Slack connection contract"
     }
   ],
-  "task_capabilities": {
-    "tools": [
-      {
-        "tool": "artifact.send",
-        "interface": "system_room",
-        "worker_environment_kind": "system_room"
-      }
-    ]
-  },
   "setup": {
     "fields": [
       {

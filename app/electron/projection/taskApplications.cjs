@@ -227,9 +227,10 @@ async function configureOctopusOsTaskApplication(
         externalInputs.push({ checkpointId, interfaceId });
       });
     }
-    const allApplicationArtifactIds = new Set(installedApplicationDocuments.flatMap((candidate) => (
-      candidate.manifest.artifact_bindings.map((binding) => binding.artifact_id)
-    )));
+    const allApplicationArtifactIds = new Set(installedApplicationDocuments.flatMap((candidate) => [
+      ...candidate.manifest.artifact_bindings.map((binding) => binding.artifact_id),
+      ...candidate.manifest.interfaces.map((interfaceId) => `artifact-operation-catalog-${interfaceId}`),
+    ]));
     const baseContextArtifactIds = new Set(arrayValue(baseAuthoringProfile?.context_artifact_bindings)
       .map((binding) => stringValue(binding?.id))
       .filter(Boolean));

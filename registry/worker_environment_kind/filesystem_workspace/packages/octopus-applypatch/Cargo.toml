@@ -1,0 +1,26 @@
+[package]
+name = "octopus-applypatch"
+edition = "2024"
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "octopus_applypatch"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+similar = "2.7.0"
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25"
+octopus-file-system = { path = "../../../process_session/packages/octopus-file-system" }
+octopus-util-abspath = { path = "../../../process_session/packages/octopus-util-abspath" }
+octopus-util-pathuri = { path = "../../../process_session/packages/octopus-util-pathuri" }
+
+[dev-dependencies]
+assert_matches = "1.5.0"
+pretty_assertions = "1.4.1"
+tempfile = "3.23.0"

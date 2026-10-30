@@ -1,0 +1,113 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "driver.mcp_stdio_session",
+  "version": "1.0.1",
+  "product_kind": "driver",
+  "product_id": "mcp_stdio_session",
+  "release_status": "optional",
+  "display": {
+    "name": "MCP Stdio Session",
+    "description": "A local MCP server over stdio: list and call its tools, prompts and resources.",
+    "developer": "Octopus",
+    "category": "worker_environment",
+    "icon": "plugins"
+  },
+  "members": [
+    {
+      "registry_kind": "worker_environment_kind",
+      "owner": "mcp_stdio_session",
+      "primary": true
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.call_tool",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.cancel_request",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.close",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.complete",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.get_prompt",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.list_prompts",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.list_resource_templates",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.list_resources",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.list_tools",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.ping",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.poll_events",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.read_resource",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.send_progress",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.set_logging_level",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.status",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.subscribe_resource",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "mcp.unsubscribe_resource",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "interface",
+      "owner": "system_mcp",
+      "configuration": [{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    }
+  ]
+}

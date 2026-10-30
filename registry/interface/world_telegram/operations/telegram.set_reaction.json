@@ -1,0 +1,45 @@
+{
+  "id": "telegram.set_reaction",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "reaction.set"
+  },
+  "description": "Set the bot's reaction on a message, or remove it by omitting emoji. Telegram accepts only its standard reaction emoji, such as 👍 ❤ 🔥 🎉 👀 🤔 👌 🙏.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "message_id from a telegram.event or from an earlier result."
+      },
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat to act in: chat.id from a telegram.event, or a public @username. Omit it only for the configured home chat or the single allowed user."
+      },
+      "emoji": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "description": "One standard reaction emoji."
+      },
+      "big": {
+        "type": "boolean",
+        "description": "Play the big reaction animation."
+      }
+    },
+    "required": [
+      "message_id"
+    ],
+    "additionalProperties": false
+  }
+}

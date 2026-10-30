@@ -209,7 +209,7 @@ impl CodexAppServerInterfaceDriver {
                 "the exact provider interface descriptor does not declare this operation artifact",
             ));
         }
-        let admitted_record = octopus_runtime::run_record::RunRecord::from_bytes(admitted_run_record)
+        let admitted_record = octopus_run_record::RunRecord::from_bytes(admitted_run_record)
             .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
         let (context_payloads, payload_selection) = admitted_payload_context(&admitted_record, &input)?;
         let continuity_sources = continuity_input_sources(&admitted_record, &input)?;
@@ -469,7 +469,7 @@ impl CodexAppServerInterfaceDriver {
         } else { None };
         let effect_gate = Arc::new(tokio::sync::Mutex::new(()));
         let turn_interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let native_parent_record = octopus_runtime::run_record::RunRecord::from_bytes(current_run_record)
+        let native_parent_record = octopus_run_record::RunRecord::from_bytes(current_run_record)
             .map_err(|error| InterfaceDriverError::FailedClosed(error.to_string()))?;
         let turn_context = TurnContext {
             run_invocation: run_affordances.as_ref().map(|affordances| NativeRunInvocation {

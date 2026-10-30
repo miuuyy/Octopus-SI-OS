@@ -1303,7 +1303,6 @@ async fn native_transport_authenticates_admitted_body_and_preserves_partial_and_
             granted_tools: &tools, door_root_bindings: &BTreeMap::new(), door_instance_dir: Path::new("."), ee_root_slot_allowance: None,
         }).unwrap();
         let sequence = 100 + index as u64;
-        let mut source_environment = environment.clone(); source_environment.interface = door.clone();
         let mut input = envelope(&root, sequence, exact_id, arguments, &tools);
         input.metadata = Some(InvocationMetadata::new(GrantProjection {
             tools: tools.clone(), worker_environment_kinds: vec!["browser_session".into()], ..GrantProjection::default()
@@ -1312,10 +1311,10 @@ async fn native_transport_authenticates_admitted_body_and_preserves_partial_and_
             checkpoint: CheckpointId::new(format!("cp_{sequence}")), interface: door, epoch: 0, run_record_hash: None,
         }));
         let (kind, _) = registry.get(&kinds[0]).unwrap();
-        let admitted = crate::decode_room_invocation(&source_environment, ToolProcessInvocation {
+        let admitted = crate::decode_room_invocation(ToolProcessInvocation {
             request_id: sequence, descriptor: clone, envelope: input, source_movement_seq: sequence,
             worker_environment: Some(formed.clone()), worker_environment_kind: Some((*kind).clone()),
-        }, "browser").unwrap_or_else(|_| panic!("source clone must pass existing browser invocation admission"));
+        }).unwrap_or_else(|_| panic!("source clone must pass existing browser invocation admission"));
         assert_eq!(admitted.descriptor_bytes, canonical);
         let pin = formed.tool_descriptor_hashes.get(exact_id).unwrap();
         assert_eq!(blake3::hash(&admitted.descriptor_bytes).to_hex().as_str(), pin);
@@ -1332,7 +1331,7 @@ async fn native_transport_authenticates_admitted_body_and_preserves_partial_and_
     let mut tools = browser_tools(); tools.push("browser.wait_complete".into());
     let (formation, kind) = formation("browser_session", &tools, "browser.navigate");
     let arguments = json!({"url":"https://example.com/","wait_until":"none","snapshot":false});
-    let decoded = crate::decode_room_invocation(&environment, invocation(&root, 15, "browser.navigate", arguments.clone(), &tools, &formation, &kind), "browser").unwrap_or_else(|_| panic!("fixture invocation must pass existing browser admission"));
+    let decoded = crate::decode_room_invocation(invocation(&root, 15, "browser.navigate", arguments.clone(), &tools, &formation, &kind)).unwrap_or_else(|_| panic!("fixture invocation must pass existing browser admission"));
     let expected_formation = serde_json::to_value(&formation).unwrap();
     let waiter = json!({"wait_id":"c".repeat(32),"host_generation":generation,"worker_environment_id":formation.worker_environment_id,"formation_pin":formation.formation_pin,"browser_context_id":"CONTEXT1","target_id":"TARGET1","debugger_epoch":0,"start_source_movement_seq":15,"start_artifact_content_hash":"d".repeat(64),"condition_digest":"e".repeat(64)});
     let expected_waiter = waiter.clone();
@@ -1661,7 +1660,7 @@ async fn upload_resume_requires_exact_verified_current_file_binding_and_never_re
     std::fs::write(&pending_path,serde_json::to_vec(&json!({"request":request,"formation":formed,"operator_interface":"world_operator_upload_test","provider_interface":"world_provider_upload_test"})).unwrap()).unwrap(); std::fs::set_permissions(&pending_path,std::fs::Permissions::from_mode(0o600)).unwrap();
     let copy_call = |call: &ToolProcessInvocation| ToolProcessInvocation { request_id:call.request_id,descriptor:call.descriptor.clone(),envelope:call.envelope.clone(),source_movement_seq:call.source_movement_seq,worker_environment:call.worker_environment.clone(),worker_environment_kind:call.worker_environment_kind.clone() };
     let mut call = invocation(&root,2,"browser.filechooser_resume",json!({"request_id":request_id}),&tools,&formed,&kind);
-    assert!(crate::decode_room_invocation(&environment,copy_call(&call),"browser").is_err(),"model tool.call cannot enter private resume");
+    assert!(crate::decode_room_invocation(copy_call(&call)).is_err(),"model tool.call cannot enter private resume");
     let payload = serde_json::to_vec(&json!({"operator_approval_response":{"request_id":request_id,"call_id":"upload-call","decision":"accept","selected_persistence":"session"}})).unwrap();
     call.envelope.artifact_file = InterfaceArtifactFile::write(root.join("operator"),"operator.approval.response",&payload).unwrap();
     call.envelope.artifact = ArtifactRef { id:ArtifactId::new("operator-response"),content:ContentHash::of_bytes(&payload) };

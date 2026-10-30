@@ -88,11 +88,12 @@
       ".yaml",
       ".yml"
     ],
-    "retention_days": 30
+    "retention_days": 30,
+    "file_label": "telegram.file",
+    "max_images_per_event": 10,
+    "max_image_bytes_per_event": 16777216
   },
   "outbound": {
-    "operation_label": "telegram.operation",
-    "delivery_label": "telegram.delivery.result",
     "max_message_chars": 4096,
     "max_caption_chars": 1024,
     "max_text_chars": 65536,
@@ -108,30 +109,6 @@
       "enabled": true,
       "refresh_ms": 4500,
       "max_ms": 120000
-    },
-    "allowed_api_methods": [
-      "closeForumTopic",
-      "copyMessage",
-      "createForumTopic",
-      "editForumTopic",
-      "forwardMessage",
-      "getChat",
-      "getChatAdministrators",
-      "getChatMember",
-      "getChatMemberCount",
-      "pinChatMessage",
-      "reopenForumTopic",
-      "sendDice",
-      "sendLocation",
-      "sendPoll",
-      "stopPoll",
-      "unpinChatMessage"
-    ],
-    "retry_safe_api_methods": [
-      "getChat",
-      "getChatAdministrators",
-      "getChatMember",
-      "getChatMemberCount"
-    ]
+    }
   }
 }

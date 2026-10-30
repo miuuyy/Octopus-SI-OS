@@ -18,14 +18,30 @@ name = "octopus-filesystem-workspace-tool-door-life"
 path = "src/bin/tool_door_life.rs"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
+ignore = "0.4.23"
+regex = "1.12.3"
+similar = "2.7.0"
+blake3 = { workspace = true }
+base64 = "0.22.1"
+tracing = "0.1.44"
+
+octopus-applypatch = { path = "../octopus-applypatch" }
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
-octopus-system-coder-env = { path = "../../../git_worktree/packages/octopus-system-coder-env" }
+octopus-file-search = { path = "../octopus-file-search" }
+octopus-file-system = { path = "../../../process_session/packages/octopus-file-system" }
+octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-tool-door-runtime = { package = "octopus-process-session-tool-runtime", path = "../../../process_session/packages/octopus-process-session-tool-runtime" }
+octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
+octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
+octopus-util-pathuri = { path = "../../../process_session/packages/octopus-util-pathuri" }
+octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
+octopus-workspace-substrate = { path = "../octopus-workspace-substrate" }
 
 [dev-dependencies]
+octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
 octopus-verifiers = { path = "../../../../../crates/octopus-verifiers" }
-octopus-git-sandbox = { package = "octopus-git-sandbox-substrate", path = "../../../git_worktree/packages/octopus-git-sandbox-substrate" }
-octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

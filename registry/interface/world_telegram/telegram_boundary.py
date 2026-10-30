@@ -24,9 +24,8 @@ MOVEMENTS_JSONL = os.environ["OCTOPUS_MOVEMENTS_JSONL"]
 BLOBS_DIR = os.environ["OCTOPUS_BLOBS_DIR"]
 LEDGER_INDEX_SQLITE = os.environ["OCTOPUS_LEDGER_INDEX_SQLITE"]
 PAYLOAD_DIR = os.path.join(VAR_DIR, "payloads")
-EFFECT_DIR = os.path.join(VAR_DIR, "outbound-effects")
+REQUEST_DIR = os.path.join(VAR_DIR, "operation-requests")
 CURSOR_PATH = os.path.join(VAR_DIR, "ledger-cursor.json")
-EFFECT_STATUSES = {"started", "succeeded", "indeterminate", "evidenced", "failure_evidenced"}
 
 os.umask(0o077)
 
@@ -202,23 +201,27 @@ def hand_artifact(manifest_path, evidence=None):
     raise ArtifactDeliveryRefused(verdict)
 
 
-def materialize_artifact(label, payload, key):
+def artifact_paths(key):
     key = require_string(key, "Telegram artifact key", maximum=512)
     if not re.fullmatch(r"[0-9A-Za-z._-]+", key):
         raise ValueError("Telegram artifact key contains unsafe characters")
-    payload_path = os.path.join(PAYLOAD_DIR, f"{key}.payload")
-    manifest_path = os.path.join(PAYLOAD_DIR, f"{key}.artifact.json")
-    atomic_bytes(payload_path, payload)
+    return os.path.join(PAYLOAD_DIR, f"{key}.payload"), os.path.join(PAYLOAD_DIR, f"{key}.artifact.json")
+
+
+def materialize_artifact(label, payload, key):
+    payload_path, manifest_path = artifact_paths(key)
+    if payload is not None:
+        atomic_bytes(payload_path, payload)
     atomic_json(manifest_path, {"label": label, "payload_path": payload_path})
     return manifest_path
 
 
 def encode(value):
-    return json.dumps(sanitize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-
-
-def hand_json(label, value, key):
-    return hand_artifact(materialize_artifact(label, encode(value), key))
+    media = value.get("media") if isinstance(value, dict) else None
+    value = sanitize({key: item for key, item in value.items() if key != "media"} if media is not None else value)
+    if media is not None:
+        value["media"] = media
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def materialized_artifact_id(manifest_path, maximum):
@@ -232,7 +235,7 @@ def find_admitted_arrival_seq(artifact_id, max_row_bytes):
     try:
         connection = sqlite3.connect(f"file:{urllib.parse.quote(os.path.abspath(LEDGER_INDEX_SQLITE))}?mode=ro", uri=True, timeout=0.25)
         try:
-            if connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone() != ("3",):
+            if connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone() != ("4",):
                 raise RuntimeError("Telegram ledger index has unsupported schema")
             row = connection.execute("SELECT seq FROM movements WHERE kind = 'InterfaceArrival' AND from_kind = 'interface' AND from_id = ? AND artifact_id = ? ORDER BY seq ASC LIMIT 1", (INTERFACE_ID, artifact_id)).fetchone()
         finally:
@@ -259,8 +262,7 @@ def find_admitted_arrival_seq(artifact_id, max_row_bytes):
     return None
 
 
-def hand_json_idempotent(label, value, key, config):
-    manifest_path = materialize_artifact(label, encode(value), key)
+def hand_idempotent(manifest_path, config):
     artifact_id = materialized_artifact_id(manifest_path, config["outbound"]["max_payload_bytes"])
     evidence = [{"interface_id": INTERFACE_ID, "artifact_id": artifact_id, "label": "telegram.arrival.idempotency", "bytes": list(hashlib.sha256(artifact_id.encode("utf-8")).digest())}]
     try:
@@ -275,8 +277,39 @@ def hand_json_idempotent(label, value, key, config):
         raise
 
 
-def hand_failure(source_seq, category, details, key):
-    return hand_json(f"{INTERFACE_ID}.failure", {"source_movement_seq": source_seq, "failure_class": category, "details": details}, key)
+def hand_json_idempotent(label, value, key, config):
+    return hand_idempotent(materialize_artifact(label, encode(value), key), config)
+
+
+def answered(key):
+    return os.path.exists(artifact_paths(key)[0])
+
+
+def hand_answer(label, value, key, config):
+    return hand_idempotent(materialize_artifact(label, None if value is None else encode(value), key), config)
+
+
+def request_path(key):
+    artifact_paths(key)
+    return os.path.join(REQUEST_DIR, f"{key}.json")
+
+
+def load_request(key):
+    value = read_json_file(request_path(key), 65536, f"request journal {key}")
+    if value is not None and (not isinstance(value, dict) or value.get("schema_version") != 1):
+        raise ValueError(f"Telegram request journal {key} is malformed")
+    return value
+
+
+def record_request(key, value):
+    atomic_json(request_path(key), {"schema_version": 1, **sanitize(value)}, indent=2)
+
+
+def forget_request(key):
+    try:
+        os.unlink(request_path(key))
+    except FileNotFoundError:
+        pass
 
 
 def load_cursor():
@@ -291,6 +324,31 @@ def load_cursor():
 
 def commit_cursor(next_seq):
     atomic_json(CURSOR_PATH, {"schema_version": 1, "next_seq": next_seq})
+
+
+def ledger_end_seq(max_row_bytes):
+    try:
+        descriptor = os.open(MOVEMENTS_JSONL, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return 0
+    next_seq = 0
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise RuntimeError("Telegram movement ledger is not a regular file")
+        while True:
+            row_offset = handle.tell()
+            line = handle.readline(max_row_bytes + 1)
+            if not line or not line.endswith(b"\n"):
+                return next_seq
+            if len(line) > max_row_bytes:
+                raise RuntimeError(f"Telegram ledger row at byte {row_offset} exceeds {max_row_bytes} bytes")
+            seq = require_int(require_object(json.loads(line), f"Telegram ledger movement").get("seq"), f"Telegram ledger movement.seq", 0)
+            next_seq = max(next_seq, seq + 1)
+
+
+def start_cursor(max_row_bytes):
+    if not os.path.exists(CURSOR_PATH):
+        commit_cursor(ledger_end_seq(max_row_bytes))
 
 
 def content_hexdigest(content):
@@ -350,7 +408,7 @@ def require_outbound_runtime(movement):
 def read_index(next_seq, limit):
     connection = sqlite3.connect(f"file:{urllib.parse.quote(os.path.abspath(LEDGER_INDEX_SQLITE))}?mode=ro", uri=True, timeout=0.25)
     try:
-        if connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone() != ("3",):
+        if connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone() != ("4",):
             raise RuntimeError("Telegram ledger index schema is unsupported")
         rows = connection.execute(
             "SELECT seq, artifact_content, runtime_run, runtime_checkpoint, from_id FROM movements "
@@ -431,42 +489,5 @@ def read_outbound(next_seq, config, limit=128):
         return read_ledger(next_seq, limit, config["ledger"]["max_row_bytes"])
 
 
-def effect_path(source_seq):
-    return os.path.join(EFFECT_DIR, f"{source_seq}.json")
-
-
-def validate_effect(source_seq, value):
-    value = require_keys(value, {"schema_version", "source_movement_seq", "source_artifact_hash", "run", "artifact_label", "status"}, {"operation", "result", "error", "evidence_movement_seq"}, f"Telegram effect {source_seq}")
-    if value["schema_version"] != 1 or value["source_movement_seq"] != source_seq:
-        raise ValueError(f"Telegram effect {source_seq} identity drifted")
-    if not isinstance(value["source_artifact_hash"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["source_artifact_hash"]):
-        raise ValueError(f"Telegram effect {source_seq} artifact hash is malformed")
-    require_string(value["run"], f"Telegram effect {source_seq}.run")
-    require_string(value["artifact_label"], f"Telegram effect {source_seq}.artifact_label")
-    if value["status"] not in EFFECT_STATUSES:
-        raise ValueError(f"Telegram effect {source_seq} status is invalid")
-    if "result" in value and not isinstance(value["result"], dict):
-        raise ValueError(f"Telegram effect {source_seq}.result must be an object")
-    return value
-
-
-def load_effect(source_seq):
-    value = read_json_file(effect_path(source_seq), 16777216, f"effect {source_seq}")
-    return None if value is None else validate_effect(source_seq, value)
-
-
-def commit_effect(source_seq, value):
-    value = sanitize(value)
-    validate_effect(source_seq, value)
-    atomic_json(effect_path(source_seq), value, indent=2)
-
-
-def discard_effect(source_seq):
-    try:
-        os.unlink(effect_path(source_seq))
-    except FileNotFoundError:
-        pass
-
-
-for _directory in (VAR_DIR, PAYLOAD_DIR, EFFECT_DIR):
+for _directory in (VAR_DIR, PAYLOAD_DIR, REQUEST_DIR):
     ensure_private_directory(_directory)

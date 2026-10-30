@@ -151,7 +151,7 @@ fn validate_templates(before: &BoundRunAuthoringTopology, after: &BoundRunAuthor
     Ok(())
 }
 
-fn provider_owned(record: &RunRecord, topology: &BoundRunAuthoringTopology, cp: &octopus_runtime::run_record::CheckpointRecord) -> bool {
+fn provider_owned(record: &RunRecord, topology: &BoundRunAuthoringTopology, cp: &octopus_run_record::CheckpointRecord) -> bool {
     record.interface_state.get(&topology.provider_interface)
         .and_then(|state| state.get(FRONTIER_CHECKPOINT_IDS)).and_then(Value::as_array)
         .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(cp.id.as_str())))
@@ -166,7 +166,7 @@ fn context(record: &RunRecord, topology: &BoundRunAuthoringTopology) -> Result<V
         let rows = record.checkpoints.iter().filter(|cp| record.active_checkpoints.contains(&cp.id)
             && checkpoint_record_matches_template(cp, template, &record.id)).collect::<Vec<_>>();
         let [row] = rows.as_slice() else { return Err(format!("capability context '{}' has no exact active checkpoint", template.name)); };
-        if row.artifact_bindings.iter().any(|binding| binding.access != octopus_runtime::ArtifactAccess::read_only()) {
+        if row.artifact_bindings.iter().any(|binding| binding.access != octopus_policy::ArtifactAccess::read_only()) {
             return Err("capability context must retain exact read-only bindings".into());
         }
         let ids = row.artifact_bindings.iter().map(|binding| binding.id.clone()).collect::<Vec<_>>();
@@ -210,7 +210,7 @@ fn validate_delta(before: &RunRecord, delta: &CapabilityDelta, profile: &RunAuth
     }
     let mut candidate = json!(before);
     for cp in &delta.checkpoints {
-        let cp: octopus_runtime::run_record::CheckpointRecord = serde_json::from_value(cp.clone()).map_err(|e|e.to_string())?;
+        let cp: octopus_run_record::CheckpointRecord = serde_json::from_value(cp.clone()).map_err(|e|e.to_string())?;
         if before.checkpoint(&cp.id).is_some() || cp.inbound_interface().is_none_or(|owner|
             retained_owners.contains(owner) || !delta.interface_state.contains_key(owner)) {
             return Err(format!("capability amendment added checkpoint '{}' outside a new declared owner", cp.id));

@@ -7,6 +7,7 @@ use crate::{
     emit_catalog_as_inbound_artifacts, emit_operation_catalog,
     load_interface_config_from_descriptor, load_operation_catalog, mcp_interface_process,
     McpInterfaceConfig, McpInterfaceProcess, McpOperationCatalog, McpOperationRequest,
+    OPERATOR_APPROVAL_RESPONSE_LABEL,
 };
 
 pub fn catalog_interface_life() -> InterfaceLiftFn {
@@ -31,13 +32,34 @@ async fn remote_mcp_catalog_life(ctx: InterfaceLiftContext) -> Result<(), String
 async fn remote_mcp_operation_life(ctx: InterfaceLiftContext) -> Result<(), String> {
     let descriptor = ctx.resolved_interface_descriptor()?;
     let config = load_interface_config_from_descriptor(descriptor.clone(), &ctx.interface)?;
-    let operations = load_operation_catalog(&ctx.interface_dir, &descriptor)?;
     let process = mcp_interface_process(
         ctx.interface.clone(),
         config.clone(),
         ctx.interface_var_dir().join("remote-mcp"),
     );
-    serve_remote_operations(&ctx, &process, &operations).await
+    serve_remote_operations(&ctx, &process, &descriptor).await
+}
+
+fn operation_catalog_fingerprint(
+    ctx: &InterfaceLiftContext,
+    descriptor: &octopus_interfaces::InterfaceDescriptor,
+) -> Result<Vec<(std::ffi::OsString, u64, std::time::SystemTime)>, String> {
+    let dir = descriptor
+        .interface_driver_config
+        .as_ref()
+        .and_then(|config| config.private_config.get("operation_catalog_dir"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or("MCP interface declares no operation_catalog_dir")?;
+    let mut entries = std::fs::read_dir(ctx.interface_dir.join(dir))
+        .map_err(|error| format!("MCP operation catalog cannot be listed: {error}"))?
+        .map(|entry| {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let metadata = entry.metadata().map_err(|error| error.to_string())?;
+            Ok((entry.file_name(), metadata.len(), metadata.modified().map_err(|error| error.to_string())?))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    entries.sort();
+    Ok(entries)
 }
 
 async fn project_remote_catalog(
@@ -79,8 +101,10 @@ async fn project_remote_catalog(
 async fn serve_remote_operations(
     ctx: &InterfaceLiftContext,
     process: &McpInterfaceProcess,
-    catalog: &McpOperationCatalog,
+    descriptor: &octopus_interfaces::InterfaceDescriptor,
 ) -> Result<(), String> {
+    let mut fingerprint = operation_catalog_fingerprint(ctx, descriptor)?;
+    let mut catalog: McpOperationCatalog = load_operation_catalog(&ctx.interface_dir, descriptor)?;
     let mut reader = LedgerTailReader::open_named(ctx, "mcp-operations")?;
     let output_root = ctx.interface_var_dir().join("operation-results");
     ctx.signal_ready().await?;
@@ -93,6 +117,12 @@ async fn serve_remote_operations(
             reader.wait_for_change(&ctx.cancel).await?;
             continue;
         }
+        let current = operation_catalog_fingerprint(ctx, descriptor)?;
+        if current != fingerprint {
+            catalog = load_operation_catalog(&ctx.interface_dir, descriptor)?;
+            fingerprint = current;
+        }
+        let catalog = &catalog;
         for own in batch {
             let envelope = match reader.envelope(&own) {
                 Ok(envelope) => envelope,
@@ -120,6 +150,21 @@ async fn serve_remote_operations(
                     continue;
                 }
             };
+            if manifest.label == OPERATOR_APPROVAL_RESPONSE_LABEL {
+                match process.decide(catalog, envelope, &output_root).await {
+                    Ok(artifact) => offer_result(ctx, artifact).await?,
+                    Err(error) => {
+                        ctx.hand_admitted_failure(
+                            own.movement.seq.0,
+                            "operator_decision_refused",
+                            serde_json::json!({"error": error}),
+                        )
+                        .await?;
+                    }
+                };
+                reader.commit_through(&own)?;
+                continue;
+            }
             if manifest.label != catalog.request_label {
                 reader.commit_through(&own)?;
                 continue;
@@ -155,9 +200,7 @@ async fn serve_remote_operations(
                 continue;
             };
             match process.receive(spec, envelope, &output_root).await {
-                Ok(artifact) => {
-                    ctx.hand_admitted_arrival(artifact, Vec::new()).await?;
-                }
+                Ok(artifact) => offer_result(ctx, artifact).await?,
                 Err(error) => {
                     ctx.hand_admitted_failure(
                         own.movement.seq.0,
@@ -172,5 +215,30 @@ async fn serve_remote_operations(
             }
             reader.commit_through(&own)?;
         }
+    }
+}
+
+async fn offer_result(
+    ctx: &InterfaceLiftContext,
+    artifact: octopus_interfaces::InterfaceArtifactFile,
+) -> Result<(), String> {
+    use octopus_interfaces::{DeliveryVerdict, RefusedReason};
+    match ctx.hand_arrival(artifact, Vec::new()).await? {
+        DeliveryVerdict::Admitted { .. } => Ok(()),
+        DeliveryVerdict::Refused {
+            reason: RefusedReason::NoBinding | RefusedReason::Policy | RefusedReason::VerificationFailed,
+            detail,
+        } => {
+            tracing::warn!(
+                interface = ctx.interface.as_str(),
+                %detail,
+                "MCP operation result has no waiting call"
+            );
+            Ok(())
+        }
+        DeliveryVerdict::Refused { reason, detail } => Err(format!(
+            "runtime refused MCP operation result as '{}': {detail}",
+            reason.as_str()
+        )),
     }
 }

@@ -24,6 +24,7 @@ octopus-marks = { path = "../octopus-marks" }
 octopus-policy = { path = "../octopus-policy" }
 octopus-interfaces = { path = "../octopus-interfaces" }
 octopus-runtime = { path = "../octopus-runtime" }
+octopus-run-record = { path = "../octopus-run-record" }
 octopus-ee = { path = "../octopus-ee" }
 octopus-app-server = { path = "../octopus-app-server" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "io-std", "io-util", "net", "process", "signal", "time"] }

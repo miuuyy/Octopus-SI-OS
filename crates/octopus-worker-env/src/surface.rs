@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -287,24 +286,4 @@ pub struct FileReadOutput {
 pub struct PatchOutcome {
     pub changed_paths: Vec<AbsPath>,
     pub is_exact: bool,
-}
-
-#[derive(Default)]
-pub struct SubstrateFamilyRegistry {
-    map: BTreeMap<String, Arc<dyn WorkerEnvDriver>>,
-}
-
-impl SubstrateFamilyRegistry {
-    pub fn register(&mut self, driver: Arc<dyn WorkerEnvDriver>) -> Result<(), WorkerEnvError> {
-        let family = driver.substrate_family().to_string();
-        if self.map.contains_key(&family) {
-            return Err(WorkerEnvError::DuplicateSubstrateFamily(family));
-        }
-        self.map.insert(family, driver);
-        Ok(())
-    }
-
-    pub fn resolve(&self, substrate_family: &str) -> Option<Arc<dyn WorkerEnvDriver>> {
-        self.map.get(substrate_family).cloned()
-    }
 }

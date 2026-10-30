@@ -124,6 +124,14 @@ The optional desktop client's **Applications** catalog presents these packages
 as providers, connectors, plugins, and context artifacts. A connector such as
 Slack installs interface files; making it available in a Project and connecting
 it to a task are separate steps, and only connected tasks receive its messages.
+Photos, screenshots and image attachments arrive inside the message artifact,
+so the model sees them as images. What a connector can do (post, reply, edit,
+react, upload, read a thread) is its operation catalog, the same declaration an
+MCP application uses: one JSON file per action under `operations/` with its
+input schema and description. The model calls each action as its own tool, and
+the connector answers each request exactly once on its result label, with
+images it read as `media`; an action whose outcome is unknown after a restart
+is reported as `indeterminate_external_effect`, never repeated.
 A plugin is a service the model calls through its interface, such as an MCP
 server, together with the context artifact that teaches the model its contract.
 Installation does not make the model call it automatically. An application pack groups packages for setup without
@@ -136,7 +144,36 @@ interface can declare a connection module under its `packages/` folder in
 connected account and walk you through browser sign-in or pairing. Applications
 without a module are connected once their required setup fields are saved. The
 connection check is presentation only: the interface still refuses to work with
-bad credentials, and nothing is recorded in a run or the ledger.
+bad credentials, and nothing is recorded in a run or the ledger. For an MCP
+application that declares `server_tool_operations`, Connect also turns each tool
+the server lists into an operation of that application, keeping the server's own
+annotations (`readOnlyHint`, `destructiveHint` and the rest) in the operation.
+Every Connect of an application with operations, and every publication of a
+server's tools, rewrites its operation catalog artifact
+(`artifact-operation-catalog-<interface>`) from the whole `operations/` folder.
+Connected tasks bind that catalog, so the model sees each operation as its own
+tool — including tools published after the task was created. A task cannot be
+composed while the catalog is missing; reconnecting the application writes it.
+
+Connected tasks share the application's one interface: one life, one session,
+one set of credentials. An operation call goes from the task's provider to that
+interface, and its result reaches only the calling task: the call arms a wait
+for exactly its own result — the same operation, correlation id and the result
+label the catalog declares — checked by the `tool_result_correspondence`
+verifier. The interface's `private_config.task_input_labels` lists what a
+connected task receives unprompted, such as a connector's incoming messages;
+those start a turn, and nothing else from the interface reaches the task.
+Interfaces that receive such events are never copied privately, so one poller or
+socket serves every task.
+
+A server tool that is not declared read-only — or has no annotations at all —
+waits for your approval before anything reaches the server. The application
+answers the call with an approval request instead of running it; the chat shows
+**Allow once**, **Decline** and **Cancel**. Your answer is checked against that
+exact request, recorded in the task's evidence, and only then does the
+application send the call; a declined call returns `operator_declined` to the
+model. The call's wait stays armed until that final answer arrives. The same
+rule covers the generic call by tool name.
 
 A configured local Home opens after local client unlock and verification by the
 existing setup owner of its complete aggregate receipt, followed by matching
@@ -363,6 +400,16 @@ present. `context_fields` names required accompanying data.
 when text is absent, nonempty declared request context carries the request. The
 provider preserves the complete structured payload instead of selecting or
 rewriting a transcript line.
+
+An artifact from any other interface reaches the model as its structured
+payload. When that payload carries `media`, the same entries a tool or operation
+result uses — `mime_type`, the image's own artifact manifest and its bytes as
+`payload_base64` — the model sees each PNG, JPEG or WebP image as an image, and
+the payload text keeps the manifest and dimensions without the bytes. A
+malformed or mislabelled image fails the input closed. This is how a connector
+hands over the photos, screenshots and image attachments it received: the bytes
+travel inside the one event artifact the kernel pins, so no task needs read
+access to the connector's private files.
 
 Native user-input requests cross the provider's declared question and answer
 artifacts. The client renders the question and returns the selected or written

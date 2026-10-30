@@ -264,6 +264,7 @@
             &active,
             "run_test",
             "world_provider_test",
+            &OperationRoutes::default(),
         )
         .expect("the route is identified by its exact edge after provider authoring");
         assert_eq!(resolved, active);

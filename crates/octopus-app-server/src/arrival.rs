@@ -11,8 +11,9 @@ use octopus_ledger::{
     MovementLog, MovementMetadata, TraceId,
 };
 use octopus_runtime::{
-    GrantEpoch, InterfaceArrivalTarget, InterfaceOutboundArtifactTransfer, RunId, RuntimeError,
+    InterfaceArrivalTarget, InterfaceOutboundArtifactTransfer, RunId, RuntimeError,
 };
+use octopus_run_record::GrantEpoch;
 
 mod retained;
 
@@ -73,7 +74,7 @@ pub async fn recover_runtime_relay_arrivals(
 fn pin_run_record_snapshot(
     blobs: &mut dyn BlobStore,
     run: &RunId,
-    snapshot: &octopus_runtime::RunRecordSnapshot,
+    snapshot: &octopus_run_record::RunRecordSnapshot,
 ) -> Result<(), ArrivalError> {
     let actual = ContentHash::of_bytes(snapshot.bytes.as_ref());
     if actual != snapshot.hash {

@@ -9,7 +9,7 @@
   ],
   "worker_consent": "explicit_ceiling",
   "supported_executor_kinds": [
-    "browser"
+    "exec"
   ],
   "capabilities": [
     "web_search",

@@ -2,18 +2,18 @@ use base64::Engine;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope, InvocationMetadata};
+use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope};
+use octopus_tool_door_runtime::room::{decode_tool_call, emit_json_artifact, formed_scope, strict_object};
 use octopus_tool_door_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo, WorkerEnvironmentLifecycleRecorder, WorkerEnvironmentLiveStateRecorder,
-    WorkerEnvironmentReleaseContext,
 };
 use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact, ToolResultError};
 use octopus_worker_env::{
     WorkerEnvKindSpec, WorkerEnvironmentFormation, WorkerEnvironmentId, WorkerEnvironmentLifecycle,
 };
 use reqwest::header::{HeaderName, HeaderValue};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 pub mod backend;
@@ -37,7 +37,7 @@ pub mod protocol;
 
 use config::DesktopConfig;
 
-const TOOL_CALL_LABEL: &str = "tool.call";
+const ROOM: &str = "desktop room";
 const SUBSTRATE_FAMILY: &str = "gui";
 
 pub(crate) trait WorkerEnvironmentRecorder:
@@ -116,12 +116,6 @@ impl SystemGuiEnv {
             source_movement_seq,
             ..
         } = invocation;
-        if descriptor.interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "tool descriptor '{}' belongs to interface '{}', not desktop door '{}'",
-                descriptor.id, descriptor.interface, self.environment.interface
-            )));
-        }
         let formation = worker_environment.ok_or_else(|| {
             ToolProcessError::Capability(
                 "desktop invocation has no formed worker environment".to_string(),
@@ -132,24 +126,23 @@ impl SystemGuiEnv {
                 "desktop invocation has no formed kind descriptor".to_string(),
             )
         })?;
-        validate_formation(&self.environment, &formation, &kind)?;
         let config = DesktopConfig::load_formed(&self.environment, &formation, &kind)
             .map_err(ToolProcessError::Capability)?;
         config.validate_process_inputs(&descriptor).map_err(ToolProcessError::Capability)?;
         let operation = desktop_operation(&descriptor.handler_config, descriptor.id.as_str())?;
         let call = if operation == DesktopOperation::AppResume {
             app_authorization::decode_resume(&envelope, descriptor.id.as_str()).map_err(ToolProcessError::Capability)?
-        } else { decode_tool_call(&envelope)? };
+        } else { decode_tool_call(ROOM, &envelope)? };
         if descriptor.id.as_str() != call.tool {
             return Err(ToolProcessError::Capability(format!(
                 "tool descriptor '{}' does not match tool.call '{}'",
                 descriptor.id, call.tool
             )));
         }
+        formed_scope(ROOM, &envelope, &formation)?;
         let metadata = envelope
             .metadata()
             .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        validate_coordinates(metadata, &formation)?;
         let (client, call_sequence) = self
             .client(&formation, &config)
             .await
@@ -273,11 +266,8 @@ impl SystemGuiEnv {
                 ToolResultArtifact::failure(&call.tool, call.correlation_id, failure)
             }
         };
-        Ok(vec![materialize_artifact(
-            &envelope,
-            &response.label,
-            &response,
-        )?])
+        Ok(vec![emit_json_artifact(&envelope, &response.label, &response)
+            .map_err(ToolProcessError::Capability)?])
     }
 
     async fn client(
@@ -342,9 +332,6 @@ impl SystemGuiEnv {
         formation: &WorkerEnvironmentFormation,
         kind: &WorkerEnvKindSpec,
     ) -> Result<(), String> {
-        validate_formation(&self.environment, formation, kind).map_err(|error| match error {
-            ToolProcessError::Capability(error) | ToolProcessError::Unavailable(error) => error,
-        })?;
         let config = DesktopConfig::load_formed(&self.environment, formation, kind)?;
         let (client, call_sequence) = self.client(formation, &config).await?;
         let result = dispatch(
@@ -386,6 +373,14 @@ fn desktop_live_evidence(body: &Value) -> Value {
 }
 
 impl ToolProcessHandler for SystemGuiEnv {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
+    fn releases_cold(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -414,18 +409,6 @@ impl ToolProcessHandler for SystemGuiEnv {
         })
     }
 
-    fn release_with_context<'a>(
-        &'a self,
-        context: WorkerEnvironmentReleaseContext<'a>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), ToolProcessError>> + Send + 'a>,
-    > {
-        Box::pin(async move {
-            self.release_room(context.formation, context.kind)
-                .await
-                .map_err(ToolProcessError::Unavailable)
-        })
-    }
 }
 
 pub async fn run_gui_session_tool_process() -> Result<(), String> {
@@ -836,23 +819,6 @@ fn screenshot_action(tool: &str, arguments: &Value) -> Result<Value, String> {
     }))
 }
 
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
-}
-
 fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
     object
         .get(field)
@@ -905,84 +871,6 @@ fn optional_u64(object: &Map<String, Value>, field: &str) -> Result<Option<u64>,
             .map(Some)
             .ok_or_else(|| format!("{field} must be an unsigned integer or null")),
     }
-}
-
-fn validate_formation(
-    environment: &ToolProcessEnvironment,
-    formation: &WorkerEnvironmentFormation,
-    kind: &WorkerEnvKindSpec,
-) -> Result<(), ToolProcessError> {
-    if formation.door_interface != environment.interface {
-        return Err(ToolProcessError::Capability(format!(
-            "desktop formation belongs to door '{}', not '{}'",
-            formation.door_interface, environment.interface
-        )));
-    }
-    if kind.worker_environment_kind_id != formation.worker_environment_kind
-        || kind.substrate_family != SUBSTRATE_FAMILY
-    {
-        return Err(ToolProcessError::Capability(format!(
-            "desktop tool was formed for incompatible worker_environment_kind '{}'",
-            formation.worker_environment_kind
-        )));
-    }
-    Ok(())
-}
-
-fn validate_coordinates(
-    metadata: &InvocationMetadata,
-    formation: &WorkerEnvironmentFormation,
-) -> Result<(), ToolProcessError> {
-    let runtime = metadata.runtime.as_ref().ok_or_else(|| {
-        ToolProcessError::Capability("desktop invocation has no runtime coordinates".to_string())
-    })?;
-    if runtime.run.as_str() != formation.run || runtime.ee.as_str() != formation.ee {
-        return Err(ToolProcessError::Capability(
-            "desktop formation does not match invocation coordinates".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn decode_tool_call(
-    envelope: &InterfaceInvocationEnvelope,
-) -> Result<ToolCallArtifact, ToolProcessError> {
-    let manifest = envelope
-        .read_artifact_manifest()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if manifest.label != TOOL_CALL_LABEL {
-        return Err(ToolProcessError::Capability(format!(
-            "desktop room expected '{TOOL_CALL_LABEL}', got '{}'",
-            manifest.label
-        )));
-    }
-    let payload = envelope
-        .read_artifact_payload()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    serde_json::from_slice(&payload).map_err(|error| {
-        ToolProcessError::Capability(format!("desktop tool.call is malformed: {error}"))
-    })
-}
-
-fn materialize_artifact<T: Serialize>(
-    input: &InterfaceInvocationEnvelope,
-    label: &str,
-    body: &T,
-) -> Result<InterfaceArtifactFile, ToolProcessError> {
-    let parent = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| {
-            ToolProcessError::Capability("desktop tool input manifest has no parent".to_string())
-        })?;
-    let bytes = serde_json::to_vec(body).map_err(|error| {
-        ToolProcessError::Capability(format!(
-            "desktop emitted artifact did not serialize: {error}"
-        ))
-    })?;
-    InterfaceArtifactFile::write(parent.join("emitted"), label, &bytes)
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))
 }
 
 fn materialize_image(input: &InterfaceInvocationEnvelope, body: &mut Value) -> Result<(), String> {

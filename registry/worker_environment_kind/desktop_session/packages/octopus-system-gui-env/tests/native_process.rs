@@ -33,6 +33,16 @@ fn cold_application_settings_child_uses_only_the_declared_private_store() {
     assert!(root.join("app-permission-always-invalid.json").is_file());
 }
 
+fn admitted(frame: &serde_json::Value, seq: u64) -> String {
+    let verdict = json!({"admitted":{"seq":seq}});
+    let reply = if frame["kind"] == "retained_arrival" {
+        json!({"kind":"retained_delivery","request_id":frame["request_id"],"delivery":{"Ok":{"state":"complete","verdict":verdict}}})
+    } else {
+        json!({"kind":"delivery_verdict","request_id":frame["request_id"],"verdict":verdict})
+    };
+    format!("{reply}\n")
+}
+
 #[tokio::test]
 #[cfg(target_os = "macos")]
 async fn declared_host_signals_life_readiness_only_after_native_status_admission() {
@@ -276,11 +286,11 @@ async fn remote_desktop_tool_crosses_the_actual_door_and_broker_without_native_c
                 assert!(output.read_line(&mut line).await.unwrap() > 0, "desktop door exited before a result");
                 let frame: Value = serde_json::from_str(&line).unwrap();
                 if frame["kind"] == "ready" { continue; }
-                assert_eq!(frame["kind"], "arrival", "{frame}");
+                assert_eq!(frame["kind"], if mixed { "arrival" } else { "retained_arrival" }, "{frame}");
                 let result = InterfaceArtifactFile::new(frame["artifact_manifest_path"].as_str().unwrap()).unwrap();
                 let result: Value = serde_json::from_slice(&result.read_payload_bytes().unwrap()).unwrap();
                 assert_eq!(result["ok"], credential && !mixed, "broker returned before its expected HTTP exchange: {result}");
-                child.stdin.as_mut().unwrap().write_all(format!("{}\n", json!({"kind":"delivery_verdict","request_id":frame["request_id"],"verdict":{"admitted":{"seq":1}}})).as_bytes()).await.unwrap();
+                child.stdin.as_mut().unwrap().write_all(admitted(&frame, 1).as_bytes()).await.unwrap();
                 return result;
             }
         };
@@ -306,7 +316,7 @@ async fn remote_desktop_tool_crosses_the_actual_door_and_broker_without_native_c
             let body: Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(body["action"]["type"], "status");
             let reply = json!({"schema_version":2,"accepted":true,"worker_environment_id":body["worker_environment_id"],"request_id":body["request_id"],"operation":"status","error":null,
-                "evidence":{"status":"ready","permissions":{"screen_capture":true,"accessibility":false},"control":{"mode":"idle","owner":null,"generation":1},"screens":[],"observation":null,"effect":null}}).to_string();
+                "evidence":{"status":"ready","permissions":{"screen_capture":true,"accessibility":true},"control":{"mode":"idle","owner":null,"generation":1},"screens":[],"observation":null,"effect":null}}).to_string();
             stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
         };
         let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::join!(receive, serve) }).await.expect("remote door waited for a native host or failed its finite broker contract");
@@ -425,6 +435,7 @@ async fn actual_gui_decoder_recovers_past_retired_host_without_reading_connectio
             .env("OCTOPUS_INTERFACE_HOST_IO_LIMITS",json!({"max_control_frame_bytes":1048576,"max_stderr_bytes":262144,"max_manifest_bytes":1048576,"max_payload_bytes":8388608}).to_string())
             .env("OCTOPUS_ROOT_SLOTS_JSON",json!({"interface_life_install_root":install}).to_string())
             .env("OCTOPUS_MOVEMENTS_JSONL",&ledger).env("OCTOPUS_BLOBS_DIR",&blobs)
+            .env("OCTOPUS_LEDGER_INDEX_SQLITE",root.path().join("ledger-index.sqlite"))
             .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true).spawn().unwrap();
         let mut output = BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
@@ -540,11 +551,11 @@ async fn application_resume_crosses_actual_gui_door_and_broker_with_original_ope
                 if output.read_line(&mut line).await.map_err(|e|e.to_string())? == 0 { return Err("GUI door EOF before result".to_string()); }
                 let frame: Value = serde_json::from_str(&line).map_err(|e|e.to_string())?;
                 if frame["kind"] == "ready" { continue; }
-                if frame["kind"] != "arrival" { return Err(format!("unexpected GUI frame {frame}")); }
+                if frame["kind"] != "retained_arrival" { return Err(format!("unexpected GUI frame {frame}")); }
                 let artifact = InterfaceArtifactFile::new(frame["artifact_manifest_path"].as_str().ok_or("arrival has no manifest")?).map_err(|e|e.to_string())?;
                 let body: Value = serde_json::from_slice(&artifact.read_payload_bytes().map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
                 if body["ok"] != true { return Err(format!("GUI tool failed before expected host response: {body}")); }
-                child.stdin.as_mut().unwrap().write_all(format!("{}\n",json!({"kind":"delivery_verdict","request_id":frame["request_id"],"verdict":{"admitted":{"seq":20+phase}}})).as_bytes()).await.map_err(|e|e.to_string())?;
+                child.stdin.as_mut().unwrap().write_all(admitted(&frame, 20+phase).as_bytes()).await.map_err(|e|e.to_string())?;
                 return Ok(body);
             }
         };
@@ -589,7 +600,7 @@ async fn application_resume_crosses_actual_gui_door_and_broker_with_original_ope
                     "error":{"code":"application_approval_declined","message":"No native effect performed"}}})
             };
             let reply=json!({"schema_version":2,"accepted":true,"worker_environment_id":body["worker_environment_id"],"request_id":body["request_id"],"operation":body["action"]["type"],"error":null,
-                "evidence":{"status":"ready","permissions":{"screen_capture":true,"accessibility":false},"control":{"mode":"idle","owner":null,"generation":1},"screens":[],"observation":null,"effect":null},"application_result":packet}).to_string();
+                "evidence":{"status":"ready","permissions":{"screen_capture":true,"accessibility":true},"control":{"mode":"idle","owner":null,"generation":1},"screens":[],"observation":null,"effect":null},"application_result":packet}).to_string();
             stream.get_mut().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",reply.len()).as_bytes()).await.map_err(|e|e.to_string())?;
             Ok::<(),String>(())
         };
@@ -631,7 +642,7 @@ async fn application_resume_crosses_actual_gui_door_and_broker_with_original_ope
     assert_eq!(failure["failure_class"], "invalid_tool_artifact");
     assert_eq!(failure["details"]["error"], "application resume requires the original operator.approval.response artifact at the GUI door");
     assert!(tokio::time::timeout(Duration::from_millis(50),listener.accept()).await.is_err());
-    child.stdin.as_mut().unwrap().write_all(format!("{}\n",json!({"kind":"delivery_verdict","request_id":frame["request_id"],"verdict":{"admitted":{"seq":22}}})).as_bytes()).await.unwrap();
+    child.stdin.as_mut().unwrap().write_all(admitted(&frame, 22).as_bytes()).await.unwrap();
     drop(child.stdin.take());
     let exited=tokio::time::timeout(Duration::from_secs(5),child.wait_with_output()).await.unwrap().unwrap();
     assert!(!exited.status.success());

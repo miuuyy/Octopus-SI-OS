@@ -1,0 +1,68 @@
+{
+  "id": "slack.upload_files",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "file.upload"
+  },
+  "description": "Upload one to ten files into a conversation, optionally in a thread with a comment. blob_id is the content hash of an artifact payload this task produced.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "channel": {
+        "type": "string",
+        "pattern": "^[CDG][A-Z0-9]{8,32}$",
+        "description": "Conversation id: channel_id from a slack.event."
+      },
+      "thread_ts": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}\\.[0-9]{1,12}$",
+        "description": "Thread to answer in: the event's thread_ts, or its message_ts to start a thread under that message."
+      },
+      "files": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 10,
+        "items": {
+          "type": "object",
+          "properties": {
+            "blob_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "filename": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          },
+          "required": [
+            "blob_id",
+            "filename"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "initial_comment": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Message text in Markdown, converted to Slack formatting."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "channel",
+      "files"
+    ],
+    "additionalProperties": false
+  }
+}

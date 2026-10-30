@@ -11,7 +11,7 @@ clap = { version = "4", features = ["derive", "wrap_help"] }
 # mode, profile-layer name) comes from the substrate contract, never from the
 # provider registry.
 octopus-substrate-contract = { package = "octopus-substrate-contract", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-substrate-contract" }
-octopus-shell-command = { package = "octopus-shell-command", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-shell-command" }
+octopus-shell-command = { package = "octopus-shell-command", path = "../octopus-shell-command" }
 serde.workspace = true
 toml = "0.9.5"
 

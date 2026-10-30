@@ -33,7 +33,7 @@ pub(crate) fn recover_provider_turn_continuity(
         private_config_string_set(&config.private_config, "context_output_labels")?;
     let session_snapshot_labels =
         private_config_string_set(&config.private_config, "session_snapshot_labels")?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(pinned_run_record)
+    let record = octopus_run_record::RunRecord::from_bytes(pinned_run_record)
         .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
     let context_payloads = octopus_run_authoring::context_artifact_payloads(
         &record,
@@ -112,7 +112,7 @@ pub(crate) fn recover_provider_result_continuity(
     let config = &descriptor.interface_driver_config.as_ref().ok_or_else(|| InterfaceDriverError::FailedClosed("result continuity has no provider config".into()))?.private_config;
     let labels = private_config_string_set(config, "context_output_labels")?;
     let snapshots = private_config_string_set(config, "session_snapshot_labels")?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(pinned)
+    let record = octopus_run_record::RunRecord::from_bytes(pinned)
         .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
     let payloads = octopus_run_authoring::context_artifact_payloads(&record, input.metadata()?, &input.artifact_binding_payloads)
         .map_err(InterfaceDriverError::FailedClosed)?;
@@ -205,7 +205,7 @@ pub(crate) fn recovered_tool_handoff_receipt(
     if reconcile_operator_session_continuity(descriptor, input, Some(state.clone()), session)? != Some(state.clone()) {
         return Err(refused("recovered tool handoff is not the current pending continuity"));
     }
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(current_record)
+    let record = octopus_run_record::RunRecord::from_bytes(current_record)
         .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
     if record.id != runtime.run || record.worker != runtime.worker
         || record.interface_state.get(&runtime.interface).and_then(|state| state.get("context_generation"))
@@ -278,7 +278,7 @@ pub(crate) fn duplicate_tool_result_receipt(
     }) {
         return Err(refused("completed duplicate result still owns the current native wait"));
     }
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(current_record)
+    let record = octopus_run_record::RunRecord::from_bytes(current_record)
         .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
     if record.id != runtime.run || record.worker != runtime.worker
         || record.interface_state.get(&runtime.interface).and_then(|state| state.get("context_generation"))

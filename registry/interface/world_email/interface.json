@@ -1,0 +1,31 @@
+{
+  "id": "world_email",
+  "interface_type": "world",
+  "role": "service",
+  "direction": "bidirectional",
+  "source_names": [
+    "email"
+  ],
+  "interface_driver_ref": "email_life",
+  "interface_driver_config": {
+    "private_config": {
+      "environment": {
+        "address_env": "EMAIL_ADDRESS",
+        "password_env": "EMAIL_APP_PASSWORD",
+        "imap_host_env": "EMAIL_IMAP_SERVER",
+        "smtp_host_env": "EMAIL_SMTP_SERVER",
+        "allowed_senders_env": "EMAIL_ALLOWED_SENDERS"
+      },
+      "operation_catalog_dir": "operations",
+      "operation_catalog_label": "email.operation_catalog",
+      "operation_request_label": "email.operation.request",
+      "client_connection": {
+        "schema_version": 1,
+        "module": "interface://world_email/packages/connection.cjs"
+      },
+      "task_input_labels": [
+        "email.event"
+      ]
+    }
+  }
+}

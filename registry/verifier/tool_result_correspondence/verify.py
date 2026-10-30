@@ -70,11 +70,15 @@ def verify(request):
         assert carrier != source["artifact"] and carrier != call, "invocation carrier must be distinct"
         assert request["artifact"] == {"id": carrier["id"], "content": bytes(carrier["content"]).hex()}, "invocation carrier differs from the checked declaration"
         for reference in (source["artifact"], carrier):
-            assert reference["id"] == tool + ".result:" + bytes(reference["content"]).hex(), "invocation result identity is malformed"
+            assert reference["id"] == request["artifact_label"] + ":" + bytes(reference["content"]).hex(), "invocation result identity is malformed"
         path = invocation["manifest_relative_path"]
         assert text(path) and all(part and part not in (".", "..") for part in path.split("/")), "invocation carrier path is not private-relative"
     result = decode(request["payload_utf8"])
-    assert isinstance(result, dict) and {"label", "tool", "correlation_id", "ok"} <= set(result) <= {"label", "tool", "correlation_id", "ok", "body", "error"}, "result shape is malformed"
+    assert isinstance(result, dict), "result shape is malformed"
+    if "operation" in result:
+        verify_operation_result(request, result, tool, correlation)
+        return
+    assert {"label", "tool", "correlation_id", "ok"} <= set(result) <= {"label", "tool", "correlation_id", "ok", "body", "error"}, "result shape is malformed"
     assert result["tool"] == tool and result["correlation_id"] == correlation, "result answers a different call"
     assert result["label"] == request["artifact_label"] == tool + ".result", "result label differs from its tool"
     if result["ok"] is True:
@@ -85,6 +89,14 @@ def verify(request):
         assert isinstance(error, dict) and {"code", "message"} <= set(error) <= {"code", "message", "details"}, "failure result is malformed"
         assert text(error["code"]) and text(error["message"]), "failure result has empty details"
         assert "details" not in error or isinstance(error["details"], dict) and error["details"], "failure details must be nonempty"
+
+
+def verify_operation_result(request, result, operation, correlation):
+    assert {"label", "operation", "correlation_id", "ok"} <= set(result), "operation result shape is malformed"
+    assert result["operation"] == operation and result["correlation_id"] == correlation, "result answers a different call"
+    assert text(result["label"]) and result["label"] == request["artifact_label"], "result label differs from its declared result"
+    assert type(result["ok"]) is bool, "result status is malformed"
+    assert ("result" in result) == result["ok"] and ("error" in result) != result["ok"], "operation result has inconsistent evidence"
 
 
 def main():

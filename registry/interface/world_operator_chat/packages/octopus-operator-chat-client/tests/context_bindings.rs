@@ -53,7 +53,7 @@ fn composed_tool_context_retains_selected_instruction_sources_without_history() 
     use octopus_interfaces::{ArtifactBindingPayload, GrantProjection};
     use octopus_ledger::{ArtifactRef, ContentHash};
     use octopus_operator_chat_client::run_composition::{plan_run_composition, RunCompositionPlan};
-    use octopus_runtime::run_record::RunRecord;
+    use octopus_run_record::RunRecord;
 
     let root = tempfile::tempdir().unwrap();
     let request = composition::fixture(root.path());

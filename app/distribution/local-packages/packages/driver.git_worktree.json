@@ -1,0 +1,103 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "driver.git_worktree",
+  "version": "1.0.1",
+  "product_kind": "driver",
+  "product_id": "git_worktree",
+  "release_status": "optional",
+  "display": {
+    "name": "Git Worktree",
+    "description": "A private Git worktree per task to edit files, run commands and inspect or abandon its diff.",
+    "developer": "Octopus",
+    "category": "worker_environment",
+    "icon": "worktree"
+  },
+  "members": [
+    {
+      "registry_kind": "worker_environment_kind",
+      "owner": "git_worktree",
+      "primary": true
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.apply_patch",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.build",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.exec",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.grep",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.list_dir",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.process.list",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.process.signal",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.process.terminate",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.read_file",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.worktree.abandon",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.worktree.diff",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.worktree.snapshot",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.worktree.status",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.write_file",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "coder.write_stdin",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "interface",
+      "owner": "system_coder_env",
+      "configuration": [{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    }
+  ]
+}

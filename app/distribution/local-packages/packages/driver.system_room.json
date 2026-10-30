@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.system_room",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "product_kind": "driver",
   "product_id": "system_room",
   "release_status": "optional",
@@ -11,7 +11,7 @@
     "description": "The file room Home and tasks write through, with artifact, skill and context tools.",
     "developer": "Octopus",
     "category": "worker_environment",
-    "icon": "hard-drive"
+    "icon": "artifact"
   },
   "members": [
     {

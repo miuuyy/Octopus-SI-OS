@@ -5,7 +5,7 @@ use std::process::Command;
 use octopus_descriptors::{InterfaceId, ProcessAuthoritySpec};
 use octopus_interface_transport::process_authority::ProcessAuthoritySpecExecution;
 use octopus_interface_transport::spawn_life_config_of;
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 
 #[test]
 fn file_observer_starter_uses_the_existing_life_and_checkpoint_contracts() {

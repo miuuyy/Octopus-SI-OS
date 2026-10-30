@@ -18,7 +18,7 @@ doctest = false
 octopus-substrate-contract = { package = "octopus-substrate-contract", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-substrate-contract" }
 # Ported siblings (codex-* -> octopus-*)
 octopus-async-utils = { path = "../octopus-async-utils" }
-octopus-execpolicy = { package = "octopus-execpolicy", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-execpolicy" }
+octopus-execpolicy = { package = "octopus-execpolicy", path = "../octopus-execpolicy" }
 octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
 octopus-util-image = { path = "../octopus-util-image" }
 octopus-util-pathuri = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-pathuri" }

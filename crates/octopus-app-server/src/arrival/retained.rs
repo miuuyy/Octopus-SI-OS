@@ -64,7 +64,7 @@ impl InterfaceArtifactArrivalFromInterface<'_> {
             let hash = coordinate.run_record_hash.as_deref().and_then(ContentHash::from_hex)
                 .ok_or_else(|| ArrivalError::Malformed("retained arrival has no snapshot identity".into()))?;
             let bytes = self.blobs.get(&hash).ok_or_else(|| ArrivalError::Malformed("retained arrival snapshot is unreadable".into()))?;
-            let original = InterfaceArrivalTarget::from_retained_snapshot(&coordinate, octopus_runtime::RunRecordSnapshot {
+            let original = InterfaceArrivalTarget::from_retained_snapshot(&coordinate, octopus_run_record::RunRecordSnapshot {
                 hash, bytes: bytes.into(),
             }, scope.seq.0).map_err(ArrivalError::Malformed)?;
             let target = match self.runtime.refresh_retained_interface_arrival_target(&original) {

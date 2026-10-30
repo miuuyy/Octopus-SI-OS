@@ -46,8 +46,8 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 
-octopus-git-utils = { package = "octopus-git-utils", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-git-utils" }
-octopus-shell-command = { package = "octopus-shell-command", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-shell-command" }
+octopus-git-utils = { package = "octopus-git-utils", path = "../octopus-git-utils" }
+octopus-shell-command = { package = "octopus-shell-command", path = "../octopus-shell-command" }
 octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
 vt100 = { version = "0.15.2", optional = true }
 octopus-terminal-detection = { path = "../octopus-terminal-detection" }

@@ -311,7 +311,7 @@ fn static_revision_checkpoint<'a>(
     record: &'a RunRecord,
     writer: &CheckedRunWriter,
     next: &BoundRunAuthoringTopology,
-) -> Result<&'a octopus_runtime::run_record::CheckpointRecord, String> {
+) -> Result<&'a octopus_run_record::CheckpointRecord, String> {
     if !static_revision_candidate(record, writer, next)? {
         return Err("active input correction is not a terminal failed-source static revision".into());
     }
@@ -355,7 +355,7 @@ fn static_revision_checkpoint<'a>(
 pub(super) struct FailedSourceStaticContext {
     coordinate: RuntimeCoordinateKey,
     snapshot: ContentHash,
-    checkpoint: octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: octopus_run_record::CheckpointRecord,
     source: IndexedOutboundArtifact,
     added: Vec<ArtifactRef>,
 }
@@ -363,7 +363,7 @@ pub(super) struct FailedSourceStaticContext {
 impl FailedSourceStaticContext {
     pub(super) fn refs_for(
         &self, coordinate: &RuntimeCoordinateKey, source: &IndexedOutboundArtifact,
-        snapshot: &ContentHash, checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+        snapshot: &ContentHash, checkpoint: &octopus_run_record::CheckpointRecord,
     ) -> Result<&[ArtifactRef], String> {
         if &self.coordinate != coordinate || &self.source != source
             || &self.snapshot != snapshot || &self.checkpoint != checkpoint

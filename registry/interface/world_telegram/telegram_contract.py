@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import ipaddress
 import json
@@ -5,7 +6,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from telegram_render import FORMATS
+from octopus_content_hash import octopus_content_hash
 from telegram_render import safe_link_url
 
 
@@ -22,19 +23,6 @@ FILE_KINDS = {
     "video": ("sendVideo", "video"),
     "voice": ("sendVoice", "voice"),
 }
-CHAT_ACTIONS = {
-    "choose_sticker",
-    "find_location",
-    "record_video",
-    "record_video_note",
-    "record_voice",
-    "typing",
-    "upload_document",
-    "upload_photo",
-    "upload_video",
-    "upload_video_note",
-    "upload_voice",
-}
 MEDIA_FIELDS = (
     ("animation", ".mp4", "video/mp4"),
     ("video", ".mp4", "video/mp4"),
@@ -45,16 +33,7 @@ MEDIA_FIELDS = (
     ("sticker", ".webp", "image/webp"),
 )
 ENVIRONMENT_KEYS = ("bot_token_env", "allowed_user_ids_env", "home_chat_env")
-SEND_KEYS = {"chat_id", "topic_id", "reply_to_message_id", "format", "silent", "link_preview", "buttons"}
-OPERATION_SHAPES = {
-    "api.call": ({"method"}, {"params"}),
-    "chat.action": (set(), {"chat_id", "topic_id", "action"}),
-    "file.send": (set(), {"chat_id", "topic_id", "reply_to_message_id", "blob_id", "file_id", "filename", "kind", "caption", "format", "silent", "buttons"}),
-    "message.delete": ({"message_id"}, {"chat_id"}),
-    "message.edit": ({"message_id"}, {"chat_id", "text", "format", "link_preview", "buttons"}),
-    "message.send": ({"text"}, SEND_KEYS),
-    "reaction.set": ({"message_id"}, {"chat_id", "emoji", "big"}),
-}
+HANDLERS = {"message.send", "message.edit", "message.delete", "reaction.set", "file.send", "chat.action", "bot_api"}
 
 
 def require_object(value, name):
@@ -136,12 +115,6 @@ def require_chat_id(value, name):
             value = int(value)
     if not is_id(value):
         raise ValueError(f"{name} must be a Telegram chat id or @username")
-    return value
-
-
-def require_message_id(value, name):
-    if not is_id(value) or value < 0:
-        raise ValueError(f"{name} must be a positive Telegram message id")
     return value
 
 
@@ -270,8 +243,11 @@ def validate_config(config):
             re.compile(pattern, re.IGNORECASE)
         except re.error as error:
             raise ValueError(f"Telegram gating.mention_patterns[{index}] is invalid: {error}") from error
-    media = require_keys(config["media"], {"download_enabled", "max_download_bytes", "max_upload_bytes", "max_files_per_event", "text_preview_bytes", "text_extensions", "retention_days"}, set(), "Telegram media")
+    media = require_keys(config["media"], {"download_enabled", "max_download_bytes", "max_upload_bytes", "max_files_per_event", "text_preview_bytes", "text_extensions", "retention_days", "file_label", "max_images_per_event", "max_image_bytes_per_event"}, set(), "Telegram media")
     require_bool(media["download_enabled"], "Telegram media.download_enabled")
+    require_string(media["file_label"], "Telegram media.file_label", maximum=256)
+    require_int(media["max_images_per_event"], "Telegram media.max_images_per_event", 0, 16)
+    require_int(media["max_image_bytes_per_event"], "Telegram media.max_image_bytes_per_event", 0, 67108864)
     require_int(media["max_download_bytes"], "Telegram media.max_download_bytes", 1, 2147483648)
     require_int(media["max_upload_bytes"], "Telegram media.max_upload_bytes", 1, 2147483648)
     require_int(media["max_files_per_event"], "Telegram media.max_files_per_event", 0, 100)
@@ -282,12 +258,10 @@ def validate_config(config):
             raise ValueError(f"Telegram media.text_extensions contains invalid extension {extension!r}")
     outbound = require_keys(
         config["outbound"],
-        {"operation_label", "delivery_label", "max_message_chars", "max_caption_chars", "max_text_chars", "max_messages_per_operation", "max_manifest_bytes", "max_payload_bytes", "max_buttons", "link_previews", "unsent_retry_window_ms", "unsent_retry_backoff_cap_ms", "bot_message_retention", "typing", "allowed_api_methods", "retry_safe_api_methods"},
+        {"max_message_chars", "max_caption_chars", "max_text_chars", "max_messages_per_operation", "max_manifest_bytes", "max_payload_bytes", "max_buttons", "link_previews", "unsent_retry_window_ms", "unsent_retry_backoff_cap_ms", "bot_message_retention", "typing"},
         set(),
         "Telegram outbound",
     )
-    require_string(outbound["operation_label"], "Telegram outbound.operation_label")
-    require_string(outbound["delivery_label"], "Telegram outbound.delivery_label")
     for key, low, high in (
         ("max_message_chars", 16, 4096),
         ("max_caption_chars", 16, 4096),
@@ -306,10 +280,6 @@ def validate_config(config):
     require_bool(typing["enabled"], "Telegram outbound.typing.enabled")
     require_int(typing["refresh_ms"], "Telegram outbound.typing.refresh_ms", 1000, 5000)
     require_int(typing["max_ms"], "Telegram outbound.typing.max_ms", 1000, 600000)
-    allowed = require_string_list(outbound["allowed_api_methods"], "Telegram outbound.allowed_api_methods", True)
-    safe = require_string_list(outbound["retry_safe_api_methods"], "Telegram outbound.retry_safe_api_methods", True)
-    if any(not re.fullmatch(r"[a-z][A-Za-z]{1,63}", method) for method in allowed) or not set(safe).issubset(allowed):
-        raise ValueError("Telegram outbound API methods must be Bot API method names, and retry-safe methods must be allowed")
     return config
 
 
@@ -557,6 +527,29 @@ def forward_origin(origin):
     return None
 
 
+IMAGE_SIGNATURES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"))
+
+
+def image_type(content):
+    for signature, mime_type in IMAGE_SIGNATURES:
+        if content.startswith(signature):
+            return mime_type
+    return "image/webp" if content[:4] == b"RIFF" and content[8:12] == b"WEBP" else None
+
+
+def image_room(media, limits):
+    used = sum(len(item["payload_base64"]) // 4 * 3 - item["payload_base64"][-2:].count("=") for item in media)
+    return 0 if len(media) >= limits["max_images_per_event"] else max(0, limits["max_image_bytes_per_event"] - used)
+
+
+def embed_image(media, view, path, content, limits):
+    mime_type = image_type(content)
+    if mime_type is None or len(content) > image_room(media, limits):
+        return
+    view["image"] = len(media)
+    media.append({"mime_type": mime_type, "artifact": {"label": limits["file_label"], "payload_path": path, "payload_content_hash": octopus_content_hash(content)}, "payload_base64": base64.b64encode(content).decode("ascii")})
+
+
 def message_content(message, bot, files, config):
     text, entities = message_body(message)
     content = {}
@@ -678,62 +671,46 @@ def validate_buttons(value, config):
     return rows
 
 
-def validate_args(operation, args, config):
+def validate_handlers(catalog):
+    for identity, spec in catalog["operations"].items():
+        handler = spec["handler_config"]
+        if handler["operation"] not in HANDLERS:
+            raise ValueError(f"Telegram operation {identity} names unknown handler {handler['operation']!r}")
+        if handler["operation"] != "bot_api":
+            require_keys(handler, {"operation"}, set(), f"Telegram operation {identity} handler_config")
+            continue
+        require_keys(handler, {"operation", "method", "read_only"}, set(), f"Telegram operation {identity} handler_config")
+        if not isinstance(handler["method"], str) or not re.fullmatch(r"[a-z][A-Za-z]{1,63}", handler["method"]):
+            raise ValueError(f"Telegram operation {identity} names no Bot API method")
+        require_bool(handler["read_only"], f"Telegram operation {identity} handler_config.read_only")
+    return catalog
+
+
+def validate_args(handler, args, config):
+    for key in ("chat_id", "from_chat_id"):
+        if key in args:
+            args[key] = require_chat_id(args[key], f"Telegram {key}")
+    if handler == "bot_api":
+        return args
     outbound = config["outbound"]
-    for key in ("chat_id",):
+    for key in ("text", "caption"):
         if key in args:
-            args[key] = require_chat_id(args[key], f"Telegram {operation} {key}")
-    for key in ("topic_id", "message_id", "reply_to_message_id"):
-        if key in args:
-            args[key] = require_message_id(args[key], f"Telegram {operation} {key}")
-    for key in ("silent", "link_preview", "big"):
-        if key in args:
-            require_bool(args[key], f"Telegram {operation} {key}")
-    if "format" in args and args["format"] not in FORMATS:
-        raise ValueError(f"Telegram {operation} format must be one of {', '.join(FORMATS)}")
-    if "text" in args:
-        require_text(args["text"], f"Telegram {operation} text", outbound["max_text_chars"])
-    if "caption" in args:
-        require_text(args["caption"], f"Telegram {operation} caption", outbound["max_text_chars"])
+            require_text(args[key], f"Telegram {key}", outbound["max_text_chars"])
     if "buttons" in args:
         args["buttons"] = validate_buttons(args["buttons"], config)
-    if operation == "message.edit" and "text" not in args and "buttons" not in args:
-        raise ValueError("Telegram message.edit requires text or buttons")
-    if operation == "reaction.set" and args.get("emoji") is not None:
-        require_string(args["emoji"], "Telegram reaction.set emoji", maximum=32)
-    if operation == "chat.action" and args.setdefault("action", "typing") not in CHAT_ACTIONS:
-        raise ValueError(f"Telegram chat.action action must be one of {', '.join(sorted(CHAT_ACTIONS))}")
-    if operation == "file.send":
+    if handler == "message.edit" and "text" not in args and "buttons" not in args:
+        raise ValueError("Telegram edit_message needs text, buttons or both")
+    if handler == "chat.action":
+        args.setdefault("action", "typing")
+    if handler == "file.send":
         if ("blob_id" in args) == ("file_id" in args):
-            raise ValueError("Telegram file.send needs exactly one of blob_id or file_id")
+            raise ValueError("Telegram send_file needs exactly one of blob_id or file_id")
         if "blob_id" in args:
-            if not isinstance(args["blob_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", args["blob_id"]):
-                raise ValueError("Telegram file.send blob_id must be a content hash")
-            filename = require_string(args.get("filename"), "Telegram file.send filename", maximum=255)
+            filename = require_string(args.get("filename"), "Telegram send_file filename", maximum=255)
             if "/" in filename or "\\" in filename or filename in {".", ".."} or any(ord(character) < 32 for character in filename):
-                raise ValueError("Telegram file.send filename must be a plain file name")
-        else:
-            require_string(args["file_id"], "Telegram file.send file_id", maximum=512)
+                raise ValueError("Telegram send_file filename must be a plain file name")
+        elif "filename" in args:
+            raise ValueError("Telegram send_file takes filename only with blob_id")
         if args.setdefault("kind", "document") not in FILE_KINDS:
-            raise ValueError(f"Telegram file.send kind must be one of {', '.join(sorted(FILE_KINDS))}")
-    if operation == "api.call":
-        method = require_string(args["method"], "Telegram api.call method")
-        if method not in outbound["allowed_api_methods"]:
-            raise ValueError(f"Telegram Bot API method {method!r} is not allowed")
-        args["params"] = dict(require_object(args.get("params", {}), "Telegram api.call params"))
+            raise ValueError(f"Telegram send_file kind must be one of {', '.join(sorted(FILE_KINDS))}")
     return args
-
-
-def normalize_operation(body, config):
-    body = require_object(body, "Telegram outbound payload")
-    if "operation" not in body:
-        require_keys(body, {"text"}, SEND_KEYS, "Telegram reply")
-        return "message.send", validate_args("message.send", dict(body), config)
-    require_keys(body, {"operation", "args"}, set(), "Telegram operation payload")
-    operation = require_string(body["operation"], "Telegram operation")
-    if operation not in OPERATION_SHAPES:
-        raise ValueError(f"Telegram operation {operation!r} is not supported; use one of {', '.join(sorted(OPERATION_SHAPES))}")
-    args = require_object(body["args"], "Telegram operation.args")
-    required, optional = OPERATION_SHAPES[operation]
-    require_keys(args, required, optional, f"Telegram {operation} args")
-    return operation, validate_args(operation, dict(args), config)

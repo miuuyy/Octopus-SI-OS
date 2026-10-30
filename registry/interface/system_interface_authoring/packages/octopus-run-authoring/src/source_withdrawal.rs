@@ -42,7 +42,7 @@ pub(super) fn publication_bindings(record: &RunRecord, config: &RunAuthoringConf
         || !replaced.is_disjoint(&protected)
         || proof.parent.as_ref().is_some_and(|parent| !proof.replaced_context.iter().any(|(reference, _)| reference == parent))
         || proof.replaced_context.iter().any(|(reference, _)| bindings.iter().filter(|binding|
-            binding.id == reference.id && binding.access == octopus_runtime::ArtifactAccess::read_only()).count() != 1)
+            binding.id == reference.id && binding.access == octopus_policy::ArtifactAccess::read_only()).count() != 1)
         || bindings.iter().any(|binding| binding.id == item.artifact_id)
     { return Err("source withdrawal lost its exact dynamic context or changed static artifact authority".into()); }
     bindings.retain(|binding| !replaced.contains(&binding.id));
@@ -244,7 +244,7 @@ pub(super) fn source_snapshot_from_evidence(
     protected.extend(config.checkpoints.iter().flat_map(|template| template.static_artifact_bindings.iter().cloned()));
     let replaced = provider_context_bindings(record, &config.provider_interface)?.into_iter()
         .filter(|binding| !protected.contains(&binding.id)).map(|binding| {
-            if binding.access != octopus_runtime::ArtifactAccess::read_only() { return Err("withdrawal dynamic context changed its read-only rights".into()); }
+            if binding.access != octopus_policy::ArtifactAccess::read_only() { return Err("withdrawal dynamic context changed its read-only rights".into()); }
             let entry = context.artifacts.iter().find(|entry| entry.source_artifact.id == binding.id)
                 .ok_or("withdrawal predecessor binding is absent from its exact source context")?;
             Ok((entry.source_artifact.clone(), entry.source_movement_seq.ok_or("withdrawal predecessor context has no movement")?))

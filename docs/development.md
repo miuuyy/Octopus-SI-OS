@@ -27,7 +27,8 @@ Use [Getting started](getting-started.md) for the macOS build,
 | --- | --- |
 | `octopus-app` | The `octopus` binary: `up`, `down`, `doctor`. Boots a Home and runs the arrival loop. |
 | `octopus-app-server` | The composition root: registry snapshot, artifact arrival handling, and the worker-policy wiring. |
-| `octopus-runtime` | Grant formation per arrival, admission, outbound transfers, run records, and the run-records index. |
+| `octopus-runtime` | Grant formation per arrival, admission, and outbound transfers. |
+| `octopus-run-record` | Run and checkpoint records, grant epochs, and the run-records index. Rooms and interfaces read and author runs through it without linking the runtime. |
 | `octopus-policy` | Policy shapes and their reduction: worker-interface ceilings and interface policy declarations. |
 | `octopus-ee` | EE templates, instances, and the EE tree. |
 | `octopus-interfaces` | Interface descriptors and worker-pin policy loading. |

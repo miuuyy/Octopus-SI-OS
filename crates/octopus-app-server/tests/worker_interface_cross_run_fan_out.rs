@@ -404,7 +404,7 @@ async fn worker_interface_delivers_executor_artifact_cross_run_to_the_planner_th
                 source.artifact.as_ref().unwrap(),
                 &RunId::new("run_executor_b"),
                 &CheckpointId::new("cB"),
-                octopus_runtime::GrantEpoch(0),
+                octopus_run_record::GrantEpoch(0),
                 source.lamport,
                 &InterfaceId::new(WORKER_INTERFACE),
             )
@@ -456,7 +456,7 @@ async fn worker_interface_delivers_executor_artifact_cross_run_to_the_planner_th
         source.artifact.as_ref().unwrap(),
         &RunId::new("run_executor_b"),
         &CheckpointId::new("cB"),
-        octopus_runtime::GrantEpoch(1),
+        octopus_run_record::GrantEpoch(1),
         source.lamport,
         &InterfaceId::new(WORKER_INTERFACE),
     )

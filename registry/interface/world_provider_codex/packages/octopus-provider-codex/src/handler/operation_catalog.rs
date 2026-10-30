@@ -7,6 +7,8 @@ pub(crate) struct InterfaceOperationCatalogArtifact {
     pub(crate) label: String,
     pub(crate) interface: InterfaceId,
     pub(crate) request_label: String,
+    #[serde(default)]
+    pub(crate) task_input_labels: BTreeSet<String>,
     pub(crate) operations: Vec<InterfaceOperationCatalogEntry>,
 }
 
@@ -110,6 +112,14 @@ pub(crate) fn extract_interface_operation_affordances(
                     )));
                 }
             }
+            if catalog.task_input_labels.contains(&operation.output_label)
+                || catalog.task_input_labels.iter().any(|label| label.trim().is_empty() || label.trim() != label)
+            {
+                return Err(InterfaceDriverError::Protocol(format!(
+                    "bound interface operation catalog '{}' declares a malformed task input label or one that is also an operation result",
+                    bound.artifact.id.as_str()
+                )));
+            }
             if operation.request_label != catalog.request_label {
                 return Err(InterfaceDriverError::Protocol(format!(
                     "bound interface operation '{}' request label '{}' differs from catalog label '{}'",
@@ -143,6 +153,7 @@ pub(crate) fn extract_interface_operation_affordances(
                         interface: catalog.interface.clone(),
                         request_label: operation.request_label,
                         output_label: operation.output_label,
+                        input_labels: catalog.task_input_labels.clone(),
                     },
                 )
                 .is_some()

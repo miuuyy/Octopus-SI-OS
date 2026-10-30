@@ -10,7 +10,7 @@ use octopus_ledger::{ArtifactRef, ContentHash, InvocationMetadata};
 use octopus_policy::{
     ArtifactAccess, ContextGrant, PolicyLayer, WorkerInterfacePolicy, form_policy,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

@@ -7,18 +7,20 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope, InvocationMetadata};
+use octopus_interfaces::{InterfaceArtifactFile, InvocationMetadata};
+use octopus_tool_door_runtime::room::{
+    admitted_tool, decode_tool_call, descriptor_operation, emission_root, emit_json_artifact,
+    formed_scope, strict_object,
+};
 use octopus_tool_door_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo, WorkerEnvironmentLifecycleRecorder, WorkerEnvironmentLiveStateRecorder,
-    WorkerEnvironmentReleaseContext, WorkerEnvironmentReleaseMode,
 };
-use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact, ToolResultError};
+use octopus_tool_handlers::{ToolResultArtifact, ToolResultError};
 use octopus_worker_env::{
     AbsPath, NetworkCeiling, WorkerEnvKindSpec, WorkerEnvironmentFormation,
     WorkerEnvironmentLifecycle,
 };
-use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
@@ -30,8 +32,12 @@ use config::{
     ContainerNetwork, MountAccess, MountSourceType, PullPolicy, ReadyCondition, RecoveryPolicy,
 };
 
-const TOOL_CALL_LABEL: &str = "tool.call";
+const ROOM: &str = "container door";
 const SUBSTRATE_FAMILY: &str = "container";
+const OPERATIONS: &[&str] = &[
+    "start", "attach", "status", "exec", "file_read", "file_write", "file_list", "logs", "stop",
+    "remove",
+];
 const INSPECT_OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
 const CONTAINER_INSTANCE_ROOT_SLOTS: &[&str] = &["worktree_root"];
 
@@ -198,12 +204,6 @@ impl ContainerRoom {
             worker_environment_kind,
             ..
         } = invocation;
-        if descriptor.interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "tool descriptor '{}' belongs to interface '{}', not container door '{}'",
-                descriptor.id, descriptor.interface, self.environment.interface
-            )));
-        }
         let formation = worker_environment.ok_or_else(|| {
             ToolProcessError::Capability(
                 "container invocation has no formed worker environment".to_string(),
@@ -214,37 +214,37 @@ impl ContainerRoom {
                 "container invocation has no formed kind descriptor".to_string(),
             )
         })?;
-        validate_formation(&self.environment, &formation, &kind)?;
         let config = ContainerConfig::load_formed(&self.environment, &formation, &kind)
             .map_err(ToolProcessError::Capability)?;
         validate_network_grant(&formation, &config)?;
         validate_mount_grants(&formation, &config)?;
         let root_bindings = project_container_instance_root_bindings(&formation)
             .map_err(ToolProcessError::Capability)?;
-        let call = decode_tool_call(&envelope)?;
+        let call = decode_tool_call(ROOM, &envelope)?;
+        if !call.arguments.is_object() {
+            return Err(ToolProcessError::Capability(
+                "container tool.call arguments must be a JSON object".to_string(),
+            ));
+        }
         if descriptor.id.as_str() != call.tool {
             return Err(ToolProcessError::Capability(format!(
                 "tool descriptor '{}' does not match tool.call '{}'",
                 descriptor.id, call.tool
             )));
         }
-        let operation = descriptor_operation(descriptor.id.as_str(), &descriptor.handler_config)?;
-        let metadata = envelope
-            .metadata()
+        let operation = descriptor_operation(ROOM, descriptor.id.as_str(), &descriptor.handler_config, OPERATIONS)
+            .map_err(ToolProcessError::Capability)?;
+        formed_scope(ROOM, &envelope, &formation)?;
+        validate_runtime_owner(
+            envelope
+                .metadata()
+                .map_err(|error| ToolProcessError::Capability(error.to_string()))?,
+            &formation,
+        )?;
+        admitted_tool(ROOM, &envelope, &call)
             .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        validate_coordinates(metadata, &formation)?;
-        validate_tool_grant(&envelope, &call.tool)?;
         let sequence = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
-        let emission_root = envelope
-            .artifact_file
-            .manifest_path()
-            .parent()
-            .ok_or_else(|| {
-                ToolProcessError::Capability(
-                    "container inbound artifact manifest has no parent".to_string(),
-                )
-            })?
-            .join("emitted");
+        let emission_root = emission_root(&envelope).map_err(ToolProcessError::Capability)?;
         let body = self
             .dispatch(
                 &formation,
@@ -346,11 +346,8 @@ impl ContainerRoom {
                 )
             }
         };
-        Ok(vec![materialize_artifact(
-            &envelope,
-            &response.label,
-            &response,
-        )?])
+        Ok(vec![emit_json_artifact(&envelope, &response.label, &response)
+            .map_err(ToolProcessError::Capability)?])
     }
 
     async fn dispatch(
@@ -1732,6 +1729,14 @@ fn evidence_write_error(stage: &str, message: impl Into<String>) -> Value {
 }
 
 impl ToolProcessHandler for ContainerRoom {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
+    fn releases_cold(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -1754,7 +1759,6 @@ impl ToolProcessHandler for ContainerRoom {
         Box<dyn std::future::Future<Output = Result<(), ToolProcessError>> + Send + 'a>,
     > {
         Box::pin(async move {
-            validate_formation(&self.environment, formation, kind)?;
             let config = ContainerConfig::load_formed(&self.environment, formation, kind)
                 .map_err(ToolProcessError::Capability)?;
             self.release_container(formation, &config)
@@ -1763,47 +1767,12 @@ impl ToolProcessHandler for ContainerRoom {
         })
     }
 
-    fn release_with_context<'a>(
-        &'a self,
-        context: WorkerEnvironmentReleaseContext<'a>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), ToolProcessError>> + Send + 'a>,
-    > {
-        match context.mode {
-            WorkerEnvironmentReleaseMode::LiveOwner
-            | WorkerEnvironmentReleaseMode::ColdRecovery => {
-                self.release(context.formation, context.kind)
-            }
-        }
-    }
 }
 
 pub async fn run_container_room_tool_process() -> Result<(), String> {
     let environment = ToolProcessEnvironment::from_env()?;
     let room = Arc::new(ContainerRoom::new(environment));
     octopus_tool_door_runtime::run_tool_process(room).await
-}
-
-fn validate_formation(
-    environment: &ToolProcessEnvironment,
-    formation: &WorkerEnvironmentFormation,
-    kind: &WorkerEnvKindSpec,
-) -> Result<(), ToolProcessError> {
-    if formation.door_interface != environment.interface {
-        return Err(ToolProcessError::Capability(format!(
-            "container formation belongs to door '{}', not '{}'",
-            formation.door_interface, environment.interface
-        )));
-    }
-    if formation.worker_environment_kind != kind.worker_environment_kind_id
-        || kind.substrate_family != SUBSTRATE_FAMILY
-    {
-        return Err(ToolProcessError::Capability(format!(
-            "container invocation was formed for incompatible worker_environment_kind '{}'",
-            formation.worker_environment_kind
-        )));
-    }
-    Ok(())
 }
 
 fn validate_network_grant(
@@ -1873,74 +1842,7 @@ fn validate_mount_grants(
     Ok(())
 }
 
-fn decode_tool_call(
-    envelope: &InterfaceInvocationEnvelope,
-) -> Result<ToolCallArtifact, ToolProcessError> {
-    let manifest = envelope
-        .read_artifact_manifest()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if manifest.label != TOOL_CALL_LABEL {
-        return Err(ToolProcessError::Capability(format!(
-            "container door manifest label '{}' is not '{}'",
-            manifest.label, TOOL_CALL_LABEL
-        )));
-    }
-    let payload = envelope
-        .read_artifact_payload()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    let call: ToolCallArtifact = serde_json::from_slice(&payload).map_err(|error| {
-        ToolProcessError::Capability(format!("container tool.call is malformed: {error}"))
-    })?;
-    if call.tool.trim().is_empty() {
-        return Err(ToolProcessError::Capability(
-            "container tool.call has an empty tool name".to_string(),
-        ));
-    }
-    if !call.arguments.is_object() {
-        return Err(ToolProcessError::Capability(
-            "container tool.call arguments must be a JSON object".to_string(),
-        ));
-    }
-    Ok(call)
-}
-
-fn descriptor_operation<'a>(
-    tool_id: &str,
-    handler_config: &'a Value,
-) -> Result<&'a str, ToolProcessError> {
-    let config = handler_config.as_object().ok_or_else(|| {
-        ToolProcessError::Capability(format!(
-            "tool '{tool_id}' handler_config must be an object with an operation"
-        ))
-    })?;
-    let operation = config
-        .get("operation")
-        .ok_or_else(|| {
-            ToolProcessError::Capability(format!(
-                "tool '{tool_id}' handler_config.operation is absent"
-            ))
-        })?
-        .as_str()
-        .ok_or_else(|| {
-            ToolProcessError::Capability(format!(
-                "tool '{tool_id}' handler_config.operation must be a string"
-            ))
-        })?;
-    if operation.is_empty() || operation.trim() != operation {
-        return Err(ToolProcessError::Capability(format!(
-            "tool '{tool_id}' handler_config.operation must be a non-empty trimmed string"
-        )));
-    }
-    match operation {
-        "start" | "attach" | "status" | "exec" | "file_read" | "file_write" | "file_list"
-        | "logs" | "stop" | "remove" => Ok(operation),
-        other => Err(ToolProcessError::Capability(format!(
-            "tool '{tool_id}' declares unknown container operation '{other}'"
-        ))),
-    }
-}
-
-fn validate_coordinates(
+fn validate_runtime_owner(
     metadata: &InvocationMetadata,
     formation: &WorkerEnvironmentFormation,
 ) -> Result<(), ToolProcessError> {
@@ -1949,61 +1851,12 @@ fn validate_coordinates(
             "container invocation metadata has no runtime coordinates".to_string(),
         )
     })?;
-    if runtime.run.as_str() != formation.run || runtime.ee.as_str() != formation.ee {
-        return Err(ToolProcessError::Capability(
-            "container formation does not match invocation run and EE".to_string(),
-        ));
-    }
     if runtime.worker != formation.worker || runtime.interface != formation.door_interface {
         return Err(ToolProcessError::Capability(
             "container formation does not match invocation worker and door".to_string(),
         ));
     }
     Ok(())
-}
-
-fn validate_tool_grant(
-    envelope: &InterfaceInvocationEnvelope,
-    tool: &str,
-) -> Result<(), ToolProcessError> {
-    let granted = envelope
-        .granted_tool_names()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if !granted.iter().any(|item| item == tool) {
-        return Err(ToolProcessError::Capability(format!(
-            "container door denied tool.call '{tool}' because formed metadata did not grant it"
-        )));
-    }
-    let blocked = envelope
-        .hard_blocked_tool_names()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if blocked.iter().any(|item| item == tool) {
-        return Err(ToolProcessError::Capability(format!(
-            "container door denied hard-blocked tool.call '{tool}'"
-        )));
-    }
-    Ok(())
-}
-
-fn materialize_artifact<T: Serialize>(
-    envelope: &InterfaceInvocationEnvelope,
-    label: &str,
-    body: &T,
-) -> Result<InterfaceArtifactFile, ToolProcessError> {
-    let parent = envelope
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| {
-            ToolProcessError::Capability(
-                "container inbound artifact manifest has no parent".to_string(),
-            )
-        })?;
-    let bytes = serde_json::to_vec(body).map_err(|error| {
-        ToolProcessError::Capability(format!("container response failed to encode: {error}"))
-    })?;
-    InterfaceArtifactFile::write(parent.join("emitted"), label, &bytes)
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))
 }
 
 fn materialize_binary_carrier(
@@ -2611,23 +2464,6 @@ fn truncate_detail(value: &str, maximum: usize) -> String {
     format!("{}…", &value[..end])
 }
 
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
-}
-
 fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
     object
         .get(field)
@@ -2839,21 +2675,6 @@ mod tests {
             post_operation_lifecycle("status", false, Ok(false)),
             WorkerEnvironmentLifecycle::Failed
         );
-    }
-
-    #[test]
-    fn exact_clone_selects_only_its_descriptor_operation() {
-        for tool_id in ["container.start", "container.custom_start"] {
-            assert_eq!(
-                descriptor_operation(tool_id, &json!({"operation": "start"}))
-                    .ok()
-                    .unwrap(),
-                "start"
-            );
-        }
-        assert!(descriptor_operation("container.clone", &Value::Null).is_err());
-        assert!(descriptor_operation("container.clone", &json!({"operation": 1})).is_err());
-        assert!(descriptor_operation("container.clone", &json!({"operation": "unknown"})).is_err());
     }
 
     #[test]

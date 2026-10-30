@@ -94,7 +94,7 @@ done
     let read_access = serde_json::json!({"read":true,"change":false,"create":false,"delete":false});
     metadata.grant.artifact_access.insert("role-instruction".into(), serde_json::from_value(read_access.clone()).unwrap());
     let runtime = metadata.runtime.clone().unwrap();
-    let mut admitted = serde_json::to_value(octopus_runtime::run_record::RunRecord {
+    let mut admitted = serde_json::to_value(octopus_run_record::RunRecord {
         id: runtime.run.clone(), ee: runtime.ee.clone(), worker: runtime.worker.clone(),
         trace: octopus_runtime::TraceId("trace:cut-turn".into()), status: serde_json::json!("running"),
         interface_state: BTreeMap::new(), checkpoints: Vec::new(), active_checkpoints: Vec::new(),
@@ -114,7 +114,7 @@ done
     }]);
     admitted["active_checkpoints"] = serde_json::json!(["checkpoint-a"]);
     let admitted_record = serde_json::to_vec(&admitted).unwrap();
-    octopus_runtime::run_record::RunRecord::from_bytes(&admitted_record).unwrap();
+    octopus_run_record::RunRecord::from_bytes(&admitted_record).unwrap();
     let mut current = admitted;
     current["interface_state"]["world_provider_codex"]["context_generation"] = serde_json::json!(7);
     current["checkpoints"] = serde_json::json!([]);

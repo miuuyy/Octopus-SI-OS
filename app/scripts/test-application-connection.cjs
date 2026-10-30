@@ -171,3 +171,66 @@ test("a crate module is shared only when its owner declares it identically, and 
   write("world_demo_owner/interface.json", descriptor("world_demo_owner", null));
   await assert.rejects(host.connect({ operationId: operationId(), applicationId: "world_demo_shared", interfaceId: "world_demo_shared", input: {} }), /is not declared by its installed owner/);
 });
+
+test("connecting publishes server tools as operations of the declaring interface, replacing only earlier generated ones", async () => {
+  const id = "world_demo_mail";
+  const declared = descriptor(id, directModule);
+  Object.assign(declared.interface_driver_config.private_config, {
+    operation_catalog_dir: "operations",
+    operation_catalog_label: "mcp.operation_catalog",
+    operation_request_label: "mcp.operation.request",
+    server_tool_operations: { prefix: "demo" },
+  });
+  write(`${id}/interface.json`, declared);
+  const callTool = { id: "demo.call_tool", request_label: "mcp.operation.request", output_label: "mcp.tool.result",
+    handler_config: { operation: "call_tool" }, description: "Call a tool", input_schema: { type: "object" } };
+  write(`${id}/operations/demo.call_tool.json`, callTool);
+  write(`${id}/operations/demo.retired.json`, { id: "demo.retired", handler_config: { operation: "call_tool", mcp_tool_name: "retired" } });
+  const schema = { type: "object", properties: { query: { type: "string" } } };
+  const published = [];
+  globalThis.demoConnection.connect = async (ctx) => {
+    published.push(await ctx.publishOperations([
+      { name: "search", description: "Search mail", inputSchema: schema, annotations: { readOnlyHint: true, title: "Search", extra: 1 } },
+      { name: "demo.read", title: "Read mail", inputSchema: schema, annotations: { readOnlyHint: "yes", destructiveHint: true } },
+      { name: "call_tool", inputSchema: schema },
+      { name: "bad/name", inputSchema: schema },
+    ]));
+    return { state: "connected" };
+  };
+  await host.connect({ operationId: operationId(), applicationId: id, interfaceId: id, input: { DEMO_ADDRESS: "me@example.com" } });
+  assert.deepEqual(published[0].published, 2);
+  assert.deepEqual(published[0].approvalRequired, ["demo.read"]);
+  assert.deepEqual(published[0].skipped, ["call_tool: it would replace an operation of the application", "bad/name: its name cannot be an operation id"]);
+  const catalog = path.join(registry, "interface", id, "operations");
+  assert.deepEqual(fs.readdirSync(catalog).sort(), ["demo.call_tool.json", "demo.read.json", "demo.search.json"]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(catalog, "demo.search.json"), "utf8")), {
+    id: "demo.search",
+    request_label: "mcp.operation.request",
+    output_label: "mcp.tool.result",
+    handler_config: { operation: "call_tool", mcp_tool_name: "search", annotations: { title: "Search", readOnlyHint: true } },
+    description: "Search mail",
+    input_schema: schema,
+  });
+  const read = JSON.parse(fs.readFileSync(path.join(catalog, "demo.read.json"), "utf8"));
+  assert.equal(read.description, "Read mail");
+  assert.deepEqual(read.handler_config.annotations, { destructiveHint: true });
+  const artifact = JSON.parse(fs.readFileSync(path.join(registry, "artifact", `artifact-operation-catalog-${id}`, "artifact.json"), "utf8"));
+  assert.deepEqual(artifact, {
+    id: `artifact-operation-catalog-${id}`, label: "mcp.operation_catalog", interface: id, request_label: "mcp.operation.request",
+    operations: [callTool, read, JSON.parse(fs.readFileSync(path.join(catalog, "demo.search.json"), "utf8"))].map((operation) => ({
+      name: operation.id, description: operation.description, input_schema: operation.input_schema,
+      request_label: operation.request_label, output_label: operation.output_label,
+    })),
+  });
+  declared.interface_driver_config.private_config.task_input_labels = ["demo.event"];
+  delete declared.interface_driver_config.private_config.server_tool_operations;
+  write(`${id}/interface.json`, declared);
+  fs.rmSync(path.join(catalog, "demo.read.json"));
+  globalThis.demoConnection.connect = async (ctx) => ({ state: typeof ctx.publishOperations === "function" ? "error" : "connected" });
+  await host.connect({ operationId: operationId(), applicationId: id, interfaceId: id, input: {} });
+  const connector = JSON.parse(fs.readFileSync(path.join(registry, "artifact", `artifact-operation-catalog-${id}`, "artifact.json"), "utf8"));
+  assert.deepEqual(connector.task_input_labels, ["demo.event"]);
+  assert.deepEqual(connector.operations.map((operation) => operation.name), ["demo.call_tool", "demo.search"]);
+  globalThis.demoConnection.probe = async (ctx) => ({ state: typeof ctx.publishOperations === "function" ? "error" : "not_connected" });
+  assert.equal((await host.probe({ applicationId: id })).interfaces[0].state.state, "not_connected");
+});

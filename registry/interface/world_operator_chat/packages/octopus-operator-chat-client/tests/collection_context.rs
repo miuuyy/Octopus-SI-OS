@@ -9,7 +9,7 @@ use octopus_operator_chat_client::{
     run_composition::*,
 };
 use octopus_policy::{ArtifactAccess, ArtifactVerb, CapSet, ContextGrant};
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 use std::path::Path;
 

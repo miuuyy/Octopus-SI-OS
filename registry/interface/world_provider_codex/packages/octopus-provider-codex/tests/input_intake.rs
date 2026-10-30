@@ -14,7 +14,7 @@ use octopus_provider_codex::intake_state::{
 };
 use octopus_run_authoring::provider_context_bindings;
 use octopus_run_authoring::{CheckedRunTransition, validate_checked_owner_transition};
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 
 #[tokio::test]

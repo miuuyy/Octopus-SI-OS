@@ -1,0 +1,64 @@
+{
+  "id": "telegram.copy_message",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "bot_api",
+    "method": "copyMessage",
+    "read_only": false
+  },
+  "description": "Copy a message into a chat without a link to the original. caption replaces the original caption as plain text. Returns the new message_id.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Destination chat: chat.id or a public @username."
+      },
+      "from_chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat the message is in."
+      },
+      "message_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "message_id from a telegram.event or from an earlier result."
+      },
+      "message_thread_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "caption": {
+        "type": "string",
+        "maxLength": 1024
+      },
+      "disable_notification": {
+        "type": "boolean",
+        "description": "Deliver without a notification sound."
+      }
+    },
+    "required": [
+      "chat_id",
+      "from_chat_id",
+      "message_id"
+    ],
+    "additionalProperties": false
+  }
+}

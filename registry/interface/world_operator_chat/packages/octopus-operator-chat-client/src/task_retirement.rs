@@ -15,7 +15,7 @@ use octopus_run_authoring::{
     CheckedRunEvidence, RunAuthoringProfile, declared_provider_run_writer,
     provider_input_payloads_ready,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

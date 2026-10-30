@@ -1,8 +1,5 @@
 use octopus_descriptors::{ArtifactId, InterfaceId};
-use octopus_interfaces::{
-    InterfaceArtifactFile, InterfaceBoundaryError as InterfaceDriverError,
-    InterfaceInvocationEnvelope,
-};
+use octopus_interfaces::{InterfaceBoundaryError as InterfaceDriverError, InterfaceInvocationEnvelope};
 use octopus_ledger::{ArtifactRef, ContentHash};
 use octopus_tool_door_runtime::{SystemInterfaceEmissionArtifact, ToolProcessIo};
 
@@ -79,18 +76,8 @@ pub async fn execute_artifact_send_with_reference(
         .map_err(|error| ArtifactSendError::Capability(error.to_string()))?;
     let emitted = match call.body {
         ArtifactSendBody::Payload { label, bytes } => {
-            let parent = input
-                .artifact_file
-                .manifest_path()
-                .parent()
-                .ok_or_else(|| {
-                    ArtifactSendError::Capability(format!(
-                        "artifact.send manifest '{}' has no parent",
-                        input.artifact_file.manifest_path().display()
-                    ))
-                })?;
             SystemInterfaceEmissionArtifact::Materialized(
-                InterfaceArtifactFile::write(parent.join("emitted"), &label, &bytes).map_err(
+                octopus_tool_door_runtime::room::emit_artifact(input, &label, &bytes).map_err(
                     |error| {
                         ArtifactSendError::Capability(format!(
                             "artifact.send could not materialize the emitted artifact: {error}"
@@ -191,7 +178,7 @@ fn ensure_interface_in_formed_grant(
 mod tests {
     use super::*;
     use octopus_descriptors::ArtifactId;
-    use octopus_interfaces::ArtifactBindingPayload;
+    use octopus_interfaces::{ArtifactBindingPayload, InterfaceArtifactFile};
     use octopus_ledger::ContentHash;
 
     #[test]

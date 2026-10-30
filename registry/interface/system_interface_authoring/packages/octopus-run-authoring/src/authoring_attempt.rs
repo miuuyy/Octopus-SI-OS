@@ -643,7 +643,7 @@ pub(crate) fn recover_source_session_context_with_static_correction(
 
 pub(crate) fn source_context_payloads_from_cache(
     blobs_dir: &Path, limits: InterfaceHostIoLimits, pinned: &RunRecord, config: &RunAuthoringConfig,
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord, template: &RunAuthoringCheckpoint, source: &IndexedOutboundArtifact,
+    checkpoint: &octopus_run_record::CheckpointRecord, template: &RunAuthoringCheckpoint, source: &IndexedOutboundArtifact,
 ) -> Result<(Vec<octopus_interfaces::ArtifactBindingPayload>, BTreeSet<ArtifactId>), String> {
     let mut selected = payload_artifact_bindings(pinned, &config.provider_interface)?;
     let call_evidence = result_inputs::bound_call_evidence(pinned, &config.provider_interface, &checkpoint.id)?;

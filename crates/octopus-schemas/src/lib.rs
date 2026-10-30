@@ -17,7 +17,7 @@ pub fn surfaces() -> Vec<(&'static str, schemars::schema::RootSchema)> {
 }
 
 fn run_record_schema() -> schemars::schema::RootSchema {
-    let mut schema = schema_for!(octopus_runtime::run_record::RunRecord);
+    let mut schema = schema_for!(octopus_run_record::RunRecord);
     let properties = &mut schema
         .schema
         .object

@@ -1,0 +1,30 @@
+{
+  "id": "slack.open_conversation",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "web_api",
+    "method": "conversations.open",
+    "read_only": false
+  },
+  "description": "Open or find a direct message with one member, or a group DM with up to eight; returns the channel to post in.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "users": {
+        "type": "string",
+        "pattern": "^[UW][A-Z0-9]{8,32}(,[UW][A-Z0-9]{8,32}){0,7}$",
+        "description": "Comma-separated member ids."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "users"
+    ],
+    "additionalProperties": false
+  }
+}

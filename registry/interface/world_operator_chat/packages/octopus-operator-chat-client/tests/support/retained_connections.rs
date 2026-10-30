@@ -145,3 +145,71 @@ fn client_continuation_retains_exact_peer_but_removes_selected_capability() {
     assert!(!removed.run_record_content.contains("outgoing_peer"));
 
 }
+
+#[test]
+fn connected_application_operations_wait_per_call_on_the_shared_interface() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("registry");
+    tests::copy_planner_descriptors(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../../registry"), &registry);
+    let ee = dir.path().join("ee");
+    std::fs::create_dir(&ee).unwrap();
+    tests::boot_operator_space_ee_instances(&ee);
+    let write = |path: PathBuf, value: &Value| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    };
+    let provider_path = registry.join("interface/world_provider_ollama/interface.json");
+    let mut provider: Value = serde_json::from_slice(&std::fs::read(&provider_path).unwrap()).unwrap();
+    provider["interface_driver_config"]["private_config"].as_object_mut().unwrap().remove("input_intake");
+    write(provider_path, &provider);
+    let mut request: OperatorChatPlanRequest = serde_json::from_value(json!({
+        "registry_root":registry,"ee_instances_root":ee,"run_records_root":dir.path().join("runs"),"interface_private_state_root":dir.path().join("private"),"write_hash_algorithm":"sha256",
+        "chat_id":"application_operations","provider_interface_id":"world_provider_ollama",
+        "ee_id":"ee_operator_space","worker_interface_id":"system_worker_coder_max",
+        "client_surface_role":"task","cycle":"first","conversation":{"ledger_offset":0},
+        "external_inputs":[{"checkpoint_id":"cp_app_world_gmail_input_1","interface_id":"world_gmail"}]
+    })).unwrap();
+    assert!(plan_operator_chat_topology(&request).unwrap_err().contains("reconnect the application"));
+    let catalog_id = "artifact-operation-catalog-world_gmail";
+    let operation = |name: &str, output: &str| json!({"name":name,"description":name,"input_schema":{"type":"object"},
+        "request_label":"mcp.operation.request","output_label":output});
+    let mut catalog = json!({"id":catalog_id,"label":"mcp.operation_catalog","interface":"world_gmail","request_label":"mcp.operation.request",
+        "operations":[operation("gmail.status","mcp.result"),operation("gmail.send_email","mcp.tool.result")]});
+    write(registry.join("artifact").join(catalog_id).join("artifact.json"), &catalog);
+    let plan = plan_operator_chat_topology(&request).unwrap();
+    let run: Value = serde_json::from_str(&plan.run_record_content).unwrap();
+    let state = &run["interface_state"][&plan.model_interface_id];
+    let active = |run: &Value| run["checkpoints"].as_array().unwrap().iter()
+        .filter(|cp| run["active_checkpoints"].as_array().unwrap().contains(&cp["id"])).cloned().collect::<Vec<_>>();
+    assert!(!active(&run).iter().any(|cp| cp["interface_binding"]["interface"] == "world_gmail"), "an application without task inputs has no standing route");
+    let request_binding = |interface: &str| json!(operator_chat_input_binding_names(interface, &["mcp.operation.request".into()]).unwrap());
+    let route = active(&run).into_iter().find(|cp| cp["outbound_interface_bindings"] == json!([request_binding("world_gmail")])).unwrap();
+    assert_eq!(route["interface_binding"], request_binding(&plan.model_interface_id));
+    assert!(state["frontier_checkpoint_ids"].as_array().unwrap().contains(&route["id"]));
+    let template = state["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter()
+        .find(|cp| cp["role"] == "provider_interface_output").unwrap();
+    assert_eq!(template["result_receiving"]["mcp.tool.result"], json!({"mark":"tool.result.corresponds","artifact_label":"mcp.tool.result","verifier":"tool_result_correspondence","params":{}}));
+    assert_eq!(template["result_receiving"].as_object().unwrap().keys().collect::<Vec<_>>(), ["mcp.result", "mcp.tool.result"]);
+    let input = run["checkpoints"].as_array().unwrap().iter().find(|cp| cp["id"] == "cp_operator_input_first").unwrap();
+    assert!(input["artifact_bindings"].as_array().unwrap().iter().any(|binding| binding["id"] == catalog_id));
+
+    catalog["task_input_labels"] = json!(["gmail.event"]);
+    write(registry.join("artifact").join(catalog_id).join("artifact.json"), &catalog);
+    let evented: Value = serde_json::from_str(&plan_operator_chat_topology(&request).unwrap().run_record_content).unwrap();
+    let standing = active(&evented).into_iter().find(|cp| cp["interface_binding"]["interface"] == "world_gmail").unwrap();
+    assert_eq!(standing["interface_binding"], json!(operator_chat_input_binding_names("world_gmail", &["gmail.event".into()]).unwrap()));
+    catalog.as_object_mut().unwrap().remove("task_input_labels");
+    write(registry.join("artifact").join(catalog_id).join("artifact.json"), &catalog);
+
+    for edit in plan.interface_writes.iter().chain(&plan.run_writes) {
+        std::fs::create_dir_all(edit.path.parent().unwrap()).unwrap();
+        std::fs::write(&edit.path, &edit.content).unwrap();
+    }
+    request.existing_run_record = Some(run);
+    request.cycle = "second".into();
+    let next: Value = serde_json::from_str(&plan_operator_chat_topology(&request).expect("a continuation recomposes the operation route").run_record_content).unwrap();
+    assert_eq!(active(&next).iter().filter(|cp| cp["outbound_interface_bindings"] == json!([request_binding("world_gmail")])).count(), 1);
+    request.external_inputs.clear();
+    let removed = plan_operator_chat_topology(&request).expect("disconnecting removes the operation route").run_record_content;
+    assert!(!removed.contains("world_gmail"));
+}

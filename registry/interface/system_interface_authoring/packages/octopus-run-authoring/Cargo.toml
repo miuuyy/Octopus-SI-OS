@@ -30,8 +30,8 @@ octopus-app-server-interface = { path = "../../../world_operator_chat/packages/o
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
 octopus-ledger-index = { path = "../../../../../crates/octopus-ledger-index" }
 octopus-ledger-store = { path = "../../../../../crates/octopus-ledger-store" }
-octopus-marks = { path = "../../../../../crates/octopus-marks" }
-octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-policy = { path = "../../../../../crates/octopus-policy" }
+octopus-run-record = { path = "../../../../../crates/octopus-run-record" }
 octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
 
 [dev-dependencies]

@@ -17,6 +17,7 @@ use octopus_interfaces::{
     ArtifactBindingPayload, InterfaceArtifactFile, InterfaceDescriptor, InterfaceInvocationEnvelope,
 };
 use octopus_ledger::ContentHash;
+use octopus_tool_door_runtime::room::{admitted_tool, emission_root, TOOL_CALL_LABEL};
 use octopus_tool_door_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo,
@@ -27,7 +28,6 @@ use rodio::Source;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-const TOOL_CALL_LABEL: &str = "tool.call";
 const AUDIO_DRIVER_REF: &str = "audio_device";
 const AUDIO_WORKER_ENVIRONMENT_KIND: &str = "audio_device_session";
 const AUDIO_PROTOCOL_VERSION: u32 = 1;
@@ -278,6 +278,10 @@ struct AudioDeviceProcess {
 }
 
 impl ToolProcessHandler for AudioDeviceProcess {
+    fn substrate_family(&self) -> &str {
+        "audio_device"
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -295,7 +299,6 @@ impl AudioDeviceProcess {
         invocation: ToolProcessInvocation,
     ) -> Result<Vec<InterfaceArtifactFile>, ToolProcessError> {
         let call = decode_call(
-            &self.interface,
             &invocation.descriptor,
             &invocation.envelope,
             self.max_manifest_bytes,
@@ -305,7 +308,7 @@ impl AudioDeviceProcess {
         let operation =
             parse_operation(&invocation.descriptor).map_err(ToolProcessError::Capability)?;
         let output_root =
-            invocation_output_root(&invocation.envelope).map_err(ToolProcessError::Capability)?;
+            emission_root(&invocation.envelope).map_err(ToolProcessError::Capability)?;
         match (&self.mode, operation.as_str()) {
             (AudioInterfaceMode::Microphone(config), "list_input_devices") => {
                 let arguments: ListDevicesArguments =
@@ -845,18 +848,11 @@ fn decode_arguments<T: serde::de::DeserializeOwned>(
 }
 
 fn decode_call(
-    interface: &InterfaceId,
     descriptor: &ToolDescriptor,
     envelope: &InterfaceInvocationEnvelope,
     max_manifest_bytes: u64,
     max_tool_call_bytes: u64,
 ) -> Result<ToolCallArtifact, String> {
-    if descriptor.interface != *interface {
-        return Err(format!(
-            "tool descriptor '{}' belongs to interface '{}', not process interface '{}'",
-            descriptor.id, descriptor.interface, interface
-        ));
-    }
     validate_audio_tool_code_world(descriptor)?;
     let artifact = envelope
         .read_artifact_bounded(max_manifest_bytes, max_tool_call_bytes)
@@ -875,21 +871,7 @@ fn decode_call(
             descriptor.id, call.tool
         ));
     }
-    let granted = envelope
-        .granted_tool_names()
-        .map_err(|error| error.to_string())?;
-    if !granted.iter().any(|tool| tool == &call.tool) {
-        return Err(format!(
-            "tool '{}' is absent from the formed tool grant",
-            call.tool
-        ));
-    }
-    let blocked = envelope
-        .hard_blocked_tool_names()
-        .map_err(|error| error.to_string())?;
-    if blocked.iter().any(|tool| tool == &call.tool) {
-        return Err(format!("tool '{}' is hard-blocked", call.tool));
-    }
+    admitted_tool("audio interface", envelope, &call).map_err(|error| error.to_string())?;
     Ok(call)
 }
 
@@ -1830,15 +1812,6 @@ fn require_trimmed(field: &str, value: &str) -> Result<(), String> {
         return Err(format!("{field} must be non-empty and trimmed"));
     }
     Ok(())
-}
-
-fn invocation_output_root(envelope: &InterfaceInvocationEnvelope) -> Result<PathBuf, String> {
-    envelope
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .map(|parent| parent.join("emitted"))
-        .ok_or_else(|| "audio tool invocation manifest has no parent directory".to_string())
 }
 
 fn materialize_json(

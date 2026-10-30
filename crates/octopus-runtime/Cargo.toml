@@ -14,6 +14,7 @@ octopus-descriptors = { path = "../octopus-descriptors" }
 octopus-ledger = { path = "../octopus-ledger" }
 octopus-marks = { path = "../octopus-marks" }
 octopus-policy = { path = "../octopus-policy" }
+octopus-run-record = { path = "../octopus-run-record" }
 octopus-interfaces = { path = "../octopus-interfaces" }
 octopus-file-storage = { path = "../octopus-file-storage" }
 # runtime IS the mechanism plane — it is the body, so tokio/async are allowed here

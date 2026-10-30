@@ -39,7 +39,7 @@ impl ResultInvocation {
 pub(crate) struct BridgeDefinition {
     pub(crate) invocation: ResultInvocation,
     template: RunAuthoringCheckpoint,
-    checkpoint: octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: octopus_run_record::CheckpointRecord,
     original: RunAuthoringCheckpoint,
 }
 

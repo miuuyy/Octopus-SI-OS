@@ -46,7 +46,7 @@ octopus-login = { path = "../octopus-codex-login" }
 octopus-protocol = { path = "../octopus-protocol" }
 
 octopus-arg0 = { path = "../octopus-arg0" }
-octopus-git-utils = { package = "octopus-git-utils", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-git-utils" }
+octopus-git-utils = { package = "octopus-git-utils", path = "../../../world_terminal/packages/octopus-git-utils" }
 octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
 octopus-utils-cli = { path = "../../../../../registry/interface/world_terminal/packages/octopus-utils-cli" }
 

@@ -43,7 +43,7 @@ tracing-subscriber = "0.3.22"
 url = "2"
 
 octopus-arg0 = { path = "../octopus-arg0" }
-octopus-execpolicy = { package = "octopus-execpolicy", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-execpolicy" }
+octopus-execpolicy = { package = "octopus-execpolicy", path = "../octopus-execpolicy" }
 octopus-substrate-contract = { package = "octopus-substrate-contract", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-substrate-contract" }
 octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
 

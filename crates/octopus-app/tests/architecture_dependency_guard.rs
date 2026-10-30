@@ -715,6 +715,37 @@ fn runtime_and_app_server_do_not_link_concrete_product_interface_packages() {
 }
 
 #[test]
+fn worker_environment_kind_packages_link_neither_runtime_nor_app_server() {
+    let repo_root = repo_root();
+    let kinds_root = repo_root.join("registry").join("worker_environment_kind");
+    let kinds_root = kinds_root.to_str().expect("worker-environment kind root is UTF-8");
+    for kernel in RUNTIME_DESCRIPTOR_ONLY_PACKAGES {
+        let output = Command::new("cargo")
+            .current_dir(repo_root)
+            .args([
+                "tree", "--locked", "--workspace", "--edges", "normal", "--prefix", "none",
+                "--format", "{p}", "--invert", kernel,
+            ])
+            .output()
+            .unwrap_or_else(|err| panic!("failed to run cargo tree: {err}"));
+        assert!(
+            output.status.success(),
+            "cargo tree --invert {kernel} failed\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let linking: BTreeSet<&str> = std::str::from_utf8(&output.stdout)
+            .expect("cargo tree output is UTF-8")
+            .lines()
+            .filter(|line| line.contains(kinds_root))
+            .collect();
+        assert!(
+            linking.is_empty(),
+            "worker-environment kind packages link {kernel}: {linking:?}; a door life or tool process is an application of the OS and reads run records through octopus-run-record, never the kernel"
+        );
+    }
+}
+
+#[test]
 fn production_app_does_not_link_concrete_interface_packages() {
     let repo_root = repo_root();
     let manifest = repo_root

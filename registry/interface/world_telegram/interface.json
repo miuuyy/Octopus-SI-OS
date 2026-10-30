@@ -14,10 +14,16 @@
         "allowed_user_ids_env": "TELEGRAM_ALLOWED_USERS",
         "home_chat_env": "TELEGRAM_HOME_CHAT"
       },
+      "operation_catalog_dir": "operations",
+      "operation_catalog_label": "telegram.operation_catalog",
+      "operation_request_label": "telegram.operation.request",
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_telegram/packages/connection.cjs"
-      }
+      },
+      "task_input_labels": [
+        "telegram.event"
+      ]
     }
   }
 }

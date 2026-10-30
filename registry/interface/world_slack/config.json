@@ -68,6 +68,10 @@
   },
   "media": {
     "download_enabled": true,
+    "retention_days": 30,
+    "file_label": "slack.file",
+    "max_images_per_event": 10,
+    "max_image_bytes_per_event": 16777216,
     "max_download_bytes": 52428800,
     "max_upload_bytes": 52428800,
     "max_files_per_event": 20,
@@ -84,51 +88,10 @@
     ]
   },
   "outbound": {
-    "operation_label": "slack.operation",
-    "delivery_label": "slack.delivery.result",
     "max_message_chars": 39000,
     "max_manifest_bytes": 1048576,
     "max_payload_bytes": 67108864,
     "max_blocks": 50,
-    "max_block_json_bytes": 262144,
-    "allowed_web_methods": [
-      "assistant.threads.setStatus",
-      "bookmarks.add",
-      "bookmarks.edit",
-      "bookmarks.list",
-      "bookmarks.remove",
-      "chat.getPermalink",
-      "conversations.history",
-      "conversations.info",
-      "conversations.list",
-      "conversations.members",
-      "conversations.open",
-      "conversations.replies",
-      "pins.add",
-      "pins.list",
-      "pins.remove",
-      "reactions.get",
-      "team.info",
-      "usergroups.list",
-      "users.info",
-      "users.list",
-      "users.profile.get"
-    ],
-    "retry_safe_web_methods": [
-      "bookmarks.list",
-      "chat.getPermalink",
-      "conversations.history",
-      "conversations.info",
-      "conversations.list",
-      "conversations.members",
-      "conversations.replies",
-      "pins.list",
-      "reactions.get",
-      "team.info",
-      "usergroups.list",
-      "users.info",
-      "users.list",
-      "users.profile.get"
-    ]
+    "max_block_json_bytes": 262144
   }
 }

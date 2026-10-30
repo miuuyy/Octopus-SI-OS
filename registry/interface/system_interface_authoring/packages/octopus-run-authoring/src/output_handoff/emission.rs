@@ -376,12 +376,13 @@ impl ProviderOutputHandoff {
                     &next_session_context,
                 )?);
             }
-            let output_checkpoint = active.config.output_checkpoint(
+            let mut output_checkpoint = active.config.output_checkpoint(
                 &route,
                 &active.granted_tools,
                 &active.granted_interfaces,
                 &manifest.label,
             )?;
+            result_inputs::select_call_result(&mut output_checkpoint, &route)?;
             let verified_inputs = active.config.verified_input_checkpoints(
                 &route,
                 &output_checkpoint,

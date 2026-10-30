@@ -248,7 +248,7 @@ fn admission_guards_only_the_selected_ee_dependency_closure() {
         fingerprint: Arc::new(Mutex::new(Some(registry_descriptor_fingerprint(&registry, &instances, &mut RegistryFileCache::default()).unwrap()))),
         registry_root: registry, ee_instances_root: instances.clone(),
     };
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&serde_json::to_vec(&json!({
+    let record = octopus_run_record::RunRecord::from_bytes(&serde_json::to_vec(&json!({
         "id":"run", "ee":"ee_0", "worker":"worker", "trace":"guard", "status":"running", "interface_state":{},
         "active_checkpoints":["input"], "checkpoints":[{"id":"input", "run":"run", "trace":"guard", "epoch":0,
         "interface_binding":octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new("worker")), "artifact_bindings":[], "outbound_interface_bindings":[]}]

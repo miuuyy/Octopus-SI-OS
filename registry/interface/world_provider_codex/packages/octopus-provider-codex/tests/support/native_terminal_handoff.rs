@@ -30,8 +30,8 @@ include!("retained_native_delivery.rs");
 async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     use octopus_interfaces::DeliveryVerdict;
     use octopus_run_authoring::ProviderSourceRecovery;
-    use octopus_runtime::run_record::RunRecord;
-    fn edge(ctx: &InterfaceLiftContext, bytes: &[u8], checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    use octopus_run_record::RunRecord;
+    fn edge(ctx: &InterfaceLiftContext, bytes: &[u8], checkpoint: &octopus_run_record::CheckpointRecord,
         file: &InterfaceArtifactFile, kind: MovementKind, target: InterfaceId) -> Movement {
         let record = RunRecord::from_bytes(bytes).unwrap();
         let tool=&ctx.descriptor_snapshot.as_ref().unwrap().interface_driver_config.as_ref().unwrap().private_config["run_authoring_profile"]["file_write_tool"];

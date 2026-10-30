@@ -1,0 +1,33 @@
+{
+  "id": "slack.publish_home",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "view.publish"
+  },
+  "description": "Publish the App Home tab one member sees.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "user_id": {
+        "type": "string",
+        "pattern": "^[UW][A-Z0-9]{8,32}$",
+        "description": "Member id, such as user_id from a slack.event."
+      },
+      "view": {
+        "type": "object",
+        "description": "A Block Kit view object with its type, title and blocks."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "user_id",
+      "view"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use octopus_descriptors::InterfaceId;
 use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope};
+use octopus_tool_door_runtime::room::{admitted_tool, decode_tool_call, emit_json_artifact};
 use octopus_tool_door_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo,
 };
-use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact, ToolResultError};
+use octopus_tool_handlers::{ToolResultArtifact, ToolResultError};
 use octopus_tool_registry::ToolDescriptor;
 use octopus_worker_env::WorkerEnvironmentLifecycle;
 
@@ -29,20 +29,22 @@ pub use file_read::run_file_read_tool_process;
 pub use file_write::execute_file_write_result;
 pub use memory_bound::{MemoryHost, execute as execute_memory_tool};
 
-const TOOL_CALL_LABEL: &str = "tool.call";
+const ROOM: &str = "system-room door";
+const SUBSTRATE_FAMILY: &str = "system_room";
 
 struct FileWriteProcess {
-    interface: InterfaceId,
     root_slots: BTreeMap<String, PathBuf>,
     effect_root: PathBuf,
     max_payload_bytes: u64,
 }
 
-struct ArtifactSendProcess {
-    interface: InterfaceId,
-}
+struct ArtifactSendProcess;
 
 impl ToolProcessHandler for FileWriteProcess {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -55,12 +57,8 @@ impl ToolProcessHandler for FileWriteProcess {
         >,
     > {
         Box::pin(async move {
-            let call = decode_invocation(
-                &self.interface,
-                &invocation.descriptor,
-                &invocation.envelope,
-            )
-            .map_err(capability)?;
+            let call = decode_invocation(&invocation.descriptor, &invocation.envelope)
+                .map_err(capability)?;
             let room_kinds = invocation
                 .descriptor
                 .supported_worker_environment_kinds
@@ -109,6 +107,10 @@ impl ToolProcessHandler for FileWriteProcess {
 }
 
 impl ToolProcessHandler for ArtifactSendProcess {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -121,12 +123,8 @@ impl ToolProcessHandler for ArtifactSendProcess {
         >,
     > {
         Box::pin(async move {
-            let call = decode_invocation(
-                &self.interface,
-                &invocation.descriptor,
-                &invocation.envelope,
-            )
-            .map_err(capability)?;
+            let call = decode_invocation(&invocation.descriptor, &invocation.envelope)
+                .map_err(capability)?;
             let formation = invocation.worker_environment.as_ref().ok_or_else(|| {
                 capability("artifact.send invocation has no formed worker environment")
             })?;
@@ -205,7 +203,6 @@ pub async fn run_file_write_tool_process() -> Result<(), String> {
         })?
         .join("file-write-effects");
     octopus_tool_door_runtime::run_tool_process(Arc::new(FileWriteProcess {
-        interface: environment.interface,
         root_slots: environment.root_slots,
         effect_root,
         max_payload_bytes: environment.host_io_limits.max_payload_bytes,
@@ -214,65 +211,23 @@ pub async fn run_file_write_tool_process() -> Result<(), String> {
 }
 
 pub async fn run_artifact_send_tool_process() -> Result<(), String> {
-    let environment = ToolProcessEnvironment::from_env()?;
-    octopus_tool_door_runtime::run_tool_process(Arc::new(ArtifactSendProcess {
-        interface: environment.interface,
-    }))
-    .await
+    octopus_tool_door_runtime::run_tool_process(Arc::new(ArtifactSendProcess)).await
 }
 
 fn decode_invocation(
-    interface: &InterfaceId,
     descriptor: &ToolDescriptor,
     input: &InterfaceInvocationEnvelope,
 ) -> Result<DecodedToolCall, String> {
-    if &descriptor.interface != interface {
-        return Err(format!(
-            "tool descriptor '{}' belongs to interface '{}', not system-room door '{}'",
-            descriptor.id, descriptor.interface, interface
-        ));
-    }
-    let manifest = input
-        .read_artifact_manifest()
-        .map_err(|error| error.to_string())?;
-    if manifest.label != TOOL_CALL_LABEL {
-        return Err(format!(
-            "system-room manifest label '{}' is not '{}'",
-            manifest.label, TOOL_CALL_LABEL
-        ));
-    }
-    let payload = input
-        .read_artifact_payload()
-        .map_err(|error| error.to_string())?;
-    let artifact: ToolCallArtifact = serde_json::from_slice(&payload)
-        .map_err(|error| format!("tool.call artifact is malformed: {error}"))?;
-    let tool = artifact.tool.trim();
-    if tool.is_empty() {
-        return Err("tool.call carries an empty tool id".to_string());
-    }
+    let artifact = decode_tool_call(ROOM, input).map_err(|error| error.to_string())?;
+    let tool = admitted_tool(ROOM, input, &artifact).map_err(|error| error.to_string())?;
     if descriptor.id.as_str() != tool {
         return Err(format!(
             "tool descriptor '{}' does not match tool.call '{}'",
             descriptor.id, tool
         ));
     }
-    let granted = input
-        .granted_tool_names()
-        .map_err(|error| error.to_string())?;
-    if !granted.iter().any(|candidate| candidate == tool) {
-        return Err(format!(
-            "tool '{}' is absent from the formed tool grant",
-            tool
-        ));
-    }
-    let blocked = input
-        .hard_blocked_tool_names()
-        .map_err(|error| error.to_string())?;
-    if blocked.iter().any(|candidate| candidate == tool) {
-        return Err(format!("tool '{}' is hard-blocked", tool));
-    }
     Ok(DecodedToolCall {
-        tool: tool.to_string(),
+        tool,
         arguments: artifact.arguments,
         correlation_id: artifact.correlation_id,
     })
@@ -282,15 +237,7 @@ fn materialize_response(
     input: &InterfaceInvocationEnvelope,
     response: ToolResultArtifact,
 ) -> Result<InterfaceArtifactFile, String> {
-    let bytes = serde_json::to_vec(&response)
-        .map_err(|error| format!("system-room result did not serialize: {error}"))?;
-    let parent = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| "system-room invocation manifest has no parent".to_string())?;
-    InterfaceArtifactFile::write(parent.join("emitted"), &response.label, &bytes)
-        .map_err(|error| error.to_string())
+    emit_json_artifact(input, &response.label, &response)
 }
 
 fn capability(error: impl ToString) -> ToolProcessError {
@@ -306,6 +253,7 @@ mod tests {
     };
     use octopus_interfaces::{GrantProjection, InvocationMetadata};
     use octopus_ledger::{ArtifactRef, ContentHash};
+    use octopus_tool_door_runtime::room::TOOL_CALL_LABEL;
     use octopus_tool_registry::{ToolArgumentValidator, load_tool_descriptor_from_dir};
 
     use super::*;
@@ -355,7 +303,7 @@ mod tests {
                 ..GrantProjection::default()
             })),
         };
-        let call = decode_invocation(&descriptor.interface, &descriptor, &envelope).unwrap();
+        let call = decode_invocation(&descriptor, &envelope).unwrap();
         assert_eq!(call.tool, "file.write.cron_authoring");
         let room_kinds = descriptor
             .supported_worker_environment_kinds
@@ -427,12 +375,7 @@ mod tests {
                 ..GrantProjection::default()
             })),
         };
-        let patch_call = decode_invocation(
-            &patch_descriptor.interface,
-            &patch_descriptor,
-            &patch_envelope,
-        )
-        .unwrap();
+        let patch_call = decode_invocation(&patch_descriptor, &patch_envelope).unwrap();
         ToolArgumentValidator::compile(&patch_descriptor.args_schema)
             .unwrap()
             .validate(&patch_call.arguments)
@@ -568,7 +511,7 @@ mod tests {
                 ..GrantProjection::default()
             })),
         };
-        let call = decode_invocation(&descriptor.interface, &descriptor, &envelope).unwrap();
+        let call = decode_invocation(&descriptor, &envelope).unwrap();
         assert_eq!(call.tool, "artifact.custom_send");
         let send = artifact_send::decode_artifact_send_call(&envelope, &call.arguments).unwrap();
         assert_eq!(send.to_interface.as_str(), "system_worker_planner");

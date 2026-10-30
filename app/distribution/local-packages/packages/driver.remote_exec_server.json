@@ -1,0 +1,103 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "driver.remote_exec_server",
+  "version": "1.0.1",
+  "product_kind": "driver",
+  "product_id": "remote_exec_server",
+  "release_status": "optional",
+  "display": {
+    "name": "Remote Exec Server",
+    "description": "Files, commands and processes on a remote machine reached through its exec server.",
+    "developer": "Octopus",
+    "category": "worker_environment",
+    "icon": "sites"
+  },
+  "members": [
+    {
+      "registry_kind": "worker_environment_kind",
+      "owner": "remote_exec_server",
+      "primary": true
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.directory_create",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.exec",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.file_copy",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.file_delete",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.file_list",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.file_read",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.file_stat",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.file_write",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.process_interrupt",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.process_list",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.process_read",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.process_start",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.process_terminate",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.process_write",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "remote.status",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "interface",
+      "owner": "system_remote_exec",
+      "configuration": [{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    }
+  ]
+}

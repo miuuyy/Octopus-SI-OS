@@ -1,0 +1,35 @@
+{
+  "id": "slack.set_profile_status",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "profile.status.set"
+  },
+  "description": "Set the bot user's profile status text and emoji, optionally until a Unix time.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "status_text": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "status_emoji": {
+        "type": "string",
+        "maxLength": 100,
+        "description": "Emoji such as :hourglass:."
+      },
+      "status_expiration": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Unix time when the status clears; 0 keeps it."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

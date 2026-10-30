@@ -5,7 +5,7 @@ use std::path::Path;
 use octopus_descriptors::{ArtifactId, InterfaceId, RunId};
 use octopus_ledger::{ArtifactRef, ContentHash};
 use octopus_ledger_store::DurableMovementDecoder;
-use octopus_runtime::run_record::{ArtifactBinding, RunRecord};
+use octopus_run_record::{ArtifactBinding, RunRecord};
 
 use crate::chat_topology::{TerminalHostRoots, load_private_run_topology};
 use crate::emit_input::TerminalUserInput;

@@ -30,6 +30,7 @@ octopus-policy = { path = "../../../../../crates/octopus-policy" }
 octopus-run-authoring = { path = "../../../system_interface_authoring/packages/octopus-run-authoring" }
 octopus-process-session-tool-runtime = { path = "../../../../worker_environment_kind/process_session/packages/octopus-process-session-tool-runtime" }
 octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-run-record = { path = "../../../../../crates/octopus-run-record" }
 octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
 octopus-verifiers = { path = "../../../../../crates/octopus-verifiers" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }

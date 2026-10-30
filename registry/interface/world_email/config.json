@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "ledger": {
+    "max_row_bytes": 1048576
+  },
+  "providers": [
+    {
+      "id": "gmail",
+      "domains": ["gmail.com", "googlemail.com"],
+      "imap": {"host": "imap.gmail.com", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp.gmail.com", "port": 465, "tls": "implicit"},
+      "sent_copy": "provider",
+      "authserv_ids": ["mx.google.com"],
+      "sign_in_help": "Gmail needs an app password: turn on 2-Step Verification, then create one at myaccount.google.com/apppasswords."
+    },
+    {
+      "id": "icloud",
+      "domains": ["icloud.com", "me.com", "mac.com"],
+      "imap": {"host": "imap.mail.me.com", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp.mail.me.com", "port": 587, "tls": "starttls"},
+      "sent_copy": "append",
+      "authserv_ids": ["bimi.icloud.com", "dmarc.icloud.com", "dkim-verifier.icloud.com", "spf.icloud.com"],
+      "sign_in_help": "iCloud Mail needs an app-specific password: create one at account.apple.com under Sign-In and Security."
+    },
+    {
+      "id": "outlook",
+      "domains": ["outlook.com", "hotmail.com", "live.com", "msn.com"],
+      "imap": {"host": "outlook.office365.com", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp-mail.outlook.com", "port": 587, "tls": "starttls"},
+      "sent_copy": "provider",
+      "authserv_ids": ["(none)"],
+      "sign_in_help": "Microsoft may refuse password sign-in for mail apps; with two-step verification on, try an app password from account.microsoft.com/security."
+    },
+    {
+      "id": "yahoo",
+      "domains": ["yahoo.com", "ymail.com"],
+      "imap": {"host": "imap.mail.yahoo.com", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp.mail.yahoo.com", "port": 465, "tls": "implicit"},
+      "sent_copy": "provider",
+      "authserv_ids": ["*.yahoo.com"],
+      "sign_in_help": "Yahoo Mail needs an app password: create one under Account Security at login.yahoo.com."
+    },
+    {
+      "id": "yandex",
+      "domains": ["yandex.ru", "yandex.com", "ya.ru"],
+      "imap": {"host": "imap.yandex.com", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp.yandex.com", "port": 465, "tls": "implicit"},
+      "sent_copy": "provider",
+      "authserv_ids": ["*.yandex.net", "*.yandex.ru"],
+      "sign_in_help": "Yandex Mail needs an app password for mail (id.yandex.com, Security) and IMAP access turned on in the mail settings."
+    },
+    {
+      "id": "mailru",
+      "domains": ["mail.ru", "inbox.ru", "list.ru", "bk.ru"],
+      "imap": {"host": "imap.mail.ru", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp.mail.ru", "port": 465, "tls": "implicit"},
+      "sent_copy": "provider",
+      "authserv_ids": ["*.mail.ru"],
+      "sign_in_help": "Mail.ru needs a password for external apps: create one in the account settings under Security."
+    },
+    {
+      "id": "fastmail",
+      "domains": ["fastmail.com", "fastmail.fm"],
+      "imap": {"host": "imap.fastmail.com", "port": 993, "tls": "implicit"},
+      "smtp": {"host": "smtp.fastmail.com", "port": 465, "tls": "implicit"},
+      "sent_copy": "provider",
+      "authserv_ids": ["*.messagingengine.com"],
+      "sign_in_help": "Fastmail needs an app password with IMAP and SMTP access: Settings, Privacy & Security, App passwords."
+    }
+  ],
+  "custom_provider": {
+    "sent_copy": "none",
+    "authserv_ids": [],
+    "sign_in_help": "Use the password your provider issues for mail apps; many providers require a separate app password."
+  },
+  "endpoints": {
+    "imap": {"default_port": 993, "implicit_tls_ports": [993], "starttls_ports": [143], "discovery_ports": [993, 143]},
+    "smtp": {"default_port": 465, "implicit_tls_ports": [465], "starttls_ports": [587, 25], "discovery_ports": [465, 587]}
+  },
+  "transport": {
+    "connect_timeout_ms": 20000,
+    "command_timeout_ms": 120000,
+    "idle_refresh_ms": 600000,
+    "poll_interval_ms": 60000,
+    "outbound_poll_ms": 250,
+    "reconnect_backoff_ms": 2000,
+    "reconnect_backoff_cap_ms": 300000,
+    "sign_in_retry_ms": 900000,
+    "sign_in_retry_cap_ms": 3600000
+  },
+  "intake": {
+    "event_label": "email.event",
+    "mailboxes": ["INBOX"],
+    "use_idle": true,
+    "backlog_messages": 0,
+    "max_messages_per_cycle": 50,
+    "message_key_retention": 20000,
+    "mark_seen": false
+  },
+  "authz": {
+    "include_account_address": true,
+    "allowed_senders": [],
+    "allow_all_senders": false,
+    "require_verified_sender": false,
+    "ignore_automated": true,
+    "automated_sender_fragments": ["noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"],
+    "automated_header_presence": ["List-Id", "List-Unsubscribe", "X-Auto-Response-Suppress"],
+    "automated_header_values": {
+      "Auto-Submitted": ["auto-generated", "auto-replied", "auto-notified"],
+      "Precedence": ["bulk", "list", "junk"]
+    }
+  },
+  "content": {
+    "max_message_bytes": 26214400,
+    "max_header_bytes": 262144,
+    "max_body_chars": 60000,
+    "max_attachments": 25,
+    "max_attachment_bytes": 26214400,
+    "text_preview_bytes": 32768,
+    "file_label": "email.file",
+    "max_images_per_event": 10,
+    "max_image_bytes_per_event": 16777216,
+    "text_preview_media_types": ["text/*", "application/json", "application/xml", "application/x-yaml", "application/yaml", "application/csv"]
+  },
+  "outbound": {
+    "max_recipients": 50,
+    "max_subject_chars": 400,
+    "max_body_chars": 400000,
+    "max_attachments": 20,
+    "max_total_attachment_bytes": 18874368,
+    "default_search_results": 20,
+    "max_search_results": 100,
+    "max_fetch_body_chars": 200000,
+    "max_manifest_bytes": 1048576,
+    "max_payload_bytes": 67108864,
+    "auto_submitted": "auto-generated",
+    "from_name": null,
+    "reference_limit": 20
+  }
+}

@@ -44,7 +44,7 @@ pub fn mandatory_role_bindings(grant: &octopus_ledger::GrantProjection) -> Resul
             || grant.artifact_access.get(role).is_none_or(|access| !access.read) {
             return Err("raw output checkpoint has no exact readable mandatory role closure".into());
         }
-        Ok(ArtifactBinding { id: ArtifactId::new(role), access: octopus_runtime::ArtifactAccess::read_only() })
+        Ok(ArtifactBinding { id: ArtifactId::new(role), access: octopus_policy::ArtifactAccess::read_only() })
     }).collect()
 }
 

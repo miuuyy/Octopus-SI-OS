@@ -221,6 +221,10 @@ Installation and access are separate:
 4. **Select/connect** gives a task the relevant bindings. A default for new
    tasks is not evidence that an existing task already uses it.
 
+A tool of a connected MCP application that the server does not declare
+read-only, such as sending or deleting mail, asks for your approval in the chat
+before it runs.
+
 An installed package grants no authority by itself. Each card offers the next
 step — **Install**, **Repair** or **Connect** — or shows **Connected** with a
 menu to reconnect or disconnect; **Reconnect required** and **Connection

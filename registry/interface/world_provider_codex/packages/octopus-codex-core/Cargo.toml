@@ -68,9 +68,9 @@ octopus-features = { path = "../octopus-features" }
 octopus-login = { path = "../octopus-codex-login" }
 octopus-codex-model-provider-info = { path = "../octopus-codex-model-provider-info" }
 octopus-otel = { path = "../octopus-otel" }
-octopus-shell-command = { package = "octopus-shell-command", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-shell-command" }
-octopus-execpolicy = { package = "octopus-execpolicy", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-execpolicy" }
-octopus-git-utils = { package = "octopus-git-utils", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-git-utils" }
+octopus-shell-command = { package = "octopus-shell-command", path = "../../../world_terminal/packages/octopus-shell-command" }
+octopus-execpolicy = { package = "octopus-execpolicy", path = "../octopus-execpolicy" }
+octopus-git-utils = { package = "octopus-git-utils", path = "../../../world_terminal/packages/octopus-git-utils" }
 octopus-install-context = { path = "../octopus-install-context" }
 octopus-network-proxy = { package = "octopus-network-proxy", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-network-proxy" }
 octopus-file-system = { package = "octopus-file-system", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-file-system" }

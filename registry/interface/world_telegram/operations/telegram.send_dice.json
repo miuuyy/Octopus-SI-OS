@@ -1,0 +1,53 @@
+{
+  "id": "telegram.send_dice",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "bot_api",
+    "method": "sendDice",
+    "read_only": false
+  },
+  "description": "Send an animated emoji with a random value, such as a die roll; the value is in the returned message.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat: chat.id from a telegram.event, or a public @username."
+      },
+      "emoji": {
+        "type": "string",
+        "enum": [
+          "🎲",
+          "🎯",
+          "🏀",
+          "⚽",
+          "🎳",
+          "🎰"
+        ],
+        "description": "Which game; 🎲 by default."
+      },
+      "message_thread_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "disable_notification": {
+        "type": "boolean",
+        "description": "Deliver without a notification sound."
+      }
+    },
+    "required": [
+      "chat_id"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -722,7 +722,7 @@ fn selected_home_retains_native_history_retirement_evidence() {
     let before = std::fs::read(&path).unwrap();
     let native_before = std::fs::read(&rollout).unwrap();
     let ledger_before = std::fs::read(home.join("ledger/movements.jsonl")).unwrap();
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&before).unwrap();
+    let record = octopus_run_record::RunRecord::from_bytes(&before).unwrap();
     let descriptor: InterfaceDescriptor = serde_json::from_slice(&std::fs::read(home.join("registry/interface").join(provider.as_str()).join("interface.json")).unwrap()).unwrap();
     let life: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join("registry/interface").join(provider.as_str()).join("life.json")).unwrap()).unwrap();
     let limits = serde_json::from_value(life["processes"][0]["io_limits"].clone()).unwrap();

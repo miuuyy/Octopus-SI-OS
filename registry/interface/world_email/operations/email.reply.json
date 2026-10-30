@@ -1,0 +1,146 @@
+{
+  "id": "email.reply",
+  "request_label": "email.operation.request",
+  "output_label": "email.operation.result",
+  "handler_config": {
+    "operation": "message.reply",
+    "read_only": false
+  },
+  "description": "Reply to a message in its thread from the connected mailbox; the subject, In-Reply-To and References are set for you. Name the message by exactly one of ref or message_id. Returns the sent message_id with the accepted and refused recipients.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "uidvalidity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "uid": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "mailbox",
+          "uidvalidity",
+          "uid"
+        ],
+        "additionalProperties": false,
+        "description": "message.ref from an email.event or a search result."
+      },
+      "message_id": {
+        "type": "string",
+        "pattern": "^<[^<>\\s]{1,994}>$",
+        "description": "Message-ID such as <id@example.com>, when no ref is at hand."
+      },
+      "mailbox": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "description": "Folder to look in for message_id; INBOX, All Mail, Sent and Archive by default."
+      },
+      "text": {
+        "type": "string",
+        "description": "Plain-text body."
+      },
+      "reply_all": {
+        "type": "boolean",
+        "description": "Also answer everyone else on the original."
+      },
+      "quote": {
+        "type": "boolean",
+        "description": "Quote the original under the reply."
+      },
+      "cc": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "description": "\"name@example.com\" or \"Name <name@example.com>\", or an array of them."
+      },
+      "bcc": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "description": "\"name@example.com\" or \"Name <name@example.com>\", or an array of them."
+      },
+      "html": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Optional HTML version of the body."
+      },
+      "attachments": {
+        "type": "array",
+        "description": "Files to attach. Each gives exactly one of path (an attachment path from an email.event or email.read_message), artifact (an artifact id or payload content hash), text with filename, or content_base64 with filename; filename and media_type are optional otherwise.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifact": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            },
+            "content_base64": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "media_type": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

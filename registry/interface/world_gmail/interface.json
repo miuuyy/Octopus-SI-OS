@@ -42,6 +42,9 @@
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_gmail/packages/connection.cjs"
+      },
+      "server_tool_operations": {
+        "prefix": "gmail"
       }
     },
     "transport": {

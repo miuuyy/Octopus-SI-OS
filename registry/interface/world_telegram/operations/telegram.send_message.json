@@ -1,0 +1,95 @@
+{
+  "id": "telegram.send_message",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "message.send"
+  },
+  "description": "Send a message as the bot. To answer a telegram.event, pass its chat.id as chat_id, its topic_id, and in groups its message_id as reply_to_message_id. Text longer than one Telegram message is sent as several messages; buttons go under the last one. Returns chat_id and the sent message_ids.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Message text, Markdown unless format says otherwise."
+      },
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat to act in: chat.id from a telegram.event, or a public @username. Omit it only for the configured home chat or the single allowed user."
+      },
+      "topic_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "reply_to_message_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Answer this message: the event's message_id. In groups, always reply to the message you answer."
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "text",
+          "html"
+        ],
+        "description": "How the text is written: markdown (default), plain text, or Telegram HTML."
+      },
+      "silent": {
+        "type": "boolean",
+        "description": "Deliver without a notification sound."
+      },
+      "link_preview": {
+        "type": "boolean",
+        "description": "Show a preview of the first link; omit to keep the interface setting."
+      },
+      "buttons": {
+        "type": "array",
+        "minItems": 1,
+        "description": "Inline keyboard as rows of buttons. Each button has text and exactly one of data (at most 64 bytes, returned as a button event when pressed) or url (an http, https or tg link).",
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "data": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

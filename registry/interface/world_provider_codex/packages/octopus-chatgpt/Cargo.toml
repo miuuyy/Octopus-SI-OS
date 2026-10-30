@@ -31,7 +31,7 @@ toml = "0.9.5"
 # Ported octopus siblings (codex-* -> octopus-*; ZERO codex dep).
 octopus-appserver-proto = { path = "../octopus-appserver-proto" }
 octopus-core = { path = "../octopus-codex-core" }
-octopus-git-utils = { package = "octopus-git-utils", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-git-utils" }
+octopus-git-utils = { package = "octopus-git-utils", path = "../../../world_terminal/packages/octopus-git-utils" }
 octopus-login = { path = "../octopus-codex-login" }
 
 [dev-dependencies]

@@ -18,11 +18,9 @@ use octopus_interfaces::{
 use octopus_ledger::{ArtifactRef, Endpoint, Movement, MovementKind};
 use octopus_ledger_index::LedgerSqliteReader;
 use octopus_ledger_store::DurableMovementDecoder;
-use octopus_runtime::{
-    AuthoredInterfaceBinding, BindingArtifactPolicy, ContentHash, InterfaceBindingConfig,
-    RequiredVerifiedArtifact,
-    run_record::{ArtifactBinding, RunRecord},
-};
+use octopus_ledger::{ContentHash, RequiredVerifiedArtifact};
+use octopus_policy::{AuthoredInterfaceBinding, BindingArtifactPolicy, InterfaceBindingConfig};
+use octopus_run_record::{ArtifactBinding, RunRecord};
 use octopus_tool_handlers::ToolResultArtifact;
 use octopus_world_pyecho_life_runtime::LedgerTailReader;
 use sha2::{Digest, Sha256};
@@ -45,11 +43,13 @@ pub enum ProviderEmissionRoute {
     ClientProjectionWithVerifiedInputs { inputs: Vec<ProviderVerifiedInput> },
     Tool { tool: String },
     Interface { interface: InterfaceId },
+    Operation { interface: InterfaceId, result_label: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderVerifiedInput {
     pub also_deliver_to_tool: Option<String>,
+    pub also_deliver_to_interface: Option<InterfaceId>,
     pub artifact_label: String,
     pub required_verified_artifact: RequiredVerifiedArtifact,
 }
@@ -74,6 +74,7 @@ enum ProviderHandoffRoute {
     ClientProjectionWithVerifiedInputs { inputs: Vec<ProviderVerifiedInput> },
     Tool { tool: String },
     Interface { interface: InterfaceId },
+    Operation { interface: InterfaceId, result_label: String },
     TransportDispatch { attempt: u32 },
 }
 
@@ -92,6 +93,9 @@ impl From<ProviderEmission> for ProviderHandoffEmission {
             ProviderEmissionRoute::Tool { tool } => ProviderHandoffRoute::Tool { tool },
             ProviderEmissionRoute::Interface { interface } => {
                 ProviderHandoffRoute::Interface { interface }
+            }
+            ProviderEmissionRoute::Operation { interface, result_label } => {
+                ProviderHandoffRoute::Operation { interface, result_label }
             }
         };
         Self {

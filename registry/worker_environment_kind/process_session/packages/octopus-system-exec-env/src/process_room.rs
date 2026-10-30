@@ -11,10 +11,12 @@ use octopus_exec::{
     ExecServerRuntimePaths, ProcessId, ProcessSignal,
 };
 use octopus_interfaces::InterfaceArtifactFile;
+use octopus_process_session_tool_runtime::room::{
+    admitted_tool, decode_tool_call, emit_json_artifact, formed_scope, strict_object,
+};
 use octopus_process_session_tool_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo, WorkerEnvironmentLifecycleRecorder, WorkerEnvironmentLiveStateRecorder,
-    WorkerEnvironmentReleaseContext, WorkerEnvironmentReleaseMode,
 };
 use octopus_tool_handlers::{ToolResultArtifact, ToolResultError};
 use octopus_util_pathuri::PathUri;
@@ -26,8 +28,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
-use super::{decode_exec_env_request, materialize_system_exec_emitted_artifact};
-
+const ROOM: &str = "system_exec_env";
 const INTERFACE_LOCAL_IPC_ROOT_SLOT: &str = "interface_local_ipc_root";
 
 pub struct ProcessRoom {
@@ -168,59 +169,24 @@ impl ProcessRoom {
             descriptor,
             envelope,
             worker_environment,
-            worker_environment_kind,
             ..
         } = invocation;
-        if descriptor.interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "tool descriptor '{}' belongs to interface '{}', not process interface '{}'",
-                descriptor.id, descriptor.interface, self.environment.interface
-            )));
-        }
         let formation = worker_environment.ok_or_else(|| {
             ToolProcessError::Capability(
                 "persistent process invocation has no formed worker environment".to_string(),
             )
         })?;
-        if formation.door_interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "persistent process formation belongs to door '{}', not '{}'",
-                formation.door_interface, self.environment.interface
-            )));
-        }
-        let kind = worker_environment_kind.ok_or_else(|| {
-            ToolProcessError::Capability(
-                "persistent process invocation has no formed kind descriptor".to_string(),
-            )
-        })?;
-        if kind.worker_environment_kind_id != formation.worker_environment_kind
-            || kind.substrate_family != "persistent_process"
-        {
-            return Err(ToolProcessError::Capability(format!(
-                "tool '{}' was formed for incompatible worker_environment_kind '{}'",
-                descriptor.id, formation.worker_environment_kind
-            )));
-        }
-        let manifest = envelope
-            .read_artifact_manifest()
+        let call = decode_tool_call(ROOM, &envelope)?;
+        let tool = admitted_tool(ROOM, &envelope, &call)
             .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        let payload = envelope
-            .read_artifact_payload()
-            .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        let decoded = decode_exec_env_request(&manifest.label, &payload, &envelope)
-            .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        if descriptor.id.as_str() != decoded.tool {
+        if descriptor.id.as_str() != tool {
             return Err(ToolProcessError::Capability(format!(
                 "tool descriptor '{}' does not match tool.call '{}'",
-                descriptor.id, decoded.tool
+                descriptor.id, tool
             )));
         }
         let operation = process_operation(&descriptor.handler_config, descriptor.id.as_str())?;
-        if decoded.scope.run != formation.run || decoded.scope.ee != formation.ee {
-            return Err(ToolProcessError::Capability(
-                "persistent process formation does not match invocation coordinates".to_string(),
-            ));
-        }
+        formed_scope(ROOM, &envelope, &formation)?;
         let (_workspace, _transcript, inserted) = self
             .materialize_room(&formation, Arc::clone(&recorder))
             .await
@@ -245,13 +211,12 @@ impl ProcessRoom {
                 .await
                 .map_err(ToolProcessError::Unavailable)?;
         }
-        let tool = decoded.tool;
-        let correlation_id = decoded.correlation_id;
+        let correlation_id = call.correlation_id;
         let response = match self
             .dispatch(
                 &formation,
                 operation,
-                &decoded.arguments,
+                &call.arguments,
                 Arc::clone(&recorder),
             )
             .await
@@ -263,13 +228,8 @@ impl ProcessRoom {
                 ToolResultError::new("tool_execution_failed", error),
             ),
         };
-        let bytes = serde_json::to_vec(&response).map_err(|error| {
-            ToolProcessError::Capability(format!(
-                "persistent process response artifact did not serialize: {error}"
-            ))
-        })?;
-        materialize_system_exec_emitted_artifact(&envelope, &response.label, &bytes)
-            .map_err(|error| ToolProcessError::Capability(error.to_string()))
+        emit_json_artifact(&envelope, &response.label, &response)
+            .map_err(ToolProcessError::Capability)
     }
 
     async fn dispatch(
@@ -1003,6 +963,14 @@ impl ProcessRoom {
 }
 
 impl ToolProcessHandler for ProcessRoom {
+    fn substrate_family(&self) -> &str {
+        "persistent_process"
+    }
+
+    fn releases_cold(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -1033,20 +1001,6 @@ impl ToolProcessHandler for ProcessRoom {
                 .await
                 .map_err(ToolProcessError::Unavailable)
         })
-    }
-
-    fn release_with_context<'a>(
-        &'a self,
-        context: WorkerEnvironmentReleaseContext<'a>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), ToolProcessError>> + Send + 'a>,
-    > {
-        match context.mode {
-            WorkerEnvironmentReleaseMode::LiveOwner
-            | WorkerEnvironmentReleaseMode::ColdRecovery => {
-                self.release(context.formation, context.kind)
-            }
-        }
     }
 
     fn quiesce<'a>(
@@ -2241,23 +2195,6 @@ fn process_operation(
                 "tool '{tool}' has malformed process handler_config: {error}"
             ))
         })
-}
-
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
 }
 
 fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {

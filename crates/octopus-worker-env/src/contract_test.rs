@@ -355,31 +355,21 @@ fn exact_door_and_worker_are_formed_from_the_concrete_grant_not_the_shared_kind(
 }
 
 #[test]
-fn driver_socket_is_empty_until_a_kind_package_registers() {
+fn lease_refuses_a_driver_of_another_substrate_family() {
     let reg = registry();
-    assert!(
-        matches!(
-            reg.driver("process_exec"),
-            Err(WorkerEnvError::UnknownSubstrateFamily(_))
-        ),
-        "the box ships NO builtin families; a kind package must register its driver"
-    );
-
-    let mut reg = registry();
-    reg.register_driver(Arc::new(RecordingDriver {
-        family: "process_exec",
+    let ctx = ctx_with_door_slots("/srv/room", &["coder.worktree_path"]);
+    let formation = worktree_formation(&reg, &ctx, None, "coder.exec");
+    let (spec, _) = reg
+        .get(&WorkerEnvironmentKindId::from("local.coder.worktree"))
+        .unwrap();
+    let driver = Arc::new(RecordingDriver {
+        family: "browser",
         seen_caps: std::sync::Mutex::new(None),
         seen_root_bindings: std::sync::Mutex::new(None),
-    }))
-    .unwrap();
-    assert!(reg.driver("process_exec").is_ok());
+    });
     assert!(matches!(
-        reg.register_driver(Arc::new(RecordingDriver {
-            family: "process_exec",
-            seen_caps: std::sync::Mutex::new(None),
-            seen_root_bindings: std::sync::Mutex::new(None),
-        })),
-        Err(WorkerEnvError::DuplicateSubstrateFamily(_))
+        block_on(crate::lease(&spec, &formation, driver, ctx, None)),
+        Err(WorkerEnvError::UnknownSubstrateFamily(_))
     ));
 }
 
@@ -620,13 +610,12 @@ fn declared_instance_config_is_canonical_and_part_of_formation_identity() {
 
 #[test]
 fn generic_lease_forms_caps_from_kind_boundary_door_and_ee() {
-    let mut reg = registry();
+    let reg = registry();
     let driver = Arc::new(RecordingDriver {
         family: "process_exec",
         seen_caps: std::sync::Mutex::new(None),
         seen_root_bindings: std::sync::Mutex::new(None),
     });
-    reg.register_driver(driver.clone()).unwrap();
 
     // Door provides the worktree root the kind boundary writes; EE unconstrained.
     let caps = lease_recording_caps(
@@ -672,13 +661,12 @@ fn generic_lease_forms_caps_from_kind_boundary_door_and_ee() {
 
 #[test]
 fn generic_lease_preserves_kind_owned_root_coordinates() {
-    let mut reg = registry();
+    let reg = registry();
     let driver = Arc::new(RecordingDriver {
         family: "process_exec",
         seen_caps: std::sync::Mutex::new(None),
         seen_root_bindings: std::sync::Mutex::new(None),
     });
-    reg.register_driver(driver.clone()).unwrap();
     let ctx = ctx_with_door_slots("/srv/room", &["coder.worktree_path"]);
     let formation = worktree_formation(&reg, &ctx, None, "coder.exec");
     let base = formation

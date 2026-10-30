@@ -202,7 +202,7 @@ async fn a_cron_interface_folder_lifts_and_emits_a_time_artifact_into_a_run() {
     cancel.cancel();
 
     assert_eq!(tick.interface.as_str(), "world_cron");
-    let authored = octopus_runtime::run_record::RunRecord::from_bytes(
+    let authored = octopus_run_record::RunRecord::from_bytes(
         &std::fs::read(runs_dir.join(format!("{CRON_RUN}.json")))
             .expect("the operator-authored cron run remains readable after the tick"),
     )

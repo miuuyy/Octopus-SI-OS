@@ -9,18 +9,20 @@ use octopus_exec::{
     ExecutorFileSystem, FsRootedOperation, FsRootedParams, FsRootedResponse, ProcessId,
     ProcessSignal, WriteStatus,
 };
-use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope, InvocationMetadata};
+use octopus_interfaces::InterfaceArtifactFile;
+use octopus_tool_door_runtime::room::{
+    decode_tool_call, descriptor_operation, emit_json_artifact, formed_scope, strict_object,
+};
 use octopus_tool_door_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo, WorkerEnvironmentLifecycleRecorder, WorkerEnvironmentLiveStateRecorder,
     WorkerEnvironmentReleaseContext, WorkerEnvironmentReleaseMode,
 };
-use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact, ToolResultError};
+use octopus_tool_handlers::{ToolResultArtifact, ToolResultError};
 use octopus_util_pathuri::PathUri;
 use octopus_worker_env::{
     WorkerEnvKindSpec, WorkerEnvironmentFormation, WorkerEnvironmentId, WorkerEnvironmentLifecycle,
 };
-use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 mod config;
@@ -32,8 +34,13 @@ use recovery::{
     RemoteRoomIdentity,
 };
 
-const TOOL_CALL_LABEL: &str = "tool.call";
+const ROOM: &str = "remote exec room";
 const SUBSTRATE_FAMILY: &str = "remote_exec_server";
+const OPERATIONS: &[&str] = &[
+    "process_start", "process_read", "process_write", "process_interrupt", "process_terminate",
+    "process_list", "status", "exec", "file_read", "file_write", "file_list", "file_stat",
+    "file_delete", "file_copy", "directory_create",
+];
 const READ_CHUNK_BYTES: usize = 1024 * 1024;
 
 struct RoomEntry {
@@ -112,12 +119,6 @@ impl RemoteExecRoom {
             worker_environment_kind,
             ..
         } = invocation;
-        if descriptor.interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "tool descriptor '{}' belongs to interface '{}', not remote exec door '{}'",
-                descriptor.id, descriptor.interface, self.environment.interface
-            )));
-        }
         let formation = worker_environment.ok_or_else(|| {
             ToolProcessError::Capability(
                 "remote exec invocation has no formed worker environment".to_string(),
@@ -128,21 +129,18 @@ impl RemoteExecRoom {
                 "remote exec invocation has no formed kind descriptor".to_string(),
             )
         })?;
-        validate_formation(&self.environment, &formation, &kind)?;
         let config = RemoteExecConfig::load_formed(&self.environment, &formation, &kind)
             .map_err(ToolProcessError::Capability)?;
-        let call = decode_tool_call(&envelope)?;
+        let call = decode_tool_call(ROOM, &envelope)?;
         if descriptor.id.as_str() != call.tool {
             return Err(ToolProcessError::Capability(format!(
                 "tool descriptor '{}' does not match tool.call '{}'",
                 descriptor.id, call.tool
             )));
         }
-        let operation = descriptor_operation(descriptor.id.as_str(), &descriptor.handler_config)?;
-        let metadata = envelope
-            .metadata()
-            .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        validate_coordinates(metadata, &formation)?;
+        let operation = descriptor_operation(ROOM, descriptor.id.as_str(), &descriptor.handler_config, OPERATIONS)
+            .map_err(ToolProcessError::Capability)?;
+        formed_scope(ROOM, &envelope, &formation)?;
         let access = self
             .remote_environment(&formation, &config)
             .await
@@ -232,11 +230,8 @@ impl RemoteExecRoom {
                 )
             }
         };
-        Ok(vec![materialize_artifact(
-            &envelope,
-            &response.label,
-            &response,
-        )?])
+        Ok(vec![emit_json_artifact(&envelope, &response.label, &response)
+            .map_err(ToolProcessError::Capability)?])
     }
 
     async fn remote_environment(
@@ -1408,9 +1403,6 @@ impl RemoteExecRoom {
         formation: &WorkerEnvironmentFormation,
         kind: &WorkerEnvKindSpec,
     ) -> Result<(), String> {
-        validate_formation(&self.environment, formation, kind).map_err(|error| match error {
-            ToolProcessError::Capability(error) | ToolProcessError::Unavailable(error) => error,
-        })?;
         let config = RemoteExecConfig::load_formed(&self.environment, formation, kind)?;
         let durable_root = self.environment.durable_var_dir.as_ref().ok_or_else(|| {
             "remote exec room requires a formation-private durable state directory".to_string()
@@ -1521,6 +1513,10 @@ impl RemoteExecRoom {
 }
 
 impl ToolProcessHandler for RemoteExecRoom {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -2507,144 +2503,6 @@ fn unix_ms() -> Result<u64, String> {
     u64::try_from(millis).map_err(|_| "system clock does not fit u64 milliseconds".to_string())
 }
 
-fn validate_formation(
-    environment: &ToolProcessEnvironment,
-    formation: &WorkerEnvironmentFormation,
-    kind: &WorkerEnvKindSpec,
-) -> Result<(), ToolProcessError> {
-    if formation.door_interface != environment.interface {
-        return Err(ToolProcessError::Capability(format!(
-            "remote exec formation belongs to door '{}', not '{}'",
-            formation.door_interface, environment.interface
-        )));
-    }
-    if kind.worker_environment_kind_id != formation.worker_environment_kind
-        || kind.substrate_family != SUBSTRATE_FAMILY
-    {
-        return Err(ToolProcessError::Capability(format!(
-            "remote exec tool was formed for incompatible worker_environment_kind '{}'",
-            formation.worker_environment_kind
-        )));
-    }
-    Ok(())
-}
-
-fn validate_coordinates(
-    metadata: &InvocationMetadata,
-    formation: &WorkerEnvironmentFormation,
-) -> Result<(), ToolProcessError> {
-    let runtime = metadata.runtime.as_ref().ok_or_else(|| {
-        ToolProcessError::Capability(
-            "remote exec invocation has no runtime coordinates".to_string(),
-        )
-    })?;
-    if runtime.run.as_str() != formation.run || runtime.ee.as_str() != formation.ee {
-        return Err(ToolProcessError::Capability(
-            "remote exec formation does not match invocation coordinates".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn decode_tool_call(
-    envelope: &InterfaceInvocationEnvelope,
-) -> Result<ToolCallArtifact, ToolProcessError> {
-    let manifest = envelope
-        .read_artifact_manifest()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if manifest.label != TOOL_CALL_LABEL {
-        return Err(ToolProcessError::Capability(format!(
-            "remote exec room expected '{TOOL_CALL_LABEL}', got '{}'",
-            manifest.label
-        )));
-    }
-    let payload = envelope
-        .read_artifact_payload()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    serde_json::from_slice(&payload).map_err(|error| {
-        ToolProcessError::Capability(format!("remote exec tool.call is malformed: {error}"))
-    })
-}
-
-fn descriptor_operation<'a>(
-    tool_id: &str,
-    handler_config: &'a Value,
-) -> Result<&'a str, ToolProcessError> {
-    let config = handler_config.as_object().ok_or_else(|| {
-        ToolProcessError::Capability(format!(
-            "tool '{tool_id}' handler_config must be an object with an operation"
-        ))
-    })?;
-    let operation = config
-        .get("operation")
-        .ok_or_else(|| {
-            ToolProcessError::Capability(format!(
-                "tool '{tool_id}' handler_config.operation is absent"
-            ))
-        })?
-        .as_str()
-        .ok_or_else(|| {
-            ToolProcessError::Capability(format!(
-                "tool '{tool_id}' handler_config.operation must be a string"
-            ))
-        })?;
-    if operation.is_empty() || operation.trim() != operation {
-        return Err(ToolProcessError::Capability(format!(
-            "tool '{tool_id}' handler_config.operation must be a non-empty trimmed string"
-        )));
-    }
-    match operation {
-        "process_start" | "process_read" | "process_write" | "process_interrupt"
-        | "process_terminate" | "process_list" | "status" | "exec" | "file_read" | "file_write"
-        | "file_list" | "file_stat" | "file_delete" | "file_copy" | "directory_create" => {
-            Ok(operation)
-        }
-        other => Err(ToolProcessError::Capability(format!(
-            "tool '{tool_id}' declares unknown remote exec operation '{other}'"
-        ))),
-    }
-}
-
-fn materialize_artifact<T: Serialize>(
-    input: &InterfaceInvocationEnvelope,
-    label: &str,
-    body: &T,
-) -> Result<InterfaceArtifactFile, ToolProcessError> {
-    let parent = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| {
-            ToolProcessError::Capability(
-                "remote exec tool input manifest has no parent".to_string(),
-            )
-        })?;
-    let bytes = serde_json::to_vec(body).map_err(|error| {
-        ToolProcessError::Capability(format!(
-            "remote exec emitted artifact did not serialize: {error}"
-        ))
-    })?;
-    InterfaceArtifactFile::write(parent.join("emitted"), label, &bytes)
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))
-}
-
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
-}
-
 fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
     object
         .get(field)
@@ -2720,21 +2578,6 @@ mod tests {
     use octopus_tool_door_runtime::InterfaceHostIoLimits;
 
     use super::*;
-
-    #[test]
-    fn exact_clone_selects_only_its_descriptor_operation() {
-        for tool_id in ["remote.exec", "remote.custom_command"] {
-            assert_eq!(
-                descriptor_operation(tool_id, &json!({"operation": "exec"}))
-                    .ok()
-                    .unwrap(),
-                "exec"
-            );
-        }
-        assert!(descriptor_operation("remote.clone", &Value::Null).is_err());
-        assert!(descriptor_operation("remote.clone", &json!({"operation": {}})).is_err());
-        assert!(descriptor_operation("remote.clone", &json!({"operation": "command"})).is_err());
-    }
 
     struct FailOnceProcess {
         process_id: ProcessId,

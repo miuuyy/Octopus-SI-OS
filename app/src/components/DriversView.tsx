@@ -66,6 +66,7 @@ type DriverRecord = {
   name: string;
   display_name?: string;
   description?: string;
+  icon?: string;
   package_id?: string;
   installed: boolean;
   materialized?: boolean;
@@ -1454,16 +1455,24 @@ function DriverDetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+const DRIVER_GLYPHS = new Set<GlyphName>([
+  "artifact",
+  "browser",
+  "code",
+  "desktop",
+  "folderOpen",
+  "layers",
+  "microphone",
+  "plugins",
+  "search",
+  "sites",
+  "terminal",
+  "worktree",
+]);
+
 function driverGlyph(driver: DriverRecord): GlyphName {
-  const capabilities = new Set(driver.capabilities);
-  if (capabilities.has("browser_session")) return "browser";
-  if (capabilities.has("desktop_session") || capabilities.has("computer_use")) return "desktop";
-  if (capabilities.has("audio_capture") || capabilities.has("audio_playback")) return "microphone";
-  if (capabilities.has("git") || capabilities.has("script_exec")) return "code";
-  if (capabilities.has("container_session")) return "layers";
-  if (capabilities.has("remote_machine") || capabilities.has("web_search")) return "globe";
-  if (capabilities.has("mcp_stdio_session")) return "plugins";
-  return "terminal";
+  const icon = driver.icon as GlyphName;
+  return DRIVER_GLYPHS.has(icon) ? icon : "environment";
 }
 
 function driverSummary(driver: DriverRecord): string {

@@ -1,0 +1,50 @@
+{
+  "id": "telegram.create_topic",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "bot_api",
+    "method": "createForumTopic",
+    "read_only": false
+  },
+  "description": "Create a topic in a forum supergroup. Returns its message_thread_id, which messages in the topic carry as topic_id.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat: chat.id from a telegram.event, or a public @username."
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "icon_color": {
+        "type": "integer",
+        "enum": [
+          7322096,
+          16766590,
+          13338331,
+          9367192,
+          16749490,
+          16478047
+        ],
+        "description": "RGB icon color from Telegram's fixed set."
+      }
+    },
+    "required": [
+      "chat_id",
+      "name"
+    ],
+    "additionalProperties": false
+  }
+}

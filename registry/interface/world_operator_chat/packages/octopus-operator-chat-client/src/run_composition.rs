@@ -59,7 +59,7 @@ pub struct CompositionOutputSelection {
 }
 
 impl CompositionOutputSelection {
-    fn validate_provider_outputs(&self, provider: &InterfaceDescriptor) -> Result<(), String> {
+    fn validate_provider_outputs(&self, provider: &InterfaceDescriptor, model_outputs: &[ModelOutputSeed]) -> Result<(), String> {
         let declared = provider.interface_driver_config.as_ref()
             .and_then(|config| config.private_config.get("client_projection_output_labels"))
             .ok_or_else(|| format!(
@@ -73,7 +73,15 @@ impl CompositionOutputSelection {
         }) {
             return Err(format!("provider '{}' output labels must be non-empty, exact and unique", provider.id));
         }
-        let selected = self.return_labels.iter().chain(&self.record_labels).collect::<BTreeSet<_>>();
+        let mut selected = self.return_labels.iter().chain(&self.record_labels).collect::<BTreeSet<_>>();
+        for output in model_outputs {
+            if !selected.insert(&output.required_verified_artifact.artifact_label) {
+                return Err(format!(
+                    "model output '{}' carries '{}', which another provider output already owns",
+                    output.checkpoint_id, output.required_verified_artifact.artifact_label,
+                ));
+            }
+        }
         let missing = unique.difference(&selected).map(|label| label.as_str()).collect::<Vec<_>>();
         if !missing.is_empty() {
             return Err(format!(
@@ -469,7 +477,7 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
         &topology,
     )?;
     if let Some(selection) = &request.communication.output_selection {
-        selection.validate_provider_outputs(&provider.interface)?;
+        selection.validate_provider_outputs(&provider.interface, &request.model_outputs)?;
     }
     let mut config = composition_config(request);
     if let Some(template) = &request.communication.client_template_interface_id {
@@ -520,7 +528,6 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
     external.dedup();
     let connected = external.iter().map(String::as_str).collect::<BTreeSet<_>>();
     topology.worker_relays.retain(|id, _| connected.contains(id.as_str()));
-    topology.operation_bindings.retain(|id, _| connected.contains(id.as_str()));
     let selection = RunSelection {
         ee_id: request.ee_id.clone(),
         worker_choice_interface: request.worker_template_interface_id.clone(),
@@ -650,6 +657,10 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
         &selected_context,
         &resolved.staged_artifacts,
     )?;
+    let operations = OperationRoutes::load(&roots.registry_root, &request.external_inputs, std::iter::empty())?;
+    for binding in operations.catalog_bindings() {
+        if !selected_context.contains(&binding) { selected_context.push(binding); }
+    }
     let catalogue = collection_context::plan(collection_context::PlanContext {
         registry_root: &roots.registry_root, ee_instances_root: &roots.ee_instances_root,
         ee_id: &request.ee_id, identity: &identity, bindings: selected_context.clone(),
@@ -730,6 +741,7 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
         &request.payload_artifact_bindings,
         &provider.client_operation_request_labels,
         None,
+        &operations,
     )?;
     let run_content = catalogue.wire(&identity.model_interface_id, run_content)?;
     let (run_content, intake) = input_intake::wire(&roots.registry_root, &identity, &mut writes, run_content)?;
@@ -950,6 +962,9 @@ fn validate_request(request: &RunCompositionRequest) -> Result<(), String> {
         if request.communication.client_interface_id.is_some() {
             return Err("select a new client template or an existing client interface, not both".into());
         }
+    }
+    if !request.model_outputs.is_empty() && request.communication.output_selection.is_none() {
+        return Err("model outputs require an output selection, so the task's return output does not also carry their labels".into());
     }
     if let Some(outputs) = &request.communication.output_selection {
         let mut names = BTreeSet::new();

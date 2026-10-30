@@ -13,22 +13,19 @@ path = "src/lib.rs"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-tracing = "0.1.44"
 reqwest = { version = "0.12", features = ["json"] }
-tokio-tungstenite = { version = "0.28.0", features = ["connect", "handshake"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-base64 = "0.22.1"
 blake3 = "1"
 percent-encoding = "2"
 
-octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
+octopus-browser-session-env = { path = "../../../browser_session/packages/octopus-browser-session-env" }
 octopus-tool-door-runtime = { package = "octopus-process-session-tool-runtime", path = "../../../process_session/packages/octopus-process-session-tool-runtime" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
-octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
 
 [dev-dependencies]
+octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
+octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
 tempfile = "3"
 tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread"] }

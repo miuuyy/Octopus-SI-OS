@@ -2,7 +2,7 @@ async fn retained_admission_native_turn(
     root: &Path,
     descriptor: &InterfaceDescriptor,
     input: &InterfaceInvocationEnvelope,
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     source_seq: u64,
     control: &Arc<CodexTurnControlBroker>,
     stream: Arc<ProviderOutputStream>,

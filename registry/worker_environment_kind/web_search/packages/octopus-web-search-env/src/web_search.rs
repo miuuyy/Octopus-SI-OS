@@ -1,10 +1,17 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use octopus_browser_session_env::{
+    bounded_optional_u64, browser_result, evidence_write_error, required_string, url_is_loopback,
+};
 use octopus_interfaces::InterfaceArtifactFile;
+use octopus_tool_door_runtime::room::{
+    admitted_tool, decode_tool_call, descriptor_operation, emit_json_artifact, formed_scope,
+    strict_object,
+};
 use octopus_tool_door_runtime::{
-    ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
-    ToolProcessIo, WorkerEnvironmentLifecycleRecorder,
+    ToolProcessError, ToolProcessHandler, ToolProcessInvocation, ToolProcessIo,
+    WorkerEnvironmentLifecycleRecorder,
 };
 use octopus_tool_handlers::ToolCall;
 use octopus_worker_env::WorkerEnvironmentLifecycle;
@@ -13,13 +20,11 @@ use reqwest::{Method, StatusCode, Url};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::{decode_room_invocation, evidence_write_error, response_artifact, web_search_result};
-
+const ROOM: &str = "web search door";
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 2_000_000;
 const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 400;
-const SUBSTRATE_FAMILY: &str = "web_search";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WebOperation {
@@ -27,43 +32,67 @@ enum WebOperation {
     Extract,
 }
 
-pub struct WebSearchRoom {
-    environment: ToolProcessEnvironment,
-}
+pub struct WebSearchRoom;
 
 impl WebSearchRoom {
-    pub fn new(environment: ToolProcessEnvironment) -> Self {
-        Self { environment }
-    }
-
     pub(crate) async fn receive(
         &self,
         invocation: ToolProcessInvocation,
         lifecycle_sink: &dyn WorkerEnvironmentLifecycleRecorder,
     ) -> Result<InterfaceArtifactFile, ToolProcessError> {
-        let decoded = decode_room_invocation(&self.environment, invocation, SUBSTRATE_FAMILY)?;
-        let tool = decoded.call.tool_id.clone();
-        let result = execute(&decoded.call).await;
+        let ToolProcessInvocation {
+            descriptor,
+            envelope,
+            worker_environment,
+            ..
+        } = invocation;
+        let formation = worker_environment.ok_or_else(|| {
+            ToolProcessError::Capability(format!(
+                "tool '{}' invocation has no formed worker environment",
+                descriptor.id
+            ))
+        })?;
+        formed_scope(ROOM, &envelope, &formation)?;
+        let artifact = decode_tool_call(ROOM, &envelope)?;
+        let tool = admitted_tool(ROOM, &envelope, &artifact)
+            .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
+        if descriptor.id.as_str() != tool {
+            return Err(ToolProcessError::Capability(format!(
+                "tool descriptor '{}' does not match tool.call '{}'",
+                descriptor.id, tool
+            )));
+        }
+        let call = ToolCall {
+            tool_id: tool,
+            arguments: artifact.arguments,
+            handler_config: descriptor.handler_config.clone(),
+        };
+        let result = execute(&call).await;
         let lifecycle = if result.is_ok() {
             WorkerEnvironmentLifecycle::Active
         } else {
             WorkerEnvironmentLifecycle::Failed
         };
         let mut evidence_write_errors = Vec::new();
-        if let Err(error) = lifecycle_sink.record(&decoded.formation, lifecycle).await {
+        if let Err(error) = lifecycle_sink.record(&formation, lifecycle).await {
             evidence_write_errors.push(evidence_write_error("lifecycle", error));
         }
-        let response = web_search_result(
-            &tool,
-            decoded.correlation_id.clone(),
+        let response = browser_result(
+            &call.tool_id,
+            artifact.correlation_id,
             result,
             evidence_write_errors,
         );
-        response_artifact(&decoded.envelope, response)
+        emit_json_artifact(&envelope, &response.label, &response)
+            .map_err(ToolProcessError::Capability)
     }
 }
 
 impl ToolProcessHandler for WebSearchRoom {
+    fn substrate_family(&self) -> &str {
+        "web_search"
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -180,32 +209,16 @@ struct RetryProjection {
 }
 
 async fn execute(call: &ToolCall) -> Result<Value, String> {
-    match descriptor_operation(&call.tool_id, &call.handler_config)? {
+    match web_operation(&call.tool_id, &call.handler_config)? {
         WebOperation::Search => execute_search(call).await,
         WebOperation::Extract => execute_extract(call).await,
     }
 }
 
-fn descriptor_operation(tool_id: &str, handler_config: &Value) -> Result<WebOperation, String> {
-    let config = handler_config.as_object().ok_or_else(|| {
-        format!("tool '{tool_id}' handler_config must be an object with an operation")
-    })?;
-    let operation = config
-        .get("operation")
-        .ok_or_else(|| format!("tool '{tool_id}' handler_config.operation is absent"))?
-        .as_str()
-        .ok_or_else(|| format!("tool '{tool_id}' handler_config.operation must be a string"))?;
-    if operation.is_empty() || operation.trim() != operation {
-        return Err(format!(
-            "tool '{tool_id}' handler_config.operation must be a non-empty trimmed string"
-        ));
-    }
-    match operation {
+fn web_operation(tool_id: &str, handler_config: &Value) -> Result<WebOperation, String> {
+    match descriptor_operation("web-search", tool_id, handler_config, &["search", "extract"])? {
         "search" => Ok(WebOperation::Search),
-        "extract" => Ok(WebOperation::Extract),
-        other => Err(format!(
-            "tool '{tool_id}' declares unknown web-search operation '{other}'"
-        )),
+        _ => Ok(WebOperation::Extract),
     }
 }
 
@@ -619,16 +632,6 @@ fn explicit_proxy(env_name: Option<&str>) -> Result<Option<reqwest::Proxy>, Stri
     Ok(Some(proxy))
 }
 
-fn url_is_loopback(url: &Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host.to_ascii_lowercase().ends_with(".localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    })
-}
-
 fn apply_auth(
     provider_id: &str,
     auth: Option<&AuthProjection>,
@@ -1001,54 +1004,6 @@ fn required_urls(object: &Map<String, Value>) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
-}
-
-fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
-    object
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{field} must be a non-empty string"))
-}
-
-fn bounded_optional_u64(
-    object: &Map<String, Value>,
-    field: &str,
-    minimum: u64,
-    maximum: u64,
-) -> Result<Option<u64>, String> {
-    let value = object
-        .get(field)
-        .map(|value| {
-            value
-                .as_u64()
-                .ok_or_else(|| format!("{field} must be a non-negative integer"))
-        })
-        .transpose()?;
-    if let Some(value) = value {
-        if !(minimum..=maximum).contains(&value) {
-            return Err(format!("{field} must be between {minimum} and {maximum}"));
-        }
-    }
-    Ok(value)
-}
-
 fn bounded_text(value: String, max_chars: Option<usize>) -> String {
     let Some(max_chars) = max_chars else {
         return value;
@@ -1069,29 +1024,4 @@ fn body_evidence(value: &[u8]) -> String {
 
 fn default_true() -> bool {
     true
-}
-
-#[cfg(test)]
-mod operation_tests {
-    use super::*;
-
-    #[test]
-    fn exact_clone_selects_only_its_descriptor_operation() {
-        let config = json!({
-            "operation": "search",
-            "default_provider": "fixture",
-            "providers": {}
-        });
-        assert_eq!(
-            descriptor_operation("web.search", &config).unwrap(),
-            WebOperation::Search
-        );
-        assert_eq!(
-            descriptor_operation("web.custom_search", &config).unwrap(),
-            WebOperation::Search
-        );
-        assert!(descriptor_operation("web.clone", &Value::Null).is_err());
-        assert!(descriptor_operation("web.clone", &json!({"operation": false})).is_err());
-        assert!(descriptor_operation("web.clone", &json!({"operation": "crawl"})).is_err());
-    }
 }

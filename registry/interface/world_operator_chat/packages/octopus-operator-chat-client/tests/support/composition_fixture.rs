@@ -1,5 +1,5 @@
 use octopus_operator_chat_client::{SelectedToolSeed, run_composition::*};
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

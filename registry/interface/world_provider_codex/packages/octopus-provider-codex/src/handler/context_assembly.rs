@@ -311,7 +311,7 @@ pub(crate) fn append_assembled_context(
     {
         assembled.conversation.push(format!("{speaker}\n{prompt}"));
     } else {
-        let mut visible = value.clone();
+        let mut visible = crate::result_media::without_embedded_payloads(value);
         if let Some(object) = visible.as_object_mut() {
             for field in [CODEX_CONTINUITY_FIELD, SESSION_CONTEXT_FIELD, CONTEXT_WINDOW_USAGE_FIELD,
                 "provider_token_usage", "thread_id", "turn_id", "item_id", "completed_at_ms", "lifecycle"] {

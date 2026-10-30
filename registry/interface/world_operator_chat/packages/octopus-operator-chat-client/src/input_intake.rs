@@ -3,7 +3,7 @@ use std::path::Path;
 use octopus_descriptors::InterfaceId;
 use octopus_ledger::RequiredVerifiedArtifact;
 use octopus_run_authoring::{CheckedRunWriter, RunAuthoringProfile};
-use octopus_runtime::run_record::ArtifactBinding;
+use octopus_run_record::ArtifactBinding;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -358,7 +358,7 @@ pub(crate) fn wire(
     }
     reconcile_input_context(&mut record, &config)?;
     let content = pretty_json(&record)?;
-    octopus_runtime::run_record::RunRecord::from_bytes(content.as_bytes())
+    octopus_run_record::RunRecord::from_bytes(content.as_bytes())
         .map_err(|e| e.to_string())?;
     Ok((
         content,
@@ -372,7 +372,7 @@ pub(crate) fn wire(
 
 fn reconcile_input_context(record: &mut Value, config: &InputIntakeConfig) -> Result<(), String> {
     let parsed =
-        octopus_runtime::run_record::RunRecord::from_bytes(pretty_json(record)?.as_bytes())
+        octopus_run_record::RunRecord::from_bytes(pretty_json(record)?.as_bytes())
             .map_err(|e| e.to_string())?;
     let owner = config.writer.owner.as_str();
     let owned: Vec<String> =

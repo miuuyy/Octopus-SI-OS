@@ -315,7 +315,7 @@ pub(crate) fn derive_bound_run_authoring_topology(
 #[cfg(test)]
 pub(crate) fn derived_checkpoint_template(
     role: RunAuthoringCheckpointRole,
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
 ) -> Result<RunAuthoringCheckpoint, String> {
     let interface_binding = checkpoint.interface_binding.clone().ok_or_else(|| {
         format!(
@@ -655,7 +655,7 @@ pub(crate) fn validate_checkpoint_topology(
 }
 
 pub(crate) fn checkpoint_record_matches_template(
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
     template: &RunAuthoringCheckpoint,
     run: &RunId,
 ) -> bool {
@@ -666,7 +666,7 @@ pub(crate) fn checkpoint_record_matches_template(
 }
 
 pub(crate) fn canonical_role_bindings(
-    frontier: &[&octopus_runtime::run_record::CheckpointRecord],
+    frontier: &[&octopus_run_record::CheckpointRecord],
     authoring_call: &RunAuthoringCheckpoint,
     authoring_result: &RunAuthoringCheckpoint,
     run: &RunId,
@@ -709,7 +709,7 @@ pub(crate) fn canonical_role_bindings(
 }
 
 pub(crate) fn checkpoint_role_bindings_match(
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
     mandatory_role_bindings: &[ArtifactBinding],
     template: &RunAuthoringCheckpoint,
 ) -> bool {

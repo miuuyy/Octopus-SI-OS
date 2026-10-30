@@ -1,0 +1,16 @@
+{
+  "id": "email.list_mailboxes",
+  "request_label": "email.operation.request",
+  "output_label": "email.operation.result",
+  "handler_config": {
+    "operation": "mailbox.list",
+    "read_only": true
+  },
+  "description": "List the mailbox's folders with their roles, such as \\Sent or \\Trash.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

@@ -8,7 +8,7 @@ use octopus_operator_chat_client::{
         validate_publication_expansion_receipt, validate_publication_snapshot_refs,
     },
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
@@ -615,9 +615,28 @@ fn native_amendment_and_continuation_preserve_accepted_capabilities_and_publicat
     request.cycle = "second".into();
     let next = plan_operator_chat_topology(&request).unwrap();
     let next_record = RunRecord::from_bytes(next.run_record_content.as_bytes()).unwrap();
+    let roles = |record: &RunRecord| -> Vec<octopus_run_record::ArtifactBinding> {
+        serde_json::from_value(
+            record.interface_state[&provider]["run_authoring_binding"]["writer_run"]
+                ["role_artifact_bindings"]
+                .clone(),
+        )
+        .unwrap()
+    };
+    let (accepted_roles, next_roles) = (roles(&current), roles(&next_record));
+    assert!(next_roles.iter().any(|role| role.id.as_str() == "new-role"));
+    assert!(accepted_roles.iter().all(|role| next_roles.contains(role)));
     assert_eq!(
         octopus_run_authoring::provider_context_bindings(&next_record, &provider).unwrap(),
-        accepted_bindings
+        next_roles
+            .iter()
+            .chain(
+                accepted_bindings
+                    .iter()
+                    .filter(|binding| !accepted_roles.contains(binding))
+            )
+            .cloned()
+            .collect::<Vec<_>>()
     );
     assert_eq!(next.publication_evidence, accepted.publication_evidence);
     assert_eq!(next.authoring_profile, accepted.authoring_profile);

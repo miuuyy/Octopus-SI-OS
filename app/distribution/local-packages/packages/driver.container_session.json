@@ -1,0 +1,78 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "driver.container_session",
+  "version": "1.0.1",
+  "product_kind": "driver",
+  "product_id": "container_session",
+  "release_status": "optional",
+  "display": {
+    "name": "Container Session",
+    "description": "A pinned container to start, run commands in, read and write its files, and stop.",
+    "developer": "Octopus",
+    "category": "worker_environment",
+    "icon": "layers"
+  },
+  "members": [
+    {
+      "registry_kind": "worker_environment_kind",
+      "owner": "container_session",
+      "primary": true
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.attach",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.exec",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.file_list",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.file_read",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.file_write",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.logs",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.remove",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.start",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.status",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "container.stop",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "interface",
+      "owner": "system_container",
+      "configuration": [{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    }
+  ]
+}

@@ -37,7 +37,7 @@ pub(crate) async fn hand_failure_into_standing_route(
     let path = ctx.root_slot("run_records_root")?.join(format!("{}.json", run.as_str()));
     let bytes = octopus_interfaces::read_artifact_carrier_file_bounded(&path, ctx.required_host_io_limits()?.max_payload_bytes)
         .map_err(|error| format!("provider run '{}' current record cannot be read: {error}", run.as_str()))?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
+    let record = octopus_run_record::RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
     if record.id != *run {
         return Err(format!("provider run record '{}' names run '{}'", run.as_str(), record.id.as_str()));
     }

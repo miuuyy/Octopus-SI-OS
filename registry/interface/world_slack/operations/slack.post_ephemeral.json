@@ -1,0 +1,54 @@
+{
+  "id": "slack.post_ephemeral",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "message.ephemeral"
+  },
+  "description": "Post a message in a channel that only one member sees, until they reload Slack.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "channel": {
+        "type": "string",
+        "pattern": "^[CDG][A-Z0-9]{8,32}$",
+        "description": "Conversation id: channel_id from a slack.event."
+      },
+      "user": {
+        "type": "string",
+        "pattern": "^[UW][A-Z0-9]{8,32}$",
+        "description": "Member id, such as user_id from a slack.event."
+      },
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Message text in Markdown, converted to Slack formatting."
+      },
+      "blocks": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 50,
+        "items": {
+          "type": "object"
+        },
+        "description": "Block Kit layout blocks."
+      },
+      "thread_ts": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}\\.[0-9]{1,12}$",
+        "description": "Thread to answer in: the event's thread_ts, or its message_ts to start a thread under that message."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "channel",
+      "user",
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

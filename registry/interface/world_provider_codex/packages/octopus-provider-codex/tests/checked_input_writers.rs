@@ -22,7 +22,7 @@ use octopus_run_authoring::{
     CheckedRunWriter, checked_provider_run_advance, checked_run_file_chain,
     checked_run_file_chain_before,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

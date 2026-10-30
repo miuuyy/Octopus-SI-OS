@@ -17,7 +17,7 @@ octopus-code-mode-engine = { path = "../octopus-code-mode-engine" }
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
 octopus-ledger-store = { path = "../../../../../crates/octopus-ledger-store" }
-octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-run-record = { path = "../../../../../crates/octopus-run-record" }
 libc = "0.2.182"
 octopus-tool-door-runtime = { package = "octopus-process-session-tool-runtime", path = "../../../process_session/packages/octopus-process-session-tool-runtime" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
@@ -30,6 +30,7 @@ octopus-app-server-interface = { path = "../../../../interface/world_operator_ch
 
 
 [dev-dependencies]
+octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
 octopus-app-server = { path = "../../../../../crates/octopus-app-server", features = ["owner-contract-tests"] }
 octopus-ledger-index = { path = "../../../../../crates/octopus-ledger-index" }
 octopus-file-storage = { path = "../../../../../crates/octopus-file-storage" }

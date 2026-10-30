@@ -1,16 +1,5 @@
-# The exec-server SUBSTRATE, relocated out of the box into the worker_environment_kind code-world
-# (codex-cut-map §4.F / §9.2 / §9.14 — Front SANDBOX GO-FURTHER). This is the exec-server room: the
-# process/PTY exec backend + the sandboxed file-system helper that wraps the sandbox substrate
-# (SandboxManager) to run confined FS operations through a helper subprocess. It is the technical
-# execution room a process-exec `worker_environment_kind` binds to — box CODE that belongs in the
-# WEK world, not in crates/. Its box product-binary entry-points (fs-helper main, exec-server main)
-# are dispatched into by the box arg0 product binary (the arg0 trick).
-#
-# Package name is `octopus-exec-substrate` (its home moved into the code-world), lib name kept
-# `octopus_exec` so `use octopus_exec::...` call-sites need no code churn during the rewire.
 [package]
 name = "octopus-exec-substrate"
-# Ported Codex source uses edition 2024 idioms (let-chains); override workspace 2021.
 edition = "2024"
 version.workspace = true
 license.workspace = true
@@ -21,13 +10,11 @@ name = "octopus_exec"
 doctest = false
 
 [dependencies]
-# workspace primitives
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
-async-trait.workspace = true
 tokio = { workspace = true, features = [
     "fs",
     "io-std",
@@ -40,8 +27,6 @@ tokio = { workspace = true, features = [
     "time",
 ] }
 tokio-util = { workspace = true, features = ["io", "rt"] }
-
-# crates.io deps (versions copied from codex-rs workspace)
 arc-swap = "1.9.0"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
 base64 = "0.22.1"
@@ -67,36 +52,17 @@ tokio-tungstenite = { version = "0.28.0", features = [
 tracing = "0.1.44"
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1.8.2"
-
-# The substrate contract (BOX crate) — sandbox posture, filesystem/network permissions,
-# shell-environment policy, permission profiles. RE-POINTED off the provider package
-# octopus-protocol (which merely re-exported these box types at old paths) so this WEK
-# code-world stands blind to the provider BY CONSTRUCTION (codex-cut-map §9.15 / §7.3).
-# The exec-server's JSON-RPC-lite wire is now room-owned (src/jsonrpc_lite.rs) and its
-# remote-auth-headers contract is a room trait (src/inlined.rs::ExecServerAuthHeaders),
-# so octopus-appserver-proto and octopus-cxapi are gone too — this crate no longer
-# path-links any world_provider_codex package.
 octopus-substrate-contract = { path = "../octopus-substrate-contract" }
 octopus-file-system = { path = "../octopus-file-system" }
-# The sandbox-backend substrate is now a sibling package in this same WEK code-world.
 octopus-sandbox-substrate = { path = "../octopus-sandbox-substrate" }
-# The PTY substrate is the sibling WEK package (one copy in the room code-world; the former
-# inlined src/pty copy is deleted — codex-cut-map §9.6 dedup).
 octopus-util-pty = { path = "../octopus-util-pty" }
 octopus-util-abspath = { path = "../octopus-util-abspath" }
 octopus-util-pathuri = { path = "../octopus-util-pathuri" }
 
 [dev-dependencies]
-# versions copied from codex-rs workspace dependencies
 pretty_assertions = "1.4.1"
 tempfile = "3.23.0"
 wiremock = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.182"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_Storage_FileSystem",
-] }

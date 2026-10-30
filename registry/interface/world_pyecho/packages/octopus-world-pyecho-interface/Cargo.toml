@@ -18,6 +18,7 @@ octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
 octopus-ledger-store = { path = "../../../../../crates/octopus-ledger-store" }
 octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-run-record = { path = "../../../../../crates/octopus-run-record" }
 
 [lints.rust]
 unsafe_code = "forbid"

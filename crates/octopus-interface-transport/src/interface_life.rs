@@ -21,10 +21,10 @@ use octopus_descriptors::{ArtifactId, InterfaceId, ProcessAuthoritySpec};
 use octopus_interfaces::{
     DeliveryVerdict, InterfaceArtifactFile, InterfaceArtifactManifest, InterfaceInvocationEnvelope,
 };
-use octopus_ledger::ArtifactRef;
+use octopus_ledger::{ArtifactRef, ContentHash};
 use octopus_file_storage::metadata::FileStamp;
 use std::time::SystemTime;
-use octopus_runtime::{ContentHash, run_index::RunRecordsIndex};
+use octopus_run_record::RunRecordsIndex;
 use sha2::Sha256;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -4703,8 +4703,8 @@ mod tests {
                 "run": "run_a",
                 "trace": "trace:run_a:c1",
                 "epoch": 0,
-                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("world_operator_chat")),
-                "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("world_provider_codex"))]
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new("world_operator_chat")),
+                "outbound_interface_bindings": [octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new("world_provider_codex"))]
             }],
             "active_checkpoints": ["c1"]
         }))

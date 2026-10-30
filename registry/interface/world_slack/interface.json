@@ -16,10 +16,16 @@
         "allowed_channel_ids_env": "SLACK_ALLOWED_CHANNELS",
         "home_channel_env": "SLACK_HOME_CHANNEL"
       },
+      "operation_catalog_dir": "operations",
+      "operation_catalog_label": "slack.operation_catalog",
+      "operation_request_label": "slack.operation.request",
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_slack/packages/connection.cjs"
-      }
+      },
+      "task_input_labels": [
+        "slack.event"
+      ]
     }
   }
 }

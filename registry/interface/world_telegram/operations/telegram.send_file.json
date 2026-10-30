@@ -1,0 +1,118 @@
+{
+  "id": "telegram.send_file",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "file.send"
+  },
+  "description": "Send a file to a chat. Pass exactly one of blob_id with filename, for a file this task produced, or file_id, to send again a file received in a telegram.event. kind decides how Telegram shows it. Returns chat_id, message_ids and kind.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat to act in: chat.id from a telegram.event, or a public @username. Omit it only for the configured home chat or the single allowed user."
+      },
+      "topic_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "reply_to_message_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Answer this message: the event's message_id. In groups, always reply to the message you answer."
+      },
+      "blob_id": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "Content hash of an artifact payload to upload."
+      },
+      "filename": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "description": "Plain file name for an uploaded blob, such as report.pdf."
+      },
+      "file_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "description": "file_id of a file from a telegram.event."
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "document",
+          "photo",
+          "video",
+          "audio",
+          "voice",
+          "animation"
+        ],
+        "description": "How Telegram presents the file; document by default."
+      },
+      "caption": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Caption under the file, Markdown unless format says otherwise; it must fit one caption."
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "markdown",
+          "text",
+          "html"
+        ],
+        "description": "How the text is written: markdown (default), plain text, or Telegram HTML."
+      },
+      "silent": {
+        "type": "boolean",
+        "description": "Deliver without a notification sound."
+      },
+      "buttons": {
+        "type": "array",
+        "minItems": 1,
+        "description": "Inline keyboard as rows of buttons. Each button has text and exactly one of data (at most 64 bytes, returned as a button event when pressed) or url (an http, https or tg link).",
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "data": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

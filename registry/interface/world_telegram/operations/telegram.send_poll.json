@@ -1,0 +1,87 @@
+{
+  "id": "telegram.send_poll",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "bot_api",
+    "method": "sendPoll",
+    "read_only": false
+  },
+  "description": "Send a poll. People answer in Telegram; telegram.stop_poll closes it and returns the results.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat: chat.id from a telegram.event, or a public @username."
+      },
+      "question": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "options": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 12,
+        "items": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "description": "Answer options as {text} objects."
+      },
+      "is_anonymous": {
+        "type": "boolean",
+        "description": "Hide who voted; true by default."
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "regular",
+          "quiz"
+        ]
+      },
+      "allows_multiple_answers": {
+        "type": "boolean"
+      },
+      "correct_option_id": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Index of the right answer in a quiz."
+      },
+      "message_thread_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "disable_notification": {
+        "type": "boolean",
+        "description": "Deliver without a notification sound."
+      }
+    },
+    "required": [
+      "chat_id",
+      "question",
+      "options"
+    ],
+    "additionalProperties": false
+  }
+}

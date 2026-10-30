@@ -1,0 +1,125 @@
+{
+  "id": "email.send_message",
+  "request_label": "email.operation.request",
+  "output_label": "email.operation.result",
+  "handler_config": {
+    "operation": "message.send",
+    "read_only": false
+  },
+  "description": "Start a new email conversation from the connected mailbox. Without to it goes to the default recipient: the first allowed sender, or the mailbox itself. Before writing to an address that has not written in this conversation, confirm with the owner unless the task already says to. Returns the sent message_id with the accepted and refused recipients.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "to": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "description": "\"name@example.com\" or \"Name <name@example.com>\", or an array of them."
+      },
+      "subject": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One-line subject."
+      },
+      "text": {
+        "type": "string",
+        "description": "Plain-text body."
+      },
+      "cc": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "description": "\"name@example.com\" or \"Name <name@example.com>\", or an array of them."
+      },
+      "bcc": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "description": "\"name@example.com\" or \"Name <name@example.com>\", or an array of them."
+      },
+      "html": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Optional HTML version of the body."
+      },
+      "attachments": {
+        "type": "array",
+        "description": "Files to attach. Each gives exactly one of path (an attachment path from an email.event or email.read_message), artifact (an artifact id or payload content hash), text with filename, or content_base64 with filename; filename and media_type are optional otherwise.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifact": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            },
+            "content_base64": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "media_type": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "subject",
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -100,11 +100,11 @@ octopus-marks = { path = "../../../../../crates/octopus-marks" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-ee = { path = "../../../../../crates/octopus-ee" }
 octopus-exec = { package = "octopus-exec-substrate", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-exec-substrate" }
-octopus-file-search = { package = "octopus-file-search", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-file-search" }
-octopus-git-utils = { package = "octopus-git-utils", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-git-utils" }
+octopus-file-search = { package = "octopus-file-search", path = "../../../../../registry/worker_environment_kind/filesystem_workspace/packages/octopus-file-search" }
+octopus-git-utils = { package = "octopus-git-utils", path = "../octopus-git-utils" }
 octopus-ledger-store = { path = "../../../../../crates/octopus-ledger-store" }
 octopus-sandbox = { package = "octopus-sandbox-substrate", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-sandbox-substrate" }
-octopus-shell-command = { package = "octopus-shell-command", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-shell-command" }
+octopus-shell-command = { package = "octopus-shell-command", path = "../octopus-shell-command" }
 octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
 octopus-util-pathuri = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-pathuri" }
 

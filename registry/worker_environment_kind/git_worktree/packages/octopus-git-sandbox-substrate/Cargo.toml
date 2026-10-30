@@ -11,43 +11,17 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
-octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
-octopus-network-proxy = { path = "../../../process_session/packages/octopus-network-proxy" }
-octopus-substrate-contract = { path = "../../../process_session/packages/octopus-substrate-contract" }
-octopus-util-abspath = { path = "../../../process_session/packages/octopus-util-abspath" }
-octopus-util-pathuri = { path = "../../../process_session/packages/octopus-util-pathuri" }
-octopus-worker-env-floor = { path = "../../../process_session/packages/octopus-worker-env-floor" }
-octopus-util-pty = { path = "../../../process_session/packages/octopus-util-pty" }
-octopus-exec = { package = "octopus-exec-substrate", path = "../../../process_session/packages/octopus-exec-substrate" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
-octopus-sandbox-base = { package = "octopus-sandbox-substrate", path = "../../../process_session/packages/octopus-sandbox-substrate" }
-octopus-applypatch = { path = "../octopus-applypatch" }
-octopus-file-system = { path = "../../../process_session/packages/octopus-file-system" }
-base64 = "0.22.1"
+octopus-workspace-substrate = { path = "../../../filesystem_workspace/packages/octopus-workspace-substrate" }
 blake3.workspace = true
-fs2 = "0.4"
 serde.workspace = true
-
 serde_json.workspace = true
-dunce = "1.0.4"
-regex-lite = "0.1.8"
 tracing = { version = "0.1.44", features = ["log"] }
-tokio.workspace = true
-url = "2"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2.182"
-which = "8"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2.182"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-dirs = "6"
-tempfile = "3.23.0"
 
 [dev-dependencies]
-anyhow.workspace = true
-pretty_assertions = "1.4.1"
+octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 tempfile = "3.23.0"
 tokio = { workspace = true, features = ["macros", "rt"] }

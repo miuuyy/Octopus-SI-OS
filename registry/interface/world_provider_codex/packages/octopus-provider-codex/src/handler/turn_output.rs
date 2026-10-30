@@ -237,8 +237,9 @@ impl CodexTurnOutput {
                 "arguments": arguments,
                 "correlation_id": correlation_id,
             }),
-            route: ProviderEmissionRoute::Interface {
+            route: ProviderEmissionRoute::Operation {
                 interface: operation.interface.clone(),
+                result_label: operation.output_label.clone(),
             },
         }
     }
@@ -601,6 +602,7 @@ pub(crate) fn provider_route_from_lifecycle(route: LifecycleRoute) -> ProviderEm
                     .into_iter()
                     .map(|input| ProviderVerifiedInput {
                         also_deliver_to_tool: None,
+                        also_deliver_to_interface: None,
                         artifact_label: input.artifact_label,
                         required_verified_artifact: input.required_verified_artifact,
                     })
@@ -609,6 +611,9 @@ pub(crate) fn provider_route_from_lifecycle(route: LifecycleRoute) -> ProviderEm
         }
         LifecycleRoute::Tool { tool } => ProviderEmissionRoute::Tool { tool },
         LifecycleRoute::Interface { interface } => ProviderEmissionRoute::Interface { interface },
+        LifecycleRoute::Operation { interface, result_label } => {
+            ProviderEmissionRoute::Operation { interface, result_label }
+        }
     }
 }
 

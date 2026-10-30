@@ -400,9 +400,16 @@ async fn invoke_tool(
         epoch: 0,
         run_record_hash: None,
     });
+    let context = serde_json::to_vec(&json!({"artifact_bindings":[],"metadata":metadata})).unwrap();
+    let context_hash = ContentHash::of_bytes(&context);
+    let context_path = private.path().join("invocations").canonicalize().unwrap().join("1/artifact")
+        .join(format!("invocation-context-{}.json", context_hash.to_hex()));
+    std::fs::write(&context_path, &context).unwrap();
+    std::fs::set_permissions(&context_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let message = json!({"kind":"invoke","request_id":1,"descriptor":descriptor,"envelope":{"artifact":{
         "id":format!("tool.call:{}",content.to_hex()),"content":content},"label":"tool.call","manifest_path":file.manifest_path(),
-        "artifact_bindings":[],"metadata":metadata,"source_movement_seq":1,"worker_environment":formation,"worker_environment_kind":&*kind}});
+        "context":{"path":context_path,"content_hash":context_hash,"byte_len":context.len()},
+        "source_movement_seq":1,"worker_environment":formation,"worker_environment_kind":&*kind}});
     stdin
         .write_all(format!("{message}\n").as_bytes())
         .await

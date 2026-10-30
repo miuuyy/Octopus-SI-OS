@@ -143,7 +143,7 @@ pub(crate) fn pending_required_evidence(item: &PendingHandoffItem) -> Result<Opt
 }
 
 pub(crate) fn checkpoint_matches_pending(
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
     pending: &PendingHandoffCheckpoint,
 ) -> bool {
     checkpoint.id == pending.id

@@ -17,13 +17,14 @@ use octopus_ledger::ContentHash;
 use octopus_policy::{
     AuthoredInterfaceBinding, BindingArtifactPolicy, InterfaceBindingConfig, WorkerInterfacePolicy,
 };
-use octopus_runtime::{RequiredVerifiedArtifact, run_record::RunRecord};
+use octopus_runtime::RequiredVerifiedArtifact;
+use octopus_run_record::RunRecord;
 use octopus_tool_handlers::ToolResultArtifact;
 use octopus_tool_registry::{ToolDescriptor, load_tool_descriptor_from_dir};
 
 use crate::capability_formation::{
     CapabilityFormationRequest, FormedInterfaceOperation, WorkerRelayCapabilityBinding,
-    form_capability_topology, resolve_live_ee_policy_chain,
+    form_capability_topology, load_interface_operation_binding, resolve_live_ee_policy_chain,
 };
 use crate::daemon_arrival::{TerminalDaemonEmitter, interface_control_socket_path};
 use crate::emit_input::materialize_input_artifact;
@@ -1378,7 +1379,7 @@ fn plan_private_shell_rearm(
 }
 
 fn checkpoint_pair(
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
     inbound: &InterfaceId,
     outbound: &InterfaceId,
 ) -> bool {
@@ -2099,9 +2100,10 @@ pub fn load_private_run_topology(
         )?;
 
         let instance = load_interface(registry_root, &interface)?;
-        validate_exact_operation_descriptors(registry_root, &instance.id, expected)?;
+        let private = private_operation_capability(registry_root, &instance, expected)?;
+        validate_exact_operation_descriptors(registry_root, &instance.id, &private)?;
         let catalog_artifact =
-            validate_operation_catalog_artifact(registry_root, &instance.id, expected)?;
+            validate_operation_catalog_artifact(registry_root, &instance.id, &private)?;
         require_active_operation_catalog_binding(
             &record,
             &authored_checkpoints,
@@ -2466,6 +2468,9 @@ fn load_root_catalog(
 
     let mut operation_capabilities = BTreeMap::new();
     for (interface_id, binding) in formed_capabilities.operation_bindings {
+        if receives_world_events(&binding.interface)? {
+            continue;
+        }
         if interface_id != binding.interface.id {
             return Err(contract(format!(
                 "formed operation capability key '{}' disagrees with interface '{}'",
@@ -2919,6 +2924,24 @@ fn planned_exact_tools(
     Ok(exact)
 }
 
+fn receives_world_events(interface: &InterfaceDescriptor) -> Result<bool, TopologyError> {
+    let Some(labels) = interface
+        .interface_driver_config
+        .as_ref()
+        .and_then(|config| config.private_config.get("task_input_labels"))
+    else {
+        return Ok(false);
+    };
+    let labels = labels
+        .as_array()
+        .filter(|labels| labels.iter().all(|label| label.as_str().is_some_and(|label| !label.trim().is_empty())))
+        .ok_or_else(|| contract(format!(
+            "interface '{}' task_input_labels must be a list of labels",
+            interface.id.as_str()
+        )))?;
+    Ok(!labels.is_empty())
+}
+
 fn operation_catalog_artifact_id(interface: &InterfaceId) -> ArtifactId {
     ArtifactId::new(format!("artifact-operation-catalog-{}", interface.as_str()))
 }
@@ -2989,6 +3012,37 @@ fn plan_private_operation_catalog_writes(
         }
     }
     Ok(artifacts)
+}
+
+fn private_operation_capability(
+    registry_root: &Path,
+    instance: &InterfaceDescriptor,
+    template: &OperationCapabilityCatalog,
+) -> Result<OperationCapabilityCatalog, TopologyError> {
+    let binding = load_interface_operation_binding(&registry_root.join("interface"), instance)
+        .map_err(|error| contract(format!("private operation catalog failed to form: {error}")))?
+        .ok_or_else(|| {
+            contract(format!(
+                "private operation interface '{}' declares no operation catalog",
+                instance.id.as_str()
+            ))
+        })?;
+    if binding.catalog_dir != template.catalog_dir
+        || binding.catalog_label != template.catalog_label
+        || binding.request_label != template.request_label
+    {
+        return Err(contract(format!(
+            "private operation interface '{}' changed its template's catalog contract",
+            instance.id.as_str()
+        )));
+    }
+    Ok(OperationCapabilityCatalog {
+        template: template.template.clone(),
+        catalog_dir: binding.catalog_dir,
+        catalog_label: binding.catalog_label,
+        request_label: binding.request_label,
+        operations: binding.operations,
+    })
 }
 
 fn validate_exact_operation_descriptors(
@@ -5649,7 +5703,7 @@ fn validate_active_terminal_topology(
 }
 
 fn checkpoint_role_bindings_match(
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
     mandatory_role_artifacts: &[ArtifactId],
     allow_additional_context: bool,
 ) -> bool {

@@ -147,7 +147,7 @@ pub(super) fn validate_transition(before: &RunRecord, after: &RunRecord, config:
         let previous = before.checkpoint(&CheckpointId::new(old_id)).ok_or("replacement predecessor checkpoint missing")?;
         let next = after.checkpoint(&CheckpointId::new(new_id)).ok_or("replacement successor checkpoint missing")?;
         let mut expected = previous.clone(); expected.id = next.id.clone();
-        expected.trace = octopus_runtime::TraceId(format!("trace:{}:{}", before.id, next.id));
+        expected.trace = octopus_ledger::TraceId(format!("trace:{}:{}", before.id, next.id));
         if expected != *next || old_id.strip_prefix(&previous_prefix).map(|suffix| format!("{prefix}{suffix}")).as_ref() != Some(new_id) {
             let changes = json_patch::diff(&serde_json::to_value(&expected).map_err(|e| e.to_string())?, &serde_json::to_value(next).map_err(|e| e.to_string())?);
             return Err(format!("replacement changed frontier '{old_id}' -> '{new_id}': {}", changes.iter().map(|op|op.path().to_string()).collect::<Vec<_>>().join(",")));

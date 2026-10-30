@@ -1,0 +1,64 @@
+{
+  "processes": [
+    {
+      "bin": "python3",
+      "io_limits": {
+        "max_control_frame_bytes": 1048576,
+        "max_stderr_bytes": 262144,
+        "max_manifest_bytes": 1048576,
+        "max_payload_bytes": 268435456
+      },
+      "args": [
+        {
+          "repository_file": "registry/interface/world_email/email_life.py"
+        }
+      ],
+      "required_files": [
+        "registry/interface/world_email/email_life.py",
+        "registry/interface/world_email/email_contract.py",
+        "registry/interface/world_email/email_wire.py",
+        "registry/interface/world_email/octopus_operation_catalog.py",
+        "registry/interface/world_email/octopus_content_hash.py"
+      ],
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "inherit_env": [
+        "PATH"
+      ],
+      "inherit_env_from_interface": [
+        "/interface_driver_config/private_config/environment/address_env",
+        "/interface_driver_config/private_config/environment/password_env",
+        "/interface_driver_config/private_config/environment/imap_host_env",
+        "/interface_driver_config/private_config/environment/smtp_host_env",
+        "/interface_driver_config/private_config/environment/allowed_senders_env"
+      ],
+      "required_env": [],
+      "authority": {
+        "read_root_slots": [
+          "registry_interface_root"
+        ],
+        "write_root_slots": [
+          "interface_hand_in_root"
+        ],
+        "executable_root_slots": [],
+        "read_paths": [],
+        "write_paths": [],
+        "executable_paths": [],
+        "executable_commands": [
+          "python3"
+        ],
+        "read_env_paths": [],
+        "write_env_paths": [],
+        "executable_env_paths": [],
+        "allow_network": true,
+        "allow_local_ipc": true
+      },
+      "read_handles": [
+        "ledger",
+        "blobs",
+        "ledger_index"
+      ]
+    }
+  ]
+}

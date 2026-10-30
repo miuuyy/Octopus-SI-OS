@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { createRequire } = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -12,6 +13,27 @@ const application = JSON.parse(fs.readFileSync(path.join(ROOT, "application.json
 const TOKEN = `123456789:${"A".repeat(35)}`;
 const BOT = { id: 999, is_bot: true, first_name: "Octo", username: "octo_bot" };
 const ANN = { id: 4242, is_bot: false, first_name: "Ann" };
+
+function assertOperationCatalog(root, prefix, count) {
+  const Ajv = createRequire(path.resolve(root, "../../../app/package.json"))("ajv");
+  const ajv = new Ajv({ strict: true, strictTypes: true, allErrors: true });
+  const config = JSON.parse(fs.readFileSync(path.join(root, "interface.json"), "utf8")).interface_driver_config.private_config;
+  assert.deepEqual([config.operation_catalog_dir, config.operation_catalog_label, config.operation_request_label], ["operations", `${prefix}.operation_catalog`, `${prefix}.operation.request`]);
+  const files = fs.readdirSync(path.join(root, "operations")).sort();
+  assert.equal(files.length, count);
+  for (const file of files) {
+    const operation = JSON.parse(fs.readFileSync(path.join(root, "operations", file), "utf8"));
+    assert.deepEqual(Object.keys(operation).sort(), ["description", "handler_config", "id", "input_schema", "output_label", "request_label"]);
+    assert.equal(`${operation.id}.json`, file);
+    assert.match(operation.id, new RegExp(`^${prefix}\\.[a-z_]+$`));
+    assert.deepEqual([operation.request_label, operation.output_label], [`${prefix}.operation.request`, `${prefix}.operation.result`]);
+    assert.deepEqual([operation.input_schema.type, operation.input_schema.additionalProperties], ["object", false]);
+    ajv.compile(operation.input_schema);
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "application.json"), "utf8")).task_capabilities, undefined);
+  const contract = JSON.parse(fs.readFileSync(path.resolve(root, `../../artifact/artifact-application-${prefix}-context/artifact.json`), "utf8")).text;
+  assert.doesNotMatch(contract, /artifact\.send|delivery\.result|\.failure|\.operation\b/);
+}
 
 function telegram(script) {
   const calls = [];
@@ -122,4 +144,8 @@ test("typed allowed users skip pairing, bad input fails clearly and disconnect c
   const cleared = context(api);
   assert.equal((await connection.disconnect(cleared.ctx)).state, "not_connected");
   assert.deepEqual(cleared.saved, [{ TELEGRAM_BOT_TOKEN: null, TELEGRAM_ALLOWED_USERS: null, TELEGRAM_HOME_CHAT: null }]);
+});
+
+test("the operation catalog declares one precise tool per Telegram action", () => {
+  assertOperationCatalog(ROOT, "telegram", 22);
 });

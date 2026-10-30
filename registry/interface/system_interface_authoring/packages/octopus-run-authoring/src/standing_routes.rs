@@ -1,5 +1,5 @@
 use super::*;
-use octopus_runtime::run_record::CheckpointRecord;
+use octopus_run_record::CheckpointRecord;
 use std::io::Write;
 
 pub(super) const STANDING_DISPATCH_NAME: &str = "transport_dispatch_standing";

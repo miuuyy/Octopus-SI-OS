@@ -394,7 +394,7 @@ pub(super) async fn actual_nested_failure_return(
         && row.file.read_payload_bytes().unwrap() == wait_file.read_payload_bytes().unwrap()).cloned().collect::<Vec<_>>();
     assert_eq!(settled.len(), 1);
     let result_pin = &settled[0].metadata.runtime.as_ref().unwrap().run_record_hash.as_ref().unwrap();
-    let pinned = octopus_runtime::run_record::RunRecord::from_bytes(
+    let pinned = octopus_run_record::RunRecord::from_bytes(
         &std::fs::read(ctx.owner_blobs_dir().join(result_pin)).unwrap()).unwrap();
     let bindings = octopus_run_authoring::provider_context_bindings(
         &pinned, &InterfaceId::new("world_provider_test")).unwrap();

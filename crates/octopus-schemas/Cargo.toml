@@ -11,7 +11,7 @@ serde_json.workspace = true
 octopus-interfaces = { path = "../octopus-interfaces" }
 octopus-ledger = { path = "../octopus-ledger" }
 octopus-marks = { path = "../octopus-marks" }
-octopus-runtime = { path = "../octopus-runtime" }
+octopus-run-record = { path = "../octopus-run-record" }
 octopus-verifiers = { path = "../octopus-verifiers" }
 
 [[bin]]

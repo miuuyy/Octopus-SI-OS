@@ -62,7 +62,7 @@ pub(crate) async fn run(
         );
     }
     let record =
-        octopus_runtime::run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(input)?)
+        octopus_run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(input)?)
             .map_err(|e| e.to_string())?;
     if !record.checkpoints.iter().any(|cp| {
         record.active_checkpoints.contains(&cp.id)

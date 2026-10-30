@@ -1,0 +1,28 @@
+{
+  "id": "slack.get_user_profile",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "web_api",
+    "method": "users.profile.get",
+    "read_only": true
+  },
+  "description": "Read a member's profile fields, such as title, status and email where the workspace shares it; the bot's own profile when user is omitted.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "user": {
+        "type": "string",
+        "pattern": "^[UW][A-Z0-9]{8,32}$",
+        "description": "Member id, such as user_id from a slack.event."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

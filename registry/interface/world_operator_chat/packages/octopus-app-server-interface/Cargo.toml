@@ -19,7 +19,6 @@ thiserror.workspace = true
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
-octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
 tokio-stream = { version = "0.1", default-features = false }
 async-stream = "0.3"
 

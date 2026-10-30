@@ -46,6 +46,21 @@ async fn read_message(
     serde_json::from_str(&line).unwrap()
 }
 
+fn context_carrier(var_dir: &Path, request_id: u64, bindings: &Value, metadata: &impl Serialize) -> Value {
+    let bytes = serde_json::to_vec(&json!({"artifact_bindings": bindings, "metadata": metadata})).unwrap();
+    let content_hash = ContentHash::of_bytes(&bytes);
+    let directory = var_dir.join("invocations").canonicalize().unwrap().join(request_id.to_string()).join("artifact");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("invocation-context-{}.json", content_hash.to_hex()));
+    std::fs::write(&path, &bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    json!({"path": path, "content_hash": content_hash, "byte_len": bytes.len()})
+}
+
 #[tokio::test]
 async fn file_write_process_reports_active_before_completion_and_accepts_release() {
     file_write_process_case(false).await;
@@ -323,8 +338,7 @@ async fn file_write_process_case(ordered: bool) {
                 "artifact": artifact,
                 "label": "tool.call",
                 "manifest_path": input_artifact.manifest_path(),
-                "artifact_bindings": [],
-                "metadata": metadata,
+                "context": context_carrier(&process_var_dir, 1, &json!([]), &metadata),
                 "source_movement_seq": 41,
                 "worker_environment": formation,
                 "worker_environment_kind": &*kind
@@ -510,7 +524,7 @@ async fn client_mcp_process_preserves_bound_scope_emission_verdict_and_lifecycle
         let content = ContentHash::of_bytes(&std::fs::read(input.manifest_path()).unwrap());
         write_message(&mut stdin, &json!({"kind":"invoke","request_id":request_id,"descriptor":descriptor,"envelope":{
             "artifact":{"id":format!("tool.call:{}",content.to_hex()),"content":content},"label":"tool.call",
-            "manifest_path":input.manifest_path(),"artifact_bindings":bindings,"metadata":metadata,
+            "manifest_path":input.manifest_path(),"context":context_carrier(&process_var_dir, request_id, &json!(bindings), &metadata),
             "source_movement_seq":41+request_id,"worker_environment":formation,"worker_environment_kind":&*kind,
         }})).await;
         if matches!(request_id, 6 | 7 | 9 | 10) {

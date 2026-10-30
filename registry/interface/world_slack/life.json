@@ -17,6 +17,7 @@
         "registry/interface/world_slack/slack_life.py",
         "registry/interface/world_slack/slack_contract.py",
         "registry/interface/world_slack/slack_wire.py",
+        "registry/interface/world_slack/octopus_operation_catalog.py",
         "registry/interface/world_slack/octopus_content_hash.py"
       ],
       "inherit_env": [

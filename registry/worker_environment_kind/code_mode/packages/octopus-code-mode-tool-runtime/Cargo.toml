@@ -18,7 +18,7 @@ octopus-tool-door-runtime = { package = "octopus-process-session-tool-runtime", 
 octopus-run-authoring = { path = "../../../../interface/system_interface_authoring/packages/octopus-run-authoring" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
-octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-run-record = { path = "../../../../../crates/octopus-run-record" }
 octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
 serde = { workspace = true, features = ["derive"] }

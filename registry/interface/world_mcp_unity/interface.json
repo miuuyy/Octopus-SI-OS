@@ -28,6 +28,9 @@
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"
+      },
+      "server_tool_operations": {
+        "prefix": "unity"
       }
     },
     "transport": {

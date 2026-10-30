@@ -1,0 +1,84 @@
+{
+  "id": "email.move_messages",
+  "request_label": "email.operation.request",
+  "output_label": "email.operation.result",
+  "handler_config": {
+    "operation": "message.move",
+    "read_only": false
+  },
+  "description": "Move messages to another folder, such as \\Archive or \\Trash. Give exactly one of ref or refs; their refs change after the move.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "uidvalidity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "uid": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "mailbox",
+          "uidvalidity",
+          "uid"
+        ],
+        "additionalProperties": false,
+        "description": "message.ref from an email.event or a search result."
+      },
+      "refs": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 500,
+        "items": {
+          "type": "object",
+          "properties": {
+            "mailbox": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "uidvalidity": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            "uid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            }
+          },
+          "required": [
+            "mailbox",
+            "uidvalidity",
+            "uid"
+          ],
+          "additionalProperties": false
+        },
+        "description": "Several message refs from one mailbox."
+      },
+      "to_mailbox": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "description": "Folder name, or a role: \\Sent, \\Archive, \\Trash, \\Junk, \\Drafts, \\All or \\Flagged."
+      }
+    },
+    "required": [
+      "to_mailbox"
+    ],
+    "additionalProperties": false
+  }
+}

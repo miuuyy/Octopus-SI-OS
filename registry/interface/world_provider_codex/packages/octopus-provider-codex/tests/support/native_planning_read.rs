@@ -2,7 +2,7 @@
 async fn native_planning_reads_the_acknowledged_tip_after_progress_without_replaying_effects() {
     use futures::{SinkExt, StreamExt};
     use octopus_appserver_proto::JSONRPCMessage;
-    use octopus_runtime::run_record::RunRecord;
+    use octopus_run_record::RunRecord;
     use serde_json::json;
     use std::time::Duration;
 

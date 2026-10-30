@@ -538,10 +538,19 @@ async function loadLedgerArtifactPayload(row, hex, required = false, projection 
   }
   const payloadText = payloadBytes.toString("utf8");
   try {
-    return { payload: JSON.parse(payloadText), cacheable: true, retainedBytes: bytes.byteLength + payloadBytes.byteLength, files };
+    return { payload: withoutEmbeddedMedia(JSON.parse(payloadText)), cacheable: true, retainedBytes: bytes.byteLength + payloadBytes.byteLength, files };
   } catch {
     return { payload: { __raw: payloadText }, cacheable: true, retainedBytes: bytes.byteLength + payloadBytes.byteLength, files };
   }
+}
+
+function withoutEmbeddedMedia(payload) {
+  if (!Array.isArray(payload?.media)) return payload;
+  return { ...payload, media: payload.media.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+    const { payload_base64: _bytes, ...summary } = entry;
+    return summary;
+  }) };
 }
 
 function movementBoundaryInterface(row, endpointKey) {

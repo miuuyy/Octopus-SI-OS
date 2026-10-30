@@ -1,0 +1,37 @@
+{
+  "id": "slack.push_view",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "view.push"
+  },
+  "description": "Push a new view onto an open modal, from the trigger of an action inside it.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "view": {
+        "type": "object",
+        "description": "A Block Kit view object with its type, title and blocks."
+      },
+      "trigger_handle": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "trigger_handle from the slack.event."
+      },
+      "trigger_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "A raw Slack trigger_id, when one is known."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "view"
+    ],
+    "additionalProperties": false
+  }
+}

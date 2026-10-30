@@ -51,8 +51,8 @@ pub(crate) struct TurnContext<'context, 'sink> {
 pub(crate) struct NativeRunInvocation<'a> {
     pub(crate) affordances: &'a RunAffordances,
     pub(crate) metadata: &'a InvocationMetadata,
-    pub(crate) admitted_record: &'a octopus_runtime::run_record::RunRecord,
-    pub(crate) current_record: &'a octopus_runtime::run_record::RunRecord,
+    pub(crate) admitted_record: &'a octopus_run_record::RunRecord,
+    pub(crate) current_record: &'a octopus_run_record::RunRecord,
 }
 
 pub(crate) fn normalize_output_identity(
@@ -865,10 +865,10 @@ pub(crate) fn lifecycle_route_from_provider(
         ProviderEmissionRoute::ClientProjectionWithVerifiedInputs { inputs } => {
             if inputs
                 .iter()
-                .any(|input| input.also_deliver_to_tool.is_some())
+                .any(|input| input.also_deliver_to_tool.is_some() || input.also_deliver_to_interface.is_some())
             {
                 return Err(InterfaceDriverError::FailedClosed(
-                    "lifecycle-held projection cannot discard a verified tool-door recipient"
+                    "lifecycle-held projection cannot discard a verified second recipient"
                         .to_string(),
                 ));
             }
@@ -884,6 +884,9 @@ pub(crate) fn lifecycle_route_from_provider(
         }
         ProviderEmissionRoute::Tool { tool } => LifecycleRoute::Tool { tool },
         ProviderEmissionRoute::Interface { interface } => LifecycleRoute::Interface { interface },
+        ProviderEmissionRoute::Operation { interface, result_label } => {
+            LifecycleRoute::Operation { interface, result_label }
+        }
     })
 }
 

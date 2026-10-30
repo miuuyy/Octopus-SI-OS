@@ -1,5 +1,5 @@
 use octopus_operator_chat_client::run_composition::*;
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 
 #[path = "support/composition_fixture.rs"]
@@ -572,6 +572,21 @@ fn selected_external_routes_preserve_checkpoints_profiles_and_scoped_dependencie
         required_verified_artifact: serde_json::from_value(json!({"mark":"tool.call.allowed", "artifact_label":"selected.result",
             "verifier":"artifact_exists", "params":{"selected":"exact"}})).unwrap(),
     }];
+    assert!(plan_run_composition(&request).unwrap_err().contains("model outputs require an output selection"));
+    let provider_path = request.roots.registry_root.join("interface/world_provider_fixture/interface.json");
+    let mut provider: Value = serde_json::from_slice(&std::fs::read(&provider_path).unwrap()).unwrap();
+    provider["interface_driver_config"]["private_config"]["client_projection_output_labels"] =
+        json!(["interface.artifact.output", "turn.stream", "selected.result"]);
+    std::fs::write(provider_path, serde_json::to_vec(&provider).unwrap()).unwrap();
+    request.communication.output_selection = Some(CompositionOutputSelection {
+        return_labels: vec!["selected.result".into()],
+        record_labels: vec!["turn.stream".into()],
+    });
+    assert!(plan_run_composition(&request).unwrap_err().contains("another provider output already owns"));
+    request.communication.output_selection = Some(CompositionOutputSelection {
+        return_labels: vec!["interface.artifact.output".into()],
+        record_labels: vec!["turn.stream".into()],
+    });
     let plan = plan_run_composition(&request).unwrap();
     let record = RunRecord::from_bytes(plan.run_write.content.as_bytes()).unwrap();
     for (checkpoint, source, targets) in [

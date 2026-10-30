@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.process_session",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "product_kind": "driver",
   "product_id": "process_session",
   "release_status": "optional",
@@ -11,7 +11,7 @@
     "description": "Private process rooms with their own workspace, terminals and long-running commands.",
     "developer": "Octopus",
     "category": "worker_environment",
-    "icon": "hard-drive"
+    "icon": "terminal"
   },
   "members": [
     {

@@ -81,7 +81,7 @@
             "trace":"trace-a","status":"running","checkpoints":[{"id":"checkpoint-a","run":"run-a",
                 "trace":"trace-a","epoch":1,"interface_binding":inbound,"outbound_interface_bindings":[outbound]}],
             "active_checkpoints":["checkpoint-a"]})).unwrap();
-        octopus_runtime::run_record::RunRecord::from_bytes(&bytes).unwrap();
+        octopus_run_record::RunRecord::from_bytes(&bytes).unwrap();
         bytes
     }
 
@@ -1634,7 +1634,7 @@
                 "checkpoints":[{"name":"input","role":"stable","include_context":true,"interface_binding":input_binding,
                     "outbound_interface_bindings":outputs,"required_verified_artifacts":[]}]}}});
             let pinned = serde_json::to_vec(&pinned).unwrap();
-            octopus_runtime::run_record::RunRecord::from_bytes(&pinned).unwrap();
+            octopus_run_record::RunRecord::from_bytes(&pinned).unwrap();
             let pin = ContentHash::of_bytes(&pinned);
             std::fs::write(ctx.blobs_dir.join(pin.to_hex()), &pinned).unwrap();
             let mut metadata = runtime_metadata();

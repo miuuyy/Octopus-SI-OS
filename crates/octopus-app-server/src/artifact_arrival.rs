@@ -68,7 +68,7 @@ fn arrival_trace_id(arriving_interface: &InterfaceId) -> TraceId {
 struct AttestedEmissionSource {
     run: RunId,
     checkpoint: CheckpointId,
-    epoch: octopus_runtime::GrantEpoch,
+    epoch: octopus_run_record::GrantEpoch,
     trace: TraceId,
     lamport: Lamport,
 }
@@ -146,7 +146,7 @@ fn attest_emission_source(
     Ok(AttestedEmissionSource {
         run: runtime.run.clone(),
         checkpoint: runtime.checkpoint.clone(),
-        epoch: octopus_runtime::GrantEpoch(runtime.epoch),
+        epoch: octopus_run_record::GrantEpoch(runtime.epoch),
         trace: movement.trace,
         lamport: movement.lamport,
     })

@@ -17,7 +17,6 @@ octopus-util-abspath = { path = "../octopus-util-abspath" }
 octopus-util-pathuri = { path = "../octopus-util-pathuri" }
 octopus-worker-env-floor = { path = "../octopus-worker-env-floor" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
-blake3.workspace = true
 serde.workspace = true
 
 serde_json.workspace = true

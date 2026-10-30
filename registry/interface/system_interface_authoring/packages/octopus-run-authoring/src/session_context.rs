@@ -237,7 +237,7 @@ pub fn validate_payload_artifact_selection(selected: &[ArtifactRef]) -> Result<(
 
 pub(crate) fn validate_payload_read_bindings(
     selected: &[ArtifactRef],
-    checkpoint: &octopus_runtime::run_record::CheckpointRecord,
+    checkpoint: &octopus_run_record::CheckpointRecord,
     references: &[ArtifactRef],
     readable: &BTreeSet<ArtifactId>,
     roles: &[String],
@@ -266,7 +266,7 @@ pub fn context_artifact_payloads(
     let runtime = metadata.runtime.as_ref().ok_or("context projection has no admitted runtime coordinate")?;
     let mut selected = payload_artifact_bindings(record, &runtime.interface)?;
     if let Some(reference) = result_inputs::bound_call_evidence(record, &runtime.interface, &runtime.checkpoint)? {
-        if metadata.grant.artifact_access.get(reference.id.as_str()) != Some(&octopus_runtime::ArtifactAccess::read_only()) {
+        if metadata.grant.artifact_access.get(reference.id.as_str()) != Some(&octopus_policy::ArtifactAccess::read_only()) {
             return Err("result context lost its exact read-only call evidence grant".into());
         }
         if !selected.contains(&reference) { selected.push(reference); }

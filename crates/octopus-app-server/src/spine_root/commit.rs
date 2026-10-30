@@ -50,7 +50,7 @@ impl Inputs {
         Ok(())
     }
 
-    fn capture(owner: &RegistryRunGrantResolver, record: &octopus_runtime::run_record::RunRecord, marks: &[Mark]) -> Result<Self, String> {
+    fn capture(owner: &RegistryRunGrantResolver, record: &octopus_run_record::RunRecord, marks: &[Mark]) -> Result<Self, String> {
         let mut inputs = Self::default();
         let snapshot = owner.live_registry.read().map_err(|_| "registry snapshot lock is poisoned")?;
         let mut roots = vec![RegistryNode::interface(record.worker.as_str())];
@@ -91,7 +91,7 @@ impl Inputs {
     }
 }
 
-pub(super) fn acquire(owner: &RegistryRunGrantResolver, record: &octopus_runtime::run_record::RunRecord, marks: &[Mark]) -> Result<RegistryCommitGuard, String> {
+pub(super) fn acquire(owner: &RegistryRunGrantResolver, record: &octopus_run_record::RunRecord, marks: &[Mark]) -> Result<RegistryCommitGuard, String> {
     let before = Inputs::capture(owner, record, marks)?;
     let guard = ReadGuard::try_acquire(
         &before.files.iter().cloned().collect::<Vec<_>>(),

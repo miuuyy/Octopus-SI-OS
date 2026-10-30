@@ -138,6 +138,8 @@ jobs:
           node --test registry/interface/world_gmail/tests/test_connection.cjs
           python3 registry/interface/world_telegram/tests/test_telegram_contract.py
           node registry/interface/world_telegram/tests/test_connection.cjs
+          python3 registry/interface/world_email/tests/test_email_contract.py
+          node --test registry/interface/world_email/tests/test_connection.cjs
           python3 -m unittest discover -s registry/interface/world_cron/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_issues/tests -p 'test_*.py'
           node registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/configure-transport.test.cjs
@@ -227,11 +229,11 @@ jobs:
         run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_)'
 
       - name: Runtime and product dependency boundaries
-        run: cargo test --locked -p octopus-app --test architecture_dependency_guard production_roots_keep_registry_implementation_boundaries -- --exact
+        run: cargo test --locked -p octopus-app --test architecture_dependency_guard -- --exact production_roots_keep_registry_implementation_boundaries worker_environment_kind_packages_link_neither_runtime_nor_app_server
 
       - name: Coder and workspace command ownership and continuity
         run: |
-          cargo test --locked -p octopus-system-coder-env --lib keep_kind_owned_command_routing
+          cargo test --locked -p octopus-system-coder-env -p octopus-system-workspace-env --lib keep_kind_owned_command_routing
           cargo test --locked -p octopus-system-workspace-env --test persistent_process_keeper a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_exact_outcome -- --exact
 
       - name: Registry and context artifact freshness

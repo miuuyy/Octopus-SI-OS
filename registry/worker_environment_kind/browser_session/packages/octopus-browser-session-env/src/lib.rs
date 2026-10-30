@@ -1,6 +1,5 @@
-use octopus_interfaces::{
-    InterfaceArtifactFile, InterfaceBoundaryError, InterfaceInvocationEnvelope,
-};
+use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope};
+use octopus_tool_door_runtime::room::{admitted_tool, decode_tool_call, emit_json_artifact, formed_scope};
 use octopus_tool_door_runtime::{ToolProcessEnvironment, ToolProcessError, ToolProcessInvocation};
 use octopus_tool_handlers::{ToolCall, ToolCallArtifact, ToolResultArtifact, ToolResultError};
 use octopus_worker_env::WorkerEnvironmentFormation;
@@ -14,18 +13,14 @@ pub use browser_wait_completion::run_browser_wait_completion_tool_process;
 mod native_transport;
 pub use native_transport::prepare_private_native_host;
 pub use browser_session::decode_filechooser_door_artifact;
+pub use browser_session::{bounded_optional_u64, required_string, url_is_loopback};
 #[cfg(test)]
 mod tests;
 
 use browser_session::BrowserRoom;
 
-const NEUTRAL_TOOL_CALL_LABEL: &str = "tool.call";
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct BrowserInvocationScope {
-    run: String,
-    ee: String,
-}
+const ROOM: &str = "browser door";
+const SUBSTRATE_FAMILY: &str = "browser";
 
 struct DecodedRoomInvocation {
     envelope: InterfaceInvocationEnvelope,
@@ -108,7 +103,7 @@ struct BrowserHandlerConfig {
     operation: BrowserOperation,
 }
 
-fn browser_result(
+pub fn browser_result(
     tool: &str,
     correlation_id: Option<String>,
     result: Result<Value, String>,
@@ -152,7 +147,7 @@ fn browser_result(
     }
 }
 
-fn evidence_write_error(stage: &str, error: impl Into<String>) -> Value {
+pub fn evidence_write_error(stage: &str, error: impl Into<String>) -> Value {
     serde_json::json!({
         "stage": stage,
         "message": error.into(),
@@ -166,93 +161,33 @@ pub async fn run_browser_session_tool_process() -> Result<(), String> {
 }
 
 fn decode_room_invocation(
-    environment: &ToolProcessEnvironment,
     invocation: ToolProcessInvocation,
-    substrate_family: &str,
 ) -> Result<DecodedRoomInvocation, ToolProcessError> {
     let ToolProcessInvocation {
         descriptor,
         envelope,
         source_movement_seq,
         worker_environment,
-        worker_environment_kind,
         ..
     } = invocation;
-    if descriptor.interface != environment.interface {
-        return Err(capability(format!(
-            "tool descriptor '{}' belongs to interface '{}', not browser door '{}'",
-            descriptor.id, descriptor.interface, environment.interface
-        )));
-    }
     let formation = worker_environment.ok_or_else(|| {
         capability(format!(
             "tool '{}' invocation has no formed worker environment",
             descriptor.id
         ))
     })?;
-    if formation.door_interface != environment.interface {
-        return Err(capability(format!(
-            "tool '{}' formation belongs to door '{}', not '{}'",
-            descriptor.id, formation.door_interface, environment.interface
-        )));
-    }
-    let kind = worker_environment_kind.ok_or_else(|| {
-        capability(format!(
-            "tool '{}' invocation has no formed kind descriptor",
-            descriptor.id
-        ))
-    })?;
-    if kind.worker_environment_kind_id != formation.worker_environment_kind
-        || kind.substrate_family != substrate_family
-    {
-        return Err(capability(format!(
-            "tool '{}' was formed for incompatible worker_environment_kind '{}'",
-            descriptor.id, formation.worker_environment_kind
-        )));
-    }
-    if !descriptor
-        .supported_worker_environment_kinds
-        .iter()
-        .any(|candidate| candidate == &kind.worker_environment_kind_id)
-        || !formation
-            .granted_tools
-            .iter()
-            .any(|tool| tool == descriptor.id.as_str())
-        || !formation
-            .tool_descriptor_hashes
-            .contains_key(descriptor.id.as_str())
-    {
-        return Err(capability(format!(
-            "tool '{}' is not part of the exact formed room",
-            descriptor.id
-        )));
-    }
-    let manifest = envelope
-        .read_artifact_manifest()
-        .map_err(|error| capability(error.to_string()))?;
-    let payload = envelope
-        .read_artifact_payload()
-        .map_err(|error| capability(error.to_string()))?;
-    let scope =
-        invocation_scope_from_input(&envelope).map_err(|error| capability(error.to_string()))?;
-    if scope.run != formation.run || scope.ee != formation.ee {
-        return Err(capability(format!(
-            "tool '{}' formation does not match invocation coordinates",
-            descriptor.id
-        )));
-    }
+    formed_scope(ROOM, &envelope, &formation)?;
     let operation = browser_operation(&descriptor.handler_config, descriptor.id.as_str())?;
-    let artifact: ToolCallArtifact = if operation == BrowserOperation::FilechooserResume {
-        browser_session::decoded_response(&envelope, descriptor.id.as_str()).map_err(capability)?
-    } else if operation == BrowserOperation::HistoryResume {
-        browser_history::decoded_response(&envelope, descriptor.id.as_str()).map_err(capability)?
-    } else {
-        if manifest.label != NEUTRAL_TOOL_CALL_LABEL {
-            return Err(capability(format!("browser door manifest label '{}' is not '{}'", manifest.label, NEUTRAL_TOOL_CALL_LABEL)));
+    let artifact: ToolCallArtifact = match operation {
+        BrowserOperation::FilechooserResume => {
+            browser_session::decoded_response(&envelope, descriptor.id.as_str()).map_err(capability)?
         }
-        serde_json::from_slice(&payload).map_err(|error| capability(format!("tool.call artifact is not a strict browser-door JSON object: {error}")))?
+        BrowserOperation::HistoryResume => {
+            browser_history::decoded_response(&envelope, descriptor.id.as_str()).map_err(capability)?
+        }
+        _ => decode_tool_call(ROOM, &envelope)?,
     };
-    let tool = admitted_tool_call_tool(&envelope, &artifact)
+    let tool = admitted_tool(ROOM, &envelope, &artifact)
         .map_err(|error| capability(error.to_string()))?;
     if descriptor.id.as_str() != tool {
         return Err(capability(format!(
@@ -260,11 +195,9 @@ fn decode_room_invocation(
             descriptor.id, tool
         )));
     }
-    let descriptor_bytes = octopus_descriptors::canonical_bytes(&serde_json::to_value(&descriptor).map_err(|error| capability(error.to_string()))?);
-    let descriptor_hash = blake3::hash(&descriptor_bytes).to_hex().to_string();
-    if formation.tool_descriptor_hashes.get(descriptor.id.as_str()).map(ToString::to_string).as_deref() != Some(descriptor_hash.as_str()) {
-        return Err(capability("Original broker tool descriptor differs from the exact formed pin"));
-    }
+    let descriptor_bytes = octopus_descriptors::canonical_bytes(
+        &serde_json::to_value(&descriptor).map_err(|error| capability(error.to_string()))?,
+    );
     let effective_allow_network = descriptor.process.authority.allow_network
         && formation.network_ceiling != octopus_worker_env::NetworkCeiling::Denied;
     Ok(DecodedRoomInvocation {
@@ -296,78 +229,11 @@ fn browser_operation(
         })
 }
 
-fn invocation_scope_from_input(
-    input: &InterfaceInvocationEnvelope,
-) -> Result<BrowserInvocationScope, InterfaceBoundaryError> {
-    let runtime = input
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.runtime.as_ref())
-        .ok_or_else(|| {
-            InterfaceBoundaryError::Protocol(
-                "browser door requires runtime metadata beside the artifact".into(),
-            )
-        })?;
-    Ok(BrowserInvocationScope {
-        run: runtime.run.as_str().to_string(),
-        ee: runtime.ee.as_str().to_string(),
-    })
-}
-
-fn admitted_tool_call_tool(
-    input: &InterfaceInvocationEnvelope,
-    call: &ToolCallArtifact,
-) -> Result<String, InterfaceBoundaryError> {
-    let tool = call.tool.trim();
-    if tool.is_empty() {
-        return Err(InterfaceBoundaryError::Protocol(
-            "browser door tool.call has empty tool name".into(),
-        ));
-    }
-    if !input
-        .granted_tool_names()?
-        .iter()
-        .any(|grant| grant == tool)
-    {
-        return Err(InterfaceBoundaryError::Protocol(format!(
-            "browser door denied tool.call '{}' because formed metadata did not grant it",
-            tool
-        )));
-    }
-    if input
-        .hard_blocked_tool_names()?
-        .iter()
-        .any(|blocked| blocked == tool)
-    {
-        return Err(InterfaceBoundaryError::Protocol(format!(
-            "browser door denied hard-blocked tool.call '{}'",
-            tool
-        )));
-    }
-    Ok(tool.to_string())
-}
-
 fn response_artifact(
     envelope: &InterfaceInvocationEnvelope,
     response: ToolResultArtifact,
 ) -> Result<InterfaceArtifactFile, ToolProcessError> {
-    let bytes = serde_json::to_vec(&response).map_err(|error| {
-        capability(format!(
-            "browser door response artifact did not serialize: {error}"
-        ))
-    })?;
-    let parent = envelope
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| {
-            capability(format!(
-                "browser door inbound artifact manifest '{}' has no parent directory",
-                envelope.artifact_file.manifest_path().display()
-            ))
-        })?;
-    InterfaceArtifactFile::write(parent.join("emitted"), &response.label, &bytes)
-        .map_err(|error| capability(error.to_string()))
+    emit_json_artifact(envelope, &response.label, &response).map_err(capability)
 }
 
 fn capability(error: impl Into<String>) -> ToolProcessError {

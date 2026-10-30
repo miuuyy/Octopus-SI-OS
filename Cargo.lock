@@ -6156,6 +6156,7 @@ dependencies = [
  "octopus-ledger-store",
  "octopus-marks",
  "octopus-policy",
+ "octopus-run-record",
  "octopus-runtime",
  "octopus-tool-registry",
  "octopus-verifiers",
@@ -6184,6 +6185,7 @@ dependencies = [
  "octopus-ledger-store",
  "octopus-marks",
  "octopus-policy",
+ "octopus-run-record",
  "octopus-runtime",
  "octopus-tool-registry",
  "octopus-verifiers",
@@ -6205,7 +6207,6 @@ dependencies = [
  "octopus-descriptors",
  "octopus-interfaces",
  "octopus-ledger",
- "octopus-runtime",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -6376,7 +6377,6 @@ dependencies = [
  "octopus-tool-registry",
  "octopus-util-image",
  "octopus-worker-env",
- "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
@@ -6384,7 +6384,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.28.0",
- "tracing",
 ]
 
 [[package]]
@@ -6531,6 +6530,7 @@ dependencies = [
  "octopus-policy",
  "octopus-process-session-tool-runtime",
  "octopus-run-authoring",
+ "octopus-run-record",
  "octopus-runtime",
  "octopus-system-gui-env",
  "octopus-tool-handlers",
@@ -6556,7 +6556,7 @@ dependencies = [
  "octopus-ledger",
  "octopus-process-session-tool-runtime",
  "octopus-run-authoring",
- "octopus-runtime",
+ "octopus-run-record",
  "octopus-tool-handlers",
  "octopus-worker-env",
  "serde",
@@ -6702,7 +6702,6 @@ dependencies = [
  "octopus-ledger",
  "octopus-process-session-tool-runtime",
  "octopus-tool-handlers",
- "octopus-tool-registry",
  "octopus-worker-env",
  "serde",
  "serde_json",
@@ -6888,7 +6887,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "blake3",
@@ -6918,7 +6916,6 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "uuid",
- "windows-sys 0.52.0",
  "wiremock",
  "zeroize",
 ]
@@ -6969,15 +6966,12 @@ name = "octopus-file-search"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "crossbeam-channel",
  "ignore",
  "nucleo",
  "pretty_assertions",
  "serde",
- "serde_json",
  "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -7029,34 +7023,16 @@ dependencies = [
 name = "octopus-git-sandbox-substrate"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "base64 0.22.1",
  "blake3",
- "dirs",
- "dunce",
- "fs2",
  "libc",
- "octopus-applypatch",
  "octopus-descriptors",
- "octopus-exec-substrate",
- "octopus-file-system",
- "octopus-network-proxy",
- "octopus-sandbox-substrate",
- "octopus-substrate-contract",
- "octopus-util-abspath",
- "octopus-util-pathuri",
- "octopus-util-pty",
  "octopus-worker-env",
- "octopus-worker-env-floor",
- "pretty_assertions",
- "regex-lite",
+ "octopus-workspace-substrate",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
- "url",
- "which 8.0.4",
 ]
 
 [[package]]
@@ -7154,7 +7130,7 @@ dependencies = [
  "octopus-ledger-store",
  "octopus-policy",
  "octopus-run-authoring",
- "octopus-runtime",
+ "octopus-run-record",
  "octopus-tool-handlers",
  "octopus-util-abspath",
  "octopus-world-pyecho-life-runtime",
@@ -7212,7 +7188,8 @@ dependencies = [
  "octopus-interface-projection",
  "octopus-interfaces",
  "octopus-ledger",
- "octopus-runtime",
+ "octopus-policy",
+ "octopus-run-record",
  "octopus-util-pty",
  "octopus-verifiers",
  "schemars 0.8.22",
@@ -7483,6 +7460,7 @@ dependencies = [
  "octopus-process-session-tool-runtime",
  "octopus-provider-codex",
  "octopus-run-authoring",
+ "octopus-run-record",
  "octopus-runtime",
  "octopus-system-room-env",
  "octopus-tool-handlers",
@@ -7644,6 +7622,7 @@ dependencies = [
  "octopus-operator-chat-client",
  "octopus-protocol",
  "octopus-run-authoring",
+ "octopus-run-record",
  "octopus-runtime",
  "octopus-secrets",
  "octopus-system-room-env",
@@ -7776,8 +7755,8 @@ dependencies = [
  "octopus-ledger",
  "octopus-ledger-index",
  "octopus-ledger-store",
- "octopus-marks",
- "octopus-runtime",
+ "octopus-policy",
+ "octopus-run-record",
  "octopus-system-room-env",
  "octopus-tool-handlers",
  "octopus-world-pyecho-life-runtime",
@@ -7792,6 +7771,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "octopus-run-record"
+version = "0.1.0"
+dependencies = [
+ "octopus-descriptors",
+ "octopus-file-storage",
+ "octopus-ledger",
+ "octopus-policy",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "octopus-runtime"
 version = "0.1.0"
 dependencies = [
@@ -7802,6 +7794,7 @@ dependencies = [
  "octopus-ledger",
  "octopus-marks",
  "octopus-policy",
+ "octopus-run-record",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -7815,7 +7808,6 @@ name = "octopus-sandbox-substrate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "blake3",
  "dirs",
  "dunce",
  "libc",
@@ -7843,7 +7835,7 @@ dependencies = [
  "octopus-interfaces",
  "octopus-ledger",
  "octopus-marks",
- "octopus-runtime",
+ "octopus-run-record",
  "octopus-verifiers",
  "schemars 0.8.22",
  "serde_json",
@@ -7933,28 +7925,17 @@ dependencies = [
 name = "octopus-system-coder-env"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
- "blake3",
- "ignore",
- "octopus-applypatch",
  "octopus-descriptors",
- "octopus-file-search",
- "octopus-file-system",
  "octopus-git-sandbox-substrate",
- "octopus-interfaces",
- "octopus-ledger",
  "octopus-process-session-tool-runtime",
+ "octopus-system-workspace-env",
  "octopus-tool-handlers",
  "octopus-tool-registry",
- "octopus-util-pathuri",
  "octopus-worker-env",
- "regex",
  "serde",
  "serde_json",
- "similar",
  "tempfile",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -8048,14 +8029,29 @@ dependencies = [
 name = "octopus-system-workspace-env"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "ignore",
+ "octopus-applypatch",
  "octopus-descriptors",
- "octopus-git-sandbox-substrate",
+ "octopus-file-search",
+ "octopus-file-system",
+ "octopus-interfaces",
+ "octopus-ledger",
  "octopus-process-session-tool-runtime",
- "octopus-system-coder-env",
+ "octopus-tool-handlers",
+ "octopus-tool-registry",
+ "octopus-util-pathuri",
  "octopus-verifiers",
  "octopus-worker-env",
+ "octopus-workspace-substrate",
+ "regex",
+ "serde",
+ "serde_json",
+ "similar",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8339,9 +8335,8 @@ dependencies = [
 name = "octopus-web-search-env"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
  "blake3",
- "futures-util",
+ "octopus-browser-session-env",
  "octopus-descriptors",
  "octopus-interfaces",
  "octopus-ledger",
@@ -8355,8 +8350,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "tokio-tungstenite 0.28.0",
- "tracing",
 ]
 
 [[package]]
@@ -8393,6 +8386,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "octopus-workspace-substrate"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "fs2",
+ "libc",
+ "octopus-applypatch",
+ "octopus-descriptors",
+ "octopus-exec-substrate",
+ "octopus-file-system",
+ "octopus-sandbox-substrate",
+ "octopus-util-pathuri",
+ "octopus-util-pty",
+ "octopus-worker-env",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "octopus-world-cron-interface"
 version = "0.1.0"
 dependencies = [
@@ -8402,6 +8417,7 @@ dependencies = [
  "octopus-ledger",
  "octopus-ledger-store",
  "octopus-operator-chat-client",
+ "octopus-run-record",
  "octopus-runtime",
  "serde_json",
  "tempfile",
@@ -8419,6 +8435,7 @@ dependencies = [
  "octopus-interfaces",
  "octopus-ledger",
  "octopus-ledger-store",
+ "octopus-run-record",
  "octopus-runtime",
  "serde_json",
  "tempfile",
@@ -8463,6 +8480,7 @@ dependencies = [
  "octopus-ledger",
  "octopus-ledger-store",
  "octopus-policy",
+ "octopus-run-record",
  "octopus-runtime",
  "octopus-tool-handlers",
  "octopus-tool-registry",

@@ -13,7 +13,7 @@ use octopus_run_authoring::{
     CheckedRunEdit, CheckedRunTransition, OwnerWriterEdit, owner_writer_binding, provider_context_bindings,
     validate_unchanged_run_neighbors,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use octopus_tool_handlers::ToolResultArtifact;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

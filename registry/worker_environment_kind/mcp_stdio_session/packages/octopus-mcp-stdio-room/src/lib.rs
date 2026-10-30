@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope, InvocationMetadata};
+use octopus_interfaces::InterfaceArtifactFile;
+use octopus_tool_door_runtime::room::{decode_tool_call, descriptor_operation, formed_scope};
 use octopus_tool_door_runtime::{
     DeliveryVerdict, ToolProcessEnvironment, ToolProcessError, ToolProcessHandler,
     ToolProcessInvocation, ToolProcessIo, WorkerEnvironmentLifecycleRecorder,
-    WorkerEnvironmentLiveStateRecorder, WorkerEnvironmentReleaseContext,
-    WorkerEnvironmentReleaseMode,
+    WorkerEnvironmentLiveStateRecorder,
 };
-use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact, ToolResultError};
+use octopus_tool_handlers::{ToolResultArtifact, ToolResultError};
 use octopus_worker_env::{
     WorkerEnvKindSpec, WorkerEnvironmentFormation, WorkerEnvironmentId, WorkerEnvironmentLifecycle,
 };
@@ -25,8 +25,14 @@ pub mod example_server;
 use client::StdioMcpClient;
 use config::McpStdioConfig;
 
-const TOOL_CALL_LABEL: &str = "tool.call";
+const ROOM: &str = "MCP stdio room";
 const SUBSTRATE_FAMILY: &str = "mcp_stdio";
+const OPERATIONS: &[&str] = &[
+    "call_tool", "list_tools", "list_resources", "list_resource_templates", "read_resource",
+    "subscribe_resource", "unsubscribe_resource", "list_prompts", "get_prompt", "complete",
+    "set_logging_level", "ping", "cancel_request", "send_progress", "poll_events", "status",
+    "close",
+];
 const MAX_SERVER_EVENTS_PER_CALL: usize = 256;
 const PROJECTED_EVENT_CURSOR_FILE: &str = "projected_server_events.json";
 const MAX_PROJECTED_EVENT_CURSOR_BYTES: u64 = 4096;
@@ -407,12 +413,6 @@ impl McpStdioRoom {
             source_movement_seq,
             ..
         } = invocation;
-        if descriptor.interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "tool descriptor '{}' belongs to interface '{}', not MCP stdio door '{}'",
-                descriptor.id, descriptor.interface, self.environment.interface
-            )));
-        }
         let formation = worker_environment.ok_or_else(|| {
             ToolProcessError::Capability(
                 "MCP stdio invocation has no formed worker environment".to_string(),
@@ -423,21 +423,21 @@ impl McpStdioRoom {
                 "MCP stdio invocation has no formed kind descriptor".to_string(),
             )
         })?;
-        validate_formation(&self.environment, &formation, &kind)?;
         let config = McpStdioConfig::load_formed(&self.environment, &formation, &kind)
             .map_err(ToolProcessError::Capability)?;
-        let call = decode_tool_call(&envelope)?;
+        let call = decode_tool_call(ROOM, &envelope)?;
         if call.tool != descriptor.id.as_str() {
             return Err(ToolProcessError::Capability(format!(
                 "tool descriptor '{}' does not match tool.call '{}'",
                 descriptor.id, call.tool
             )));
         }
-        let operation = descriptor_operation(descriptor.id.as_str(), &descriptor.handler_config)?;
+        let operation = descriptor_operation(ROOM, descriptor.id.as_str(), &descriptor.handler_config, OPERATIONS)
+            .map_err(ToolProcessError::Capability)?;
+        formed_scope(ROOM, &envelope, &formation)?;
         let metadata = envelope
             .metadata()
             .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        validate_coordinates(metadata, &formation)?;
         let invocation_evidence = json!({
             "tool": call.tool,
             "correlation_id": call.correlation_id,
@@ -587,7 +587,7 @@ impl McpStdioRoom {
         materialize_completed_result(&call_root, &completed, &response).map_err(|error| {
             ToolProcessError::Unavailable(format!(
                 "MCP stdio operation finished but its result could not be retained: {}; execution will not be repeated",
-                tool_process_error_message(error)
+                error
             ))
         })?;
         hand_completed_result(io, &completed, event_projection).await
@@ -1010,6 +1010,14 @@ impl McpStdioRoom {
 }
 
 impl ToolProcessHandler for McpStdioRoom {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
+    fn releases_cold(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -1038,19 +1046,6 @@ impl ToolProcessHandler for McpStdioRoom {
         })
     }
 
-    fn release_with_context<'a>(
-        &'a self,
-        context: WorkerEnvironmentReleaseContext<'a>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<(), ToolProcessError>> + Send + 'a>,
-    > {
-        match context.mode {
-            WorkerEnvironmentReleaseMode::LiveOwner
-            | WorkerEnvironmentReleaseMode::ColdRecovery => {
-                self.release(context.formation, context.kind)
-            }
-        }
-    }
 }
 
 pub async fn run_mcp_stdio_room_tool_process() -> Result<(), String> {
@@ -1388,12 +1383,6 @@ fn evidence_write_error(stage: &str, error: impl AsRef<str>) -> Value {
     })
 }
 
-fn tool_process_error_message(error: ToolProcessError) -> String {
-    match error {
-        ToolProcessError::Capability(error) | ToolProcessError::Unavailable(error) => error,
-    }
-}
-
 fn sanitize_error(value: &str) -> String {
     let mut words = Vec::new();
     let mut redact_next = false;
@@ -1436,114 +1425,6 @@ fn is_transport_failure(message: &str) -> bool {
         || lower.contains("session not found")
         || lower.contains("unknown session")
         || lower.contains("session terminated")
-}
-
-fn validate_formation(
-    environment: &ToolProcessEnvironment,
-    formation: &WorkerEnvironmentFormation,
-    kind: &WorkerEnvKindSpec,
-) -> Result<(), ToolProcessError> {
-    if formation.door_interface != environment.interface {
-        return Err(ToolProcessError::Capability(format!(
-            "MCP stdio formation belongs to door '{}', not '{}'",
-            formation.door_interface, environment.interface
-        )));
-    }
-    if kind.worker_environment_kind_id != formation.worker_environment_kind
-        || kind.substrate_family != SUBSTRATE_FAMILY
-    {
-        return Err(ToolProcessError::Capability(format!(
-            "MCP stdio tool was formed for incompatible worker_environment_kind '{}'",
-            formation.worker_environment_kind
-        )));
-    }
-    Ok(())
-}
-
-fn validate_coordinates(
-    metadata: &InvocationMetadata,
-    formation: &WorkerEnvironmentFormation,
-) -> Result<(), ToolProcessError> {
-    let runtime = metadata.runtime.as_ref().ok_or_else(|| {
-        ToolProcessError::Capability("MCP stdio invocation has no runtime coordinates".to_string())
-    })?;
-    if runtime.run.as_str() != formation.run || runtime.ee.as_str() != formation.ee {
-        return Err(ToolProcessError::Capability(
-            "MCP stdio formation does not match invocation coordinates".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn decode_tool_call(
-    envelope: &InterfaceInvocationEnvelope,
-) -> Result<ToolCallArtifact, ToolProcessError> {
-    let manifest = envelope
-        .read_artifact_manifest()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if manifest.label != TOOL_CALL_LABEL {
-        return Err(ToolProcessError::Capability(format!(
-            "MCP stdio room expected '{TOOL_CALL_LABEL}', got '{}'",
-            manifest.label
-        )));
-    }
-    let payload = envelope
-        .read_artifact_payload()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    serde_json::from_slice(&payload).map_err(|error| {
-        ToolProcessError::Capability(format!("MCP stdio tool.call is malformed: {error}"))
-    })
-}
-
-fn descriptor_operation<'a>(
-    tool_id: &str,
-    handler_config: &'a Value,
-) -> Result<&'a str, ToolProcessError> {
-    let config = handler_config.as_object().ok_or_else(|| {
-        ToolProcessError::Capability(format!(
-            "tool '{tool_id}' handler_config must be an object with an operation"
-        ))
-    })?;
-    let operation = config
-        .get("operation")
-        .ok_or_else(|| {
-            ToolProcessError::Capability(format!(
-                "tool '{tool_id}' handler_config.operation is absent"
-            ))
-        })?
-        .as_str()
-        .ok_or_else(|| {
-            ToolProcessError::Capability(format!(
-                "tool '{tool_id}' handler_config.operation must be a string"
-            ))
-        })?;
-    if operation.is_empty() || operation.trim() != operation {
-        return Err(ToolProcessError::Capability(format!(
-            "tool '{tool_id}' handler_config.operation must be a non-empty trimmed string"
-        )));
-    }
-    match operation {
-        "call_tool"
-        | "list_tools"
-        | "list_resources"
-        | "list_resource_templates"
-        | "read_resource"
-        | "subscribe_resource"
-        | "unsubscribe_resource"
-        | "list_prompts"
-        | "get_prompt"
-        | "complete"
-        | "set_logging_level"
-        | "ping"
-        | "cancel_request"
-        | "send_progress"
-        | "poll_events"
-        | "status"
-        | "close" => Ok(operation),
-        other => Err(ToolProcessError::Capability(format!(
-            "tool '{tool_id}' declares unknown MCP stdio operation '{other}'"
-        ))),
-    }
 }
 
 fn materialize_completed_result(
@@ -1669,25 +1550,5 @@ fn optional_u64(object: &Map<String, Value>, key: &str) -> Result<Option<u64>, S
             .as_u64()
             .map(Some)
             .ok_or_else(|| format!("MCP stdio argument '{key}' is not an unsigned integer")),
-    }
-}
-
-#[cfg(test)]
-mod operation_tests {
-    use super::*;
-
-    #[test]
-    fn exact_clone_selects_only_its_descriptor_operation() {
-        for tool_id in ["mcp.list_tools", "mcp.custom_catalog"] {
-            assert_eq!(
-                descriptor_operation(tool_id, &json!({"operation": "list_tools"}))
-                    .ok()
-                    .unwrap(),
-                "list_tools"
-            );
-        }
-        assert!(descriptor_operation("mcp.clone", &Value::Null).is_err());
-        assert!(descriptor_operation("mcp.clone", &json!({"operation": []})).is_err());
-        assert!(descriptor_operation("mcp.clone", &json!({"operation": "tools/list"})).is_err());
     }
 }

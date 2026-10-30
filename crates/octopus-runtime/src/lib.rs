@@ -30,23 +30,9 @@ pub use policy::{
 
 pub use desc::MarkId;
 
-pub mod run_index;
-pub mod run_record;
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
-)]
-pub struct GrantEpoch(pub u64);
+use octopus_run_record::{
+    ArtifactBinding, CheckpointRecord, GrantEpoch, RunRecord, RunRecordSnapshot, RunRecordsIndex,
+};
 
 #[derive(Debug)]
 pub struct Observation {
@@ -91,21 +77,6 @@ pub struct InterfaceArtifactAdmission {
     pub run_record_hash: Option<ContentHash>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct RunRecordSnapshot {
-    pub hash: ContentHash,
-    pub bytes: Arc<[u8]>,
-}
-
-impl std::fmt::Debug for RunRecordSnapshot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunRecordSnapshot")
-            .field("hash", &self.hash)
-            .field("bytes_len", &self.bytes.len())
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct InterfaceArrivalTarget {
     pub run: RunId,
@@ -134,7 +105,7 @@ impl InterfaceArrivalTarget {
             || coordinates.run_record_hash.as_deref() != Some(snapshot.hash.to_hex().as_str()) {
             return Err("retained arrival snapshot differs from its captured source".into());
         }
-        let record = run_record::RunRecord::from_bytes(&snapshot.bytes).map_err(|error| error.to_string())?;
+        let record = RunRecord::from_bytes(&snapshot.bytes).map_err(|error| error.to_string())?;
         let checkpoint = record.checkpoint(&coordinates.checkpoint).ok_or("retained arrival checkpoint is absent")?;
         if record.id != coordinates.run || record.ee != coordinates.ee || record.worker != coordinates.worker
             || !record.active_checkpoints.contains(&coordinates.checkpoint) || checkpoint.epoch.0 != coordinates.epoch
@@ -234,7 +205,7 @@ impl RunGrantResolution {
 pub trait RunGrantResolver: Send + Sync {
     fn resolve_run_grant(&self, query: RunGrantQuery<'_>) -> Result<RunGrantResolution, String>;
 
-    fn acquire_commit_guard(&self, _record: &run_record::RunRecord, _marks: &[Mark]) -> Result<Option<Box<dyn AdmissionSourceGuard>>, String> {
+    fn acquire_commit_guard(&self, _record: &RunRecord, _marks: &[Mark]) -> Result<Option<Box<dyn AdmissionSourceGuard>>, String> {
         Ok(None)
     }
 }
@@ -721,7 +692,7 @@ struct RuntimeInner {
     gate: Arc<RuntimeGate>,
     interface_catalog: Arc<RuntimeInterfaceCatalog>,
     run_records_dir: Mutex<Option<std::path::PathBuf>>,
-    run_index: Mutex<run_index::RunRecordsIndex>,
+    run_index: Mutex<RunRecordsIndex>,
     checkpoint_admission: Mutex<CheckpointAdmissionState>,
     admitted_checkpoint_artifacts:
         Mutex<BTreeMap<CheckpointAdmissionKey, BTreeMap<String, AdmittedCheckpointArtifact>>>,
@@ -884,7 +855,7 @@ impl Runtime {
                 gate,
                 interface_catalog: services.interface_catalog,
                 run_records_dir: Mutex::new(None),
-                run_index: Mutex::new(run_index::RunRecordsIndex::new()),
+                run_index: Mutex::new(RunRecordsIndex::new()),
                 checkpoint_admission: Mutex::new(CheckpointAdmissionState::default()),
                 admitted_checkpoint_artifacts: Mutex::new(BTreeMap::new()),
                 registry_generation: AtomicU64::new(0),
@@ -910,10 +881,10 @@ impl Runtime {
 
     fn resolve_context_artifact_bindings(
         &self,
-        bindings: &[run_record::ArtifactBinding],
+        bindings: &[ArtifactBinding],
         artifact_access: &BTreeMap<ArtifactId, policy::ArtifactAccess>,
     ) -> Result<Vec<ArtifactRef>, RuntimeError> {
-        let readable: Vec<&run_record::ArtifactBinding> = bindings
+        let readable: Vec<&ArtifactBinding> = bindings
             .iter()
             .filter(|binding| {
                 artifact_access
@@ -1118,7 +1089,7 @@ impl Runtime {
     fn load_run_record_with_hash(
         &self,
         run: &RunId,
-    ) -> std::io::Result<Option<(run_record::RunRecord, RunRecordSnapshot)>> {
+    ) -> std::io::Result<Option<(RunRecord, RunRecordSnapshot)>> {
         let Some(dir) = self.inner.run_records_dir.lock().unwrap().clone() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1129,7 +1100,7 @@ impl Runtime {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let hash = ContentHash::of_bytes(&bytes);
-                let record = run_record::RunRecord::from_bytes(&bytes)?;
+                let record = RunRecord::from_bytes(&bytes)?;
                 if record.id != *run {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -1154,9 +1125,9 @@ impl Runtime {
     }
 
     fn active_run_record_checkpoints<'a>(
-        record: &'a run_record::RunRecord,
+        record: &'a RunRecord,
         context: &str,
-    ) -> Result<Vec<&'a run_record::CheckpointRecord>, RuntimeError> {
+    ) -> Result<Vec<&'a CheckpointRecord>, RuntimeError> {
         if record.active_checkpoint_ids().is_empty() {
             return Err(RuntimeError::DescriptorDrift {
                 reason: RefusedReason::Settled,
@@ -1226,7 +1197,7 @@ impl Runtime {
     }
 
     fn authored_interfaces_for_active_checkpoints(
-        active_checkpoints: &[&run_record::CheckpointRecord],
+        active_checkpoints: &[&CheckpointRecord],
     ) -> Vec<InterfaceId> {
         let mut authored = BTreeSet::new();
         for checkpoint in active_checkpoints {
@@ -1265,8 +1236,8 @@ impl Runtime {
     fn resolve_run_record_checkpoint_grant_once(
         &self,
         resolver: &Arc<dyn RunGrantResolver + Send + Sync>,
-        record: &run_record::RunRecord,
-        checkpoint: &run_record::CheckpointRecord,
+        record: &RunRecord,
+        checkpoint: &CheckpointRecord,
         authored_interfaces: &[InterfaceId],
     ) -> Result<ResolvedRunGrant, RuntimeError> {
         let artifact_bindings = checkpoint
@@ -1308,8 +1279,8 @@ impl Runtime {
 
     fn resolve_run_record_checkpoint_grant(
         &self,
-        record: &run_record::RunRecord,
-        checkpoint: &run_record::CheckpointRecord,
+        record: &RunRecord,
+        checkpoint: &CheckpointRecord,
     ) -> Result<ResolvedRunGrant, RuntimeError> {
         let resolver = self.installed_run_grant_resolver()?;
         let active_checkpoints = Self::active_run_record_checkpoints(
@@ -1981,7 +1952,7 @@ impl Runtime {
                 "retained arrival run '{}' could not be observed: {error}", original.run.as_str()
             )))?
             .ok_or_else(|| changed("retained arrival run was removed".into()))?;
-        let previous = run_record::RunRecord::from_bytes(&original.run_record.bytes)
+        let previous = RunRecord::from_bytes(&original.run_record.bytes)
             .map_err(|error| changed(error.to_string()))?;
         if record.worker != original.worker
             || record.trace != previous.trace

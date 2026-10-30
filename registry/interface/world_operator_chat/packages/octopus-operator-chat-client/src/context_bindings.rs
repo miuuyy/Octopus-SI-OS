@@ -3,7 +3,7 @@ use std::path::Path;
 
 use octopus_descriptors::{ArtifactId, InterfaceId};
 use octopus_interfaces::InterfaceDescriptor;
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 
 use crate::{ArtifactBindingSeed, BoundCheckpointRole, BoundRunAuthoringTopology};
 
@@ -233,7 +233,7 @@ pub(crate) fn bind_selected_context<'a>(
                 .iter()
                 .find(|b| b.get("id").and_then(serde_json::Value::as_str) == Some(id.as_str()))
             {
-                let binding: octopus_runtime::run_record::ArtifactBinding =
+                let binding: octopus_run_record::ArtifactBinding =
                     serde_json::from_value(binding.clone()).map_err(|e| e.to_string())?;
                 if !binding.access.read {
                     return Err("tool context cannot widen an existing denied read".into());
@@ -312,6 +312,30 @@ pub(crate) fn retain_context_access(
     let mut next: BoundRunAuthoringTopology =
         serde_json::from_value(after.interface_state[&provider]["run_authoring_binding"].clone())
             .map_err(|e| e.to_string())?;
+    let roles = match &next.writer_run {
+        Some(writer) => writer.role_artifact_bindings.clone(),
+        None => {
+            let authoring = next
+                .checkpoints
+                .iter()
+                .find(|template| template.role == BoundCheckpointRole::AuthoringCall)
+                .ok_or("retained context has no declared authoring call")?;
+            let calls = after
+                .checkpoints
+                .iter()
+                .filter(|cp| {
+                    after.active_checkpoints.contains(&cp.id)
+                        && cp.interface_binding.as_ref() == Some(&authoring.interface_binding)
+                        && cp.outbound_interface_bindings == authoring.outbound_interface_bindings
+                        && cp.required_verified_artifacts == authoring.required_verified_artifacts
+                })
+                .collect::<Vec<_>>();
+            let [call] = calls.as_slice() else {
+                return Err("retained context has no unique active authoring call".into());
+            };
+            call.artifact_bindings.clone()
+        }
+    };
     let mut retained = BTreeMap::new();
     for template in &mut next.checkpoints {
         let Some(prior) = old.checkpoints.iter().find(|prior| {
@@ -324,7 +348,7 @@ pub(crate) fn retain_context_access(
         };
         template.include_context = prior.include_context;
         template.name = prior.name.clone();
-        let matches = |cp: &&octopus_runtime::run_record::CheckpointRecord| {
+        let matches = |cp: &&octopus_run_record::CheckpointRecord| {
             cp.interface_binding.as_ref() == Some(&template.interface_binding)
                 && cp.outbound_interface_bindings == template.outbound_interface_bindings
                 && cp.required_verified_artifacts == template.required_verified_artifacts
@@ -389,13 +413,24 @@ pub(crate) fn retain_context_access(
         else {
             continue;
         };
-        let requested: Vec<octopus_runtime::run_record::ArtifactBinding> =
+        let requested: Vec<octopus_run_record::ArtifactBinding> =
             serde_json::from_value(row["artifact_bindings"].clone()).map_err(|e| e.to_string())?;
-        let mut ordered = bindings
+        let is_role = |binding: &octopus_run_record::ArtifactBinding| {
+            roles.iter().any(|role| role.id == binding.id)
+        };
+        let mut ordered = roles
             .iter()
-            .filter(|binding| requested.iter().any(|next| next.id == binding.id))
+            .filter_map(|role| requested.iter().find(|next| next.id == role.id))
             .cloned()
             .collect::<Vec<_>>();
+        ordered.extend(
+            bindings
+                .iter()
+                .filter(|binding| {
+                    !is_role(binding) && requested.iter().any(|next| next.id == binding.id)
+                })
+                .cloned(),
+        );
         for binding in requested {
             if !ordered.iter().any(|retained| retained.id == binding.id) {
                 ordered.push(binding);

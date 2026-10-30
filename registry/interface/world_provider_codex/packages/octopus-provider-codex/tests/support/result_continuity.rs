@@ -17,7 +17,7 @@ fn forwarded_result_preserves_its_exact_native_wait() {
         "params":{"call_artifact":source,"tool":"read","correlation_id":"call-a","params":{},"invocation":{
             "source":{"artifact":source,"source_movement_seq":40},"artifact":input.artifact,"manifest_relative_path":"invocation/result.json"}}});
     let binding = serde_json::json!({"interface":"result-door","config":{"artifact_policy":{"mode":"all"}}});
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&serde_json::to_vec(&serde_json::json!({
+    let record = octopus_run_record::RunRecord::from_bytes(&serde_json::to_vec(&serde_json::json!({
         "id":runtime.run,"ee":runtime.ee,"worker":runtime.worker,"trace":"trace","status":"running",
         "active_checkpoints":[runtime.checkpoint],"checkpoints":[{"id":runtime.checkpoint,"run":runtime.run,"trace":"trace","epoch":1,
             "interface_binding":binding,"outbound_interface_bindings":[],"artifact_bindings":[{"id":source.id}],"required_verified_artifacts":[requirement]}],
@@ -46,7 +46,7 @@ fn forwarded_result_preserves_its_exact_native_wait() {
     template["static_artifact_bindings"] = serde_json::json!([call.artifact.id]);
     template["required_verified_artifacts"][0]["params"]["call_artifact"] = serde_json::to_value(&call.artifact).unwrap();
     let pinned = serde_json::to_vec(&value).unwrap();
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&pinned).unwrap();
+    let record = octopus_run_record::RunRecord::from_bytes(&pinned).unwrap();
     let context = octopus_run_authoring::context_artifact_payloads(&record, input.metadata.as_ref().unwrap(), &input.artifact_binding_payloads).unwrap();
     assert!(context.iter().all(|payload| payload.artifact != call.artifact));
     let prior = continuity(runtime.interface.as_str(), runtime.run.as_str(), "thread-a", 4, None);

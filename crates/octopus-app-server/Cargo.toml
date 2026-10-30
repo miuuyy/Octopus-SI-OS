@@ -19,6 +19,7 @@ octopus-descriptors = { path = "../octopus-descriptors" }
 octopus-ledger = { path = "../octopus-ledger" }
 octopus-ledger-index = { path = "../octopus-ledger-index" }
 octopus-runtime = { path = "../octopus-runtime" }
+octopus-run-record = { path = "../octopus-run-record" }
 octopus-file-storage = { path = "../octopus-file-storage" }
 octopus-interface-projection = { path = "../octopus-interface-projection" }
 octopus-marks = { path = "../octopus-marks" }

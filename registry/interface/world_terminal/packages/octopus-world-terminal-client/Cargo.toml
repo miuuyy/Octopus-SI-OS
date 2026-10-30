@@ -34,6 +34,7 @@ octopus-interface-transport = { path = "../../../../../crates/octopus-interface-
 octopus-world-pyecho-life-runtime = { path = "../../../world_pyecho/packages/octopus-world-pyecho-life-runtime" }
 octopus-interface-activation-app-server-transport = { path = "../../../world_operator_chat/packages/octopus-interface-activation-app-server-transport" }
 octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-run-record = { path = "../../../../../crates/octopus-run-record" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }

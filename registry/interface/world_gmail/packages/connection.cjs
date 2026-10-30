@@ -349,18 +349,40 @@ function finish(state) {
   return result;
 }
 
-async function probe(ctx) {
+async function inspect(ctx) {
   let account;
   try {
     const config = connectionConfig(ctx.descriptor);
     const credential = await readCredential(ctx, config);
-    if (credential.stop) return finish(credential.stop);
+    if (credential.stop) return { state: finish(credential.stop), tools: [] };
     account = credential.account;
-    return finish(connectedState(config, account, await listConnectorTools(ctx, config, credential)));
+    const tools = await listConnectorTools(ctx, config, credential);
+    return { state: finish(connectedState(config, account, tools)), tools };
   } catch (error) {
-    if (error instanceof ConnectionStop) return finish({ state: error.state, account, message: error.message });
-    return finish({ state: "error", account, message: `The connection could not be checked: ${error?.message ?? error}` });
+    if (error instanceof ConnectionStop) return { state: finish({ state: error.state, account, message: error.message }), tools: [] };
+    return { state: finish({ state: "error", account, message: `The connection could not be checked: ${error?.message ?? error}` }), tools: [] };
   }
+}
+
+async function probe(ctx) {
+  return (await inspect(ctx)).state;
+}
+
+async function published(ctx, inspected) {
+  if (inspected.state.state !== "connected" || typeof ctx.publishOperations !== "function") return inspected.state;
+  const tools = inspected.tools.map((tool) => {
+    const linked = (Array.isArray(tool?._meta?.link_accounts) ? tool._meta.link_accounts : []).filter((entry) => isText(entry?.link_id));
+    if (!linked.length) return tool;
+    const accounts = linked.map((entry) => `${entry.link_id}${isText(entry.profile_email) ? ` (${entry.profile_email})` : ""}`).join(", ");
+    return { ...tool, description: `${isText(tool.description) ? `${tool.description}\n\n` : ""}Linked accounts, by link_id: ${accounts}.` };
+  });
+  const { published: count, approvalRequired = [], skipped } = await ctx.publishOperations(tools);
+  const message = [
+    `${count} tool${count === 1 ? " is" : "s are"} available to connected tasks.`,
+    approvalRequired.length ? `${approvalRequired.length} of them wait for your approval before they act.` : "",
+    skipped.length ? `Only through call_tool: ${skipped.join("; ")}` : "",
+  ].filter(Boolean).join(" ");
+  return finish({ ...inspected.state, message });
 }
 
 function describedConfig(ctx) {
@@ -374,8 +396,9 @@ function describedConfig(ctx) {
 async function connect(ctx) {
   const { config, state: invalidState } = describedConfig(ctx);
   if (!config) return invalidState;
-  let state = await probe(ctx);
-  if (state.state !== "not_connected" || !state.account) return state;
+  const first = await inspect(ctx);
+  let state = first.state;
+  if (state.state !== "not_connected" || !state.account) return published(ctx, first);
   const url = connectorLinkUrl(config);
   try {
     await ctx.openExternal(url);
@@ -395,8 +418,9 @@ async function connect(ctx) {
       if (!ctx.signal?.aborted) throw error;
     }
     if (ctx.signal?.aborted) return finish({ ...state, message: `Connecting ${config.name} was cancelled.` });
-    state = await probe(ctx);
-    if (state.state === "connected" || state.state === "expired" || !state.account) return state;
+    const next = await inspect(ctx);
+    state = next.state;
+    if (state.state === "connected" || state.state === "expired" || !state.account) return published(ctx, next);
   }
   return finish({
     state: state.state === "error" ? "error" : "not_connected",

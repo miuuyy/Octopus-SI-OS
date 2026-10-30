@@ -13,13 +13,11 @@ path = "src/lib.rs"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-tracing = "0.1.44"
 reqwest = { version = "0.12", features = ["json"] }
 tokio-tungstenite = { version = "0.28.0", features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 base64 = "0.22.1"
 blake3 = "1"
-percent-encoding = "2"
 hmac = "0.12"
 sha2 = "0.10"
 getrandom = "0.3"

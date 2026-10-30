@@ -483,8 +483,7 @@ function applicationIsConnectedToAuthoredRun(run, manifest, profile) {
   const projectedArtifacts = new Set();
   for (const checkpoint of arrayValue(run?.checkpoints)) {
     if (!active.has(stringValue(checkpoint?.id))) continue;
-    const inbound = interfaceBindingId(checkpoint?.interface_binding);
-    if (inbound) projectedInterfaces.add(inbound);
+    for (const id of authoredCheckpointInterfaceIds(checkpoint)) projectedInterfaces.add(id);
     for (const binding of arrayValue(checkpoint?.artifact_bindings)) {
       const artifactId = stringValue(binding?.id);
       if (artifactId) projectedArtifacts.add(artifactId);
@@ -496,13 +495,19 @@ function applicationIsConnectedToAuthoredRun(run, manifest, profile) {
     && capabilities.complete;
 }
 
+function authoredCheckpointInterfaceIds(checkpoint) {
+  return [checkpoint?.interface_binding, ...arrayValue(checkpoint?.outbound_interface_bindings)]
+    .map(interfaceBindingId)
+    .filter(Boolean);
+}
+
 function applicationHasAnyAuthoredBinding(run, manifest) {
   const active = new Set(arrayValue(run?.active_checkpoints).map(stringValue).filter(Boolean));
   const interfaceIds = new Set(manifest.interfaces);
   const artifactIds = new Set(manifest.artifact_bindings.map((binding) => binding.artifact_id));
   return arrayValue(run?.checkpoints).some((checkpoint) => {
     if (!active.has(stringValue(checkpoint?.id))) return false;
-    if (interfaceIds.has(interfaceBindingId(checkpoint?.interface_binding))) return true;
+    if (authoredCheckpointInterfaceIds(checkpoint).some((id) => interfaceIds.has(id))) return true;
     return arrayValue(checkpoint?.artifact_bindings).some((binding) => artifactIds.has(stringValue(binding?.id)));
   });
 }

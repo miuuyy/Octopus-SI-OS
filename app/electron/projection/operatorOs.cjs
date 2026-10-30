@@ -635,6 +635,7 @@ function operatorOsProjection(store) {
           name,
           display_name: stringValue(localPackage?.display?.name),
           description: stringValue(localPackage?.display?.description),
+          icon: stringValue(localPackage?.display?.icon),
           package_id: stringValue(localPackage?.id) || `driver.${name}`,
           installed,
           materialized,

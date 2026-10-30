@@ -557,6 +557,7 @@ pub fn plan_maintenance_observer(
         &[],
         &[],
         None,
+        &OperationRoutes::default(),
     )?;
     let content = finish_observer_record(content, &identity, &projection, &entries_root, cfg)?;
     let content = context_bindings::configure_tool_context(registry, &identity, content, None)?;

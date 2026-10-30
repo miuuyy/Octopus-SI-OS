@@ -3,7 +3,7 @@ use octopus_operator_chat_client::{
     maintenance_observer::wire_source_terminal_declaration, plan_operator_chat_topology,
     run_composition::*,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 

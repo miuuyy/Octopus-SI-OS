@@ -9,7 +9,7 @@ use octopus_ledger::RequiredVerifiedArtifact;
 use octopus_policy::{
     AuthoredInterfaceBinding, BindingArtifactPolicy, InterfaceBindingConfig, WorkerInterfacePolicy,
 };
-use octopus_runtime::run_record::{ArtifactBinding, RunRecord};
+use octopus_run_record::{ArtifactBinding, RunRecord};
 use octopus_tool_registry::{ToolDescriptor, load_tool_descriptor_from_dir};
 use octopus_world_terminal_client::{
     CapabilityFormationRequest, CapabilityRegistry, FormedCapabilityTopology,
@@ -307,13 +307,17 @@ pub struct ToolResultReceiving {
 
 impl ToolResultReceiving {
     fn requirement(&self, tool: &str) -> Result<RequiredVerifiedArtifact, String> {
+        self.contract(&format!("{tool}.result"))
+    }
+
+    fn contract(&self, artifact_label: &str) -> Result<RequiredVerifiedArtifact, String> {
         if self.mark.as_str().is_empty() || self.mark.as_str().trim() != self.mark.as_str()
             || self.verifier.as_str().is_empty() || self.verifier.as_str().trim() != self.verifier.as_str()
             || !self.params.is_object()
         {
             return Err("tool_result_receiving requires exact mark/verifier ids and object params".into());
         }
-        Ok(RequiredVerifiedArtifact { mark: self.mark.clone(), artifact_label: format!("{tool}.result"),
+        Ok(RequiredVerifiedArtifact { mark: self.mark.clone(), artifact_label: artifact_label.into(),
             verifier: self.verifier.clone(), params: self.params.clone() })
     }
 }
@@ -538,6 +542,8 @@ mod planned_writes;
 pub(crate) use planned_writes::*;
 mod external_routes;
 pub(crate) use external_routes::*;
+mod operation_routes;
+pub(crate) use operation_routes::*;
 mod segments;
 pub(crate) use segments::*;
 

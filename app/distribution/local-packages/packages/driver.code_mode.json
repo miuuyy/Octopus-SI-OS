@@ -2,13 +2,13 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.code_mode",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "product_kind": "driver",
   "product_id": "code_mode",
   "release_status": "optional",
   "display": {
     "name": "Code Mode",
-    "description": "JavaScript execution with explicitly bound persistent context and artifact-mediated tools.",
+    "description": "JavaScript with persistent bound context that reaches other tools through artifacts.",
     "developer": "Octopus",
     "category": "worker_environment",
     "icon": "code"

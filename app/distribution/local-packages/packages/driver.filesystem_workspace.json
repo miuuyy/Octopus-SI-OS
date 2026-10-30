@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.filesystem_workspace",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "product_kind": "driver",
   "product_id": "filesystem_workspace",
   "release_status": "optional",
@@ -11,7 +11,7 @@
     "description": "Your project folders: read and edit files, run commands and keep processes running.",
     "developer": "Octopus",
     "category": "worker_environment",
-    "icon": "hard-drive"
+    "icon": "folderOpen"
   },
   "members": [
     {

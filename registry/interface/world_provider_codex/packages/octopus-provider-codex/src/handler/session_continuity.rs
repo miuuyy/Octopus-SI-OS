@@ -680,7 +680,7 @@ pub(crate) fn session_evidence_targets_pending(
                 operation,
                 output_label,
             )?;
-            Ok(true)
+            Ok(OperationOperatorRequest::from_value(&evidence.payload)?.is_none())
         }
         CodexPendingContinuity::Operator {
             request_key,

@@ -1845,6 +1845,28 @@
     }
 
     #[test]
+    fn interface_input_media_reaches_the_model_as_images() {
+        use base64::Engine;
+        let encoded = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGNwaDgARAwQCgAoDgYBQzpj2gAAAABJRU5ErkJggg==";
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        let event = serde_json::json!({"event": "message", "chat": {"id": 7}, "media": [{
+            "mime_type": "image/png", "payload_base64": encoded,
+            "artifact": {"label": "chat.file", "payload_path": "/private/life/media/photo.png",
+                "payload_content_hash": blake3::hash(&bytes).to_hex().to_string()}
+        }]});
+        let decode = |value: &serde_json::Value| decode_provider_input(&serde_json::to_vec(value).unwrap(), "chat.event",
+            None, &BTreeMap::new(), None, &serde_json::Map::new());
+        let ProviderInput::Turn(turn) = decode(&event).unwrap() else { panic!("an interface event is a turn") };
+        let [UserInput::Text { text, .. }, UserInput::Image { url, .. }] = turn.as_slice() else { panic!("event lost its image: {turn:?}") };
+        assert_eq!(url, &format!("data:image/png;base64,{encoded}"));
+        assert!(text.contains("\"chat\"") && text.contains("chat.file") && !text.contains(encoded));
+        assert!(!crate::result_media::without_embedded_payloads(&event).to_string().contains(encoded));
+        let mut forged = event.clone();
+        forged["media"][0]["mime_type"] = serde_json::json!("image/jpeg");
+        assert!(decode(&forged).is_err());
+    }
+
+    #[test]
     fn embedded_result_media_survives_live_and_recovered_tool_outputs() {
         use base64::Engine;
         let encoded = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGNwaDgARAwQCgAoDgYBQzpj2gAAAABJRU5ErkJggg==";
@@ -2768,7 +2790,7 @@
             serde_json::json!({"read":true,"change":false,"create":false,"delete":false}),
         ).unwrap());
         let runtime = runtime_metadata.runtime.as_ref().unwrap();
-        let mut pinned_record = octopus_runtime::run_record::RunRecord {
+        let mut pinned_record = octopus_run_record::RunRecord {
             id: runtime.run.clone(),
             ee: runtime.ee.clone(),
             worker: runtime.worker.clone(),
@@ -2779,7 +2801,7 @@
             active_checkpoints: Vec::new(),
         };
         let pinned_run_record = serde_json::to_vec(&pinned_record).unwrap();
-        octopus_runtime::run_record::RunRecord::from_bytes(&pinned_run_record).unwrap();
+        octopus_run_record::RunRecord::from_bytes(&pinned_run_record).unwrap();
         pinned_record.interface_state.insert(
             runtime.interface.clone(),
             BTreeMap::from([("context_generation".to_string(), serde_json::json!(7))]),
@@ -3014,7 +3036,7 @@ while IFS= read -r _; do :; done
         }]);
         admitted_record["active_checkpoints"] = serde_json::json!(["checkpoint-a"]);
         let admitted_context_record = serde_json::to_vec(&admitted_record).unwrap();
-        octopus_runtime::run_record::RunRecord::from_bytes(&admitted_context_record).unwrap();
+        octopus_run_record::RunRecord::from_bytes(&admitted_context_record).unwrap();
         let mut current_record = admitted_record;
         current_record["interface_state"]["world_provider_codex"]["context_generation"] = serde_json::json!(7);
         current_record["checkpoints"] = serde_json::json!([]);
@@ -4227,6 +4249,7 @@ while IFS= read -r _; do :; done
                 "label": "mcp.operation_catalog",
                 "interface": "world_mcp_drive_exact",
                 "request_label": "mcp.operation.request",
+                "task_input_labels": ["drive.event"],
                 "operations": [{
                     "name": "google_drive.read_resource",
                     "description": "read one resource from the exact interface",
@@ -4267,8 +4290,9 @@ while IFS= read -r _; do :; done
         assert_eq!(output.label, "mcp.operation.request");
         assert_eq!(
             output.route,
-            ProviderEmissionRoute::Interface {
-                interface: InterfaceId::new("world_mcp_drive_exact")
+            ProviderEmissionRoute::Operation {
+                interface: InterfaceId::new("world_mcp_drive_exact"),
+                result_label: "mcp.resource".into(),
             }
         );
         let result = decode_interface_operation_result_artifact(
@@ -4307,6 +4331,10 @@ while IFS= read -r _; do :; done
             context.content,
             serde_json::json!({"ok": true, "resources": ["drive://document"]})
         );
+        let drive = InterfaceId::new("world_mcp_drive_exact");
+        let event = br#"{"ok":true,"text":"a document was shared with you"}"#;
+        let event = decode_provider_input(event, "drive.event", Some(&drive), &catalog.interface_operations, None, &serde_json::Map::new());
+        assert!(matches!(event.unwrap(), ProviderInput::Turn(_)), "a declared task input of an operation interface starts a turn");
     }
 
     #[test]
@@ -4543,7 +4571,7 @@ while IFS= read -r _; do :; done
 
     fn assert_selected_file_projection_uses_materialized_sources() {
         use octopus_ledger::ContentHash;
-        use octopus_runtime::run_record::RunRecord;
+        use octopus_run_record::RunRecord;
         let root = tempfile::tempdir().unwrap().keep();
         eprintln!("selected file projection fixture artifacts: {}", root.display());
         let materialize = |label: &str, bytes: &[u8]| {

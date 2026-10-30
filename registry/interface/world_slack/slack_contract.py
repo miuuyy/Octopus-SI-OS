@@ -1,7 +1,10 @@
+import base64
 import hashlib
 import json
 import os
 import re
+
+from octopus_content_hash import octopus_content_hash
 
 
 CHANNEL_RE = re.compile(r"^[CDG][A-Z0-9]{8,32}$")
@@ -150,8 +153,12 @@ def validate_config(config):
     require_int(intake["max_pending_events"], "Slack intake.max_pending_events", 1, 1000000)
     require_int(intake["dedup_retention"], "Slack intake.dedup_retention", 1, 1000000)
     require_int(intake["thread_context_max_messages"], "Slack intake.thread_context_max_messages", 0, 1000)
-    media = require_keys(config["media"], {"download_enabled", "max_download_bytes", "max_upload_bytes", "max_files_per_event", "text_preview_bytes", "allowed_download_hosts", "allowed_upload_hosts"}, set(), "Slack media")
+    media = require_keys(config["media"], {"download_enabled", "max_download_bytes", "max_upload_bytes", "max_files_per_event", "text_preview_bytes", "allowed_download_hosts", "allowed_upload_hosts", "retention_days", "file_label", "max_images_per_event", "max_image_bytes_per_event"}, set(), "Slack media")
     require_bool(media["download_enabled"], "Slack media.download_enabled")
+    require_int(media["retention_days"], "Slack media.retention_days", 1, 3650)
+    require_string(media["file_label"], "Slack media.file_label")
+    require_int(media["max_images_per_event"], "Slack media.max_images_per_event", 0, 16)
+    require_int(media["max_image_bytes_per_event"], "Slack media.max_image_bytes_per_event", 0, 67108864)
     require_int(media["max_download_bytes"], "Slack media.max_download_bytes", 1, 1073741824)
     require_int(media["max_upload_bytes"], "Slack media.max_upload_bytes", 1, 5368709120)
     require_int(media["max_files_per_event"], "Slack media.max_files_per_event", 0, 100)
@@ -160,18 +167,12 @@ def validate_config(config):
         for host in require_string_list(media[key], f"Slack media.{key}"):
             if host.lower() != host or "." not in host or "/" in host:
                 raise ValueError(f"Slack media.{key} contains invalid host {host!r}")
-    outbound = require_keys(config["outbound"], {"operation_label", "delivery_label", "max_message_chars", "max_manifest_bytes", "max_payload_bytes", "max_blocks", "max_block_json_bytes", "allowed_web_methods", "retry_safe_web_methods"}, set(), "Slack outbound")
-    require_string(outbound["operation_label"], "Slack outbound.operation_label")
-    require_string(outbound["delivery_label"], "Slack outbound.delivery_label")
-    for key in ("allowed_web_methods", "retry_safe_web_methods"):
-        require_string_list(outbound[key], f"Slack outbound.{key}")
+    outbound = require_keys(config["outbound"], {"max_message_chars", "max_manifest_bytes", "max_payload_bytes", "max_blocks", "max_block_json_bytes"}, set(), "Slack outbound")
     require_int(outbound["max_message_chars"], "Slack outbound.max_message_chars", 1, 40000)
     require_int(outbound["max_manifest_bytes"], "Slack outbound.max_manifest_bytes", 1, 16777216)
     require_int(outbound["max_payload_bytes"], "Slack outbound.max_payload_bytes", 1, 1073741824)
     require_int(outbound["max_blocks"], "Slack outbound.max_blocks", 0, 50)
     require_int(outbound["max_block_json_bytes"], "Slack outbound.max_block_json_bytes", 2, 1048576)
-    if not set(outbound["retry_safe_web_methods"]).issubset(outbound["allowed_web_methods"]):
-        raise ValueError("Slack retry_safe_web_methods must be a subset of allowed_web_methods")
     return config
 
 
@@ -322,59 +323,46 @@ def envelope_key(envelope):
     return "digest-" + hashlib.sha256(encoded).hexdigest()
 
 
-def normalize_operation(body, config, default_target=None):
-    body = require_object(body, "Slack outbound payload")
-    operation = body.get("operation")
-    if operation is None:
-        require_keys(body, {"text"}, {"team_id", "channel", "channel_id", "thread_ts"}, "Slack reply")
-        text = require_string(body.get("text"), "Slack reply.text", maximum=config["outbound"]["max_message_chars"])
-        target = dict(default_target or {})
-        return "message.post", {"team_id": body.get("team_id") or target.get("team_id"), "channel": body.get("channel") or body.get("channel_id") or target.get("channel_id"), "thread_ts": body.get("thread_ts") if "thread_ts" in body else target.get("thread_ts"), "text": text}
-    operation = require_string(operation, "Slack operation")
-    require_keys(body, {"operation", "args"}, set(), "Slack operation payload")
-    args = require_object(body.get("args"), "Slack operation.args")
-    allowed = {
-        "assistant.status.clear",
-        "assistant.status.set",
-        "callback.respond",
-        "file.upload",
-        "message.delete",
-        "message.ephemeral",
-        "message.post",
-        "message.update",
-        "profile.status.set",
-        "reaction.add",
-        "reaction.remove",
-        "typing.clear",
-        "typing.set",
-        "view.open",
-        "view.publish",
-        "view.push",
-        "view.update",
-        "web.call",
-    }
-    if operation not in allowed:
-        raise ValueError(f"Slack operation {operation!r} is not supported")
-    shapes = {
-        "assistant.status.clear": (set(), {"team_id", "channel", "channel_id", "thread_ts"}),
-        "assistant.status.set": ({"status"}, {"team_id", "channel", "channel_id", "thread_ts"}),
-        "callback.respond": ({"handle", "body"}, set()),
-        "file.upload": (set(), {"team_id", "channel", "channel_id", "thread_ts", "filename", "blob_id", "title", "files", "initial_comment", "caption"}),
-        "message.delete": ({"ts"}, {"team_id", "channel", "channel_id"}),
-        "message.ephemeral": ({"user", "text"}, {"team_id", "channel", "channel_id", "thread_ts", "blocks"}),
-        "message.post": (set(), {"team_id", "channel", "channel_id", "thread_ts", "text", "blocks", "fallback_text", "mrkdwn", "reply_broadcast", "metadata"}),
-        "message.update": ({"ts"}, {"team_id", "channel", "channel_id", "text", "blocks"}),
-        "profile.status.set": (set(), {"team_id", "status_text", "status_emoji", "status_expiration"}),
-        "reaction.add": ({"name"}, {"team_id", "channel", "channel_id", "timestamp", "ts"}),
-        "reaction.remove": ({"name"}, {"team_id", "channel", "channel_id", "timestamp", "ts"}),
-        "typing.clear": (set(), {"team_id", "channel", "channel_id", "thread_ts"}),
-        "typing.set": (set(), {"team_id", "channel", "channel_id", "thread_ts", "status"}),
-        "view.open": ({"view"}, {"team_id", "trigger_handle", "trigger_id"}),
-        "view.publish": ({"user_id", "view"}, {"team_id"}),
-        "view.push": ({"view"}, {"team_id", "trigger_handle", "trigger_id"}),
-        "view.update": ({"view"}, {"team_id", "view_id", "external_id", "hash"}),
-        "web.call": ({"method"}, {"team_id", "params"}),
-    }
-    required, optional = shapes[operation]
-    require_keys(args, required, optional, f"Slack {operation} args")
-    return operation, dict(args)
+HANDLERS = {"message.post", "message.ephemeral", "message.update", "message.delete", "reaction.add", "reaction.remove", "file.upload", "view.open", "view.push", "view.update", "view.publish", "callback.respond", "thread.status", "profile.status.set", "web_api"}
+
+
+def validate_handlers(catalog):
+    for identity, spec in catalog["operations"].items():
+        handler = spec["handler_config"]
+        if handler["operation"] not in HANDLERS:
+            raise ValueError(f"Slack operation {identity} names unknown handler {handler['operation']!r}")
+        if handler["operation"] != "web_api":
+            require_keys(handler, {"operation"}, set(), f"Slack operation {identity} handler_config")
+            continue
+        require_keys(handler, {"operation", "method", "read_only"}, {"files", "params"}, f"Slack operation {identity} handler_config")
+        if not isinstance(handler["method"], str) or not re.fullmatch(r"[a-z][A-Za-z]*(\.[a-z][A-Za-z]*){1,3}", handler["method"]):
+            raise ValueError(f"Slack operation {identity} names no Web API method")
+        require_bool(handler["read_only"], f"Slack operation {identity} handler_config.read_only")
+        if "files" in handler:
+            require_bool(handler["files"], f"Slack operation {identity} handler_config.files")
+        if "params" in handler:
+            require_object(handler["params"], f"Slack operation {identity} handler_config.params")
+    return catalog
+
+
+IMAGE_SIGNATURES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"))
+
+
+def image_type(content):
+    for signature, mime_type in IMAGE_SIGNATURES:
+        if content.startswith(signature):
+            return mime_type
+    return "image/webp" if content[:4] == b"RIFF" and content[8:12] == b"WEBP" else None
+
+
+def image_room(media, limits):
+    used = sum(len(item["payload_base64"]) // 4 * 3 - item["payload_base64"][-2:].count("=") for item in media)
+    return 0 if len(media) >= limits["max_images_per_event"] else max(0, limits["max_image_bytes_per_event"] - used)
+
+
+def embed_image(media, row, path, content, limits):
+    mime_type = image_type(content)
+    if mime_type is None or len(content) > image_room(media, limits):
+        return
+    row["image"] = len(media)
+    media.append({"mime_type": mime_type, "artifact": {"label": limits["file_label"], "payload_path": path, "payload_content_hash": octopus_content_hash(content)}, "payload_base64": base64.b64encode(content).decode("ascii")})

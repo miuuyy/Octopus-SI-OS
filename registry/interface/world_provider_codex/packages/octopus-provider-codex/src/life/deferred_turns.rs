@@ -472,12 +472,12 @@ pub(crate) fn input_awaits_open_handoff(ctx: &InterfaceLiftContext, run: &RunId,
     let path = ctx.root_slot("run_records_root")?.join(format!("{}.json", run.as_str()));
     let bytes = std::fs::read(&path)
         .map_err(|error| format!("provider run '{}' current record cannot be read: {error}", run.as_str()))?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
+    let record = octopus_run_record::RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
     octopus_run_authoring::open_standing_handoff_before(ctx, &record, &ctx.interface, turn.seq)
 }
 
 pub(crate) fn independent_provider_input(ctx: &InterfaceLiftContext, turn: &QueuedTurn) -> Result<Option<bool>, String> {
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(&turn.envelope)?)
+    let record = octopus_run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(&turn.envelope)?)
         .map_err(|error| error.to_string())?;
     let metadata = turn.envelope.metadata().map_err(|error| error.to_string())?;
     let runtime = metadata.runtime.as_ref().ok_or("provider input has no runtime identity")?;
@@ -650,7 +650,7 @@ pub(crate) fn settled_envelope_prefix(
         return Err("settled input release has an invalid ledger boundary".into());
     }
     let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
+    let record = octopus_run_record::RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
     if record.id != *run || record.status != serde_json::json!("idle") { return Ok(None); }
     let Some(pending) = record.interface_state.get(&ctx.interface).and_then(|state| state.get("pending_handoff")) else {
         return Ok(None);
@@ -852,7 +852,7 @@ pub(crate) async fn recover_deferred_failed_result(
 ) -> Result<Option<u64>, String> {
     let Some(continuity) = continuity.filter(|state| codex_continuity_waits_for_result(state)) else { return Ok(None); };
     let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
+    let record = octopus_run_record::RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
     if !record.interface_state.get(&descriptor.id).is_some_and(|state| state.contains_key("run_authoring_binding")) {
         return Ok(None);
     }
@@ -887,7 +887,7 @@ pub(crate) fn bound_operator_session_snapshot(
 ) -> Result<Option<(ArtifactRef, ProviderInvocationSessionSnapshot)>, String> {
     let labels = codex_session_snapshot_labels(descriptor).map_err(|error| error.to_string())?;
     let mut matched = None;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(&turn.envelope)?)
+    let record = octopus_run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(&turn.envelope)?)
         .map_err(|error| error.to_string())?;
     let payloads = octopus_run_authoring::context_artifact_payloads(
         &record, turn.envelope.metadata().map_err(|error| error.to_string())?, &turn.envelope.artifact_binding_payloads,
@@ -969,7 +969,7 @@ pub(crate) fn rebase_deferred_provider_turn(
         artifacts: Arc::new(artifacts),
     };
     let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
+    let record = octopus_run_record::RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
     let selected = octopus_run_authoring::payload_artifact_bindings(&record, &ctx.interface)?;
     octopus_run_authoring::context_artifact_payloads(
         &record, turn.envelope.metadata().map_err(|error| error.to_string())?, &turn.envelope.artifact_binding_payloads,

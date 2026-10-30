@@ -18,7 +18,7 @@ pub(crate) struct SelectedFileProjection {
 }
 
 pub(crate) fn admitted_payload_context(
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     input: &InterfaceInvocationEnvelope,
 ) -> Result<(Vec<octopus_interfaces::ArtifactBindingPayload>, Vec<ArtifactRef>), InterfaceDriverError> {
     let metadata = input.metadata()?;
@@ -35,7 +35,7 @@ pub(crate) fn admitted_payload_context(
 }
 
 pub(crate) fn continuity_input_sources(
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     input: &InterfaceInvocationEnvelope,
 ) -> Result<Vec<ArtifactRef>, InterfaceDriverError> {
     let metadata = input.metadata()?;
@@ -62,7 +62,7 @@ pub(crate) fn continuity_input_sources(
 }
 
 pub(crate) fn continuity_context_payloads(
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     input: &InterfaceInvocationEnvelope,
     context: &[octopus_interfaces::ArtifactBindingPayload],
 ) -> Result<Vec<octopus_interfaces::ArtifactBindingPayload>, InterfaceDriverError> {
@@ -83,7 +83,7 @@ pub(crate) fn continuity_context_payloads(
 }
 
 pub(crate) fn reconcile_input_session_continuity(
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     input: &InterfaceInvocationEnvelope,
     bound: Option<CodexContinuityState>,
     current: Option<CodexContinuityState>,
@@ -125,7 +125,7 @@ pub(crate) fn reconcile_input_session_continuity(
 }
 
 pub(crate) fn selected_file_projection(
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     input: &InterfaceInvocationEnvelope,
     source_artifact: &ArtifactRef,
     source_label: &str,
@@ -402,9 +402,10 @@ pub(crate) fn decode_provider_input(
             if let Some(result) = decode_tool_result_artifact(&value)? {
                 return Ok(ProviderInput::ToolResult(result));
             }
-            let source_is_operation_interface = interface_operations
-                .values()
-                .any(|operation| source_interface == Some(&operation.interface));
+            let source_is_operation_interface = interface_operations.values().any(|operation| {
+                source_interface == Some(&operation.interface)
+                    && !operation.input_labels.contains(manifest_label)
+            });
             if source_is_operation_interface {
                 let source_interface = source_interface.ok_or_else(|| {
                     InterfaceDriverError::Protocol(
@@ -448,18 +449,29 @@ pub(crate) fn decode_provider_input(
             let input = if turn_envelope {
                 extract_turn_input_from_value(&value, selected_files)?
             } else {
-                vec![UserInput::Text {
+                let (payload, images) = match crate::result_media::project(&value)? {
+                    Some(media) => (media.value, media.images),
+                    None => (value, Vec::new()),
+                };
+                let mut input = vec![UserInput::Text {
                     text: serde_json::to_string_pretty(&serde_json::json!({
                         "artifact": {
                             "label": manifest_label,
                             "source_interface": source_interface,
-                            "payload": value,
+                            "payload": payload,
                         }
                     })).map_err(|error| InterfaceDriverError::Protocol(
                         format!("interface input artifact failed to render: {error}")
                     ))?,
                     text_elements: Vec::new(),
-                }]
+                }];
+                input.extend(images.into_iter().filter_map(|image| match image {
+                    DynamicToolCallOutputContentItem::InputImage { image_url } => {
+                        Some(UserInput::Image { detail: None, url: image_url })
+                    }
+                    _ => None,
+                }));
+                input
             };
             Ok({
                 ProviderInput::Turn(prepend_context_block_to_turn_input(
@@ -598,7 +610,7 @@ pub(crate) fn decode_inflight_turn_control(
             "operator steering has no source-pinned run record".into(),
         ))?;
         let runtime = invocation_runtime_metadata(input)?;
-        let record = octopus_runtime::run_record::RunRecord::from_bytes(pinned_run_record)
+        let record = octopus_run_record::RunRecord::from_bytes(pinned_run_record)
             .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
         if runtime.interface != descriptor.id || runtime.run != record.id
             || runtime.ee != record.ee || runtime.worker != record.worker

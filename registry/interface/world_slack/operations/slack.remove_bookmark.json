@@ -1,0 +1,35 @@
+{
+  "id": "slack.remove_bookmark",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "web_api",
+    "method": "bookmarks.remove",
+    "read_only": false
+  },
+  "description": "Remove a bookmark from a conversation.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "channel_id": {
+        "type": "string",
+        "pattern": "^[CDG][A-Z0-9]{8,32}$",
+        "description": "Conversation id: channel_id from a slack.event."
+      },
+      "bookmark_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "channel_id",
+      "bookmark_id"
+    ],
+    "additionalProperties": false
+  }
+}

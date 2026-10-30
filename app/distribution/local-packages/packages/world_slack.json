@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "world_slack",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "product_kind": "application",
   "product_id": "world_slack",
   "release_status": "optional",

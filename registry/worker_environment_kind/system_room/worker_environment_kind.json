@@ -1,6 +1,6 @@
 {
   "worker_environment_kind_id": "system_room",
-  "substrate_family": "process_exec",
+  "substrate_family": "system_room",
   "door_driver_refs": [
     "system_room"
   ],

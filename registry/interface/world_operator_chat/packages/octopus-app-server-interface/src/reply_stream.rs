@@ -1,10 +1,9 @@
-use octopus_descriptors::InterfaceId;
+use octopus_descriptors::{InterfaceId, RunId};
 use octopus_interfaces::RuntimeInvocationMetadata;
 use octopus_ledger::{
     ArtifactRef, Cursor, Endpoint, Lamport, LiveMovementLog, LogTail, Movement, MovementCursor,
     MovementKind, MovementLog,
 };
-use octopus_runtime::RunId;
 use tokio_stream::Stream;
 
 use crate::projection::{

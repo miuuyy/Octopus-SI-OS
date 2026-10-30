@@ -534,7 +534,7 @@ struct InterfaceOperationFile {
     input_schema: serde_json::Value,
 }
 
-fn load_interface_operation_binding(
+pub(crate) fn load_interface_operation_binding(
     interface_root: &Path,
     interface: &InterfaceDescriptor,
 ) -> Result<Option<InterfaceOperationCapabilityBinding>, CapabilityFormationError> {

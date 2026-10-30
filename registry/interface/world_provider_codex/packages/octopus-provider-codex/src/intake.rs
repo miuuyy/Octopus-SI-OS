@@ -10,7 +10,7 @@ use octopus_run_authoring::{
     checked_edit_verification_failure, checked_provider_run_advance, owner_writer_binding,
     OwnerWriterEvidence,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use octopus_tool_handlers::ToolResultArtifact;
 use octopus_world_pyecho_life_runtime::LedgerTailReader;
 

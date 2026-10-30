@@ -19,9 +19,10 @@ use octopus_policy::{
     form_policy_with_lineage,
 };
 use octopus_runtime::{
-    GrantEpoch, InterfaceClass, RunGrantQuery, RunGrantResolution, RunGrantResolver, Runtime,
+    InterfaceClass, RunGrantQuery, RunGrantResolution, RunGrantResolver, Runtime,
     RuntimeInterfaceCatalog, RuntimeServices,
 };
+use octopus_run_record::GrantEpoch;
 use octopus_tool_registry::ToolDescriptor;
 use octopus_verifiers::{
     VerifierDescriptor, VerifierPackageContext, pin_verifier_package, run_pinned_verifier_process,
@@ -354,14 +355,14 @@ struct RegistryRunGrantResolver {
 pub fn inspect_registry_run_grant(
     registry_root: &Path,
     ee_instances_root: &Path,
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     checkpoint: &octopus_descriptors::CheckpointId,
 ) -> Result<octopus_interfaces::GrantProjection, String> {
     prospective_run_grant(record, checkpoint, || LoadedRegistrySnapshot::load(registry_root, ee_instances_root))
 }
 
 pub(crate) fn prospective_run_grant<S: std::borrow::Borrow<LoadedRegistrySnapshot>>(
-    record: &octopus_runtime::run_record::RunRecord,
+    record: &octopus_run_record::RunRecord,
     checkpoint: &octopus_descriptors::CheckpointId,
     snapshot: impl FnOnce() -> Result<S, String>,
 ) -> Result<octopus_interfaces::GrantProjection, String> {
@@ -381,7 +382,7 @@ pub(crate) fn validate_registry_run_contracts(
     snapshot: &LoadedRegistrySnapshot,
     registry_root: &Path,
     ee_instances_root: &Path,
-    records: &[octopus_runtime::run_record::RunRecord],
+    records: &[octopus_run_record::RunRecord],
 ) -> Result<
     (
         Vec<crate::RegistryValidationIssue>,
@@ -592,7 +593,7 @@ fn insert_formation_source(
 }
 
 impl RunGrantResolver for RegistryRunGrantResolver {
-    fn acquire_commit_guard(&self, record: &octopus_runtime::run_record::RunRecord, marks: &[Mark]) -> Result<Option<Box<dyn octopus_runtime::AdmissionSourceGuard>>, String> {
+    fn acquire_commit_guard(&self, record: &octopus_run_record::RunRecord, marks: &[Mark]) -> Result<Option<Box<dyn octopus_runtime::AdmissionSourceGuard>>, String> {
         commit::acquire(self, record, marks).map(|guard| Some(Box::new(guard) as Box<dyn octopus_runtime::AdmissionSourceGuard>))
     }
 
@@ -2566,7 +2567,7 @@ description: ""
                 continue;
             };
             let bytes = serde_json::to_vec(value).expect("interface-owned run template encodes");
-            let record = octopus_runtime::run_record::RunRecord::from_bytes(&bytes)
+            let record = octopus_run_record::RunRecord::from_bytes(&bytes)
                 .expect("interface-owned run template parses through the canonical run contract");
             for checkpoint in &record.checkpoints {
                 for binding in &checkpoint.artifact_bindings {

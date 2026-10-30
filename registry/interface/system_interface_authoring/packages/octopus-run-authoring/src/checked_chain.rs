@@ -1467,7 +1467,7 @@ pub fn validate_checked_owner_transition(transition: &CheckedRunTransition) -> R
                 }
                 continue;
             }
-            if bindings.iter().any(|binding|!binding.access.read || (output_ids.contains(&binding.id) && binding.access != octopus_runtime::ArtifactAccess::read_only())) || without_outputs(bindings) != original {
+            if bindings.iter().any(|binding|!binding.access.read || (output_ids.contains(&binding.id) && binding.access != octopus_policy::ArtifactAccess::read_only())) || without_outputs(bindings) != original {
                 return Err("checked owner changed its exact role, prelude or topology bindings".into());
             }
         }

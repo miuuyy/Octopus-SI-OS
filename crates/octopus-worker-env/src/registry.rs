@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use crate::descriptor::WorkerEnvKindSpec;
 use crate::formation::formation_pin;
-use crate::surface::{SubstrateFamilyRegistry, WorkerEnvDriver};
 use crate::{
     WekDescriptorHash, WorkerConsent, WorkerEnvCaps, WorkerEnvError, WorkerEnvironmentFormation,
     WorkerEnvironmentFormationRequest, WorkerEnvironmentKindId,
@@ -19,7 +18,6 @@ struct PinnedWek {
 pub struct WorkerEnvKindRegistry {
     by_hash: BTreeMap<WekDescriptorHash, PinnedWek>,
     head: BTreeMap<WorkerEnvironmentKindId, WekDescriptorHash>,
-    families: SubstrateFamilyRegistry,
 }
 
 impl WorkerEnvKindRegistry {
@@ -82,13 +80,6 @@ impl WorkerEnvKindRegistry {
             },
         );
         Ok(registry)
-    }
-
-    pub fn register_driver(
-        &mut self,
-        driver: Arc<dyn WorkerEnvDriver>,
-    ) -> Result<(), WorkerEnvError> {
-        self.families.register(driver)
     }
 
     fn parse_one(
@@ -431,15 +422,6 @@ impl WorkerEnvKindRegistry {
         };
         formation.validate_against_kind(spec)?;
         Ok(formation)
-    }
-
-    pub fn driver(
-        &self,
-        substrate_family: &str,
-    ) -> Result<Arc<dyn WorkerEnvDriver>, WorkerEnvError> {
-        self.families
-            .resolve(substrate_family)
-            .ok_or_else(|| WorkerEnvError::UnknownSubstrateFamily(substrate_family.to_string()))
     }
 }
 

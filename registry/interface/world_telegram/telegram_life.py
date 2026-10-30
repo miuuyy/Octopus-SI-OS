@@ -13,19 +13,23 @@ import time
 import urllib.parse
 
 import telegram_boundary as boundary
+from octopus_operation_catalog import RequestError
+from octopus_operation_catalog import answer
+from octopus_operation_catalog import load_catalog
+from octopus_operation_catalog import parse_request
 from telegram_contract import FILE_KINDS
 from telegram_contract import TOKEN_RE
 from telegram_contract import access_from_environment
 from telegram_contract import authorize
 from telegram_contract import chat_of
 from telegram_contract import chat_view
+from telegram_contract import embed_image
 from telegram_contract import is_id
 from telegram_contract import iso_time
 from telegram_contract import media_items
 from telegram_contract import message_address
 from telegram_contract import message_body
 from telegram_contract import message_content
-from telegram_contract import normalize_operation
 from telegram_contract import person
 from telegram_contract import reaction_names
 from telegram_contract import readable_text
@@ -36,8 +40,10 @@ from telegram_contract import sender_id
 from telegram_contract import topic_of
 from telegram_contract import update_key
 from telegram_contract import update_kind
+from telegram_contract import validate_args
 from telegram_contract import validate_config
 from telegram_contract import validate_environment
+from telegram_contract import validate_handlers
 from telegram_render import render_chunks
 from telegram_wire import NOT_SENT
 from telegram_wire import BotApi
@@ -75,14 +81,21 @@ def now_ms():
     return int(time.time() * 1000)
 
 
-def load_config():
-    config = require_object(json.loads(boundary.read_bounded_regular(CONFIG_PATH, CONFIG_MAX_BYTES, "interface config")), "Telegram config")
+def read_private_config():
     descriptor = require_object(json.loads(boundary.read_bounded_regular(DESCRIPTOR_PATH, CONFIG_MAX_BYTES, "interface descriptor")), "Telegram interface descriptor")
     if descriptor.get("id") != boundary.INTERFACE_ID:
         raise ValueError("Telegram interface descriptor identity does not match its folder")
-    private = require_object(require_object(descriptor.get("interface_driver_config"), "Telegram interface_driver_config").get("private_config"), "Telegram interface private_config")
-    config["environment"] = validate_environment(private.get("environment"))
+    return require_object(require_object(descriptor.get("interface_driver_config"), "Telegram interface_driver_config").get("private_config"), "Telegram interface private_config")
+
+
+def load_config():
+    config = require_object(json.loads(boundary.read_bounded_regular(CONFIG_PATH, CONFIG_MAX_BYTES, "interface config")), "Telegram config")
+    config["environment"] = validate_environment(read_private_config().get("environment"))
     return validate_config(config)
+
+
+def load_operations():
+    return validate_handlers(load_catalog(boundary.INTERFACE_DIR, read_private_config(), "telegram"))
 
 
 def make_sanitizer(config):
@@ -338,7 +351,7 @@ class Life:
         if addressed_by is None:
             return self.refuse(unit[0]["update_id"], addressed[0][1], chat["id"], user_id), None
         key = self.unit_key(unit)
-        files = self.download_files(messages, key)
+        files, images = self.download_files(messages, key)
         primary = next((message for message in messages if message_body(message)[0]), first)
         content = message_content(primary, self.bot, files, self.config)
         if len(messages) > 1:
@@ -354,6 +367,8 @@ class Life:
             "message_id": first["message_id"],
             "message": content,
         }
+        if images:
+            event["media"] = images
         topic = topic_of(first)
         if topic is not None:
             event["topic_id"] = topic
@@ -426,12 +441,13 @@ class Life:
     def download_files(self, messages, key):
         media = self.config["media"]
         items = [item for message in messages for item in media_items(message, media["max_download_bytes"])]
-        files = [self.download_file(item, key, index) for index, item in enumerate(items[: media["max_files_per_event"]])]
+        images = []
+        files = [self.download_file(item, key, index, images) for index, item in enumerate(items[: media["max_files_per_event"]])]
         if len(items) > len(files):
             files.append({"kind": "omitted", "count": len(items) - len(files)})
-        return files
+        return files, images
 
-    def download_file(self, item, key, index):
+    def download_file(self, item, key, index, images):
         media = self.config["media"]
         blob = item["blob"]
         name = blob.get("file_name") if isinstance(blob.get("file_name"), str) and blob["file_name"] else f"{item['kind']}-{index + 1}{item['suffix']}"
@@ -466,7 +482,8 @@ class Life:
         directory = boundary.ensure_private_directory(os.path.join(MEDIA_DIR, key))
         path = os.path.join(directory, f"{index + 1:02d}-{safe_file_name(name, item['kind'] + item['suffix'])}")
         boundary.atomic_bytes(path, content)
-        view.update({"path": path, "size": len(content), "sha256": hashlib.sha256(content).hexdigest()})
+        view.update({"size": len(content), "sha256": hashlib.sha256(content).hexdigest()})
+        embed_image(images, view, path, content, media)
         textual = item["mime_type"].startswith("text/") or os.path.splitext(name)[1].lower() in media["text_extensions"]
         if textual and len(content) <= media["text_preview_bytes"]:
             try:
@@ -561,13 +578,26 @@ class Life:
             raise ValueError(f"Telegram {name} must fit one message of {limit} characters after formatting")
         return chunks[0]
 
-    def execute(self, operation, args):
-        chat = None if operation == "api.call" else self.target(args)
+    def execute(self, handler, args):
+        operation = handler["operation"]
+        if operation == "bot_api":
+            try:
+                return self.call_bot_api(handler, args)
+            finally:
+                if not handler["read_only"] and "chat_id" in args:
+                    self.typing_stop(args["chat_id"])
+        chat = self.target(args)
         try:
             return self.perform(operation, args, chat)
         finally:
-            if chat is not None and operation != "chat.action":
+            if operation != "chat.action":
                 self.typing_stop(chat, args.get("topic_id"))
+
+    def call_bot_api(self, handler, args):
+        result = self.deliver(handler["method"], args, [], retry_safe=handler["read_only"])
+        if isinstance(result, dict) and not handler["read_only"]:
+            self.remember(result)
+        return {"method": handler["method"], "result": result}
 
     def perform(self, operation, args, chat):
         outbound = self.config["outbound"]
@@ -587,7 +617,7 @@ class Life:
                 if not args.get("link_preview", outbound["link_previews"]):
                     params["link_preview_options"] = {"is_disabled": True}
                 progress.append(self.remember(self.deliver("sendMessage", params, progress)))
-            return {"operation": operation, "chat_id": chat, "message_ids": progress}
+            return {"chat_id": chat, "message_ids": progress}
         if operation == "message.edit":
             params = {"chat_id": chat, "message_id": args["message_id"]}
             if "buttons" in args:
@@ -602,19 +632,19 @@ class Life:
                 self.deliver(method, params, [])
             except OperationFailure as failure:
                 if failure.kind == "refused" and "message is not modified" in (failure.error.description or ""):
-                    return {"operation": operation, "chat_id": chat, "message_id": args["message_id"], "unchanged": True}
+                    return {"chat_id": chat, "message_id": args["message_id"], "unchanged": True}
                 raise
-            return {"operation": operation, "chat_id": chat, "message_id": args["message_id"]}
+            return {"chat_id": chat, "message_id": args["message_id"]}
         if operation == "message.delete":
             self.deliver("deleteMessage", {"chat_id": chat, "message_id": args["message_id"]}, [])
-            return {"operation": operation, "chat_id": chat, "message_id": args["message_id"]}
+            return {"chat_id": chat, "message_id": args["message_id"]}
         if operation == "reaction.set":
             emoji = args.get("emoji")
             params = {"chat_id": chat, "message_id": args["message_id"], "reaction": [{"type": "emoji", "emoji": emoji}] if emoji else []}
             if args.get("big"):
                 params["is_big"] = True
             self.deliver("setMessageReaction", params, [])
-            return {"operation": operation, "chat_id": chat, "message_id": args["message_id"], "emoji": emoji}
+            return {"chat_id": chat, "message_id": args["message_id"], "emoji": emoji}
         if operation == "file.send":
             method, field = FILE_KINDS[args["kind"]]
             params = self.message_params(args, chat)
@@ -631,94 +661,83 @@ class Life:
                 content = boundary.artifact_blob(args["blob_id"], self.config["media"]["max_upload_bytes"])
                 mime_type = mimetypes.guess_type(args["filename"])[0] or "application/octet-stream"
                 message = self.deliver(method, params, [], files={field: (args["filename"], mime_type, content)})
-            return {"operation": operation, "chat_id": chat, "message_ids": [self.remember(message)], "kind": args["kind"]}
+            return {"chat_id": chat, "message_ids": [self.remember(message)], "kind": args["kind"]}
         if operation == "chat.action":
             params = {"chat_id": chat, "action": args["action"]}
             if "topic_id" in args:
                 params["message_thread_id"] = args["topic_id"]
             self.deliver("sendChatAction", params, [])
-            return {"operation": operation, "chat_id": chat, "action": args["action"]}
-        if operation == "api.call":
-            result = self.deliver(args["method"], args["params"], [], retry_safe=args["method"] in outbound["retry_safe_api_methods"])
-            return {"operation": operation, "method": args["method"], "result": result}
+            return {"chat_id": chat, "action": args["action"]}
         raise ValueError(f"Telegram operation {operation!r} is unsupported")
 
-    def prepare_output(self, label, payload):
-        if label != self.config["outbound"]["operation_label"]:
-            raise ValueError(f"Telegram interface accepts only {self.config['outbound']['operation_label']!r} artifacts, not {label!r}")
-        try:
-            body = json.loads(payload)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError(f"Telegram outbound payload is invalid JSON: {error}") from error
-        return normalize_operation(body, self.config)
+    def failure(self, failure, read_only):
+        if failure.kind == "uncertain" and not read_only:
+            code, message = "indeterminate_external_effect", "Telegram stopped answering while it carried out this request, so it may or may not have taken effect. It was not repeated; check the chat before trying again."
+        elif failure.progress:
+            code, message = "partial_delivery", "Telegram delivered only the first parts of this message; delivered_message_ids lists them."
+        elif failure.kind in {"not_delivered", "uncertain"}:
+            code, message = "telegram_unreachable", "Telegram could not be reached, so nothing was changed."
+        else:
+            code, message = "telegram_refused", "Telegram refused the request, so nothing was changed."
+        error = {"code": code, "message": message, "telegram": failure.error.details()}
+        if failure.progress:
+            error["delivered_message_ids"] = failure.progress
+        return error
 
-    def process_outbound(self, source_seq, content, run, first_attempt_ms):
+    def reply(self, catalog, key, body):
+        boundary.hand_answer(catalog["result_label"], body, key, self.config)
+        boundary.forget_request(key)
+
+    def process_request(self, source_seq, content, run, first_attempt_ms):
         if content is None or run is None:
-            boundary.hand_failure(source_seq, "poisoned_outbound", {"error": "movement carries no artifact or runtime run"}, f"telegram-poison-{source_seq}")
+            boundary.stderr(f"Telegram outbound movement {source_seq} carries no artifact or runtime run, so it is not an operation request", key=f"request:{source_seq}")
             return
         label, payload, content_hash = boundary.materialize_movement_payload(content, self.config)
-        effect = boundary.load_effect(source_seq)
-        if effect is not None and effect["source_artifact_hash"] != content_hash:
-            boundary.hand_failure(source_seq, "effect_journal_mismatch", {"expected": effect["source_artifact_hash"], "observed": content_hash}, f"telegram-effect-mismatch-{source_seq}")
+        catalog = load_operations()
+        if label != catalog["request_label"]:
+            boundary.stderr(f"Telegram answers only {catalog['request_label']} artifacts; outbound {label} is not an operation request", key=f"label:{label}")
             return
-        if effect is not None and effect["status"] in {"evidenced", "failure_evidenced"}:
-            return
-        if effect is not None and effect["status"] == "succeeded":
-            effect.update({"status": "evidenced", "evidence_movement_seq": self.delivery_evidence(source_seq, content_hash, run, effect["result"])})
-            boundary.commit_effect(source_seq, effect)
-            return
-        if effect is not None:
-            evidence = boundary.hand_failure(source_seq, "indeterminate_external_effect", {"source_artifact_hash": content_hash, "error": effect.get("error") or "the interface stopped before Telegram answered"}, f"telegram-indeterminate-{source_seq}")
-            effect.update({"status": "failure_evidenced", "evidence_movement_seq": evidence})
-            boundary.commit_effect(source_seq, effect)
+        key = f"telegram-result-{source_seq}-{content_hash[:16]}"
+        if boundary.answered(key):
+            self.reply(catalog, key, None)
             return
         try:
-            operation, args = self.prepare_output(label, payload)
-        except Exception as error:
-            boundary.hand_failure(source_seq, "boundary_rejected", {"source_artifact_hash": content_hash, "error": str(error)}, f"telegram-boundary-{source_seq}")
+            spec, args, correlation_id = parse_request(payload, catalog)
+        except RequestError as error:
+            self.reply(catalog, key, answer(catalog["result_label"], error.operation, error.correlation_id, error={"code": error.code, "message": str(error)}))
             return
-        effect = {"schema_version": 1, "source_movement_seq": source_seq, "source_artifact_hash": content_hash, "run": run, "artifact_label": label, "status": "started", "operation": operation}
-        boundary.commit_effect(source_seq, effect)
-        details = {"source_artifact_hash": content_hash, "operation": operation}
-        try:
-            result = self.execute(operation, args)
-        except ValueError as error:
-            details["error"] = str(error)
-            evidence = boundary.hand_failure(source_seq, "boundary_rejected", details, f"telegram-boundary-{source_seq}")
-            effect.update({"status": "failure_evidenced", "error": str(error), "evidence_movement_seq": evidence})
-            boundary.commit_effect(source_seq, effect)
-            return
-        except OperationFailure as failure:
-            window = self.config["outbound"]["unsent_retry_window_ms"]
-            if failure.kind == "not_delivered" and not failure.progress and now_ms() - first_attempt_ms < window:
-                boundary.discard_effect(source_seq)
-                raise RetryOutbound(failure.error.retry_after)
-            details.update({"error": failure.error.details(), "delivered_message_ids": failure.progress})
-            if failure.kind == "uncertain":
-                effect.update({"status": "indeterminate", "error": str(failure.error)})
-                boundary.commit_effect(source_seq, effect)
-                failure_class = "indeterminate_external_effect"
-            else:
-                failure_class = "partial_delivery" if failure.progress else "telegram_unreachable" if failure.kind == "not_delivered" else "telegram_refused"
-            evidence = boundary.hand_failure(source_seq, failure_class, details, f"telegram-failure-{source_seq}")
-            effect.update({"status": "failure_evidenced", "error": str(failure.error), "evidence_movement_seq": evidence})
-            boundary.commit_effect(source_seq, effect)
-            return
-        except Exception as error:
-            effect.update({"status": "indeterminate", "error": str(error)})
-            boundary.commit_effect(source_seq, effect)
-            details["error"] = str(error)
-            evidence = boundary.hand_failure(source_seq, "indeterminate_external_effect", details, f"telegram-indeterminate-{source_seq}")
-            effect.update({"status": "failure_evidenced", "evidence_movement_seq": evidence})
-            boundary.commit_effect(source_seq, effect)
-            return
-        effect.update({"status": "succeeded", "result": result})
-        boundary.commit_effect(source_seq, effect)
-        effect.update({"status": "evidenced", "evidence_movement_seq": self.delivery_evidence(source_seq, content_hash, run, result)})
-        boundary.commit_effect(source_seq, effect)
 
-    def delivery_evidence(self, source_seq, content_hash, run, result):
-        return boundary.hand_json(self.config["outbound"]["delivery_label"], {"source_movement_seq": source_seq, "source_artifact_hash": content_hash, "run": run, "ok": True, "result": result}, f"telegram-delivery-{source_seq}")
+        def respond(result=None, error=None):
+            self.reply(catalog, key, answer(catalog["result_label"], spec["id"], correlation_id, result=result, error=error))
+
+        if boundary.load_request(key) is not None:
+            respond(error={"code": "indeterminate_external_effect", "message": "Octopus stopped while Telegram was carrying out this request, so it may or may not have taken effect. It was not repeated; check the chat before trying again."})
+            return
+        handler = spec["handler_config"]
+        read_only = handler.get("read_only") is True
+        try:
+            args = validate_args(handler["operation"], args, self.config)
+        except ValueError as error:
+            respond(error={"code": "invalid_arguments", "message": str(error)})
+            return
+        if not read_only:
+            boundary.record_request(key, {"source_movement_seq": source_seq, "run": run, "operation": spec["id"], "correlation_id": correlation_id, "started_at_unix_ms": now_ms()})
+        try:
+            result = self.execute(handler, args)
+        except ValueError as error:
+            respond(error={"code": "rejected", "message": str(error)})
+        except OperationFailure as failure:
+            if failure.kind == "not_delivered" and not failure.progress and now_ms() - first_attempt_ms < self.config["outbound"]["unsent_retry_window_ms"]:
+                boundary.forget_request(key)
+                raise RetryOutbound(failure.error.retry_after)
+            respond(error=self.failure(failure, read_only))
+        except Exception as error:
+            if read_only:
+                respond(error={"code": "telegram_error", "message": f"Telegram could not answer the read: {error}"})
+            else:
+                respond(error={"code": "indeterminate_external_effect", "message": f"The request stopped before Telegram's answer was known, so it may or may not have taken effect: {error}"})
+        else:
+            respond(result=result)
 
     def outbound_loop(self):
         next_seq = boundary.load_cursor()
@@ -729,7 +748,7 @@ class Life:
                 if retry["seq"] != source_seq:
                     retry = {"seq": source_seq, "first": now_ms(), "delay": 1.0}
                 try:
-                    self.process_outbound(source_seq, content, run, retry["first"])
+                    self.process_request(source_seq, content, run, retry["first"])
                 except RetryOutbound as signal:
                     wait = min(cap, max(retry["delay"], float(signal.wait_s or 0)))
                     boundary.stderr(f"Telegram did not receive outbound movement {source_seq}; retrying while it stays unsent", key=f"retry:{source_seq}")
@@ -805,7 +824,9 @@ class Life:
 
 def main():
     config = load_config()
+    load_operations()
     boundary.SANITIZE[0] = make_sanitizer(config)
+    boundary.start_cursor(config["ledger"]["max_row_bytes"])
     token = resolve_token(config)
     access = resolve_access(config)
     api = BotApi(config, token, boundary.sanitize)

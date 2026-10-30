@@ -1,0 +1,50 @@
+{
+  "id": "telegram.send_chat_action",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "chat.action"
+  },
+  "description": "Show a status such as typing or upload_photo in a chat for about five seconds or until the bot's next message. While a task works on an incoming message the interface already shows typing.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat to act in: chat.id from a telegram.event, or a public @username. Omit it only for the configured home chat or the single allowed user."
+      },
+      "topic_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "action": {
+        "type": "string",
+        "enum": [
+          "typing",
+          "upload_photo",
+          "record_video",
+          "upload_video",
+          "record_voice",
+          "upload_voice",
+          "upload_document",
+          "choose_sticker",
+          "find_location",
+          "record_video_note",
+          "upload_video_note"
+        ],
+        "description": "Status to show; typing by default."
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

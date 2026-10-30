@@ -24,7 +24,7 @@ The folder is the identity: its name equals `worker_environment_kind_id`.
 Loading is fail-closed, unknown fields are refused, and there is no
 `schema_version` in the body.
 
-A kind family's code lives **in its own kind's folder**:
+A kind's code lives **in its own kind's folder**:
 `registry/worker_environment_kind/<kind name>/packages/*`. A kind's folder name
 is the name of an executor **type**, not a routing id - "id" is interface
 vocabulary, where artifacts are delivered by it; nothing routes by a kind's
@@ -33,9 +33,22 @@ use another kind's live executable. Code, however, is reused by explicit
 import from the owning kind's folder, as with interfaces; byte-for-byte clones
 of code per kind are not the model.
 
+Every door life and tool process is built on the door runtime that
+`process_session` owns (`octopus-process-session-tool-runtime`, imported by
+the other kinds as `octopus-tool-door-runtime`): the ledger cursor, the grant
+and formation checks, recovery, and the small room glue every door needs -
+decoding and admitting a `tool.call`, matching its coordinates to the
+formation, reading the descriptor's operation, emitting result artifacts. A
+kind's package keeps only what its room does.
+
+A door life and its tool processes are applications of the OS, not part of
+the kernel: they link neither `octopus-runtime` nor `octopus-app-server`. Run
+records are read through `octopus-run-record`; a checked run write goes through
+the authoring package that `system_interface_authoring` owns.
+
 The box crate (`crates/octopus-worker-env`) holds only the descriptor
-dictionary, the fail-closed registry, a generic lease, and the
-`WorkerEnvDriver` socket with its surface traits and authorization gate. The
+dictionary, the fail-closed registry and formation, a generic lease, and the
+`WorkerEnvDriver` trait with its surface traits and authorization gate. The
 room's **behavior** - boundary projection, materialization, patch, exec,
 worktree - lives in the kind's package.
 
@@ -69,13 +82,22 @@ file; a missing, extra, or malformed config fails closed.
 
 ## Rules
 
-- **`substrate_family` is a by-name reference to a *registered* driver
-  family**, not a branch on a name. The box holds no built-ins: the socket is
-  empty until a kind package registers a driver. Resolution fails closed on an
-  unregistered family. A new family is source work in a kind package; a new
-  kind over an existing family and existing executables is a JSON descriptor
-  only. (`git_worktree` is not its own family - it is `process_exec` plus a
-  `git` capability the family reads as data.)
+- **`substrate_family` names the code family that serves the kind.** The tool
+  process behind a door declares the family its package implements, and the
+  door runtime refuses every invocation and release whose formed kind names
+  another family before the package sees it. A package that opens its room
+  through the box's generic lease hands it a `WorkerEnvDriver` of the same
+  family, and the lease checks that too. The box keeps no family registry.
+  Kinds share a family only when they run the same room code: `git_worktree`
+  and `filesystem_workspace` are both `process_exec` because the worktree
+  package imports the workspace room from `filesystem_workspace` and adds its
+  git layout and worktree operations to it. `capabilities` are descriptive
+  vocabulary for policy and presentation; no code branches on them.
+- **A new kind is a folder with its own packages,** never a descriptor alone:
+  its door life names the kind it serves, and every `tool_process_bins` entry
+  is a binary built from a package in the kind's folder. When the room code
+  already exists in another kind, those binaries are a few lines that import it
+  from the owning kind's folder.
 - **`door_driver_refs` is the static ownership of doors by a code-world.**
   These are driver refs, not the exact interface ids of concrete tasks or runs.
   An exact door remains a separate System-interface folder; its
@@ -111,4 +133,6 @@ file; a missing, extra, or malformed config fails closed.
 - **`lifecycle.requires_release`** - the room needs a release hook on teardown
   (worktree removal, container stop). A driver that cannot provide the hook to
   such a room will not open it: a local process driver does not pretend to be a
-  remote machine.
+  remote machine. When the live owner is gone, a fresh tool process releases
+  the room cold only if its package declares that its release works from the
+  formation alone; otherwise the cold release fails closed.

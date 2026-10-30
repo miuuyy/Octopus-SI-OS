@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use octopus_descriptors::ProcessSandboxMode;
-use octopus_git_sandbox::{GitWorktreeProcessLimits, GitWorktreeProcessManager, GitWorktreeProcessStore};
+use octopus_workspace_substrate::{WorkspaceProcessLimits, WorkspaceProcessManager, WorkspaceProcessStore};
 use octopus_worker_env::{AbsPath, NetworkCeiling, ProjectedSandbox, WorkerEnvironmentId};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -13,7 +13,7 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
     for directory in ["durable", "ipc", "work"] {
         std::fs::create_dir(root.join(directory)).unwrap();
     }
-    let store = GitWorktreeProcessStore::new(
+    let store = WorkspaceProcessStore::new(
         &root.join("durable"),
         &root.join("ipc"),
         PathBuf::from(env!("CARGO_BIN_EXE_octopus-workspace-exec-tool")),
@@ -27,7 +27,7 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
         NetworkCeiling::Denied,
     );
     let room = WorkerEnvironmentId::derive(b"keeper-contract");
-    let limits = GitWorktreeProcessLimits {
+    let limits = WorkspaceProcessLimits {
         max_processes_per_worker_environment: 2,
         max_buffered_output_bytes: 4096,
         max_buffered_output_events: 64,
@@ -35,12 +35,12 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
         process_timeout: Duration::from_secs(30),
         cleanup_timeout: Duration::from_secs(5),
     };
-    let text = |poll: &octopus_git_sandbox::GitWorktreeProcessPoll| {
+    let text = |poll: &octopus_workspace_substrate::WorkspaceProcessPoll| {
         poll.chunks.iter().flat_map(|chunk| chunk.bytes.clone()).collect::<Vec<_>>()
     };
 
-    let first_owner = GitWorktreeProcessManager::new(Some(store.clone()));
-    let concurrent_owner = GitWorktreeProcessManager::new(Some(store.clone()));
+    let first_owner = WorkspaceProcessManager::new(Some(store.clone()));
+    let concurrent_owner = WorkspaceProcessManager::new(Some(store.clone()));
     let (started, concurrent) = tokio::join!(
         start(&first_owner, &room, &sandbox, &cwd, &limits),
         start(&concurrent_owner, &room, &sandbox, &cwd, &limits),
@@ -57,7 +57,7 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
     assert!(written.running && written.chunks.is_empty());
     drop(first_owner);
 
-    let next_owner = GitWorktreeProcessManager::new(Some(store));
+    let next_owner = WorkspaceProcessManager::new(Some(store));
     assert_eq!(
         next_owner
             .write_and_poll(&room, &started.process_id, b"SURVIVED\n", 0, 1024, Some("movement:11"))
@@ -101,12 +101,12 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
 }
 
 async fn start(
-    owner: &GitWorktreeProcessManager,
+    owner: &WorkspaceProcessManager,
     room: &WorkerEnvironmentId,
     sandbox: &ProjectedSandbox,
     cwd: &AbsPath,
-    limits: &GitWorktreeProcessLimits,
-) -> Result<octopus_git_sandbox::GitWorktreeProcessPoll, String> {
+    limits: &WorkspaceProcessLimits,
+) -> Result<octopus_workspace_substrate::WorkspaceProcessPoll, String> {
     owner
         .start(
             room,
@@ -141,16 +141,16 @@ async fn nested_sandbox_timeout_closes_owned_processes_without_signaling_a_neigh
         let tty = std::env::var(TTY).as_deref() == Ok("true");
         let root_exit = std::env::var(ROOT_EXIT).unwrap();
         let cwd = AbsPath::new(&root.join("work")).unwrap();
-        let store = GitWorktreeProcessStore::new(
+        let store = WorkspaceProcessStore::new(
             &root.join("durable"), &root.join("ipc"),
             PathBuf::from(env!("CARGO_BIN_EXE_octopus-workspace-exec-tool")),
         ).unwrap();
-        let manager = GitWorktreeProcessManager::new(Some(store));
+        let manager = WorkspaceProcessManager::new(Some(store));
         let room = WorkerEnvironmentId::derive(format!("nested-timeout-contract-{tty}-{root_exit}").as_bytes());
         let sandbox = ProjectedSandbox::from_parts(
             vec![cwd.clone()], Vec::new(), vec![cwd.clone()], NetworkCeiling::Denied,
         );
-        let limits = GitWorktreeProcessLimits {
+        let limits = WorkspaceProcessLimits {
             max_processes_per_worker_environment: 2,
             max_buffered_output_bytes: 4096, max_buffered_output_events: 64,
             max_input_bytes: 64, process_timeout: Duration::from_millis(500),

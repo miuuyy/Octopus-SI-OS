@@ -929,21 +929,27 @@ pub fn prepared_calls(root: &Path) -> Result<Vec<PreparedCall>, String> {
     let mut pending = Vec::new();
     for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
-        if entry
+        let Some(key) = entry
             .file_name()
             .to_str()
-            .is_some_and(|s| s.ends_with(".pending.json"))
+            .and_then(|s| s.strip_suffix(".pending.json"))
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if root
+            .join(format!("{key}.accepted.json"))
+            .try_exists()
+            .map_err(|e| e.to_string())?
         {
-            let call: PreparedCall = read_record(&entry.path())?;
-            call.validate()?;
-            if !root
-                .join(format!("{}.accepted.json", call.digest))
-                .try_exists()
-                .map_err(|e| e.to_string())?
-            {
-                pending.push(call);
-            }
+            continue;
         }
+        let call: PreparedCall = read_record(&entry.path())?;
+        call.validate()?;
+        if call.digest != key {
+            return Err("code mode pending filename differs from its immutable digest".into());
+        }
+        pending.push(call);
     }
     pending.sort_by(|a, b| a.digest.cmp(&b.digest));
     Ok(pending)
@@ -2445,7 +2451,7 @@ pub fn output_authority(
     source: &octopus_tool_door_runtime::ToolDoorOutputSource,
 ) -> Result<OutputAuthority, octopus_run_authoring::CheckedRunError> {
     use octopus_run_authoring::CheckedRunEvidenceReader;
-    use octopus_runtime::run_record::RunRecord;
+    use octopus_run_record::RunRecord;
     let context: ContextRecord = read_record(&root.join("context.json"))?;
     let topology = context.identity.owner_topology.as_ref().ok_or("output authority has no declared topology")?;
     if context.identity.config != *config || context.generation != digest(&context.identity)?

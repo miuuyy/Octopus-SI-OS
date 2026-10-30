@@ -723,7 +723,7 @@ impl CodexAppServerInterfaceDriver {
                         Err(error) => return Err(error),
                     };
                     let current =
-                        octopus_runtime::run_record::RunRecord::from_bytes(&current_bytes)
+                        octopus_run_record::RunRecord::from_bytes(&current_bytes)
                             .map_err(|error| {
                                 InterfaceDriverError::FailedClosed(error.to_string())
                             })?;

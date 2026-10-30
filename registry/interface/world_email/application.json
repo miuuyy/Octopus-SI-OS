@@ -1,0 +1,79 @@
+{
+  "schema_version": 3,
+  "id": "world_email",
+  "name": "Email",
+  "description": "Hand the mail you allow to the tasks you connect, and let them reply, send and file email from your mailbox.",
+  "category": "connector",
+  "developer": "Octopus",
+  "version": "3.0.0",
+  "icon": "email",
+  "logo": "application-logo.png",
+  "interfaces": [
+    "world_email"
+  ],
+  "artifact_bindings": [
+    {
+      "artifact_id": "artifact-application-email-context",
+      "label": "Email connection contract"
+    }
+  ],
+  "connection": {
+    "disclosure": [
+      "Octopus signs in to your mailbox over an encrypted connection with an app password that stays on this computer.",
+      "Only new mail from your own address and the senders you allow reaches your tasks; everything else stays where it is.",
+      "Connected tasks can send, reply, forward, flag and move mail as you, and every send is recorded.",
+      "Disconnect at any time to remove the saved address and password."
+    ],
+    "help": {
+      "label": "Create a Gmail app password",
+      "url": "https://myaccount.google.com/apppasswords"
+    }
+  },
+  "setup": {
+    "fields": [
+      {
+        "interface": "world_email",
+        "pointer": "/interface_driver_config/private_config/environment/address_env",
+        "label": "Email address",
+        "kind": "text",
+        "required": true,
+        "placeholder": "you@example.com"
+      },
+      {
+        "interface": "world_email",
+        "pointer": "/interface_driver_config/private_config/environment/password_env",
+        "label": "App password",
+        "kind": "secret",
+        "required": true,
+        "help": "For Gmail, create an app password in your Google account"
+      },
+      {
+        "interface": "world_email",
+        "pointer": "/interface_driver_config/private_config/environment/imap_host_env",
+        "label": "IMAP server",
+        "kind": "text",
+        "required": false,
+        "placeholder": "imap.example.com:993",
+        "help": "Leave empty for Gmail, iCloud, Outlook.com, Yahoo, Yandex, Mail.ru and Fastmail."
+      },
+      {
+        "interface": "world_email",
+        "pointer": "/interface_driver_config/private_config/environment/smtp_host_env",
+        "label": "SMTP server",
+        "kind": "text",
+        "required": false,
+        "placeholder": "smtp.example.com:465",
+        "help": "Port 465 uses TLS from the start and 587 switches to TLS with STARTTLS. Leave empty for the built-in providers."
+      },
+      {
+        "interface": "world_email",
+        "pointer": "/interface_driver_config/private_config/environment/allowed_senders_env",
+        "label": "Allowed senders",
+        "kind": "text",
+        "required": false,
+        "placeholder": "you@example.com, @example.org",
+        "help": "Your own address is always allowed. The first address listed also receives new messages by default."
+      }
+    ]
+  }
+}

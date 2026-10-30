@@ -11,7 +11,7 @@ use octopus_descriptors::{InterfaceId, RunId};
 use octopus_interfaces::InterfaceDescriptor;
 use octopus_ledger::ArtifactRef;
 use octopus_ledger_store::DurableMovementDecoder;
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 
 use crate::chat_topology::{
     TerminalClientDescriptor, TerminalHostRoots, load_private_run_topology,

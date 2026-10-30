@@ -19,6 +19,7 @@
         "registry/interface/world_telegram/telegram_contract.py",
         "registry/interface/world_telegram/telegram_render.py",
         "registry/interface/world_telegram/telegram_wire.py",
+        "registry/interface/world_telegram/octopus_operation_catalog.py",
         "registry/interface/world_telegram/octopus_content_hash.py"
       ],
       "env": {

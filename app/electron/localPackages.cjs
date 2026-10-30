@@ -713,7 +713,7 @@ async function synthesizeDriverPackages(sourceRegistryRoot, claimedOwners, error
           description: driverDescription(descriptor),
           developer: "Octopus",
           category: "worker_environment",
-          icon: "hard-drive",
+          icon: "environment",
         },
         members,
       }, file);

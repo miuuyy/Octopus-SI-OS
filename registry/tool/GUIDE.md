@@ -49,10 +49,11 @@ Background: [Tools](../../docs/contracts/TOOL_REGISTRY.md).
 
 The folder and `id` match. `interface` is the door that owns the tool.
 `handler_config` is opaque to everything except the package-local process. A
-new tool over a new or existing process is a descriptor only; there is no
-central handler registry, no `runtime_handler_ref`, and no compiled mount
-table. `supported_worker_environment_kinds` is required and contains exactly
-one name: a tool belongs to one package and code-world, not to a list of
+new tool over an existing process and operation is a descriptor only; a new
+executable is package work inside the owning kind. There is no central handler
+registry, no `runtime_handler_ref`, and no compiled mount table.
+`supported_worker_environment_kinds` is required and contains exactly one
+name: a tool belongs to one package and code-world, not to a list of
 compatible rooms.
 
 ## Authority
@@ -75,9 +76,11 @@ the sake of one file.
 ## The room's code-world
 
 A tool process lives in the same package and code-world as the kind and door
-of its worker environment. The door life contains the generic
-`octopus-tool-door-life`, which reads the ledger, checks the tool grant, and
-talks to the package process. Only artifacts cross the room's boundary.
+of its worker environment. Each kind runs its own door life, built on the door
+runtime that `process_session` owns (`octopus-process-session-tool-runtime`,
+imported by the other kinds as `octopus-tool-door-runtime`); it reads the
+ledger, checks the tool grant and formation, and talks to the package process.
+Only artifacts cross the room's boundary.
 
 The process receives a strict invoke JSON carrying the full tool descriptor and
 the invocation envelope. It returns one or more artifact manifests, or a typed

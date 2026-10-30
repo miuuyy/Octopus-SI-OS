@@ -65,7 +65,9 @@ pub(super) fn selected(
         if !names.insert(template.name.clone()) {
             return Err("existing run authoring binding repeats a template name".into());
         }
-        if template.role != BoundCheckpointRole::ProviderInterfaceOutput {
+        if template.role != BoundCheckpointRole::ProviderInterfaceOutput
+            || !template.result_receiving.is_empty()
+        {
             continue;
         }
         let [target] = template.outbound_interface_bindings.as_slice() else {

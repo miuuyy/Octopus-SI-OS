@@ -1,15 +1,5 @@
 [package]
 name = "octopus-substrate-contract"
-# BOX crate (crates/): the substrate contract carved out of octopus-protocol —
-# sandbox posture, filesystem/network permissions, shell-environment policy,
-# exec output, git sha, command parse. ZERO model-wire vocabulary, ZERO registry
-# dependency. Genuine box crates (file-system, git-utils, shell-command,
-# shell-escalation, sandbox) depend on THIS instead of reaching into the
-# provider registry, so box depends on box (two-homes law).
-#
-# Ported Codex substrate uses let-chains -> requires edition 2024 (override
-# workspace 2021), matching the sibling box crates (git-utils, shell-command,
-# sandbox).
 edition = "2024"
 rust-version = "1.85"
 version.workspace = true
@@ -21,7 +11,6 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
-# Leaf/utility box crates only — never the provider registry.
 octopus-util-abspath = { path = "../octopus-util-abspath" }
 octopus-util-pathuri = { path = "../octopus-util-pathuri" }
 

@@ -1,6 +1,7 @@
 use std::{fs, path::Path, sync::Arc};
 
 use octopus_ledger::{GrantProjection, RefusedReason, VerifierPackagePin};
+use octopus_run_record::GrantEpoch;
 use octopus_runtime::*;
 use serde_json::json;
 

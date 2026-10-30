@@ -51,7 +51,7 @@
     fn names_binding(interface: impl Into<String>, names: &[&str]) -> AuthoredInterfaceBinding {
         AuthoredInterfaceBinding {
             interface: InterfaceId::new(interface),
-            config: octopus_runtime::InterfaceBindingConfig {
+            config: octopus_policy::InterfaceBindingConfig {
                 artifact_policy: BindingArtifactPolicy::Allow {
                     names: names.iter().map(|name| (*name).to_string()).collect(),
                     namespaces: Vec::new(),
@@ -2536,7 +2536,7 @@
         let bound = pending_output_checkpoint(output, "bound_output", "tool.call", &full, &mandatory_role);
         assert_eq!(bound.artifact_bindings, [full.clone(), vec![ArtifactId::new("explicit-object")]].concat());
         let roles = vec![ArtifactBinding { id: mandatory_role[0].clone(), access: Default::default() }];
-        let mut projected: octopus_runtime::run_record::CheckpointRecord = serde_json::from_value(
+        let mut projected: octopus_run_record::CheckpointRecord = serde_json::from_value(
             materialize_pending_checkpoint(&bound, &config.run),
         ).unwrap();
         assert!(checkpoint_role_bindings_match(&projected, &roles, output));
@@ -2550,7 +2550,7 @@
         overlap.static_artifact_bindings.push(mandatory_role[0].clone());
         let mut roles = roles;
         roles[0].access.change = true;
-        let mut projected: octopus_runtime::run_record::CheckpointRecord = serde_json::from_value(
+        let mut projected: octopus_run_record::CheckpointRecord = serde_json::from_value(
             materialize_pending_checkpoint(&bound, &config.run),
         ).unwrap();
         projected.artifact_bindings[0] = roles[0].clone();
@@ -2645,6 +2645,7 @@
             inputs: vec![
                 ProviderVerifiedInput {
                     also_deliver_to_tool: None,
+                    also_deliver_to_interface: None,
                     artifact_label: "operator.approval.response".to_string(),
                     required_verified_artifact: requirement(
                         "operator.approval",
@@ -2653,6 +2654,7 @@
                 },
                 ProviderVerifiedInput {
                     also_deliver_to_tool: None,
+                    also_deliver_to_interface: None,
                     artifact_label: "operator.approval.response".to_string(),
                     required_verified_artifact: requirement(
                         "operator.input.provided",
@@ -2723,6 +2725,30 @@
             )
             .unwrap_err();
         assert!(error.contains("outside the formed invocation grant"));
+
+        let ProviderHandoffRoute::ClientProjectionWithVerifiedInputs { mut inputs } = route else {
+            unreachable!()
+        };
+        let recipient = InterfaceId::new("world_input_test");
+        for input in &mut inputs {
+            input.also_deliver_to_interface = Some(recipient.clone());
+        }
+        let route = ProviderHandoffRoute::ClientProjectionWithVerifiedInputs { inputs };
+        let unadmitted = config
+            .verified_input_checkpoints(&route, output, &static_context, &marks, &BTreeSet::new(), &BTreeSet::new())
+            .unwrap_err();
+        assert!(unadmitted.contains("not a distinct granted interface"));
+        let delivered = config
+            .verified_input_checkpoints(&route, output, &static_context, &marks, &BTreeSet::new(), &BTreeSet::from([recipient.clone()]))
+            .unwrap();
+        assert!(delivered.iter().all(|checkpoint| {
+            checkpoint
+                .outbound_interfaces()
+                .eq([&config.provider_interface, &recipient])
+        }));
+        let mut next = config.clone();
+        next.checkpoints.extend(delivered);
+        next.validate(&next.provider_interface, &next.run).unwrap();
     }
 
     #[test]
@@ -3714,6 +3740,7 @@
             .into_iter()
             .map(|(mark, verifier)| ProviderVerifiedInput {
                 also_deliver_to_tool: Some("coder.exec".into()),
+                also_deliver_to_interface: None,
                 artifact_label: "operator.approval.response".into(),
                 required_verified_artifact: RequiredVerifiedArtifact {
                     mark: octopus_descriptors::MarkId::new(mark),
@@ -5493,7 +5520,7 @@
             let mut visible = record.clone();
             visible.checkpoints.iter_mut().find(|cp| cp.id.as_str() == "terminal_input").unwrap()
                 .artifact_bindings.push(ArtifactBinding {
-                    id:context_free.items[0].artifact_id.clone(), access:octopus_runtime::ArtifactAccess::read_only(),
+                    id:context_free.items[0].artifact_id.clone(), access:octopus_policy::ArtifactAccess::read_only(),
                 });
             assert!(later.restore_pending_context(&mut state, &visible, &context_free).is_err());
         }

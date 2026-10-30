@@ -2,13 +2,13 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.desktop_session",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "product_kind": "driver",
   "product_id": "desktop_session",
   "release_status": "optional",
   "display": {
-    "name": "Computer Use",
-    "description": "Computer Use tools for Home and ordinary tasks, with a reusable Computer Use Agent preset.",
+    "name": "Desktop Session",
+    "description": "The Mac desktop and its apps: observe the screen, click, type, scroll and drag.",
     "developer": "Octopus",
     "category": "worker_environment",
     "icon": "desktop"

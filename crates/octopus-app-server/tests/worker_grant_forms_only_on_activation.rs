@@ -296,7 +296,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
             SystemInterfaceEmitter {
                 run: &run,
                 checkpoint: &current,
-                epoch: octopus_runtime::GrantEpoch(0),
+                epoch: octopus_run_record::GrantEpoch(0),
             },
             &InterfaceId::new("world_terminal"),
             &target,
@@ -341,7 +341,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
             SystemInterfaceEmitter {
                 run: &run,
                 checkpoint: &current,
-                epoch: octopus_runtime::GrantEpoch(0),
+                epoch: octopus_run_record::GrantEpoch(0),
             },
             &InterfaceId::new("system_context"),
             &target,
@@ -371,7 +371,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
             SystemInterfaceEmitter {
                 run: &run,
                 checkpoint: &current,
-                epoch: octopus_runtime::GrantEpoch(0),
+                epoch: octopus_run_record::GrantEpoch(0),
             },
             &InterfaceId::new("world_terminal"),
             &target,

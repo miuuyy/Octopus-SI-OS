@@ -149,6 +149,16 @@ pub(crate) fn project(value: &Value) -> Result<Option<ProjectedMedia>, Interface
     Ok(Some(ProjectedMedia { value, images }))
 }
 
+pub(crate) fn without_embedded_payloads(value: &Value) -> Value {
+    let mut value = value.clone();
+    if let Some(entries) = value.get_mut("media").and_then(Value::as_array_mut) {
+        for entry in entries.iter_mut().filter_map(Value::as_object_mut) {
+            entry.remove("payload_base64");
+        }
+    }
+    value
+}
+
 pub(crate) fn text_exceeds_limit(text: &str) -> Result<bool, InterfaceBoundaryError> {
     let item = DynamicToolCallOutputContentItem::InputText { text: text.into() };
     let encoded = serde_json::to_vec(&item)

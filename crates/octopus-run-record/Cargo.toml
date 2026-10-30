@@ -1,0 +1,15 @@
+[package]
+name = "octopus-run-record"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+octopus-descriptors = { path = "../octopus-descriptors" }
+octopus-file-storage = { path = "../octopus-file-storage" }
+octopus-ledger = { path = "../octopus-ledger" }
+octopus-policy = { path = "../octopus-policy" }

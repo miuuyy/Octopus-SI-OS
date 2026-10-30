@@ -68,6 +68,10 @@ use crate::run_affordances::{NativePending, NativeStep, PeerAction, PeerMessage,
 mod tool_operator_request;
 use tool_operator_request::{ToolOperatorContinuity, ToolOperatorPhase, ToolOperatorRequest};
 
+#[path = "operation_operator_request.rs"]
+mod operation_operator_request;
+use operation_operator_request::{operation_decision_call, OperationOperatorRequest};
+
 #[path = "context_refresh.rs"]
 mod context_refresh;
 use context_refresh::{ContextRefresh, CurrentNativeContext, NativeHistoryProof, NativeHistoryRetirement};

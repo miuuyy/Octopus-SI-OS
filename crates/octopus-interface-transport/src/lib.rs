@@ -19,8 +19,7 @@ pub use interface_life::{
 use notify::{RecursiveMode, Watcher};
 use octopus_descriptors::{ArtifactId, InterfaceId};
 use octopus_interfaces::{DeliveryVerdict, Direction, InterfaceArtifactFile, InterfaceDescriptor};
-use octopus_ledger::{ArtifactDelivery, ArtifactRef};
-use octopus_runtime::ContentHash;
+use octopus_ledger::{ArtifactDelivery, ArtifactRef, ContentHash};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -153,7 +152,7 @@ pub struct InterfaceActivationReconciler {
     root_cancel: CancellationToken,
     octopus_home: PathBuf,
     durable_root: Option<PathBuf>,
-    run_index: octopus_runtime::run_index::RunRecordsIndex,
+    run_index: octopus_run_record::RunRecordsIndex,
     resolved_lives: BTreeMap<InterfaceId, CachedResolvedInterfaceLife>,
     imported_executables: interface_life::ImportedExecutableVerification,
     lifted: BTreeMap<InterfaceId, LiftedInterfaceLife>,
@@ -265,7 +264,7 @@ impl InterfaceActivationReconciler {
             root_cancel,
             octopus_home,
             durable_root,
-            run_index: octopus_runtime::run_index::RunRecordsIndex::new(),
+            run_index: octopus_run_record::RunRecordsIndex::new(),
             resolved_lives: BTreeMap::new(),
             imported_executables: interface_life::ImportedExecutableVerification::default(),
             lifted: BTreeMap::new(),
@@ -1781,7 +1780,7 @@ mod interface_life_switch_tests {
             "trace": "trace:run_flaky", "status": "idle",
             "checkpoints": [{
                 "id": "c1", "run": "run_flaky", "trace": "trace:run_flaky:c1", "epoch": 0,
-                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("test_flaky")),
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new("test_flaky")),
                 "outbound_interface_bindings": []
             }],
             "active_checkpoints": ["c1"]
@@ -2004,8 +2003,8 @@ mod interface_life_switch_tests {
             "trace": "trace:run_shell", "status": "idle",
             "checkpoints": [{
                 "id": "c1", "run": "run_shell", "trace": "trace:run_shell:c1", "epoch": 0,
-                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("test_shell")),
-                "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("test_broken"))]
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new("test_shell")),
+                "outbound_interface_bindings": [octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new("test_broken"))]
             }],
             "active_checkpoints": ["c1"]
         });

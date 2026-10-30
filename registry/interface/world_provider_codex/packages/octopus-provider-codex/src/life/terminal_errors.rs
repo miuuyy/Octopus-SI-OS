@@ -252,7 +252,7 @@ pub(crate) fn native_result_admitted_prefix(
         }
         let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
         if ContentHash::of_bytes(&bytes) != hash { return Err("native result prefix run snapshot changed its hash".into()); }
-        let record = octopus_runtime::run_record::RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
+        let record = octopus_run_record::RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
         let state = record.interface_state.get(&ctx.interface).ok_or("native result prefix lost its provider state")?;
         let pending = state.get("pending_handoff").ok_or("native result prefix has no pending handoff")?;
         let owner = pending.get("source_movement_seq").and_then(serde_json::Value::as_u64)
@@ -379,7 +379,7 @@ pub(crate) async fn admit_interrupted_result(
         return Err("exact result group lost its ordered gate outcomes".into());
     }
     if native {
-        let current = octopus_runtime::run_record::RunRecord::from_bytes(&handoff.current_run_record_bytes().await)
+        let current = octopus_run_record::RunRecord::from_bytes(&handoff.current_run_record_bytes().await)
             .map_err(|error| error.to_string())?;
         if current.interface_state.get(&ctx.interface).and_then(|state| state.get("context_generation"))
             != expected_payload.get("codex_continuity").and_then(|state| state.get("context_generation")) {

@@ -68,7 +68,7 @@ fn selected_home_authoring_inspector_reads_actual_selection() {
     let ledger_path=home.join("ledger/movements.jsonl");let ledger=std::fs::read(&ledger_path).unwrap();
     let roots: octopus_operator_chat_client::run_composition::CompositionRoots = serde_json::from_value(
         descriptor.interface_driver_config.as_ref().unwrap().private_config["run_affordances"]["roots"].clone()).unwrap();
-    let record = octopus_runtime::run_record::RunRecord::from_bytes(&before).unwrap();
+    let record = octopus_run_record::RunRecord::from_bytes(&before).unwrap();
     let selection = octopus_operator_chat_client::run_composition::current_run::current_selection(&roots,&record,&provider).unwrap().unwrap();
     assert!(!selection.selected_tools.is_empty());
     let inspected = octopus_operator_chat_client::run_composition::validate_registry_candidate(&octopus_operator_chat_client::run_composition::RegistryValidationRoots {

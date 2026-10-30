@@ -13,7 +13,7 @@ use octopus_run_authoring::{
     provider_input_payloads_ready, provider_input_rearm_ready,
     validate_unchanged_admitted_checkpoint,
 };
-use octopus_runtime::run_record::RunRecord;
+use octopus_run_record::RunRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

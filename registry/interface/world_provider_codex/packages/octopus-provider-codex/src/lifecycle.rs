@@ -246,6 +246,7 @@ pub(crate) enum LifecycleRoute {
     ClientProjectionWithVerifiedInputs { inputs: Vec<LifecycleVerifiedInput> },
     Tool { tool: String },
     Interface { interface: InterfaceId },
+    Operation { interface: InterfaceId, result_label: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

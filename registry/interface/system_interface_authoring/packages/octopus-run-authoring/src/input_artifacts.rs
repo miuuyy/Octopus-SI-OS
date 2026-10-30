@@ -14,11 +14,11 @@ impl InputArtifactBinding {
             return Err("input artifact binding is not an exact manifest identity".into());
         }
         if let Some(bound) = context.iter().find(|bound| bound.id == self.artifact.id) {
-            if bound.access != octopus_runtime::ArtifactAccess::read_only() {
+            if bound.access != octopus_policy::ArtifactAccess::read_only() {
                 return Err("input artifact binding cannot replace existing object rights".into());
             }
         } else {
-            context.push(ArtifactBinding { id: self.artifact.id.clone(), access: octopus_runtime::ArtifactAccess::read_only() });
+            context.push(ArtifactBinding { id: self.artifact.id.clone(), access: octopus_policy::ArtifactAccess::read_only() });
         }
         Ok(context)
     }

@@ -60,15 +60,15 @@ pub(crate) async fn finish(envelope: &InterfaceInvocationEnvelope, response: Too
     artifact
 }
 
-pub(crate) struct BrowserWaitCompletion { environment: ToolProcessEnvironment, transport: NativeTransport, config: WaitCompletionConfig, execution: tokio::sync::Mutex<()> }
+pub(crate) struct BrowserWaitCompletion { transport: NativeTransport, config: WaitCompletionConfig, execution: tokio::sync::Mutex<()> }
 impl BrowserWaitCompletion {
     pub(crate) fn load(environment: ToolProcessEnvironment) -> Result<Self,String> {
         let (transport,config) = crate::browser_session::completion_transport(&environment)?;
-        Ok(Self {environment,transport,config,execution:tokio::sync::Mutex::new(())})
+        Ok(Self {transport,config,execution:tokio::sync::Mutex::new(())})
     }
     pub(crate) async fn receive(&self, invocation: ToolProcessInvocation) -> Result<InterfaceArtifactFile,ToolProcessError> {
             let _execution = self.execution.lock().await;
-            let decoded = decode_room_invocation(&self.environment, invocation, "browser")?;
+            let decoded = decode_room_invocation(invocation)?;
             self.config.validate(&decoded, true).map_err(capability)?;
             let args = decoded.call.arguments.as_object().filter(|value| value.len()==1).ok_or_else(|| capability("Wait completion requires only its exact handle"))?;
             let waiter = args.get("waiter").ok_or_else(|| capability("Wait completion has no handle"))?;
@@ -102,14 +102,12 @@ impl BrowserWaitCompletion {
     }
 }
 impl ToolProcessHandler for BrowserWaitCompletion {
+    fn substrate_family(&self) -> &str { crate::SUBSTRATE_FAMILY }
     fn execute<'a>(&'a self, invocation: ToolProcessInvocation, _io: ToolProcessIo) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<Vec<InterfaceArtifactFile>,ToolProcessError>> + Send + 'a>> {
         Box::pin(async move { self.receive(invocation).await.map(|artifact|vec![artifact]) })
     }
     fn release_with_context<'a>(&'a self, context: WorkerEnvironmentReleaseContext<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),ToolProcessError>> + Send + 'a>> {
-        Box::pin(async move {
-            if context.formation.door_interface != self.environment.interface || context.kind.worker_environment_kind_id != context.formation.worker_environment_kind || context.kind.substrate_family != "browser" { return Err(capability("Wait observer release belongs to another formed room")); }
-            self.transport.release(context).await.map_err(capability)
-        })
+        Box::pin(async move { self.transport.release(context).await.map_err(capability) })
     }
     fn quiesce<'a>(&'a self) -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),ToolProcessError>> + Send + 'a>> { Box::pin(async move { self.transport.shutdown().await; Ok(()) }) }
 }

@@ -45,6 +45,29 @@ class Correspondence(unittest.TestCase):
                 altered["payload_utf8"] = json.dumps(payload)
                 with self.assertRaises(AssertionError, msg=change): verifier.verify(altered)
 
+    def test_operation_results_correspond_by_operation_correlation_and_declared_label(self):
+        call = {"id": "operation-call", "content": [3] * 32}
+        base = {"params": {"call_artifact": call, "tool": "gmail.send_email", "correlation_id": "call-7", "params": {}},
+                "artifact_label": "mcp.tool.result", "metadata": {"artifact_binding_refs": [call],
+                "grant": {"artifact_access": {call["id"]: {"read": True, "change": False, "create": False, "delete": False}}}}}
+        gated = {"label": "mcp.tool.result", "operation": "gmail.send_email", "correlation_id": "call-7",
+                 "session_disposition": "awaiting_operator", "ok": True,
+                 "result": {"effect_performed": False, "operator_request": {"request_id": "blake3:00"}}}
+        declined = {"label": "mcp.tool.result", "operation": "gmail.send_email", "correlation_id": "call-7",
+                    "ok": False, "error": {"code": "operator_declined"}}
+        for result in (gated, declined):
+            verifier.verify({**base, "payload_utf8": json.dumps(result)})
+        for change in ["operation", "correlation", "label", "both", "neither", "status"]:
+            payload = copy.deepcopy(gated)
+            if change == "operation": payload["operation"] = "gmail.read_email"
+            elif change == "correlation": payload["correlation_id"] = "call-8"
+            elif change == "label": payload["label"] = "mcp.result"
+            elif change == "both": payload["error"] = {"code": "x"}
+            elif change == "neither": del payload["result"]
+            else: payload["ok"] = "true"
+            with self.assertRaises(AssertionError, msg=change):
+                verifier.verify({**base, "payload_utf8": json.dumps(payload)})
+
 
 if __name__ == "__main__":
     unittest.main()

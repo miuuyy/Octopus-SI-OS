@@ -27,7 +27,7 @@ octopus-util-pathuri = { path = "../../../../worker_environment_kind/process_ses
 # not model protocol. A provider package may depend on a box crate
 # (registry -> box is allowed). Supplies parse_command()/shlex_join() used by
 # protocol::item_builders.
-octopus-shell-command = { package = "octopus-shell-command", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-shell-command" }
+octopus-shell-command = { package = "octopus-shell-command", path = "../../../world_terminal/packages/octopus-shell-command" }
 
 # vendored proc-macro (kept inside this crate dir; excluded from workspace glob)
 octopus-experimental-api-macros = { path = "vendor-macros" }

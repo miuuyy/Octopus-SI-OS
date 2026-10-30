@@ -2553,6 +2553,7 @@ function labDriverRows(entries, data) {
       name,
       display_name: record.display?.name ?? name,
       description: record.display?.description ?? "",
+      icon: record.display?.icon ?? "",
       package_id: record.id,
       installed,
       materialized: installed,

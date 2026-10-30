@@ -1,0 +1,32 @@
+{
+  "id": "slack.list_usergroups",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "web_api",
+    "method": "usergroups.list",
+    "read_only": true
+  },
+  "description": "List the workspace's user groups and, with include_users, their members.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "include_users": {
+        "type": "boolean"
+      },
+      "include_count": {
+        "type": "boolean"
+      },
+      "include_disabled": {
+        "type": "boolean"
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

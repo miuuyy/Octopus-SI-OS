@@ -16,6 +16,7 @@ pub(crate) fn build_chat_run_record(
     payload_artifact_bindings: &[octopus_ledger::ArtifactRef],
     provider_client_operation_labels: &[String],
     previous_authoring_profile: Option<&OctopusOsAuthoringProfile>,
+    operations: &OperationRoutes,
 ) -> Result<String, String> {
     if let Some(existing) = existing {
         assert_existing_run_contract(existing, identity, selection)?;
@@ -265,7 +266,7 @@ pub(crate) fn build_chat_run_record(
                     output.checkpoint_id
                 ));
             }
-            cycle_checkpoints.push(checkpoint(
+            let mut output_checkpoint = checkpoint(
                 output.checkpoint_id.clone(),
                 Some(&identity.model_interface_id),
                 vec![&output.interface_id],
@@ -275,7 +276,11 @@ pub(crate) fn build_chat_run_record(
                         format!("model output requirement did not encode: {error}")
                     })?,
                 ],
-            ));
+            );
+            output_checkpoint["interface_binding"]["config"]["artifact_policy"] = serde_json::json!({
+                "mode":"allow","names":[output.required_verified_artifact.artifact_label],"namespaces":[]
+            });
+            cycle_checkpoints.push(output_checkpoint);
             Ok(output.checkpoint_id.clone())
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -323,7 +328,8 @@ pub(crate) fn build_chat_run_record(
         .collect::<BTreeSet<_>>();
     let external_input_checkpoints = external_inputs
         .iter()
-        .map(|input| {
+        .filter_map(|input| operations.standing_input(input).transpose().map(|binding| (input, binding)))
+        .map(|(input, binding)| {
             if cycle_ids.contains(input.checkpoint_id.as_str()) {
                 return Err(format!(
                     "external input checkpoint '{}' collides with the client cycle",
@@ -349,7 +355,7 @@ pub(crate) fn build_chat_run_record(
                 &context_artifacts,
                 required,
             );
-            input_checkpoint["interface_binding"] = serde_json::to_value(external_input_binding(input)?)
+            input_checkpoint["interface_binding"] = serde_json::to_value(binding?)
                 .map_err(|error| format!("external input checkpoint '{}' binding did not encode: {error}", input.checkpoint_id))?;
             Ok(input_checkpoint)
         })
@@ -513,6 +519,7 @@ pub(crate) fn build_chat_run_record(
         &previous_active,
         &identity.run_id,
         &identity.model_interface_id,
+        operations,
     )?;
     let replaced_ids = previous_client_cycle
         .union(&provider_frontier)
@@ -617,6 +624,32 @@ pub(crate) fn build_chat_run_record(
     }
     for output in next_binding.checkpoints.iter_mut().filter(|cp| cp.role == BoundCheckpointRole::ProviderToolOutput) {
         output.static_artifact_bindings.extend(payload_artifact_bindings.iter().map(|reference| reference.id.clone()));
+    }
+    for (interface, route) in &operations.connected {
+        let result = config.run.tool_result_receiving.as_ref()
+            .ok_or("application operations require the client's tool_result_receiving contract")?;
+        let request = |id: &str| AuthoredInterfaceBinding {
+            interface: InterfaceId::new(id),
+            config: InterfaceBindingConfig { artifact_policy: BindingArtifactPolicy::Allow {
+                names: vec![route.request_label.clone()], namespaces: Vec::new(),
+            } },
+        };
+        let mut template = bound_checkpoint_template(BoundCheckpointRole::ProviderInterfaceOutput,
+            request(&identity.model_interface_id), vec![request(interface)], Vec::new())?;
+        template.result_receiving = route.result_labels.iter()
+            .map(|label| Ok((label.clone(), result.contract(label)?)))
+            .collect::<Result<_, String>>()?;
+        let id = format!("cp_operation_{}_output_{cycle}", capability_interface_segment(interface));
+        if previous_checkpoint_ids.contains(&id) || cycle_checkpoints.iter().chain(&external_checkpoints)
+            .any(|cp| cp.get("id").and_then(serde_json::Value::as_str) == Some(id.as_str())) {
+            return Err("application operation route collides with an existing checkpoint".into());
+        }
+        let mut row = checkpoint(id.clone(), None, Vec::new(), &mandatory_role_artifacts, Vec::new());
+        row["interface_binding"] = serde_json::to_value(&template.interface_binding).map_err(|e| e.to_string())?;
+        row["outbound_interface_bindings"] = serde_json::to_value(&template.outbound_interface_bindings).map_err(|e| e.to_string())?;
+        cycle_checkpoints.push(row);
+        next_frontier.push(serde_json::json!(id));
+        next_binding.checkpoints.push(template);
     }
     for (source, owner) in &identity.code_mode_owners {
         let door = identity.capability_doors.get(source).ok_or("persistent owner has no exact door")?;

@@ -1,0 +1,34 @@
+[package]
+name = "octopus-workspace-substrate"
+edition = "2024"
+version.workspace = true
+license.workspace = true
+rust-version = "1.85"
+
+[lib]
+name = "octopus_workspace_substrate"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
+octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
+octopus-applypatch = { path = "../octopus-applypatch" }
+octopus-exec = { package = "octopus-exec-substrate", path = "../../../process_session/packages/octopus-exec-substrate" }
+octopus-file-system = { path = "../../../process_session/packages/octopus-file-system" }
+octopus-sandbox-base = { package = "octopus-sandbox-substrate", path = "../../../process_session/packages/octopus-sandbox-substrate" }
+octopus-util-pathuri = { path = "../../../process_session/packages/octopus-util-pathuri" }
+octopus-util-pty = { path = "../../../process_session/packages/octopus-util-pty" }
+base64 = "0.22.1"
+blake3.workspace = true
+fs2 = "0.4"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.182"
+
+[dev-dependencies]
+tempfile = "3.23.0"
+tokio = { workspace = true, features = ["macros", "rt"] }

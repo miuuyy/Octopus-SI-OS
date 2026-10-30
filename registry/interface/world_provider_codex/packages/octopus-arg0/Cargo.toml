@@ -14,7 +14,7 @@ doctest = false
 
 [dependencies]
 anyhow = { workspace = true }
-octopus-applypatch = { package = "octopus-applypatch", path = "../../../../../registry/worker_environment_kind/git_worktree/packages/octopus-applypatch" }
+octopus-applypatch = { package = "octopus-applypatch", path = "../../../../../registry/worker_environment_kind/filesystem_workspace/packages/octopus-applypatch" }
 # arg0 is the box arg0-trick DISPATCH composition (consumed only by the product-binary fronts cli /
 # tui, which already link exec directly). It no longer code-depends on the sandbox substrate: the
 # one string it read (the `codex-linux-sandbox` dispatch basename) is inlined as arg0's own
@@ -38,4 +38,4 @@ pretty_assertions = "1.4.1"
 # escalation wrapper client. Box->box edge — the wrapper is arg0's alias-binary arm, like
 # octopus-applypatch.
 [target.'cfg(unix)'.dependencies]
-octopus-shell-escalation = { package = "octopus-shell-escalation", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-shell-escalation" }
+octopus-shell-escalation = { package = "octopus-shell-escalation", path = "../octopus-shell-escalation" }

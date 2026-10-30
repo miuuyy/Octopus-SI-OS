@@ -2,15 +2,15 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use octopus_descriptors::InterfaceId;
 use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope};
+use octopus_tool_door_runtime::room::emission_root;
 use octopus_tool_door_runtime::{
     ToolProcessEnvironment, ToolProcessError, ToolProcessHandler, ToolProcessInvocation,
     ToolProcessIo,
 };
 use octopus_tool_handlers::{
-    ToolCall, ToolCallArtifact, ToolHandler, ToolHandlerContext, ToolHandlerError,
-    ToolHandlerResult, ToolResultArtifact,
+    ToolCall, ToolHandler, ToolHandlerContext, ToolHandlerError, ToolHandlerResult,
+    ToolResultArtifact,
 };
 use octopus_tool_registry::ToolDescriptor;
 use octopus_worker_env::{
@@ -20,10 +20,9 @@ use octopus_worker_env::{
 
 use crate::artifact_bound::ArtifactBoundHandler;
 use crate::bound_surface::InvocationArtifactSurface;
-const NEUTRAL_TOOL_CALL_LABEL: &str = "tool.call";
+use crate::{capability, materialize_response};
 
 struct ArtifactBoundProcess {
-    interface: InterfaceId,
     handler: ArtifactBoundHandler,
     run_records_root: Option<PathBuf>,
     artifact_blobs_root: Option<PathBuf>,
@@ -74,6 +73,10 @@ impl ArtifactBoundProcess {
 }
 
 impl ToolProcessHandler for ArtifactBoundProcess {
+    fn substrate_family(&self) -> &str {
+        crate::SUBSTRATE_FAMILY
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -86,12 +89,14 @@ impl ToolProcessHandler for ArtifactBoundProcess {
         >,
     > {
         Box::pin(async move {
-            let (mut call, correlation_id) = decode_invocation(
-                &self.interface,
-                &invocation.descriptor,
-                &invocation.envelope,
-            )
-            .map_err(capability)?;
+            let decoded = crate::decode_invocation(&invocation.descriptor, &invocation.envelope)
+                .map_err(capability)?;
+            let correlation_id = decoded.correlation_id;
+            let mut call = ToolCall {
+                tool_id: decoded.tool,
+                arguments: decoded.arguments,
+                handler_config: invocation.descriptor.handler_config.clone(),
+            };
             attach_skill_source_context(
                 &mut call,
                 &invocation.descriptor,
@@ -173,7 +178,6 @@ pub async fn run_artifact_bound_tool_process() -> Result<(), String> {
         })
         .transpose()?;
     octopus_tool_door_runtime::run_tool_process(Arc::new(ArtifactBoundProcess {
-        interface: env.interface,
         handler: ArtifactBoundHandler,
         run_records_root: env.root_slots.get("run_records_root").cloned(),
         artifact_blobs_root: env.root_slots.get("artifact_blobs_root").cloned(),
@@ -330,80 +334,15 @@ fn attested_skill_source_context(
     }))
 }
 
-fn decode_invocation(
-    interface: &InterfaceId,
-    descriptor: &ToolDescriptor,
-    input: &InterfaceInvocationEnvelope,
-) -> Result<(ToolCall, Option<String>), String> {
-    if &descriptor.interface != interface {
-        return Err(format!(
-            "tool descriptor '{}' belongs to interface '{}', not process interface '{}'",
-            descriptor.id, descriptor.interface, interface
-        ));
-    }
-    let manifest = input
-        .read_artifact_manifest()
-        .map_err(|error| error.to_string())?;
-    if manifest.label != NEUTRAL_TOOL_CALL_LABEL {
-        return Err(format!(
-            "system_context manifest label '{}' is not '{}'",
-            manifest.label, NEUTRAL_TOOL_CALL_LABEL
-        ));
-    }
-    let payload = input
-        .read_artifact_payload()
-        .map_err(|error| error.to_string())?;
-    let artifact: ToolCallArtifact = serde_json::from_slice(&payload)
-        .map_err(|error| format!("tool.call artifact is malformed: {error}"))?;
-    let tool = artifact.tool.trim();
-    if tool.is_empty() {
-        return Err("tool.call carries an empty tool id".to_string());
-    }
-    if descriptor.id.as_str() != tool {
-        return Err(format!(
-            "tool descriptor '{}' does not match tool.call '{}'",
-            descriptor.id, tool
-        ));
-    }
-    let granted = input
-        .granted_tool_names()
-        .map_err(|error| error.to_string())?;
-    if !granted.iter().any(|candidate| candidate == tool) {
-        return Err(format!(
-            "tool '{}' is absent from the formed tool grant",
-            tool
-        ));
-    }
-    let blocked = input
-        .hard_blocked_tool_names()
-        .map_err(|error| error.to_string())?;
-    if blocked.iter().any(|candidate| candidate == tool) {
-        return Err(format!("tool '{}' is hard-blocked", tool));
-    }
-    Ok((
-        ToolCall {
-            tool_id: tool.to_string(),
-            arguments: artifact.arguments,
-            handler_config: descriptor.handler_config.clone(),
-        },
-        artifact.correlation_id,
-    ))
-}
-
 fn invocation_surface(
     input: &InterfaceInvocationEnvelope,
     artifact_blobs_root: Option<&std::path::Path>,
     maximum_bytes: u64,
 ) -> Result<Arc<InvocationArtifactSurface>, String> {
-    let parent = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| "system_context invocation manifest has no parent".to_string())?;
     let grant = input.grant().map_err(|error| error.to_string())?.clone();
     InvocationArtifactSurface::new(
         &input.artifact_binding_payloads,
-        &parent.join("emitted"),
+        &emission_root(input)?,
         grant,
         artifact_blobs_root,
         maximum_bytes,
@@ -417,12 +356,7 @@ fn handler_context(
     surface: Arc<InvocationArtifactSurface>,
 ) -> Result<ToolHandlerContext, String> {
     let runtime = input.runtime().map_err(|error| error.to_string())?;
-    let room_root = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| "system_context invocation manifest has no parent".to_string())?
-        .join("emitted");
+    let room_root = emission_root(input)?;
     Ok(ToolHandlerContext {
         run: runtime.run.as_str().to_string(),
         room_root,
@@ -436,25 +370,6 @@ fn handler_context(
         exec: Arc::new(SealedExec),
         artifacts: Some(surface),
     })
-}
-
-fn materialize_response(
-    input: &InterfaceInvocationEnvelope,
-    response: ToolResultArtifact,
-) -> Result<InterfaceArtifactFile, String> {
-    let bytes = serde_json::to_vec(&response)
-        .map_err(|error| format!("system_context result did not serialize: {error}"))?;
-    let parent = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| "system_context invocation manifest has no parent".to_string())?;
-    InterfaceArtifactFile::write(parent.join("emitted"), &response.label, &bytes)
-        .map_err(|error| error.to_string())
-}
-
-fn capability(error: impl ToString) -> ToolProcessError {
-    ToolProcessError::Capability(error.to_string())
 }
 
 struct SealedFs;

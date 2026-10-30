@@ -1,0 +1,40 @@
+{
+  "id": "slack.update_view",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "view.update"
+  },
+  "description": "Replace the content of an open view, named by exactly one of view_id or external_id.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "view": {
+        "type": "object",
+        "description": "A Block Kit view object with its type, title and blocks."
+      },
+      "view_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "external_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "hash": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The view's hash, to refuse the update if it changed meanwhile."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "view"
+    ],
+    "additionalProperties": false
+  }
+}

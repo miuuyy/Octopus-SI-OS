@@ -44,7 +44,7 @@ pub use sandbox::ProjectedSandbox;
 pub use surface::{
     ArtifactSurface, BoundArtifact, ExecOutput, ExecRequest, ExecSurface, FileReadOutput,
     FileSurface, FileWriteOutput, PatchOutcome, ReleaseHook, SandboxedCommandRunner,
-    SubstrateFamilyRegistry, WorkerEnvDriver, WorkerEnvironment, WorkerEnvironmentParts,
+    WorkerEnvDriver, WorkerEnvironment, WorkerEnvironmentParts,
 };
 
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize)]
@@ -221,10 +221,8 @@ pub enum WorkerEnvError {
     UnknownKind(String),
     #[error("unknown pinned descriptor hash (no historical version retained): {0:?}")]
     UnknownDescriptorHash(WekDescriptorHash),
-    #[error("no registered substrate family driver for substrate_family: {0}")]
+    #[error("worker environment driver does not serve substrate_family: {0}")]
     UnknownSubstrateFamily(String),
-    #[error("duplicate registered substrate family driver: {0}")]
-    DuplicateSubstrateFamily(String),
     #[error("cap references root {0} absent from boundary ceiling (no widening)")]
     CapExceedsBoundary(String),
     #[error("path is not absolute/canonical: {0}")]

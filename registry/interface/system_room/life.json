@@ -28,6 +28,7 @@
         "write_paths": [],
         "executable_paths": [
           "target/debug/octopus-artifact-send-tool",
+          "target/debug/octopus-file-read-tool",
           "target/debug/octopus-file-write-tool"
         ],
         "executable_commands": [],

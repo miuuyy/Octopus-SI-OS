@@ -18,7 +18,7 @@ tokio = { workspace = true, features = ["fs"] }
 
 octopus-appserver-proto = { path = "../octopus-appserver-proto" }
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
-octopus-execpolicy = { package = "octopus-execpolicy", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-execpolicy" }
+octopus-execpolicy = { package = "octopus-execpolicy", path = "../octopus-execpolicy" }
 octopus-features = { path = "../octopus-features" }
 octopus-file-system = { package = "octopus-file-system", path = "../../../../../registry/worker_environment_kind/process_session/packages/octopus-file-system" }
 octopus-codex-model-provider-info = { path = "../octopus-codex-model-provider-info" }

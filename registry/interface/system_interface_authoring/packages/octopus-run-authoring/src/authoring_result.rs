@@ -473,7 +473,7 @@ pub(crate) fn active_checkpoint_for_role<'a>(
     record: &'a RunRecord,
     config: &RunAuthoringConfig,
     role: RunAuthoringCheckpointRole,
-) -> Result<&'a octopus_runtime::run_record::CheckpointRecord, String> {
+) -> Result<&'a octopus_run_record::CheckpointRecord, String> {
     let template = config.checkpoint_for_role(role)?;
     active_checkpoint_for_template(record, config, template)
 }
@@ -482,7 +482,7 @@ pub(crate) fn active_checkpoint_for_template<'a>(
     record: &'a RunRecord,
     config: &RunAuthoringConfig,
     template: &RunAuthoringCheckpoint,
-) -> Result<&'a octopus_runtime::run_record::CheckpointRecord, String> {
+) -> Result<&'a octopus_run_record::CheckpointRecord, String> {
     let provider_state = record
         .interface_state
         .get(&config.provider_interface)

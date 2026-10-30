@@ -1,0 +1,27 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_email",
+  "version": "3.0.0",
+  "product_kind": "application",
+  "product_id": "world_email",
+  "release_status": "optional",
+  "display": {
+    "name": "Email",
+    "description": "Hand the mail you allow to the tasks you connect, and let them reply, send and file email from your mailbox.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "email"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_email",
+      "primary": true
+    },
+    {
+      "registry_kind": "artifact",
+      "owner": "artifact-application-email-context"
+    }
+  ]
+}

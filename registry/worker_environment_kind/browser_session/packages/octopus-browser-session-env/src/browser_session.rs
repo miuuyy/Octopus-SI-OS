@@ -29,6 +29,7 @@ use crate::{
     browser_result, decode_room_invocation, evidence_write_error,
     BrowserOperation, DecodedRoomInvocation,
 };
+use octopus_tool_door_runtime::room::strict_object;
 
 #[path = "browser_viewport.rs"]
 mod viewport;
@@ -54,7 +55,6 @@ pub use filechooser::decode_filechooser_door_artifact;
 pub(crate) use filechooser::decoded_response;
 use actions::{BrowserRef, ObservationState, NavigationExpectation, arm_navigation, current_document, navigation_expectation, pointer_point, settle_after_action, settle_observation, type_into_ref, wait_for_document};
 
-const SUBSTRATE_FAMILY: &str = "browser";
 const CDP_WIRE: &str = "cdp";
 const DEFAULT_AUTH_HEADER: &str = "Authorization";
 const DEFAULT_AUTH_VALUE_PREFIX: &str = "Bearer ";
@@ -437,7 +437,7 @@ impl BrowserRoom {
         invocation: ToolProcessInvocation,
         recorder: &dyn WorkerEnvironmentRecorder,
     ) -> Result<InterfaceArtifactFile, ToolProcessError> {
-        let decoded = decode_room_invocation(&self.environment, invocation, SUBSTRATE_FAMILY)?;
+        let decoded = decode_room_invocation(invocation)?;
         if matches!(decoded.operation, BrowserOperation::History | BrowserOperation::HistoryResume) {
             let _execution = self.source_execution.lock().await;
             return self.receive_history(&decoded).await;
@@ -2744,16 +2744,6 @@ impl BrowserRoom {
         context: octopus_tool_door_runtime::WorkerEnvironmentReleaseContext<'_>,
     ) -> Result<(), ToolProcessError> {
         let formation = context.formation;
-        let kind = context.kind;
-        if formation.door_interface != self.environment.interface
-            || kind.worker_environment_kind_id != formation.worker_environment_kind
-            || kind.substrate_family != SUBSTRATE_FAMILY
-        {
-            return Err(ToolProcessError::Capability(format!(
-                "browser release formation '{}' does not belong to this room",
-                formation.worker_environment_id
-            )));
-        }
         if let BrowserTransport::Native(transport) = &self.transport {
             transport.release(context).await.map_err(ToolProcessError::Capability)?;
         }
@@ -2783,6 +2773,10 @@ impl BrowserRoom {
 }
 
 impl ToolProcessHandler for BrowserRoom {
+    fn substrate_family(&self) -> &str {
+        crate::SUBSTRATE_FAMILY
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -3957,7 +3951,7 @@ pub(crate) fn safe_control_body_evidence(bytes: &[u8]) -> String {
     )
 }
 
-fn url_is_loopback(url: &reqwest::Url) -> bool {
+pub fn url_is_loopback(url: &reqwest::Url) -> bool {
     url.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
             || host.to_ascii_lowercase().ends_with(".localhost")
@@ -3986,24 +3980,7 @@ fn validate_target_id(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
-}
-
-fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
+pub fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {
     object
         .get(field)
         .and_then(Value::as_str)
@@ -4127,7 +4104,7 @@ fn optional_f64(object: &Map<String, Value>, field: &str) -> Result<Option<f64>,
         .transpose()
 }
 
-fn bounded_optional_u64(
+pub fn bounded_optional_u64(
     object: &Map<String, Value>,
     field: &str,
     minimum: u64,

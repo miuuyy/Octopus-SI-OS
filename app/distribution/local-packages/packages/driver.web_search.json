@@ -1,0 +1,38 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "driver.web_search",
+  "version": "1.0.1",
+  "product_kind": "driver",
+  "product_id": "web_search",
+  "release_status": "optional",
+  "display": {
+    "name": "Web Search",
+    "description": "Web search and page extraction through a declared search provider.",
+    "developer": "Octopus",
+    "category": "worker_environment",
+    "icon": "search"
+  },
+  "members": [
+    {
+      "registry_kind": "worker_environment_kind",
+      "owner": "web_search",
+      "primary": true
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "web.extract",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "web.search",
+      "configuration": [{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    },
+    {
+      "registry_kind": "interface",
+      "owner": "system_web_search",
+      "configuration": [{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+    }
+  ]
+}

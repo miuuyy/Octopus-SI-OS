@@ -25,7 +25,7 @@ octopus-file-storage = { path = "../octopus-file-storage" }
 octopus-interface-projection = { path = "../octopus-interface-projection" }
 octopus-interfaces = { path = "../octopus-interfaces" }
 octopus-ledger = { path = "../octopus-ledger" }
-octopus-runtime = { path = "../octopus-runtime" }
+octopus-run-record = { path = "../octopus-run-record" }
 octopus-verifiers = { path = "../octopus-verifiers" }
 schemars.workspace = true
 sha2 = "0.10"
@@ -38,4 +38,5 @@ object = { version = "0.37.3", default-features = false, features = ["read", "st
 octopus-util-pty = { path = "../../registry/worker_environment_kind/process_session/packages/octopus-util-pty" }
 
 [dev-dependencies]
+octopus-policy = { path = "../octopus-policy" }
 tempfile = "3.23.0"

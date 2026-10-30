@@ -13,20 +13,19 @@ serde_json.workspace = true
 tokio.workspace = true
 url = "2"
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2.182"
-
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-exec = { package = "octopus-exec-substrate", path = "../../../process_session/packages/octopus-exec-substrate" }
 octopus-tool-door-runtime = { package = "octopus-process-session-tool-runtime", path = "../../../process_session/packages/octopus-process-session-tool-runtime" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-substrate-contract = { path = "../../../process_session/packages/octopus-substrate-contract" }
 octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
-octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
 octopus-util-pathuri = { path = "../../../process_session/packages/octopus-util-pathuri" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.182"
+
 [dev-dependencies]
-blake3.workspace = true
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
+octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
 tempfile = "3"

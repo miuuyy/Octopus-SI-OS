@@ -10,8 +10,7 @@ use octopus_interfaces::{
 };
 use octopus_ledger::{ArtifactRef, ContentHash};
 use octopus_tool_door_runtime::{
-    InterfaceHostIoLimits, ToolProcessEnvironment, ToolProcessError, ToolProcessInvocation,
-    WorkerEnvironmentLifecycleRecorder,
+    ToolProcessError, ToolProcessInvocation, WorkerEnvironmentLifecycleRecorder,
 };
 use octopus_tool_registry::{load_tool_descriptor_from_dir, ToolDescriptor};
 use octopus_worker_env::{
@@ -199,22 +198,7 @@ async fn web_search_uses_its_own_formed_network_room() {
         String::from_utf8_lossy(&request[..read]).to_string()
     });
     let root = tempfile::tempdir().unwrap();
-    let environment = ToolProcessEnvironment {
-        interface: InterfaceId::new(DOOR),
-        interface_dir: root.path().join("interface"),
-        descriptor_snapshot: None,
-        var_dir: root.path().join("var"),
-        durable_var_dir: None,
-        host_io_limits: InterfaceHostIoLimits {
-            max_control_frame_bytes: 1024 * 1024,
-            max_stderr_bytes: 256 * 1024,
-            max_manifest_bytes: 1024 * 1024,
-            max_payload_bytes: 64 * 1024 * 1024,
-        },
-        private_reads: BTreeMap::new(),
-        root_slots: BTreeMap::new(),
-    };
-    let room = WebSearchRoom::new(environment);
+    let room = WebSearchRoom;
     let tools = vec!["web.search".to_string()];
     let (formation, kind) = formation("web_search", &tools, "web.search");
     let mut call = invocation(
@@ -270,22 +254,7 @@ async fn web_search_stops_chunked_response_at_descriptor_ceiling() {
             .unwrap();
     });
     let root = tempfile::tempdir().unwrap();
-    let environment = ToolProcessEnvironment {
-        interface: InterfaceId::new(DOOR),
-        interface_dir: root.path().join("interface"),
-        descriptor_snapshot: None,
-        var_dir: root.path().join("var"),
-        durable_var_dir: None,
-        host_io_limits: InterfaceHostIoLimits {
-            max_control_frame_bytes: 1024 * 1024,
-            max_stderr_bytes: 256 * 1024,
-            max_manifest_bytes: 1024 * 1024,
-            max_payload_bytes: 64 * 1024 * 1024,
-        },
-        private_reads: BTreeMap::new(),
-        root_slots: BTreeMap::new(),
-    };
-    let room = WebSearchRoom::new(environment);
+    let room = WebSearchRoom;
     let tools = vec!["web.search".to_string()];
     let (formation, kind) = formation("web_search", &tools, "web.search");
     let mut call = invocation(
@@ -340,21 +309,7 @@ async fn web_search_failure_artifact_contains_digest_not_provider_body() {
         stream.write_all(response.as_bytes()).unwrap();
     });
     let root = tempfile::tempdir().unwrap();
-    let room = WebSearchRoom::new(ToolProcessEnvironment {
-        interface: InterfaceId::new(DOOR),
-        interface_dir: root.path().join("interface"),
-        descriptor_snapshot: None,
-        var_dir: root.path().join("var"),
-        durable_var_dir: None,
-        host_io_limits: InterfaceHostIoLimits {
-            max_control_frame_bytes: 1024 * 1024,
-            max_stderr_bytes: 256 * 1024,
-            max_manifest_bytes: 1024 * 1024,
-            max_payload_bytes: 64 * 1024 * 1024,
-        },
-        private_reads: BTreeMap::new(),
-        root_slots: BTreeMap::new(),
-    });
+    let room = WebSearchRoom;
     let tools = vec!["web.search".to_string()];
     let (formation, kind) = formation("web_search", &tools, "web.search");
     let mut call = invocation(
@@ -413,22 +368,7 @@ async fn web_extract_maps_batch_documents_inside_the_same_room_contract() {
         String::from_utf8_lossy(&request[..read]).to_string()
     });
     let root = tempfile::tempdir().unwrap();
-    let environment = ToolProcessEnvironment {
-        interface: InterfaceId::new(DOOR),
-        interface_dir: root.path().join("interface"),
-        descriptor_snapshot: None,
-        var_dir: root.path().join("var"),
-        durable_var_dir: None,
-        host_io_limits: InterfaceHostIoLimits {
-            max_control_frame_bytes: 1024 * 1024,
-            max_stderr_bytes: 256 * 1024,
-            max_manifest_bytes: 1024 * 1024,
-            max_payload_bytes: 64 * 1024 * 1024,
-        },
-        private_reads: BTreeMap::new(),
-        root_slots: BTreeMap::new(),
-    };
-    let room = WebSearchRoom::new(environment);
+    let room = WebSearchRoom;
     let tools = vec!["web.extract".to_string()];
     let (formation, kind) = formation("web_search", &tools, "web.extract");
     let mut call = invocation(

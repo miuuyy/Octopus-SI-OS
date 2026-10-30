@@ -6,25 +6,5 @@
   "source_names": [
     "microphone"
   ],
-  "interface_driver_ref": "audio_device",
-  "interface_driver_config": {
-    "private_config": {
-      "protocol_version": 1,
-      "device_direction": "input",
-      "devices_label": "microphone.devices",
-      "audio_label": "microphone.audio",
-      "max_devices": 128,
-      "max_device_name_bytes": 1024,
-      "max_audio_bytes": 134217728,
-      "max_capture_duration_ms": 600000,
-      "min_capture_duration_ms": 100,
-      "max_silence_duration_ms": 60000,
-      "min_silence_threshold_dbfs": -96.0,
-      "max_silence_threshold_dbfs": -3.0,
-      "default_silence_threshold_dbfs": -48.0,
-      "min_sample_rate": 8000,
-      "max_sample_rate": 384000,
-      "max_channels": 32
-    }
-  }
+  "interface_driver_ref": "app_server"
 }

@@ -99,6 +99,12 @@ function ApprovalResponse({ data, clientInterface, disabled, onRespond }: {
 }) {
   const requestKind = stringValue(data.kind);
   const detail = recordValue(data.detail);
+  if (requestKind === "interface_operation") {
+    const operation = interfaceOperationPresentation(data);
+    return <ToolPermissionResponse data={data} clientInterface={clientInterface} complete={operation.complete} disabled={disabled}
+      help={operation.destructive ? "This action can change or remove data and may not be undoable." : "Allow this action once."}
+      warning="" onRespond={onRespond} />;
+  }
   if (["application", "browser_file_upload", "browser_history_read"].includes(requestKind)) {
     const application = recordValue(detail.application);
     const policy = recordValue(detail.native_policy);
@@ -391,6 +397,13 @@ export function requestPresentation(kind: "approval" | "elicitation" | "user_inp
   const detail = recordValue(data.detail);
   const requestKind = stringValue(data.kind);
   const context: Array<{ label: string; value: string; code?: boolean }> = [];
+  if (kind === "approval" && requestKind === "interface_operation") {
+    const operation = interfaceOperationPresentation(data);
+    if (operation.interfaceId) context.push({ label: "Application", value: operation.interfaceId, code: true });
+    if (operation.tool) context.push({ label: "Action", value: operation.tool, code: true });
+    if (operation.arguments) context.push({ label: "Details", value: operation.arguments, code: true });
+    return { glyph: "lock", kicker: "Application action", title: stringValue(data.title) || "Allow this action?", detail: operation.description, context };
+  }
   if (kind === "approval" && requestKind === "browser_history_read") {
     const history = browserHistoryPresentation(data);
     if (history.source) context.push({ label: "History source", value: history.source, code: true });
@@ -443,6 +456,21 @@ export function requestPresentation(kind: "approval" | "elicitation" | "user_inp
     title: stringValue(data.message) || fallback || "The run is waiting for your response",
     detail: "",
     context,
+  };
+}
+
+function interfaceOperationPresentation(data: Record<string, unknown>) {
+  const detail = recordValue(data.detail);
+  const annotations = recordValue(detail.annotations);
+  const serialized = detail.arguments && typeof detail.arguments === "object" ? JSON.stringify(detail.arguments, null, 2) : "";
+  return {
+    interfaceId: stringValue(detail.interface),
+    tool: stringValue(detail.tool),
+    description: stringValue(detail.description).slice(0, 600),
+    arguments: serialized.length > 2000 ? `${serialized.slice(0, 1999)}…` : serialized,
+    destructive: annotations.destructiveHint === true,
+    complete: detail.approval_scope === "interface_operation"
+      && Boolean(stringValue(data.request_id) && stringValue(data.call_id) && stringValue(detail.interface) && stringValue(detail.tool)),
   };
 }
 

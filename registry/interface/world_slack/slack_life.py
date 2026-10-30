@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import stat
 import sys
@@ -12,6 +13,10 @@ import time
 import urllib.parse
 
 from octopus_content_hash import octopus_content_hash
+from octopus_operation_catalog import RequestError
+from octopus_operation_catalog import answer
+from octopus_operation_catalog import load_catalog
+from octopus_operation_catalog import parse_request
 
 from slack_contract import CHANNEL_RE
 from slack_contract import TEAM_RE
@@ -19,9 +24,10 @@ from slack_contract import TS_RE
 from slack_contract import USER_RE
 from slack_contract import envelope_key
 from slack_contract import env_flag
+from slack_contract import embed_image
 from slack_contract import env_ids
 from slack_contract import event_coordinates
-from slack_contract import normalize_operation
+from slack_contract import image_room
 from slack_contract import require_int
 from slack_contract import require_keys
 from slack_contract import require_object
@@ -31,6 +37,7 @@ from slack_contract import safe_blocks
 from slack_contract import slack_mrkdwn
 from slack_contract import validate_config
 from slack_contract import validate_environment
+from slack_contract import validate_handlers
 from slack_wire import SlackApi
 from slack_wire import SlackWireError
 from slack_wire import WebSocket
@@ -48,7 +55,8 @@ CURSOR_PATH = os.path.join(VAR_DIR, "ledger-cursor.json")
 RAW_DIR = os.path.join(VAR_DIR, "raw-events")
 PENDING_DIR = os.path.join(VAR_DIR, "pending-events")
 PAYLOAD_DIR = os.path.join(VAR_DIR, "payloads")
-EFFECT_DIR = os.path.join(VAR_DIR, "outbound-effects")
+MEDIA_DIR = os.path.join(VAR_DIR, "media")
+REQUEST_DIR = os.path.join(VAR_DIR, "operation-requests")
 CALLBACK_DIR = os.path.join(VAR_DIR, "callback-handles")
 STATE_PATH = os.path.join(VAR_DIR, "slack-state.json")
 CONFIG_MAX_BYTES = 1024 * 1024
@@ -75,7 +83,7 @@ def ensure_private_directory(path):
     return path
 
 
-for directory in (VAR_DIR, RAW_DIR, PENDING_DIR, PAYLOAD_DIR, EFFECT_DIR, CALLBACK_DIR):
+for directory in (VAR_DIR, RAW_DIR, PENDING_DIR, PAYLOAD_DIR, MEDIA_DIR, REQUEST_DIR, CALLBACK_DIR):
     ensure_private_directory(directory)
 
 _STDOUT_LOCK = threading.Lock()
@@ -175,15 +183,22 @@ def throttled_stderr(config, key, message):
     stderr(config, f"{message} ({suppressed} similar suppressed)" if suppressed else message)
 
 
-def load_config():
-    config = require_object(json.loads(read_bounded_regular(CONFIG_PATH, CONFIG_MAX_BYTES, "interface config")), "Slack config")
+def read_private_config():
     descriptor = require_object(json.loads(read_bounded_regular(DESCRIPTOR_PATH, CONFIG_MAX_BYTES, "interface descriptor")), "Slack interface descriptor")
     if descriptor.get("id") != INTERFACE_ID:
         raise ValueError("Slack interface descriptor identity does not match its folder")
     driver = require_object(descriptor.get("interface_driver_config"), "Slack interface_driver_config")
-    private = require_object(driver.get("private_config"), "Slack interface private_config")
-    config["environment"] = validate_environment(private.get("environment"))
+    return require_object(driver.get("private_config"), "Slack interface private_config")
+
+
+def load_config():
+    config = require_object(json.loads(read_bounded_regular(CONFIG_PATH, CONFIG_MAX_BYTES, "interface config")), "Slack config")
+    config["environment"] = validate_environment(read_private_config().get("environment"))
     return validate_config(config)
+
+
+def load_operations():
+    return validate_handlers(load_catalog(INTERFACE_DIR, read_private_config(), "slack"))
 
 
 def atomic_bytes(path, payload):
@@ -268,20 +283,27 @@ def hand_artifact(manifest_path, evidence=None):
     raise ArtifactDeliveryRefused(verdict)
 
 
-def materialize_artifact(label, payload, key):
+def artifact_paths(key):
     key = require_string(key, "Slack artifact key", maximum=512)
     if not re.fullmatch(r"[0-9A-Za-z._-]+", key):
         raise ValueError("Slack artifact key contains unsafe characters")
-    payload_path = os.path.join(PAYLOAD_DIR, f"{key}.payload")
-    manifest_path = os.path.join(PAYLOAD_DIR, f"{key}.artifact.json")
-    atomic_bytes(payload_path, payload)
+    return os.path.join(PAYLOAD_DIR, f"{key}.payload"), os.path.join(PAYLOAD_DIR, f"{key}.artifact.json")
+
+
+def materialize_artifact(label, payload, key):
+    payload_path, manifest_path = artifact_paths(key)
+    if payload is not None:
+        atomic_bytes(payload_path, payload)
     atomic_json(manifest_path, {"label": label, "payload_path": payload_path})
     return manifest_path
 
 
-def hand_json(label, value, key):
-    value = sanitize_external_error(value, _CONFIG)
-    return hand_artifact(materialize_artifact(label, json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"), key))
+def encode(value, config):
+    media = value.get("media")
+    value = sanitize_external_error({name: item for name, item in value.items() if name != "media"}, config)
+    if media is not None:
+        value["media"] = media
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
 def materialized_artifact_id(manifest_path, config):
@@ -306,7 +328,7 @@ def find_admitted_arrival_seq(artifact_id, config):
         uri = f"file:{urllib.parse.quote(os.path.abspath(LEDGER_INDEX_SQLITE))}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=0.25)
         try:
-            if connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone() != ("3",):
+            if connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone() != ("4",):
                 raise RuntimeError("Slack ledger index has unsupported schema")
             row = connection.execute("SELECT seq FROM movements WHERE kind = 'InterfaceArrival' AND from_kind = 'interface' AND from_id = ? AND artifact_id = ? ORDER BY seq ASC LIMIT 1", (INTERFACE_ID, artifact_id)).fetchone()
         finally:
@@ -338,10 +360,7 @@ def find_admitted_arrival_seq(artifact_id, config):
     return None
 
 
-def hand_json_idempotent(label, value, key, config):
-    value = sanitize_external_error(value, config)
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    manifest_path = materialize_artifact(label, payload, key)
+def hand_idempotent(manifest_path, config):
     artifact_id = materialized_artifact_id(manifest_path, config)
     evidence = [{"interface_id": INTERFACE_ID, "artifact_id": artifact_id, "label": "slack.arrival.idempotency", "bytes": list(hashlib.sha256(artifact_id.encode("utf-8")).digest())}]
     try:
@@ -356,8 +375,43 @@ def hand_json_idempotent(label, value, key, config):
         raise
 
 
-def hand_failure(source_seq, category, details, key):
-    return hand_json(f"{INTERFACE_ID}.failure", {"source_movement_seq": source_seq, "failure_class": category, "details": sanitize_external_error(details, _CONFIG)}, key)
+def hand_json_idempotent(label, value, key, config):
+    return hand_idempotent(materialize_artifact(label, encode(value, config), key), config)
+
+
+def answered(key):
+    return os.path.exists(artifact_paths(key)[0])
+
+
+def hand_answer(label, value, key, config):
+    return hand_idempotent(materialize_artifact(label, None if value is None else encode(value, config), key), config)
+
+
+def request_path(key):
+    artifact_paths(key)
+    return os.path.join(REQUEST_DIR, f"{key}.json")
+
+
+def load_request(key):
+    try:
+        with open_private_read(request_path(key)) as handle:
+            value = json.loads(handle.read())
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise ValueError(f"Slack request journal {key} is malformed")
+    return value
+
+
+def record_request(key, value):
+    atomic_json(request_path(key), {"schema_version": 1, **sanitize_external_error(value, _CONFIG)}, indent=2)
+
+
+def forget_request(key):
+    try:
+        os.unlink(request_path(key))
+    except FileNotFoundError:
+        pass
 
 
 def load_state():
@@ -568,9 +622,10 @@ def persist_envelope(config, envelope):
 
 
 TEXT_SUFFIXES = {".txt", ".md", ".json", ".csv", ".log", ".py", ".rs", ".js", ".ts", ".yaml", ".yml", ".toml"}
+IMAGE_MIMETYPES = {"image/png", "image/jpeg", "image/webp"}
 
 
-def media_rows(api, config, event, team_id=None, download=True):
+def media_rows(api, config, event, key, images, team_id=None, download=True):
     files = event.get("files") if isinstance(event.get("files"), list) else []
     rows = []
     for index, file_row in enumerate(files[: config["media"]["max_files_per_event"]]):
@@ -593,14 +648,34 @@ def media_rows(api, config, event, team_id=None, download=True):
         size = file_row.get("size")
         textual = str(file_row.get("mimetype") or "").startswith("text/") or suffix in TEXT_SUFFIXES
         small = isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= config["media"]["text_preview_bytes"]
-        if download and config["media"]["download_enabled"] and textual and small and isinstance(url, str) and url:
+        downloadable = download and config["media"]["download_enabled"] and isinstance(url, str) and url
+        if downloadable and textual and small:
             try:
                 content, _ = api.download(url, config["media"]["allowed_download_hosts"], config["media"]["text_preview_bytes"], team_id=team_id)
                 row["text_preview"] = content.decode("utf-8", "replace")
             except Exception as error:
                 row["download_error"] = sanitize_external_error(error, config)
+        elif downloadable and file_row.get("mimetype") in IMAGE_MIMETYPES and isinstance(size, int) and 0 < size <= min(config["media"]["max_download_bytes"], image_room(images, config["media"])):
+            try:
+                content, _ = api.download(url, config["media"]["allowed_download_hosts"], size, team_id=team_id)
+                directory = ensure_private_directory(os.path.join(MEDIA_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", key)[:180]))
+                path = os.path.join(directory, f"{index + 1:02d}-{re.sub(r'[^A-Za-z0-9._-]', '_', filename).strip('._')[:120] or 'image'}")
+                atomic_bytes(path, content)
+                row["sha256"] = hashlib.sha256(content).hexdigest()
+                embed_image(images, row, path, content, config["media"])
+            except Exception as error:
+                row["download_error"] = sanitize_external_error(error, config)
         rows.append(row)
     return rows
+
+
+def prune_media(config):
+    cutoff = time.time() - config["media"]["retention_days"] * 86400
+    for name in os.listdir(MEDIA_DIR):
+        path = os.path.join(MEDIA_DIR, name)
+        status = os.lstat(path)
+        if stat.S_ISDIR(status.st_mode) and status.st_mtime < cutoff:
+            shutil.rmtree(path)
 
 
 def normalized_event(api, config, envelope, record):
@@ -640,6 +715,8 @@ def normalized_event(api, config, envelope, record):
                 thread_context.append({"ts": context_message.get("ts"), "user_id": context_message.get("user"), "bot_id": context_message.get("bot_id"), "text": context_message.get("text") or "", "rich_text": rich_text(context_blocks), "edited": context_message.get("edited")})
         except Exception as error:
             thread_context = [{"context_error": sanitize_external_error(error, config)}]
+    images = []
+    files = media_rows(api, config, message or event, record["key"], images, team_id=team)
     value = {
         "schema_version": 3,
         "event_key": record["key"],
@@ -654,11 +731,13 @@ def normalized_event(api, config, envelope, record):
         "message": {
             "text": text,
             "rich_text": rich_text(blocks),
-            "files": media_rows(api, config, message or event, team_id=team),
+            "files": files,
         },
         "thread_context": thread_context,
         "raw_event_sha256": record["raw_sha256"],
     }
+    if images:
+        value["media"] = images
     if envelope.get("type") in {"interactive", "slash_commands"}:
         value.update({"callback_handle": handle, "trigger_handle": handle if isinstance(payload.get("trigger_id"), str) else None, "payload": normalized_payload})
     return value
@@ -711,6 +790,7 @@ def process_pending_event(api, config, record):
 
 
 def retry_pending(api, config):
+    prune_media(config)
     for name in sorted(os.listdir(PENDING_DIR)):
         if not name.endswith(".json"):
             continue
@@ -739,6 +819,29 @@ def load_cursor():
 
 def commit_cursor(next_seq):
     atomic_json(CURSOR_PATH, {"schema_version": 1, "next_seq": next_seq})
+
+
+def ledger_end_seq(max_row_bytes):
+    try:
+        handle = open_regular_file_stable(MOVEMENTS_JSONL, "movement ledger")
+    except FileNotFoundError:
+        return 0
+    next_seq = 0
+    with handle:
+        while True:
+            row_offset = handle.tell()
+            line = handle.readline(max_row_bytes + 1)
+            if not line or not line.endswith(b"\n"):
+                return next_seq
+            if len(line) > max_row_bytes:
+                raise RuntimeError(f"Slack ledger row at byte {row_offset} exceeds {max_row_bytes} bytes")
+            seq = require_int(require_object(json.loads(line), f"Slack ledger movement").get("seq"), f"Slack ledger movement.seq", 0)
+            next_seq = max(next_seq, seq + 1)
+
+
+def start_cursor(max_row_bytes):
+    if not os.path.exists(CURSOR_PATH):
+        commit_cursor(ledger_end_seq(max_row_bytes))
 
 
 def content_hexdigest(content):
@@ -845,7 +948,7 @@ def read_index(next_seq, limit):
     connection = sqlite3.connect(uri, uri=True, timeout=0.25)
     try:
         schema = connection.execute("SELECT value FROM index_meta WHERE key = 'schema_version'").fetchone()
-        if schema != ("3",):
+        if schema != ("4",):
             raise RuntimeError("Slack ledger index schema is unsupported")
         rows = connection.execute(
             "SELECT seq, artifact_content, runtime_run, runtime_checkpoint, from_id FROM movements "
@@ -942,51 +1045,6 @@ def read_outbound(next_seq, limit=128, config=None):
             stderr(config, f"Slack ledger index unavailable; reading ledger truth: {message}")
             _LEDGER_INDEX_WARNING = message
         return read_ledger(next_seq, limit, config["ledger"]["max_row_bytes"])
-
-
-def effect_path(source_seq):
-    return os.path.join(EFFECT_DIR, f"{source_seq}.json")
-
-
-def load_effect(source_seq):
-    try:
-        with open(effect_path(source_seq), "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-    except FileNotFoundError:
-        return None
-    original = value
-    value = sanitize_external_error(value, _CONFIG)
-    validate_effect(source_seq, value)
-    if value != original:
-        atomic_json(effect_path(source_seq), value, indent=2)
-    return value
-
-
-def validate_effect(source_seq, value):
-    value = require_keys(value, {"schema_version", "source_movement_seq", "source_artifact_hash", "run", "artifact_label", "status"}, {"operation", "result", "error", "evidence_movement_seq"}, f"Slack effect {source_seq}")
-    if value["schema_version"] != 1 or value["source_movement_seq"] != source_seq:
-        raise ValueError(f"Slack effect {source_seq} identity drifted")
-    if not isinstance(value["source_artifact_hash"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["source_artifact_hash"]):
-        raise ValueError(f"Slack effect {source_seq} artifact hash is malformed")
-    require_string(value["run"], f"Slack effect {source_seq}.run")
-    require_string(value["artifact_label"], f"Slack effect {source_seq}.artifact_label")
-    if value["status"] not in {"started", "succeeded", "indeterminate", "evidenced", "failure_evidenced"}:
-        raise ValueError(f"Slack effect {source_seq} status is invalid")
-    if "result" in value and not isinstance(value["result"], dict):
-        raise ValueError(f"Slack effect {source_seq}.result must be an object")
-    if "error" in value:
-        require_string(value["error"], f"Slack effect {source_seq}.error")
-    return value
-
-
-def commit_effect(source_seq, value):
-    value = sanitize_external_error(value, _CONFIG)
-    validate_effect(source_seq, value)
-    atomic_json(effect_path(source_seq), value, indent=2)
-
-
-def delivery_evidence(source_seq, content_hash, run, result):
-    return hand_json(_CONFIG["outbound"]["delivery_label"], {"source_movement_seq": source_seq, "source_artifact_hash": content_hash, "run": run, "ok": True, "result": result}, f"slack-delivery-{source_seq}")
 
 
 def require_channel(value, name):
@@ -1108,199 +1166,195 @@ def record_bot_thread(config, response, channel, thread):
     update_state(config, add)
 
 
-def execute_operation(api, config, operation, args, source_hash):
+class PartialDelivery(Exception):
+    def __init__(self, error, posted):
+        super().__init__(str(error))
+        self.error = error
+        self.posted = posted
+
+
+def post_message(api, config, args, source_hash, team):
     outbound = config["outbound"]
+    channel = target_channel(args, config, direct_message=True)
+    thread = target_thread(args)
+    text = args.get("text")
+    blocks = safe_blocks(args.get("blocks"), outbound["max_block_json_bytes"])
+    if len(blocks) > outbound["max_blocks"]:
+        raise ValueError("Slack message blocks exceed configured count")
+    if not isinstance(text, str) or not text:
+        if not blocks:
+            raise ValueError("Slack post_message needs text, blocks or both")
+        text = args.get("fallback_text") or "Message"
+    chunks = split_text(text, outbound["max_message_chars"])
+    if blocks and len(chunks) != 1:
+        raise ValueError("Slack block message text cannot require splitting")
+    results = []
+    for index, chunk in enumerate(chunks):
+        params = {"channel": channel, "text": slack_mrkdwn(chunk), "mrkdwn": args.get("mrkdwn", True)}
+        if thread:
+            params["thread_ts"] = thread
+        if args.get("reply_broadcast") is not None:
+            params["reply_broadcast"] = bool(args["reply_broadcast"])
+        if blocks and index == 0:
+            params["blocks"] = blocks
+        if isinstance(args.get("metadata"), dict):
+            params["metadata"] = args["metadata"]
+        params["client_msg_id"] = idempotency_uuid(f"{source_hash}:{index}")
+        try:
+            response = api.call("chat.postMessage", params, team_id=team)
+        except Exception as error:
+            if results:
+                raise PartialDelivery(error, [item.get("ts") for item in results]) from None
+            raise
+        record_bot_thread(config, response, channel, thread)
+        results.append(response)
+    status_clear = None
+    if thread:
+        try:
+            status_clear = {"ok": True, "response": api.call("assistant.threads.setStatus", {"channel_id": channel, "thread_ts": thread, "status": ""}, team_id=team)}
+        except Exception as error:
+            status_clear = {"ok": False, "error": sanitize_external_error(error, config)}
+    return {"messages": results, "status_clear": status_clear}
+
+
+def message_files(api, config, response, key, media, team):
+    for message in response.get("messages") if isinstance(response.get("messages"), list) else []:
+        if isinstance(message, dict) and isinstance(message.get("files"), list):
+            message["files"] = media_rows(api, config, message, key, media, team_id=team)
+
+
+def execute_operation(api, config, handler, args, source_hash, key, media):
+    outbound = config["outbound"]
+    operation = handler["operation"]
     team = target_team(args)
     if operation == "message.post":
-        channel = target_channel(args, config, direct_message=True)
-        thread = target_thread(args)
-        text = args.get("text")
-        blocks = safe_blocks(args.get("blocks"), outbound["max_block_json_bytes"])
-        if len(blocks) > outbound["max_blocks"]:
-            raise ValueError("Slack message blocks exceed configured count")
-        if not isinstance(text, str) or not text:
-            if not blocks:
-                raise ValueError("Slack message.post requires text or blocks")
-            text = args.get("fallback_text") or "Message"
-        chunks = split_text(text, outbound["max_message_chars"])
-        if blocks and len(chunks) != 1:
-            raise ValueError("Slack block message text cannot require splitting")
-        results = []
-        for index, chunk in enumerate(chunks):
-            params = {"channel": channel, "text": slack_mrkdwn(chunk), "mrkdwn": args.get("mrkdwn", True)}
-            if thread:
-                params["thread_ts"] = thread
-            if args.get("reply_broadcast") is not None:
-                params["reply_broadcast"] = bool(args["reply_broadcast"])
-            if blocks and index == 0:
-                params["blocks"] = blocks
-            if isinstance(args.get("metadata"), dict):
-                params["metadata"] = args["metadata"]
-            params["client_msg_id"] = idempotency_uuid(f"{source_hash}:{index}")
-            response = api.call("chat.postMessage", params, team_id=team)
-            record_bot_thread(config, response, channel, thread)
-            results.append(response)
-        status_clear = None
-        if thread:
-            try:
-                status_clear = {"ok": True, "response": api.call("assistant.threads.setStatus", {"channel_id": channel, "thread_ts": thread, "status": ""}, team_id=team)}
-            except Exception as error:
-                status_clear = {"ok": False, "error": sanitize_external_error(error, config)}
-        return {"operation": operation, "messages": results, "status_clear": status_clear}
+        return post_message(api, config, args, source_hash, team)
     if operation == "message.ephemeral":
         channel = target_channel(args, config)
-        user = require_string(args.get("user"), "Slack ephemeral user")
-        if not USER_RE.fullmatch(user):
-            raise ValueError("Slack ephemeral user is malformed")
-        text = slack_mrkdwn(require_string(args.get("text"), "Slack ephemeral text", maximum=outbound["max_message_chars"]))
-        params = {"channel": channel, "user": user, "text": text}
+        params = {"channel": channel, "user": args["user"], "text": slack_mrkdwn(require_string(args["text"], "Slack ephemeral text", maximum=outbound["max_message_chars"]))}
         blocks = safe_blocks(args.get("blocks"), outbound["max_block_json_bytes"])
         if blocks:
             params["blocks"] = blocks
         thread = target_thread(args)
         if thread:
             params["thread_ts"] = thread
-        return {"operation": operation, "response": api.call("chat.postEphemeral", params, team_id=team)}
+        return {"response": api.call("chat.postEphemeral", params, team_id=team)}
     if operation == "message.update":
-        channel = target_channel(args, config)
-        ts = require_ts(args.get("ts"), "Slack message.update ts")
-        params = {"channel": channel, "ts": ts}
+        params = {"channel": target_channel(args, config), "ts": require_ts(args.get("ts"), "Slack update_message ts")}
         if "text" in args:
-            params["text"] = slack_mrkdwn(require_string(args["text"], "Slack message.update text", maximum=outbound["max_message_chars"]))
+            params["text"] = slack_mrkdwn(require_string(args["text"], "Slack update_message text", maximum=outbound["max_message_chars"]))
         blocks = safe_blocks(args.get("blocks"), outbound["max_block_json_bytes"])
         if blocks:
             params["blocks"] = blocks
         if "text" not in params and "blocks" not in params:
-            raise ValueError("Slack message.update requires text or blocks")
-        return {"operation": operation, "response": api.call("chat.update", params, team_id=team)}
+            raise ValueError("Slack update_message needs text, blocks or both")
+        return {"response": api.call("chat.update", params, team_id=team)}
     if operation == "message.delete":
-        return {"operation": operation, "response": api.call("chat.delete", {"channel": target_channel(args, config), "ts": require_ts(args.get("ts"), "Slack message.delete ts")}, team_id=team)}
+        return {"response": api.call("chat.delete", {"channel": target_channel(args, config), "ts": require_ts(args.get("ts"), "Slack delete_message ts")}, team_id=team)}
     if operation in {"reaction.add", "reaction.remove"}:
-        method = "reactions.add" if operation.endswith("add") else "reactions.remove"
-        params = {"channel": target_channel(args, config), "timestamp": require_ts(args.get("timestamp") or args.get("ts"), "Slack reaction timestamp"), "name": require_string(args.get("name"), "Slack reaction name")}
-        return {"operation": operation, "response": api.call(method, params, team_id=team)}
+        method = "reactions.add" if operation == "reaction.add" else "reactions.remove"
+        params = {"channel": target_channel(args, config), "timestamp": require_ts(args.get("timestamp"), "Slack reaction timestamp"), "name": args["name"]}
+        return {"response": api.call(method, params, team_id=team)}
     if operation == "file.upload":
         channel = target_channel(args, config)
-        requested = args.get("files")
-        if requested is None:
-            requested = [{"filename": args.get("filename"), "blob_id": args.get("blob_id"), "title": args.get("title")}]
-        if not isinstance(requested, list) or not requested or len(requested) > 10:
-            raise ValueError("Slack file.upload files must contain 1..10 items")
-        files = []
-        for index, item in enumerate(requested):
-            item = require_object(item, f"Slack file.upload files[{index}]")
-            title = item.get("title")
-            if title is not None:
-                title = require_string(title, f"Slack file.upload files[{index}].title", maximum=255)
-            files.append({"filename": require_string(item.get("filename"), f"Slack file.upload files[{index}].filename", maximum=255), "content": artifact_blob(item.get("blob_id"), config["media"]["max_upload_bytes"]), "title": title})
-        initial_comment = args.get("initial_comment") or args.get("caption")
+        files = [{"filename": item["filename"], "content": artifact_blob(item["blob_id"], config["media"]["max_upload_bytes"]), "title": item.get("title")} for item in args["files"]]
+        initial_comment = args.get("initial_comment")
         if initial_comment is not None:
-            initial_comment = slack_mrkdwn(require_string(initial_comment, "Slack file.upload initial_comment", maximum=outbound["max_message_chars"]))
-        return {"operation": operation, "response": api.upload_multiple_external(channel, files, initial_comment=initial_comment, thread_ts=target_thread(args), team_id=team)}
+            initial_comment = slack_mrkdwn(require_string(initial_comment, "Slack upload_files initial_comment", maximum=outbound["max_message_chars"]))
+        return {"response": api.upload_multiple_external(channel, files, initial_comment=initial_comment, thread_ts=target_thread(args), team_id=team)}
     if operation in {"view.open", "view.push"}:
-        trigger_id = callback_trigger(args.get("trigger_handle")) if args.get("trigger_handle") else require_string(args.get("trigger_id"), f"Slack {operation} trigger_id")
-        view = require_object(args.get("view"), f"Slack {operation} view")
+        if ("trigger_handle" in args) == ("trigger_id" in args):
+            raise ValueError("Slack views need exactly one of trigger_handle or trigger_id")
+        trigger_id = callback_trigger(args["trigger_handle"]) if "trigger_handle" in args else args["trigger_id"]
         method = "views.open" if operation == "view.open" else "views.push"
-        return {"operation": operation, "response": api.call(method, {"trigger_id": trigger_id, "view": view}, team_id=team)}
+        return {"response": api.call(method, {"trigger_id": trigger_id, "view": args["view"]}, team_id=team)}
     if operation == "view.update":
-        view = require_object(args.get("view"), "Slack view.update view")
-        params = {"view": view}
-        if args.get("view_id"):
-            params["view_id"] = require_string(args["view_id"], "Slack view.update view_id")
-        elif args.get("external_id"):
-            params["external_id"] = require_string(args["external_id"], "Slack view.update external_id")
-        else:
-            raise ValueError("Slack view.update requires view_id or external_id")
-        if args.get("hash"):
-            params["hash"] = require_string(args["hash"], "Slack view.update hash")
-        return {"operation": operation, "response": api.call("views.update", params, team_id=team)}
+        if ("view_id" in args) == ("external_id" in args):
+            raise ValueError("Slack update_view needs exactly one of view_id or external_id")
+        params = {key: args[key] for key in ("view", "view_id", "external_id", "hash") if key in args}
+        return {"response": api.call("views.update", params, team_id=team)}
     if operation == "view.publish":
-        return {"operation": operation, "response": api.call("views.publish", {"user_id": require_string(args.get("user_id"), "Slack view.publish user_id"), "view": require_object(args.get("view"), "Slack view.publish view")}, team_id=team)}
+        return {"response": api.call("views.publish", {"user_id": args["user_id"], "view": args["view"]}, team_id=team)}
     if operation == "callback.respond":
-        body = require_object(args.get("body"), "Slack callback response body")
-        return {"operation": operation, "response": api.post_response_url(callback_url(args.get("handle")), body)}
-    if operation in {"assistant.status.set", "assistant.status.clear", "typing.set", "typing.clear"}:
-        channel = target_channel(args, config)
-        thread = target_thread(args)
-        if thread is None:
-            raise ValueError("Slack Assistant status requires thread_ts")
-        status = "" if operation.endswith("clear") else require_string(args.get("status", "Working…"), "Slack Assistant status", maximum=100)
-        return {"operation": operation, "response": api.call("assistant.threads.setStatus", {"channel_id": channel, "thread_ts": thread, "status": status}, team_id=team)}
+        return {"response": api.post_response_url(callback_url(args["handle"]), args["body"])}
+    if operation == "thread.status":
+        params = {"channel_id": target_channel(args, config), "thread_ts": require_ts(args.get("thread_ts"), "Slack set_thread_status thread_ts"), "status": args["status"]}
+        return {"response": api.call("assistant.threads.setStatus", params, team_id=team)}
     if operation == "profile.status.set":
-        profile = {
-            "status_text": require_string(args.get("status_text", ""), "Slack profile status_text", allow_empty=True, maximum=100),
-            "status_emoji": require_string(args.get("status_emoji", ""), "Slack profile status_emoji", allow_empty=True, maximum=100),
-            "status_expiration": require_int(args.get("status_expiration", 0), "Slack profile status_expiration", 0),
-        }
-        return {"operation": operation, "response": api.call("users.profile.set", {"profile": profile}, team_id=team)}
-    if operation == "web.call":
-        method = require_string(args.get("method"), "Slack web.call method")
-        if method not in outbound["allowed_web_methods"]:
-            raise ValueError(f"Slack Web API method {method!r} is not allowed")
-        params = require_object(args.get("params", {}), "Slack web.call params")
-        return {"operation": operation, "method": method, "response": api.call(method, params, safe_retry=method in outbound["retry_safe_web_methods"], team_id=team)}
-    raise ValueError(f"Slack operation {operation!r} is unsupported")
+        profile = {"status_text": args.get("status_text", ""), "status_emoji": args.get("status_emoji", ""), "status_expiration": args.get("status_expiration", 0)}
+        return {"response": api.call("users.profile.set", {"profile": profile}, team_id=team)}
+    if operation == "web_api":
+        params = {name: value for name, value in args.items() if name != "team_id"}
+        params.update(handler.get("params", {}))
+        response = api.call(handler["method"], params, safe_retry=handler["read_only"], team_id=team)
+        if handler.get("files"):
+            message_files(api, config, response, key, media, team)
+        return {"method": handler["method"], "response": response}
+    raise ValueError(f"Slack handler {operation!r} is unsupported")
 
 
-def prepare_output(config, label, payload):
-    if label != config["outbound"]["operation_label"]:
-        raise ValueError(f"Slack interface accepts only {config['outbound']['operation_label']!r} artifacts, not {label!r}")
-    try:
-        body = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"Slack outbound payload is invalid JSON: {error}") from error
-    return normalize_operation(require_object(body, "Slack outbound payload"), config)
+DEFINITE_REFUSALS = {"slack_error", "boundary_rejected", "rate_limited", "proxy_refused"}
+INDETERMINATE = "The request stopped before Slack's answer was known, so it may or may not have taken effect. It was not repeated; check the conversation before trying again."
 
 
-def process_outbound(api, config, source_seq, content, run):
+def failure(config, error, read_only):
+    wire = error.error if isinstance(error, PartialDelivery) else error
+    details = {"category": wire.category, "message": str(wire), **wire.details} if isinstance(wire, SlackWireError) else {"message": str(wire)}
+    definite = isinstance(wire, SlackWireError) and wire.category in DEFINITE_REFUSALS
+    if not read_only and not definite:
+        code, message = "indeterminate_external_effect", INDETERMINATE
+    elif isinstance(error, PartialDelivery):
+        code, message = "partial_delivery", "Slack posted only the first parts of this message; posted_ts lists them."
+    elif definite:
+        code, message = "slack_refused", "Slack refused the request, so nothing was changed."
+    else:
+        code, message = "slack_unreachable", "Slack could not be reached, so nothing was read."
+    result = {"code": code, "message": message, "slack": sanitize_external_error(details, config)}
+    if isinstance(error, PartialDelivery):
+        result["posted_ts"] = error.posted
+    return result
+
+
+def process_request(api, config, source_seq, content, run):
     if content is None or run is None:
-        hand_failure(source_seq, "poisoned_outbound", {"error": "movement carries no artifact or runtime run"}, f"slack-poison-{source_seq}")
+        throttled_stderr(config, f"request:{source_seq}", f"Slack outbound movement {source_seq} carries no artifact or runtime run, so it is not an operation request")
         return
     label, payload, content_hash = materialize_movement_payload(content, config)
-    effect = load_effect(source_seq)
-    if effect is not None and effect["source_artifact_hash"] != content_hash:
-        hand_failure(source_seq, "effect_journal_mismatch", {"expected": effect["source_artifact_hash"], "observed": content_hash}, f"slack-effect-mismatch-{source_seq}")
+    catalog = load_operations()
+    if label != catalog["request_label"]:
+        throttled_stderr(config, f"label:{label}", f"Slack answers only {catalog['request_label']} artifacts; outbound {label} is not an operation request")
         return
-    if effect is not None and effect["status"] in {"evidenced", "failure_evidenced"}:
-        return
-    if effect is not None and effect["status"] == "succeeded":
-        evidence = delivery_evidence(source_seq, content_hash, run, effect["result"])
-        effect.update({"status": "evidenced", "evidence_movement_seq": evidence})
-        commit_effect(source_seq, effect)
-        return
-    if effect is not None and effect["status"] in {"started", "indeterminate"}:
-        evidence = hand_failure(source_seq, "indeterminate_external_effect", {"source_artifact_hash": content_hash, "error": effect.get("error")}, f"slack-indeterminate-{source_seq}")
-        effect.update({"status": "failure_evidenced", "evidence_movement_seq": evidence})
-        commit_effect(source_seq, effect)
+    key = f"slack-result-{source_seq}-{content_hash[:16]}"
+    if answered(key):
+        hand_answer(catalog["result_label"], None, key, config)
+        forget_request(key)
         return
     try:
-        operation, args = prepare_output(config, label, payload)
-    except Exception as error:
-        hand_failure(source_seq, "boundary_rejected", {"source_artifact_hash": content_hash, "error": sanitize_external_error(error, config)}, f"slack-boundary-{source_seq}")
+        spec, args, correlation_id = parse_request(payload, catalog)
+    except RequestError as error:
+        hand_answer(catalog["result_label"], answer(catalog["result_label"], error.operation, error.correlation_id, error={"code": error.code, "message": str(error)}), key, config)
         return
-    effect = {"schema_version": 1, "source_movement_seq": source_seq, "source_artifact_hash": content_hash, "run": run, "artifact_label": label, "status": "started", "operation": operation}
-    commit_effect(source_seq, effect)
+    media = []
+
+    def respond(result=None, error=None):
+        hand_answer(catalog["result_label"], answer(catalog["result_label"], spec["id"], correlation_id, result=result, error=error, media=media if error is None else None), key, config)
+        forget_request(key)
+
+    if load_request(key) is not None:
+        respond(error={"code": "indeterminate_external_effect", "message": INDETERMINATE})
+        return
+    handler = spec["handler_config"]
+    read_only = handler.get("read_only") is True
+    if not read_only:
+        record_request(key, {"source_movement_seq": source_seq, "run": run, "operation": spec["id"], "correlation_id": correlation_id, "started_at_unix_ms": int(time.time() * 1000)})
     try:
-        result = execute_operation(api, config, operation, args, content_hash)
+        result = execute_operation(api, config, handler, args, content_hash, key, media)
     except ValueError as error:
-        safe_error = sanitize_external_error(error, config)
-        evidence = hand_failure(source_seq, "boundary_rejected", {"source_artifact_hash": content_hash, "operation": operation, "error": safe_error}, f"slack-boundary-{source_seq}")
-        effect.update({"status": "failure_evidenced", "error": safe_error, "evidence_movement_seq": evidence})
-        commit_effect(source_seq, effect)
-        return
+        respond(error={"code": "rejected", "message": sanitize_external_error(error, config)})
     except Exception as error:
-        safe_error = sanitize_external_error(error, config)
-        effect.update({"status": "indeterminate", "error": safe_error})
-        commit_effect(source_seq, effect)
-        evidence = hand_failure(source_seq, "indeterminate_external_effect", {"source_artifact_hash": content_hash, "operation": operation, "error": safe_error}, f"slack-indeterminate-{source_seq}")
-        effect.update({"status": "failure_evidenced", "evidence_movement_seq": evidence})
-        commit_effect(source_seq, effect)
-        return
-    effect.update({"status": "succeeded", "result": result})
-    commit_effect(source_seq, effect)
-    evidence = delivery_evidence(source_seq, content_hash, run, result)
-    effect.update({"status": "evidenced", "evidence_movement_seq": evidence})
-    commit_effect(source_seq, effect)
+        respond(error=failure(config, error, read_only))
+    else:
+        respond(result=result)
 
 
 def outbound_loop(api, config):
@@ -1309,9 +1363,9 @@ def outbound_loop(api, config):
         rows = read_outbound(next_seq, config=config)
         for source_seq, content, run in rows:
             try:
-                process_outbound(api, config, source_seq, content, run)
+                process_request(api, config, source_seq, content, run)
             except Exception as error:
-                stderr(config, f"Slack outbound movement {source_seq} failed: {error}")
+                throttled_stderr(config, f"outbound:{source_seq}", f"Slack outbound movement {source_seq} failed: {error}")
                 time.sleep(0.25)
                 break
             next_seq = source_seq + 1
@@ -1399,6 +1453,8 @@ def main():
     global _CONFIG
     config = load_config()
     _CONFIG = config
+    load_operations()
+    start_cursor(config["ledger"]["max_row_bytes"])
     bot, app = resolve_tokens(config)
     api = SlackApi(config, bot, app)
     start_runtime_verdict_reader()

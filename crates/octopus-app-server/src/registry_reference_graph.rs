@@ -624,7 +624,7 @@ pub struct RegistryCandidateStage<'a> {
 impl RegistryCandidateStage<'_> {
     pub fn run_grant(
         &self,
-        record: &octopus_runtime::run_record::RunRecord,
+        record: &octopus_run_record::RunRecord,
         checkpoint: &octopus_descriptors::CheckpointId,
     ) -> Result<octopus_interfaces::GrantProjection, String> {
         crate::spine_root::prospective_run_grant(record, checkpoint, || self.snapshot.as_ref().map_err(Clone::clone))
@@ -785,7 +785,7 @@ pub fn validate_registry_candidate_with_inspector(
 struct CandidateView {
     root: PathBuf,
     roots: RegistryValidationRoots,
-    records: BTreeMap<String, octopus_runtime::run_record::RunRecord>,
+    records: BTreeMap<String, octopus_run_record::RunRecord>,
     record_issues: BTreeMap<String, RegistryValidationIssue>,
     run_issues: Vec<RegistryValidationIssue>,
     dependencies: BTreeMap<String, BTreeSet<String>>,
@@ -956,7 +956,7 @@ impl CandidateView {
         let result = std::fs::read(path)
             .map_err(|error| error.to_string())
             .and_then(|bytes| {
-                octopus_runtime::run_record::RunRecord::from_bytes(&bytes)
+                octopus_run_record::RunRecord::from_bytes(&bytes)
                     .map_err(|error| error.to_string())
             });
         match result {

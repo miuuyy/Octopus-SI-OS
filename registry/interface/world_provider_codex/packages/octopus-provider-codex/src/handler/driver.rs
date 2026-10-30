@@ -115,7 +115,7 @@ impl CodexAppServerInterfaceDriver {
     }
 
     pub(crate) async fn wait_for_peer_artifact(
-        &self, record: &octopus_runtime::run_record::RunRecord, call_id: &str, timeout_ms: u64,
+        &self, record: &octopus_run_record::RunRecord, call_id: &str, timeout_ms: u64,
         interrupted: &std::sync::atomic::AtomicBool,
     ) -> Result<crate::peer_reader::PeerWait, InterfaceDriverError> {
         let ctx = self.life_context.get().ok_or_else(|| InterfaceDriverError::FailedClosed("peer wait has no declared interface life reader".into()))?;

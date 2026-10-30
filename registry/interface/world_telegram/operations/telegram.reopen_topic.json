@@ -1,0 +1,38 @@
+{
+  "id": "telegram.reopen_topic",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "bot_api",
+    "method": "reopenForumTopic",
+    "read_only": false
+  },
+  "description": "Reopen a closed forum topic.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat: chat.id from a telegram.event, or a public @username."
+      },
+      "message_thread_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      }
+    },
+    "required": [
+      "chat_id",
+      "message_thread_id"
+    ],
+    "additionalProperties": false
+  }
+}

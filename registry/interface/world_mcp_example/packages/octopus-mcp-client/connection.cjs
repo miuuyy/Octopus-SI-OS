@@ -2,6 +2,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_CHARS = 4 * 1024 * 1024;
 const LOOPBACK_WAIT_MS = 120_000;
 const LOOPBACK_RETRY_MS = 2_000;
+const TOOL_PAGES = 16;
 
 class ConnectionFailure extends Error {
   constructor(state, message) {
@@ -97,7 +98,21 @@ async function rpc(ctx, endpoint, token, session, id, method, params) {
   return parseRpcResponse(response.headers.get("content-type") ?? "", await response.text(), id);
 }
 
-async function check(ctx, values) {
+async function listTools(ctx, endpoint, token, session, all) {
+  const tools = [];
+  let cursor;
+  for (let page = 0; page < (all ? TOOL_PAGES : 1); page += 1) {
+    const listed = await rpc(ctx, endpoint, token, session, 2 + page, "tools/list", cursor ? { cursor } : {});
+    if (!Array.isArray(listed?.tools)) throw new ConnectionFailure("error", "The server listed no tools array.");
+    tools.push(...listed.tools);
+    cursor = typeof listed.nextCursor === "string" && listed.nextCursor ? listed.nextCursor : undefined;
+    if (!cursor) return { tools, complete: true };
+  }
+  if (all) throw new ConnectionFailure("error", `The server lists more than ${TOOL_PAGES} pages of tools.`);
+  return { tools, complete: false };
+}
+
+async function check(ctx, values, all = false) {
   const transport = transportOf(ctx.descriptor);
   const endpoint = endpointOf(transport, values);
   if (!endpoint) return { state: "not_connected", message: "Enter the server URL." };
@@ -118,17 +133,22 @@ async function check(ctx, values) {
   }
   session.protocol = initialized.protocolVersion;
   await rpc(ctx, endpoint, token, session, null, "notifications/initialized", {});
-  const listed = initialized.capabilities?.tools ? await rpc(ctx, endpoint, token, session, 2, "tools/list", {}) : { tools: [] };
-  const count = Array.isArray(listed?.tools) ? listed.tools.length : 0;
+  const listed = initialized.capabilities?.tools ? await listTools(ctx, endpoint, token, session, all) : { tools: [], complete: true };
+  const count = listed.tools.length;
   const server = initialized.serverInfo ?? {};
   const name = [server.title ?? server.name, server.version].filter((part) => typeof part === "string" && part).join(" ");
   return {
     state: "connected",
+    tools: listed.tools,
     account: {
       label: (name || new URL(endpoint.url).host).slice(0, 96),
-      detail: `${count}${listed?.nextCursor ? "+" : ""} tool${count === 1 ? "" : "s"} · ${new URL(endpoint.url).host}`.slice(0, 160),
+      detail: `${count}${listed.complete ? "" : "+"} tool${count === 1 ? "" : "s"} · ${new URL(endpoint.url).host}`.slice(0, 160),
     },
   };
+}
+
+function presented({ tools, ...state }) {
+  return state;
 }
 
 async function settle(work) {
@@ -141,7 +161,17 @@ async function settle(work) {
 }
 
 async function probe(ctx) {
-  return settle(() => check(ctx, filled(ctx.values)));
+  return presented(await settle(() => check(ctx, filled(ctx.values))));
+}
+
+async function publish(ctx, result) {
+  if (typeof ctx.publishOperations !== "function") return presented(result);
+  const { published, approvalRequired = [], skipped } = await ctx.publishOperations(result.tools);
+  const parts = [`${published} tool${published === 1 ? " is" : "s are"} available to connected tasks.`];
+  if (approvalRequired.length) parts.push(`${approvalRequired.length} of them wait for your approval before they act.`);
+  if (skipped.length) parts.push(`Only through call_tool: ${skipped.join("; ")}`);
+  const message = parts.join(" ");
+  return { ...presented(result), message: message.length > 300 ? `${message.slice(0, 299)}…` : message };
 }
 
 async function connect(ctx) {
@@ -155,10 +185,10 @@ async function connect(ctx) {
   }
   const deadline = Date.now() + LOOPBACK_WAIT_MS;
   for (;;) {
-    const result = await settle(() => check(ctx, values));
+    const result = await settle(() => check(ctx, values, typeof ctx.publishOperations === "function"));
     if (result.state === "connected") {
       if (Object.keys(input).length) await ctx.saveValues(input);
-      return result;
+      return publish(ctx, result);
     }
     if (result.state !== "not_connected" || !endpoint?.loopback || Date.now() >= deadline) return result;
     ctx.progress({ message: `Waiting for the server at ${endpoint.url}…` });

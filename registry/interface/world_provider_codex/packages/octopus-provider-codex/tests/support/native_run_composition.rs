@@ -601,7 +601,7 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
         .as_array_mut()
         .unwrap()
         .push(wait.clone());
-    let expected_wait: octopus_runtime::run_record::CheckpointRecord =
+    let expected_wait: octopus_run_record::CheckpointRecord =
         serde_json::from_value(wait.clone()).unwrap();
     run["active_checkpoints"]
         .as_array_mut()

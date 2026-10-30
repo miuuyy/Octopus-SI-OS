@@ -216,7 +216,7 @@ async fn process(
     )
     .map_err(|e| format!("invalid composer prediction request: {e}"))?;
     let record =
-        octopus_runtime::run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(input)?)
+        octopus_run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(input)?)
             .map_err(|e| e.to_string())?;
     let target = record
         .checkpoints

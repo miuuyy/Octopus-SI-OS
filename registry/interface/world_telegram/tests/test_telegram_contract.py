@@ -1,7 +1,9 @@
+import base64
 import hashlib
 import importlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -12,7 +14,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import octopus_operation_catalog as catalog
 import telegram_contract as contract
+from octopus_content_hash import octopus_content_hash
 import telegram_render as render
 from telegram_wire import BotApi
 from telegram_wire import TelegramWireError
@@ -104,20 +108,31 @@ class ContractTests(unittest.TestCase):
         command = contract.message_content(message("/start K7MQ2", entities=[{"type": "bot_command", "offset": 0, "length": 6}]), BOT, [], self.config)
         self.assertEqual(command["command"], {"name": "start", "args": "K7MQ2"})
 
-    def test_operation_vocabulary_fails_closed(self):
-        self.assertEqual(contract.normalize_operation({"text": "hi", "chat_id": "-100123"}, self.config), ("message.send", {"text": "hi", "chat_id": -100123}))
-        operation, args = contract.normalize_operation({"operation": "message.send", "args": {"text": "pick", "buttons": [[{"text": "Yes", "data": "yes"}, {"text": "Docs", "url": "https://example.com"}]]}}, self.config)
-        self.assertEqual(args["buttons"], [[{"text": "Yes", "callback_data": "yes"}, {"text": "Docs", "url": "https://example.com"}]])
-        for body, pattern in (
-            ({"operation": "chat.ban", "args": {}}, "not supported"),
-            ({"operation": "message.send", "args": {"text": "x", "buttons": [{"text": "flat", "data": "x"}]}}, "rows"),
-            ({"operation": "message.send", "args": {"text": "x", "buttons": [[{"text": "big", "data": "x" * 65}]]}}, "64-byte"),
-            ({"operation": "file.send", "args": {"blob_id": "a" * 64, "file_id": "f"}}, "exactly one"),
-            ({"operation": "api.call", "args": {"method": "banChatMember"}}, "not allowed"),
-            ({"operation": "message.edit", "args": {"message_id": 3}}, "text or buttons"),
-        ):
+    def test_operation_catalog_is_precise_and_fails_closed(self):
+        private = json.loads((ROOT / "interface.json").read_text(encoding="utf-8"))["interface_driver_config"]["private_config"]
+        loaded = contract.validate_handlers(catalog.load_catalog(str(ROOT), private, "telegram"))
+        self.assertEqual((loaded["catalog_label"], loaded["request_label"], loaded["result_label"]), ("telegram.operation_catalog", "telegram.operation.request", "telegram.operation.result"))
+        self.assertEqual(len(loaded["operations"]), 22)
+        for identity, spec in loaded["operations"].items():
+            self.assertTrue(spec["description"].endswith("."), identity)
+            self.assertFalse({"anyOf", "oneOf", "allOf"} & set(spec["input_schema"]), identity)
+        send = loaded["operations"]["telegram.send_message"]["input_schema"]
+        catalog.validate(send, {"text": "pick", "chat_id": "-100123", "buttons": [[{"text": "Yes", "data": "yes"}]]})
+        for arguments, pattern in (({"chat_id": 1}, "missing text"), ({"text": "x", "buttons": [{"text": "flat", "data": "x"}]}, "must be array"), ({"text": "x", "chat_id": "nobody"}, "none of its allowed forms"), ({"text": "x", "html": True}, "unknown properties")):
             with self.assertRaisesRegex(ValueError, pattern):
-                contract.normalize_operation(body, self.config)
+                catalog.validate(send, arguments)
+        self.assertEqual(contract.validate_args("message.send", {"text": "pick", "chat_id": "-100123", "buttons": [[{"text": "Docs", "url": "https://example.com"}]]}, self.config), {"text": "pick", "chat_id": -100123, "buttons": [[{"text": "Docs", "url": "https://example.com"}]]})
+        for handler, arguments, pattern in (("message.send", {"text": "x", "buttons": [[{"text": "big", "data": "x" * 65}]]}, "64-byte"), ("file.send", {"blob_id": "a" * 64, "file_id": "f"}, "exactly one"), ("message.edit", {"message_id": 3}, "text, buttons or both")):
+            with self.assertRaisesRegex(ValueError, pattern):
+                contract.validate_args(handler, arguments, self.config)
+        with tempfile.TemporaryDirectory() as root:
+            shutil.copytree(ROOT / "operations", Path(root) / "operations")
+            broken = Path(root) / "operations" / "telegram.get_chat.json"
+            value = json.loads(broken.read_text(encoding="utf-8"))
+            value["input_schema"]["additionalProperties"] = True
+            broken.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "closed object"):
+                catalog.load_catalog(root, private, "telegram")
 
 
 class WireTests(unittest.TestCase):
@@ -242,7 +257,7 @@ class LifeTests(unittest.TestCase):
     def test_album_becomes_one_event_with_downloaded_files(self):
         photos = []
         for index in (1, 2):
-            self.api.files[f"photos/p{index}.jpg"] = f"jpeg-{index}".encode()
+            self.api.files[f"photos/p{index}.jpg"] = b"\xff\xd8\xff" + f"jpeg-{index}".encode()
             photo = [{"file_id": f"t{index}", "file_unique_id": f"ut{index}", "width": 90, "height": 90, "file_size": 10}, {"file_id": f"p{index}", "file_unique_id": f"u{index}", "width": 900, "height": 900, "file_size": 6}]
             extra = {"caption": "trip"} if index == 1 else {}
             photos.append({"update_id": 20 + index, "message": message(None, message_id=60 + index, media_group_id="album-1", photo=photo, **extra)})
@@ -250,46 +265,69 @@ class LifeTests(unittest.TestCase):
             del update["message"]["text"]
         self.deliver(*photos)
         self.assertEqual(len(self.handed), 1)
-        content = self.handed[0][1]["message"]
+        event = self.handed[0][1]
+        content = event["message"]
         self.assertEqual((content["text"], content["album_message_ids"]), ("trip", [61, 62]))
         for index, item in enumerate(content["files"], start=1):
-            self.assertEqual((item["kind"], item["file_id"], item["sha256"]), ("photo", f"p{index}", hashlib.sha256(f"jpeg-{index}".encode()).hexdigest()))
-            self.assertEqual(Path(item["path"]).read_bytes(), f"jpeg-{index}".encode())
+            data = b"\xff\xd8\xff" + f"jpeg-{index}".encode()
+            self.assertEqual((item["kind"], item["file_id"], item["sha256"], item["image"]), ("photo", f"p{index}", hashlib.sha256(data).hexdigest(), index - 1))
+            self.assertNotIn("path", item)
+            image = event["media"][index - 1]
+            self.assertEqual((image["mime_type"], image["artifact"]["label"], base64.b64decode(image["payload_base64"])), ("image/jpeg", "telegram.file", data))
+            self.assertEqual(Path(image["artifact"]["payload_path"]).read_bytes(), data)
+            self.assertEqual(image["artifact"]["payload_content_hash"], octopus_content_hash(data))
+        self.config["media"]["max_images_per_event"] = 1
+        self.assertEqual(len(self.life.download_files([update["message"] for update in photos], "again")[1]), 1)
 
-    def test_reply_without_chat_reaches_the_single_allowed_user_in_parts(self):
-        operation, args = self.life.prepare_output("telegram.operation", json.dumps({"text": "word " * 1700, "reply_to_message_id": 5, "buttons": [[{"text": "OK", "data": "ok"}]]}).encode())
-        result = self.life.execute(operation, args)
+    def request(self, seq, operation, arguments, correlation_id="call-1", label="telegram.operation.request"):
+        body = {"operation": operation, "arguments": arguments, "correlation_id": correlation_id} if correlation_id else {"operation": operation, "arguments": arguments}
+        handed = len(self.handed)
+        with mock.patch.object(self.boundary, "materialize_movement_payload", return_value=(label, json.dumps(body).encode("utf-8"), f"{seq:064x}")), mock.patch.object(self.boundary, "hand_artifact", side_effect=self.hand):
+            self.life.process_request(seq, b"x" * 32, "run_a", self.module.now_ms())
+        return self.handed[-1] if len(self.handed) > handed else None
+
+    def test_send_message_answers_once_with_its_result(self):
+        label, result = self.request(1, "telegram.send_message", {"text": "word " * 1700, "reply_to_message_id": 5, "buttons": [[{"text": "OK", "data": "ok"}]]})
         sends = [params for method, params in self.api.calls if method == "sendMessage"]
         self.assertEqual(len(sends), 3)
         self.assertEqual({params["chat_id"] for params in sends}, {111})
         self.assertEqual(["reply_parameters" in params for params in sends], [True, False, False])
         self.assertEqual(["reply_markup" in params for params in sends], [False, False, True])
-        self.assertEqual(result, {"operation": "message.send", "chat_id": 111, "message_ids": [501, 502, 503]})
+        self.assertEqual((label, result), ("telegram.operation.result", {"label": "telegram.operation.result", "operation": "telegram.send_message", "correlation_id": "call-1", "ok": True, "result": {"chat_id": 111, "message_ids": [501, 502, 503]}}))
         self.assertIn("111:503", self.life.load_state()["bot_messages"])
+        self.assertEqual(self.request(1, "telegram.send_message", {"text": "word " * 1700})[1], result)
+        self.assertEqual(len([call for call in self.api.calls if call[0] == "sendMessage"]), 3)
+        self.assertEqual(os.listdir(self.boundary.REQUEST_DIR), [])
+        self.assertEqual(self.request(2, "telegram.get_chat", {"chat_id": "@octo_news"})[1]["result"], {"method": "getChat", "result": True})
         with mock.patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "111,222"}):
             access = self.module.resolve_access(self.config)
         with self.assertRaisesRegex(ValueError, "names no chat_id"):
             self.module.Life(self.config, access, BOT, self.api).target({})
 
-    def test_outbound_failures_are_classified_by_certainty(self):
-        payload = json.dumps({"text": "hello"}).encode()
-        failures = []
-        with mock.patch.object(self.boundary, "materialize_movement_payload", return_value=("telegram.operation", payload, "c" * 64)), mock.patch.object(self.boundary, "hand_json", side_effect=lambda label, value, key: failures.append((label, value)) or 77):
-            self.api.failure = TelegramWireError("transport_error", "unreachable")
-            with self.assertRaises(self.module.RetryOutbound):
-                self.life.process_outbound(1, b"x" * 32, "run_a", self.module.now_ms())
-            self.assertIsNone(self.boundary.load_effect(1))
-            self.api.failure = TelegramWireError("transport_uncertain", "reset after send")
-            self.life.process_outbound(2, b"x" * 32, "run_a", self.module.now_ms())
-            self.api.failure = TelegramWireError("telegram_error", "chat not found", description="Bad Request: chat not found")
-            self.life.process_outbound(3, b"x" * 32, "run_a", self.module.now_ms())
-            self.api.failure = None
-            self.life.process_outbound(4, b"x" * 32, "run_a", self.module.now_ms())
-        self.assertEqual([value.get("failure_class") or value["result"]["operation"] for _, value in failures], ["indeterminate_external_effect", "telegram_refused", "message.send"])
-        self.assertEqual([label for label, _ in failures], ["world_telegram.failure", "world_telegram.failure", "telegram.delivery.result"])
-        self.assertEqual([self.boundary.load_effect(seq)["status"] for seq in (2, 3, 4)], ["failure_evidenced", "failure_evidenced", "evidenced"])
-        with self.assertRaisesRegex(ValueError, "accepts only 'telegram.operation'"):
-            self.life.prepare_output("interface.artifact.output", payload)
+    def test_requests_fail_closed_and_uncertain_effects_are_not_repeated(self):
+        refusals = (
+            ("telegram.send_message", {"text": "x"}, None, "malformed_request"),
+            ("telegram.ban_member", {}, "call-2", "unknown_operation"),
+            ("telegram.send_message", {"text": "x", "chat": 1}, "call-3", "invalid_arguments"),
+            ("telegram.edit_message", {"message_id": 3}, "call-4", "invalid_arguments"),
+        )
+        for seq, (operation, arguments, correlation_id, code) in enumerate(refusals, start=10):
+            result = self.request(seq, operation, arguments, correlation_id)[1]
+            self.assertEqual((result["correlation_id"], result["ok"], result["error"]["code"]), (correlation_id, False, code))
+        self.assertIsNone(self.request(20, "telegram.send_message", {"text": "x"}, label="telegram.operation"))
+        self.api.failure = TelegramWireError("transport_error", "unreachable")
+        with self.assertRaises(self.module.RetryOutbound):
+            self.request(21, "telegram.send_message", {"text": "hello"})
+        self.assertEqual(os.listdir(self.boundary.REQUEST_DIR), [])
+        self.api.failure = TelegramWireError("transport_uncertain", "reset after send")
+        self.assertEqual(self.request(22, "telegram.send_message", {"text": "hello"})[1]["error"]["code"], "indeterminate_external_effect")
+        self.api.failure = TelegramWireError("telegram_error", "chat not found", description="Bad Request: chat not found")
+        self.assertEqual(self.request(23, "telegram.send_message", {"text": "hello"})[1]["error"]["code"], "telegram_refused")
+        self.api.failure = None
+        self.boundary.record_request("telegram-result-24-" + f"{24:064x}"[:16], {"operation": "telegram.send_message"})
+        calls = len(self.api.calls)
+        result = self.request(24, "telegram.send_message", {"text": "hello"})[1]
+        self.assertEqual((result["error"]["code"], len(self.api.calls)), ("indeterminate_external_effect", calls))
 
     def test_tokens_access_and_secrets_fail_closed(self):
         with mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": ""}):

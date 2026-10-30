@@ -80,9 +80,10 @@ pub(crate) fn external_input_binding(
 pub(crate) fn previous_external_route_templates(
     profile: &OctopusOsAuthoringProfile,
     model_interface_id: &str,
+    operations: &OperationRoutes,
 ) -> Result<Vec<(String, BoundCheckpointTemplate)>, String> {
     let mut routes = Vec::new();
-    for input in &profile.external_inputs {
+    for input in profile.external_inputs.iter().filter(|input| !operations.declared.contains(&input.interface_id)) {
         routes.push((
             input.checkpoint_id.clone(),
             bound_checkpoint_template(
@@ -132,12 +133,26 @@ pub(crate) fn resolve_previous_external_route_checkpoints(
     active: &BTreeSet<String>,
     run_id: &str,
     model_interface_id: &str,
+    operations: &OperationRoutes,
 ) -> Result<BTreeSet<String>, String> {
     let Some(profile) = profile else {
         return Ok(BTreeSet::new());
     };
     let mut resolved = BTreeSet::new();
-    for (authored_id, template) in previous_external_route_templates(profile, model_interface_id)? {
+    let provider = vec![AuthoredInterfaceBinding::all(InterfaceId::new(model_interface_id))];
+    for input in profile.external_inputs.iter().filter(|input| operations.declared.contains(&input.interface_id)) {
+        let rows = checkpoints.iter().filter(|checkpoint| {
+            checkpoint.get("id").and_then(serde_json::Value::as_str).is_some_and(|id| active.contains(id))
+                && checkpoint.get("run").and_then(serde_json::Value::as_str) == Some(run_id)
+                && checkpoint["interface_binding"]["interface"].as_str() == Some(input.interface_id.as_str())
+                && checkpoint.get("outbound_interface_bindings") == serde_json::to_value(&provider).ok().as_ref()
+                && checkpoint.get("required_verified_artifacts") == serde_json::to_value(&input.required_verified_artifacts).ok().as_ref()
+        }).filter_map(|checkpoint| checkpoint["id"].as_str().map(str::to_string)).collect::<Vec<_>>();
+        if rows.len() > 1 || rows.iter().any(|id| !resolved.insert(id.clone())) {
+            return Err(format!("existing application input '{}' has no unique standing route", input.checkpoint_id));
+        }
+    }
+    for (authored_id, template) in previous_external_route_templates(profile, model_interface_id, operations)? {
         let matches = checkpoints
             .iter()
             .filter_map(|checkpoint| {

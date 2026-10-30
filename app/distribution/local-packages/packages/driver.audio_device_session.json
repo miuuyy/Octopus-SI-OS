@@ -2,16 +2,16 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.audio_device_session",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "product_kind": "driver",
   "product_id": "audio_device_session",
   "release_status": "optional",
   "display": {
     "name": "Audio Device Session",
-    "description": "Microphone and speaker access for voice and audio tasks.",
+    "description": "Microphone capture and speaker playback on this Mac's audio devices.",
     "developer": "Octopus",
     "category": "worker_environment",
-    "icon": "hard-drive"
+    "icon": "microphone"
   },
   "members": [
     {

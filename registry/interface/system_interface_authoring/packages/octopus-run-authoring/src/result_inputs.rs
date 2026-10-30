@@ -15,6 +15,107 @@ struct Correspondence {
     invocation: Option<invocation::ResultInvocation>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperationCall {
+    operation: String,
+    #[serde(rename = "arguments")]
+    _arguments: serde_json::Value,
+    correlation_id: String,
+}
+
+fn call_identity(bytes: &[u8]) -> Result<(String, Option<String>), String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    if value.get("operation").is_some() {
+        let call: OperationCall = serde_json::from_value(value).map_err(|error| error.to_string())?;
+        return Ok((call.operation, Some(call.correlation_id)));
+    }
+    let call: octopus_tool_handlers::ToolCallArtifact =
+        serde_json::from_value(value).map_err(|error| error.to_string())?;
+    Ok((call.tool, call.correlation_id))
+}
+
+fn result_identity(bytes: &[u8]) -> Result<(String, Option<String>, String), String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    if value.get("operation").is_some() {
+        let field = |name: &str| value.get(name).and_then(serde_json::Value::as_str).map(str::to_string);
+        return Ok((
+            field("operation").ok_or("operation result names no operation")?,
+            field("correlation_id"),
+            field("label").ok_or("operation result has no label")?,
+        ));
+    }
+    let result: ToolResultArtifact = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    Ok((result.tool, result.correlation_id, result.label))
+}
+
+fn receives(output: &RunAuthoringCheckpoint, subject: &str, label: &str) -> bool {
+    match output.role {
+        RunAuthoringCheckpointRole::ProviderToolOutput => output.result_receiving.contains_key(subject),
+        RunAuthoringCheckpointRole::ProviderInterfaceOutput => output.result_receiving.contains_key(label),
+        _ => false,
+    }
+}
+
+fn receiving_output<'a>(
+    checkpoints: &'a [RunAuthoringCheckpoint],
+    template: &RunAuthoringCheckpoint,
+    call: &Correspondence,
+) -> Result<&'a RunAuthoringCheckpoint, String> {
+    let label = &template.required_verified_artifacts[0].artifact_label;
+    let outputs = checkpoints
+        .iter()
+        .filter(|output| output.outbound_interfaces().eq([template.interface()]) && receives(output, &call.tool, label))
+        .collect::<Vec<_>>();
+    let [output] = outputs.as_slice() else {
+        return Err("result input has no exact declared receiving output".into());
+    };
+    Ok(output)
+}
+
+pub(super) fn select_call_result(
+    output: &mut RunAuthoringCheckpoint,
+    route: &ProviderHandoffRoute,
+) -> Result<(), String> {
+    if output.role != RunAuthoringCheckpointRole::ProviderInterfaceOutput || output.result_receiving.is_empty() {
+        return Ok(());
+    }
+    let ProviderHandoffRoute::Operation { result_label, .. } = route else {
+        return Err("an interface output that waits for results requires its call to name its result label".into());
+    };
+    output.result_receiving.retain(|label, _| label == result_label);
+    if output.result_receiving.is_empty() {
+        return Err(format!(
+            "operation call names result label '{result_label}' outside its interface output's declared results"
+        ));
+    }
+    Ok(())
+}
+
+fn rearms(
+    template: &RunAuthoringCheckpoint,
+    old: &[RunAuthoringCheckpoint],
+    next: &[RunAuthoringCheckpoint],
+) -> bool {
+    next.iter().any(|input| {
+        input.role == RunAuthoringCheckpointRole::VerifiedInput
+            && !old.contains(input)
+            && input.outbound_interfaces().skip(1).any(|id| id == template.interface())
+    })
+}
+
+fn active_rows(record: &RunRecord, template: &RunAuthoringCheckpoint) -> Vec<octopus_run_record::CheckpointRecord> {
+    record
+        .checkpoints
+        .iter()
+        .filter(|checkpoint| {
+            record.active_checkpoints.contains(&checkpoint.id)
+                && checkpoint_record_matches_template(checkpoint, template, &record.id)
+        })
+        .cloned()
+        .collect()
+}
+
 pub(super) fn enabled(config: &RunAuthoringConfig) -> bool {
     config.checkpoints.iter().any(|template| {
         template.role == RunAuthoringCheckpointRole::ResultInput
@@ -416,18 +517,9 @@ pub(super) fn validate_source_advance(
     {
         return Ok(());
     }
-    let next = attempt_config(after, &handoff.config)?;
     let consumed = persisted_pending_handoff(after, &handoff.config.provider_interface)?
         .is_some_and(|pending| pending.source_movement_seq == handoff.source_movement_seq)
-        && after.checkpoint(&runtime.checkpoint).is_none()
-        && !next.checkpoints.iter().any(|template| {
-            template.role == RunAuthoringCheckpointRole::ResultInput
-                && before
-                    .checkpoint(&runtime.checkpoint)
-                    .is_some_and(|checkpoint| {
-                        checkpoint_record_matches_template(checkpoint, template, &before.id)
-                    })
-        });
+        && after.checkpoint(&runtime.checkpoint).is_none();
     if !consumed {
         if source_was_bridged(
             &handoff.completed_source_chain(after_bytes)?,
@@ -502,24 +594,22 @@ pub(super) fn validate_template(
     config: &RunAuthoringConfig,
 ) -> Result<(), String> {
     if !template.result_receiving.is_empty() {
-        if template.role != RunAuthoringCheckpointRole::ProviderToolOutput {
-            return Err("result receiving contracts belong to provider tool outputs".into());
+        let tool_output = template.role == RunAuthoringCheckpointRole::ProviderToolOutput;
+        if !tool_output && template.role != RunAuthoringCheckpointRole::ProviderInterfaceOutput {
+            return Err("result receiving contracts belong to provider tool or interface outputs".into());
         }
-        let tools = checkpoint_tool_ids(template)?;
-        if template
-            .result_receiving
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            != tools
+        if tool_output
+            && template.result_receiving.keys().cloned().collect::<BTreeSet<_>>()
+                != checkpoint_tool_ids(template)?
         {
             return Err("result receiving contracts must cover the exact declared tool set".into());
         }
-        for (tool, required) in &template.result_receiving {
+        for (key, required) in &template.result_receiving {
             required.validate("result receiving contract")?;
-            if required.artifact_label != format!("{tool}.result") || !required.params.is_object() {
+            let label = if tool_output { format!("{key}.result") } else { key.clone() };
+            if required.artifact_label != label || !required.params.is_object() {
                 return Err(
-                    "result receiving requires the exact native result label and object params"
+                    "result receiving requires the exact declared result label and object params"
                         .into(),
                 );
             }
@@ -529,6 +619,10 @@ pub(super) fn validate_template(
             input.role.is_provider_input()
                 && input.role != RunAuthoringCheckpointRole::ResultInput
                 && input.interface() == door
+                && template
+                    .result_receiving
+                    .values()
+                    .any(|required| input.interface_binding.admits(&required.artifact_label))
         }) {
             return Err(
                 "result receiving door retains another live provider input template".into(),
@@ -555,7 +649,12 @@ pub(super) fn validate_template(
         );
     }
     let required = &template.required_verified_artifacts[0];
-    if required.artifact_label != format!("{}.result", call.tool)
+    let declared = config.checkpoints.iter().any(|output| {
+        output.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput
+            && output.outbound_interfaces().eq([template.interface()])
+            && output.result_receiving.contains_key(&required.artifact_label)
+    });
+    if (!declared && required.artifact_label != format!("{}.result", call.tool))
         || !binding_admits_exact_name(&template.interface_binding, &required.artifact_label)
         || !binding_admits_exact_name(
             &template.outbound_interface_bindings[0],
@@ -573,16 +672,30 @@ fn template_for_call(
     payload: &[u8],
     config: &RunAuthoringConfig,
     call_in_context: bool,
+    result_label: Option<&str>,
 ) -> Result<RunAuthoringCheckpoint, String> {
-    let call: octopus_tool_handlers::ToolCallArtifact = serde_json::from_slice(payload)
-        .map_err(|error| format!("result receiving call is malformed: {error}"))?;
+    let (subject, correlation_id, key) = if output.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput {
+        let call: OperationCall = serde_json::from_slice(payload)
+            .map_err(|error| format!("result receiving operation call is malformed: {error}"))?;
+        let label = match result_label {
+            Some(label) => label.to_string(),
+            None => match output.result_receiving.keys().collect::<Vec<_>>().as_slice() {
+                [label] => (*label).clone(),
+                _ => return Err("operation call has no single selected result label".into()),
+            },
+        };
+        (call.operation, Some(call.correlation_id), label)
+    } else {
+        let call: octopus_tool_handlers::ToolCallArtifact = serde_json::from_slice(payload)
+            .map_err(|error| format!("result receiving call is malformed: {error}"))?;
+        (call.tool.clone(), call.correlation_id, call.tool)
+    };
+    non_empty_string(&subject, "result receiving call subject")?;
     let contract = output
         .result_receiving
-        .get(&call.tool)
-        .ok_or("result receiving call has no declared tool contract")?;
-    let correlation_id = call
-        .correlation_id
-        .ok_or("result receiving call has no correlation")?;
+        .get(&key)
+        .ok_or("result receiving call has no declared result contract")?;
+    let correlation_id = correlation_id.ok_or("result receiving call has no correlation")?;
     non_empty_string(&correlation_id, "result receiving call correlation")?;
     let mut required = contract.clone();
     let mut static_artifact_bindings = result_static_bindings(config, None, &reference);
@@ -591,7 +704,7 @@ fn template_for_call(
     }
     required.params = serde_json::to_value(Correspondence {
         call_artifact: reference,
-        tool: call.tool,
+        tool: subject,
         correlation_id,
         params: contract.params.clone(),
         invocation: None,
@@ -668,9 +781,11 @@ pub(super) fn prepare(
         ) {
             return Err("result retirement changed its admitted binding evidence".into());
         }
+        let retained = topology.checkpoints.clone();
         topology.checkpoints.retain(|template| {
             template.role != RunAuthoringCheckpointRole::ResultInput
                 || !checkpoint_record_matches_template(checkpoint, template, &record.id)
+                || rearms(template, &handoff.config.checkpoints, &retained)
         });
     }
     for output in outputs
@@ -692,6 +807,7 @@ pub(super) fn prepare(
                 .map_err(|error| error.to_string())?,
             &handoff.config,
             terminal_context.is_some_and(|context| context.contains(&output.identity.artifact.id)),
+            None,
         )?;
         if !handoff
             .granted_mark_outcomes
@@ -726,6 +842,14 @@ pub(super) fn materialize(
     consumed: Option<&CheckpointId>,
     deferred_context: Option<&[ArtifactBinding]>,
 ) -> Result<(), String> {
+    let rearmed = consumed
+        .and_then(|id| before.checkpoint(id))
+        .and_then(|row| {
+            next.checkpoints.iter().find(|template| {
+                template.role == RunAuthoringCheckpointRole::ResultInput
+                    && checkpoint_record_matches_template(row, template, &before.id)
+            })
+        });
     if consumed.is_none()
         && !next.checkpoints.iter().any(|template| {
             template.role == RunAuthoringCheckpointRole::ResultInput
@@ -744,10 +868,15 @@ pub(super) fn materialize(
     };
     let mut rows = Vec::new();
     let mut ids = Vec::new();
-    for template in next.checkpoints.iter().filter(|template| {
-        template.role == RunAuthoringCheckpointRole::ResultInput
-            && !config.checkpoints.contains(template)
-    }) {
+    for template in next
+        .checkpoints
+        .iter()
+        .filter(|template| {
+            template.role == RunAuthoringCheckpointRole::ResultInput
+                && !config.checkpoints.contains(template)
+        })
+        .chain(rearmed)
+    {
         let call = correspondence(template)?;
         let mut bindings = context.clone();
         if !bindings
@@ -783,24 +912,32 @@ pub(super) fn validate_transition(
     let old = attempt_config(before, config)?;
     let next = attempt_config(after, config)?;
     let pending = persisted_pending_handoff(after, &config.provider_interface)?;
-    let rows = |record: &RunRecord, template: &RunAuthoringCheckpoint| {
-        record
-            .checkpoints
-            .iter()
-            .filter(|checkpoint| {
-                record.active_checkpoints.contains(&checkpoint.id)
-                    && checkpoint_record_matches_template(checkpoint, template, &record.id)
-            })
-            .cloned()
-            .collect::<Vec<_>>()
-    };
+    let rows = active_rows;
     for template in old
         .checkpoints
         .iter()
         .filter(|template| template.role == RunAuthoringCheckpointRole::ResultInput)
     {
         if next.checkpoints.contains(template) && rows(before, template) != rows(after, template) {
-            return Err("outstanding result input changed before consumption".into());
+            if !rearms(template, &old.checkpoints, &next.checkpoints) {
+                return Err("outstanding result input changed before consumption".into());
+            }
+            let call = correspondence(template)?;
+            let mut expected = effective_context_bindings(after, &old.checkpoints, &config.provider_interface)?;
+            if !expected.iter().any(|binding| binding.id == call.call_artifact.id) {
+                expected.push(ArtifactBinding { id: call.call_artifact.id.clone(), access: Default::default() });
+            }
+            let (prior, rearmed) = (rows(before, template), rows(after, template));
+            let ([prior], [row]) = (prior.as_slice(), rearmed.as_slice()) else {
+                return Err("re-armed result input has no unique replaced generation".into());
+            };
+            if after.checkpoint(&prior.id).is_some()
+                || before.checkpoint(&row.id).is_some()
+                || row.epoch.0 != 0
+                || row.artifact_bindings != expected
+            {
+                return Err("re-armed result input differs from a fresh generation of its exact wait".into());
+            }
         }
     }
     for template in next.checkpoints.iter().filter(|template| {
@@ -878,18 +1015,8 @@ pub(super) fn validate_saved(
             })
             .ok_or("saved result input lost its call")?;
         let (file, reference) = load_pending_artifact(&ctx.interface_var_dir(), item)?;
-        let outputs = old
-            .checkpoints
-            .iter()
-            .filter(|output| {
-                output.role == RunAuthoringCheckpointRole::ProviderToolOutput
-                    && output.outbound_interfaces().eq([template.interface()])
-                    && output.result_receiving.contains_key(&call.tool)
-            })
-            .collect::<Vec<_>>();
-        let [output] = outputs.as_slice() else {
-            return Err("saved result input lost its declared output".into());
-        };
+        let output = receiving_output(&old.checkpoints, template, &call)
+            .map_err(|_| "saved result input lost its declared output".to_string())?;
         let call_in_context = effective_context_bindings(after, &old.checkpoints, &config.provider_interface)?
             .iter().any(|binding| binding.id == reference.id);
         let expected = template_for_call(
@@ -900,6 +1027,7 @@ pub(super) fn validate_saved(
                 .map_err(|error| error.to_string())?,
             &old,
             call_in_context,
+            Some(&template.required_verified_artifacts[0].artifact_label),
         )?;
         if expected != *template {
             return Err("saved result input changed its exact original call".into());
@@ -967,20 +1095,17 @@ pub(super) fn validate_invocation(
     let [original] = originals.as_slice() else {
         return Err("result invocation has no exact bound call artifact".into());
     };
-    let original: octopus_tool_handlers::ToolCallArtifact =
-        serde_json::from_slice(&original.read_bytes().map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
-    let result: ToolResultArtifact = serde_json::from_slice(
+    let original = call_identity(&original.read_bytes().map_err(|error| error.to_string())?)?;
+    let result = result_identity(
         &input
             .read_artifact_payload()
             .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    if original.tool != call.tool
-        || original.correlation_id.as_deref() != Some(&call.correlation_id)
-        || result.tool != call.tool
-        || result.correlation_id.as_deref() != Some(&call.correlation_id)
-        || result.label != template.required_verified_artifacts[0].artifact_label
+    )?;
+    if original.0 != call.tool
+        || original.1.as_deref() != Some(&call.correlation_id)
+        || result.0 != call.tool
+        || result.1.as_deref() != Some(&call.correlation_id)
+        || result.2 != template.required_verified_artifacts[0].artifact_label
     {
         return Err("result invocation differs from its bound original call".into());
     }
@@ -1029,15 +1154,8 @@ pub(super) fn validate_checked(
                     .find(|item| item.artifact_id == call.call_artifact.id)
             })
             .ok_or("checked result input lost its pending call")?;
-        let output = config
-            .checkpoints
-            .iter()
-            .find(|output| {
-                output.role == RunAuthoringCheckpointRole::ProviderToolOutput
-                    && output.outbound_interfaces().eq([template.interface()])
-                    && output.result_receiving.contains_key(&call.tool)
-            })
-            .ok_or("checked result input has no exact declared output")?;
+        let output = receiving_output(&config.checkpoints, template, &call)
+            .map_err(|_| "checked result input has no exact declared output".to_string())?;
         let payload = reader.pending_output_payload(
             &config.provider_interface,
             &call.call_artifact,
@@ -1051,6 +1169,7 @@ pub(super) fn validate_checked(
             &payload,
             &config,
             call_in_context,
+            Some(&template.required_verified_artifacts[0].artifact_label),
         )?;
         if expected != *template {
             return Err("checked result input changed its original call".into());
@@ -1258,7 +1377,8 @@ fn validate_retirement(
         .iter()
         .filter(|template| {
             template.role == RunAuthoringCheckpointRole::ResultInput
-                && !next.checkpoints.contains(template)
+                && (!next.checkpoints.contains(template)
+                    || active_rows(before, template) != active_rows(after, template))
         })
         .collect::<Vec<_>>();
     if removed.is_empty() {
@@ -1375,22 +1495,20 @@ fn validate_result_source(
         return Err("result source lost its exact read-only original call binding".into());
     }
     let (_, original) = reader.artifact(&call.call_artifact)?;
-    let original: octopus_tool_handlers::ToolCallArtifact =
-        serde_json::from_slice(&original).map_err(|error| error.to_string())?;
+    let original = call_identity(&original)?;
     let (manifest, result) = reader.artifact(
         source
             .artifact
             .as_ref()
             .ok_or("result retirement has no artifact")?,
     )?;
-    let result: ToolResultArtifact =
-        serde_json::from_slice(&result).map_err(|error| error.to_string())?;
-    if manifest.label != result.label
-        || result.label != template.required_verified_artifacts[0].artifact_label
-        || original.tool != call.tool
-        || original.correlation_id.as_deref() != Some(&call.correlation_id)
-        || result.tool != call.tool
-        || result.correlation_id.as_deref() != Some(&call.correlation_id)
+    let result = result_identity(&result)?;
+    if manifest.label != result.2
+        || result.2 != template.required_verified_artifacts[0].artifact_label
+        || original.0 != call.tool
+        || original.1.as_deref() != Some(&call.correlation_id)
+        || result.0 != call.tool
+        || result.1.as_deref() != Some(&call.correlation_id)
     {
         return Err("result retirement differs from its original call correspondence".into());
     }
@@ -1407,10 +1525,31 @@ pub(super) fn checked_topology_advance(
     source: u64,
     chain: &[CheckedRunTransition],
 ) -> Result<bool, String> {
+    let consumed_by_own_write = || {
+        chain.iter().any(|transition| {
+            transition.writer.owner == before.provider_interface
+                && RunRecord::from_bytes(&transition.before)
+                    .ok()
+                    .is_some_and(|record| {
+                        record.checkpoint(checkpoint) == original.checkpoint(checkpoint)
+                            && record.active_checkpoints.contains(checkpoint)
+                    })
+                && RunRecord::from_bytes(&transition.after)
+                    .ok()
+                    .is_some_and(|record| {
+                        record.checkpoint(checkpoint).is_none()
+                            && persisted_pending_handoff(&record, &before.provider_interface)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|pending| pending.source_movement_seq == source)
+                    })
+        })
+    };
     if consumed.role == RunAuthoringCheckpointRole::ResultInput
         && after.checkpoints.contains(consumed)
         && (original.checkpoint(checkpoint) != current.checkpoint(checkpoint)
             || !current.active_checkpoints.contains(checkpoint))
+        && !consumed_by_own_write()
     {
         return Err("result invocation requires its original admitted generation after a checked context revision".into());
     }
@@ -1443,26 +1582,7 @@ pub(super) fn checked_topology_advance(
         }
         let pending = persisted_pending_handoff(current, &before.provider_interface)?
             .ok_or("retired result invocation has no checked handoff")?;
-        if pending.source_movement_seq != source
-            || !chain.iter().any(|transition| {
-                transition.writer.owner == before.provider_interface
-                    && RunRecord::from_bytes(&transition.before)
-                        .ok()
-                        .is_some_and(|record| {
-                            record.checkpoint(checkpoint) == original.checkpoint(checkpoint)
-                                && record.active_checkpoints.contains(checkpoint)
-                        })
-                    && RunRecord::from_bytes(&transition.after)
-                        .ok()
-                        .is_some_and(|record| {
-                            record.checkpoint(checkpoint).is_none()
-                                && persisted_pending_handoff(&record, &before.provider_interface)
-                                    .ok()
-                                    .flatten()
-                                    .is_some_and(|pending| pending.source_movement_seq == source)
-                        })
-            })
-        {
+        if pending.source_movement_seq != source || !consumed_by_own_write() {
             return Err(
                 "result invocation was removed without consuming its own admitted source".into(),
             );

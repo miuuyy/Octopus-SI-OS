@@ -1,0 +1,34 @@
+{
+  "id": "slack.delete_message",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "message.delete"
+  },
+  "description": "Delete a message this bot posted.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "channel": {
+        "type": "string",
+        "pattern": "^[CDG][A-Z0-9]{8,32}$",
+        "description": "Conversation id: channel_id from a slack.event."
+      },
+      "ts": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}\\.[0-9]{1,12}$",
+        "description": "Message timestamp: message_ts from a slack.event or ts from an earlier result."
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "channel",
+      "ts"
+    ],
+    "additionalProperties": false
+  }
+}

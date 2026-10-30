@@ -17,10 +17,10 @@ octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-tool-door-runtime = { package = "octopus-process-session-tool-runtime", path = "../../../process_session/packages/octopus-process-session-tool-runtime" }
 octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
-octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }
 octopus-worker-env = { path = "../../../../../crates/octopus-worker-env" }
 
 [dev-dependencies]
 blake3.workspace = true
 tempfile = "3"
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
+octopus-tool-registry = { path = "../../../../../crates/octopus-tool-registry" }

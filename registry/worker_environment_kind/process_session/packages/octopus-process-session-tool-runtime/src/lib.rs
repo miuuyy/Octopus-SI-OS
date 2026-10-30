@@ -10,6 +10,7 @@ mod door_life;
 mod execution_inputs;
 mod completed_output;
 mod contract_update;
+pub mod room;
 pub use contract_update::{ToolContractUpdateRequest, ToolContractUpdateProof, ToolRetirementRequest, tool_contract_update_quiescent, tool_retirement_quiescent};
 pub use completed_output::{PreparedToolOutputRecovery, prepare_tool_output_recovery};
 
@@ -1141,6 +1142,14 @@ pub enum ToolProcessError {
     Unavailable(String),
 }
 
+impl std::fmt::Display for ToolProcessError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Capability(message) | Self::Unavailable(message) => formatter.write_str(message),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerEnvironmentReleaseMode {
@@ -1156,6 +1165,12 @@ pub struct WorkerEnvironmentReleaseContext<'a> {
 }
 
 pub trait ToolProcessHandler: Send + Sync {
+    fn substrate_family(&self) -> &str;
+
+    fn releases_cold(&self) -> bool {
+        false
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -1187,14 +1202,15 @@ pub trait ToolProcessHandler: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), ToolProcessError>> + Send + 'a>> {
         Box::pin(async move {
             match context.mode {
-                WorkerEnvironmentReleaseMode::LiveOwner => {
-                    self.release(context.formation, context.kind).await
-                }
-                WorkerEnvironmentReleaseMode::ColdRecovery => {
+                WorkerEnvironmentReleaseMode::ColdRecovery if !self.releases_cold() => {
                     Err(ToolProcessError::Capability(format!(
                         "worker environment '{}' requires cold release but its package implements no cold recovery hook",
                         context.formation.worker_environment_id
                     )))
+                }
+                WorkerEnvironmentReleaseMode::LiveOwner
+                | WorkerEnvironmentReleaseMode::ColdRecovery => {
+                    self.release(context.formation, context.kind).await
                 }
             }
         })
@@ -1706,6 +1722,7 @@ async fn execute_tool_process_command(
             let worker_environment_kind = envelope.worker_environment_kind.clone();
             if let Err(error) = validate_tool_process_formation(
                 &environment.interface,
+                handler.substrate_family(),
                 &descriptor,
                 worker_environment.as_ref(),
                 worker_environment_kind.as_ref(),
@@ -1765,7 +1782,8 @@ async fn execute_tool_process_command(
                             environment.interface, formation.door_interface
                         )))
                     } else {
-                        Ok(())
+                        validate_substrate_family(handler.substrate_family(), &kind)
+                            .map_err(ToolProcessError::Capability)
                     }
                 });
             match release {
@@ -1796,12 +1814,29 @@ async fn execute_tool_process_command(
     }
 }
 
+fn validate_substrate_family(family: &str, kind: &WorkerEnvKindSpec) -> Result<(), String> {
+    if kind.substrate_family != family {
+        return Err(format!(
+            "worker_environment_kind '{}' declares substrate family '{}', but this package serves '{family}'",
+            kind.worker_environment_kind_id, kind.substrate_family
+        ));
+    }
+    Ok(())
+}
+
 fn validate_tool_process_formation(
     interface: &InterfaceId,
+    family: &str,
     descriptor: &ToolDescriptor,
     formation: Option<&WorkerEnvironmentFormation>,
     kind: Option<&WorkerEnvKindSpec>,
 ) -> Result<(), String> {
+    if descriptor.interface != *interface {
+        return Err(format!(
+            "tool descriptor '{}' belongs to interface '{}', not tool process interface '{interface}'",
+            descriptor.id, descriptor.interface
+        ));
+    }
     match (formation, kind) {
         (None, None) => Err(format!(
             "tool '{}' invocation carries no worker-environment formation",
@@ -1821,6 +1856,7 @@ fn validate_tool_process_formation(
                     interface, formation.door_interface
                 ));
             }
+            validate_substrate_family(family, kind)?;
             if !descriptor
                 .supported_worker_environment_kinds
                 .contains(&formation.worker_environment_kind)

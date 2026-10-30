@@ -1,0 +1,53 @@
+{
+  "id": "telegram.send_location",
+  "request_label": "telegram.operation.request",
+  "output_label": "telegram.operation.result",
+  "handler_config": {
+    "operation": "bot_api",
+    "method": "sendLocation",
+    "read_only": false
+  },
+  "description": "Send a point on the map.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "chat_id": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "string",
+            "pattern": "^(@[A-Za-z][A-Za-z0-9_]{3,31}|-?[1-9][0-9]{0,15})$"
+          }
+        ],
+        "description": "Chat: chat.id from a telegram.event, or a public @username."
+      },
+      "latitude": {
+        "type": "number",
+        "minimum": -90,
+        "maximum": 90
+      },
+      "longitude": {
+        "type": "number",
+        "minimum": -180,
+        "maximum": 180
+      },
+      "message_thread_id": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Forum topic: topic_id from the telegram.event."
+      },
+      "disable_notification": {
+        "type": "boolean",
+        "description": "Deliver without a notification sound."
+      }
+    },
+    "required": [
+      "chat_id",
+      "latitude",
+      "longitude"
+    ],
+    "additionalProperties": false
+  }
+}

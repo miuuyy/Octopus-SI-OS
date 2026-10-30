@@ -175,6 +175,7 @@ pub(crate) fn exact_interrupted_result_payload(
                     interface: interface.clone(),
                     request_label: String::new(),
                     output_label: output_label.clone(),
+                    input_labels: BTreeSet::new(),
                 },
             )]);
             let result = decode_interface_operation_result_artifact(

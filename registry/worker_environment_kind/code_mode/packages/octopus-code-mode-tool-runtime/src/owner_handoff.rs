@@ -607,7 +607,7 @@ impl OwnerHandoff {
         let trace = next.get("trace").cloned().ok_or("owner run has no trace")?;
         let row = |id: &str, checkpoint: &OwnerCheckpoint| -> Result<Value, String> {
             let selected = if checkpoint == &state.topology.model_output {
-                let record = octopus_runtime::run_record::RunRecord::from_bytes(&current)
+                let record = octopus_run_record::RunRecord::from_bytes(&current)
                     .map_err(|error| error.to_string())?;
                 let provider_writer = state.topology.coauthor.as_ref()
                     .ok_or("owner result has no declared provider writer")?;

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import importlib
 import json
@@ -13,6 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import octopus_operation_catalog as catalog
 import slack_contract
 from slack_wire import SlackApi
 from slack_wire import SlackWireError
@@ -110,15 +112,22 @@ class SlackContractTests(unittest.TestCase):
         }
         self.assertEqual(slack_contract.event_coordinates(interactive), ("T12345678", "C12345678", "1720000000.000100", "1720000001.000200"))
 
-    def test_operation_vocabulary_rejects_unknown_effects(self):
-        operation, args = slack_contract.normalize_operation(
-            {"operation": "view.open", "args": {"trigger_handle": "a" * 64, "view": {"type": "modal"}}},
-            self.config,
-        )
-        self.assertEqual(operation, "view.open")
-        self.assertEqual(args["view"]["type"], "modal")
-        with self.assertRaisesRegex(ValueError, "not supported"):
-            slack_contract.normalize_operation({"operation": "admin.users.remove", "args": {}}, self.config)
+    def test_operation_catalog_is_precise_and_fails_closed(self):
+        private = json.loads((ROOT / "interface.json").read_text(encoding="utf-8"))["interface_driver_config"]["private_config"]
+        loaded = slack_contract.validate_handlers(catalog.load_catalog(str(ROOT), private, "slack"))
+        self.assertEqual((loaded["catalog_label"], loaded["request_label"], loaded["result_label"]), ("slack.operation_catalog", "slack.operation.request", "slack.operation.result"))
+        self.assertEqual(len(loaded["operations"]), 34)
+        for identity, spec in loaded["operations"].items():
+            self.assertTrue(spec["description"].endswith("."), identity)
+            self.assertIn("team_id", spec["input_schema"]["properties"], identity)
+        reaction = loaded["operations"]["slack.add_reaction"]["input_schema"]
+        catalog.validate(reaction, {"channel": "C12345678", "timestamp": "1720000000.000100", "name": "eyes"})
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            catalog.validate(reaction, {"channel": "U12345678", "timestamp": "1720000000.000100", "name": "eyes"})
+        broken = json.loads(json.dumps(loaded))
+        broken["operations"]["slack.get_user"]["handler_config"]["method"] = "admin users remove"
+        with self.assertRaisesRegex(ValueError, "names no Web API method"):
+            slack_contract.validate_handlers(broken)
 
     def test_markdown_is_rendered_without_touching_code(self):
         rendered = slack_contract.slack_mrkdwn("# Title\n**bold** [proof](https://example.com) `**code**`")
@@ -243,6 +252,23 @@ class SlackLifeTests(unittest.TestCase):
         self.assertEqual(evidence[0]["label"], "slack.arrival.idempotency")
         self.assertFalse(os.listdir(self.life.PENDING_DIR))
 
+    def test_shared_images_reach_the_event_as_media(self):
+        png, jpeg = b"\x89PNG\r\n\x1a\n" + b"chart", b"\xff\xd8\xff" + b"photo"
+        files = [{"id": "F1", "name": "chart.png", "mimetype": "image/png", "size": len(png), "url_private_download": "https://files.slack.com/F1"},
+                 {"id": "F2", "name": "../photo.jpg", "mimetype": "image/jpeg", "size": len(jpeg), "url_private_download": "https://files.slack.com/F2"}]
+
+        class Api:
+            def download(self, url, hosts, maximum, team_id=None):
+                return {"https://files.slack.com/F1": png, "https://files.slack.com/F2": jpeg}[url][:maximum], "image/png"
+
+        self.config["media"]["max_image_bytes_per_event"] = len(png)
+        images = []
+        rows = self.life.media_rows(Api(), self.config, {"files": files}, "event-1", images)
+        self.assertEqual((rows[0]["image"], "image" in rows[1], len(images)), (0, False, 1))
+        self.assertEqual((images[0]["mime_type"], images[0]["artifact"]["label"], base64.b64decode(images[0]["payload_base64"])), ("image/png", "slack.file", png))
+        self.assertEqual(Path(images[0]["artifact"]["payload_path"]).read_bytes(), png)
+        self.assertTrue(Path(images[0]["artifact"]["payload_path"]).is_relative_to(Path(self.life.MEDIA_DIR)))
+
     def test_unallowed_member_is_not_handed_to_tasks(self):
         envelope = self.direct_message()
         envelope["payload"]["event"]["user"] = "U99999999"
@@ -252,27 +278,67 @@ class SlackLifeTests(unittest.TestCase):
         hand.assert_not_called()
         self.assertIn(record["key"], self.life.load_state()["processed"])
 
-    def test_reply_without_channel_reaches_the_single_allowed_member(self):
-        operation, args = self.life.prepare_output(self.config, "slack.operation", json.dumps({"text": "Build finished"}).encode("utf-8"))
+    def request(self, api, seq, operation, arguments, label="slack.operation.request"):
+        payload = json.dumps({"operation": operation, "arguments": arguments, "correlation_id": f"call-{seq}"}).encode("utf-8")
+        handed = []
+
+        def hand(manifest_path, evidence=None):
+            manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            handed.append((manifest["label"], json.loads(Path(manifest["payload_path"]).read_text(encoding="utf-8"))))
+            return 50 + seq
+
+        with mock.patch.object(self.life, "materialize_movement_payload", return_value=(label, payload, f"{seq:064x}")), mock.patch.object(self.life, "hand_artifact", side_effect=hand):
+            self.life.process_request(api, self.config, seq, b"x" * 32, "run_slack")
+        return handed[0] if handed else None
+
+    def test_post_message_answers_its_caller_once(self):
         api = mock.Mock()
         api.call.return_value = {"ok": True, "channel": "D12345678", "ts": "1720000002.000300"}
-        result = self.life.execute_operation(api, self.config, operation, args, "a" * 64)
+        label, result = self.request(api, 1, "slack.post_message", {"text": "Build finished"})
         method, params = api.call.call_args.args
         self.assertEqual((method, params["channel"], params["text"]), ("chat.postMessage", "U12345678", "Build finished"))
-        self.assertEqual(result["messages"][0]["channel"], "D12345678")
+        self.assertEqual((label, result["operation"], result["correlation_id"], result["ok"]), ("slack.operation.result", "slack.post_message", "call-1", True))
+        self.assertEqual(result["result"]["messages"][0]["channel"], "D12345678")
         self.assertIn("D12345678:1720000002.000300", self.life.load_state()["bot_message_threads"])
-
-    def test_thread_reply_and_foreign_labels(self):
-        operation, args = self.life.prepare_output(self.config, "slack.operation", json.dumps({"text": "On it", "channel": "C12345678", "thread_ts": "1720000000.000100"}).encode("utf-8"))
-        api = mock.Mock()
-        api.call.return_value = {"ok": True, "channel": "C12345678", "ts": "1720000003.000400"}
-        self.life.execute_operation(api, self.config, operation, args, "b" * 64)
-        posted = [call.args for call in api.call.call_args_list if call.args[0] == "chat.postMessage"][0][1]
+        self.assertEqual(self.request(api, 1, "slack.post_message", {"text": "Build finished"}), (label, result))
+        self.assertEqual(api.call.call_count, 1)
+        self.request(api, 2, "slack.post_message", {"text": "On it", "channel": "C12345678", "thread_ts": "1720000000.000100"})
+        posted = [call.args for call in api.call.call_args_list if call.args[0] == "chat.postMessage"][-1][1]
         self.assertEqual((posted["channel"], posted["thread_ts"]), ("C12345678", "1720000000.000100"))
-        with self.assertRaisesRegex(ValueError, "accepts only 'slack.operation'"):
-            self.life.prepare_output(self.config, "interface.artifact.output", b'{"text": "x"}')
-        with self.assertRaisesRegex(ValueError, "not a Slack channel id"):
-            self.life.execute_operation(api, self.config, "reaction.add", {"channel": "U12345678", "timestamp": "1720000000.000100", "name": "eyes"}, "c" * 64)
+        self.assertEqual(os.listdir(self.life.REQUEST_DIR), [])
+
+    def test_read_thread_returns_images_and_effects_report_certainty(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"chart"
+
+        class Api:
+            def __init__(self):
+                self.failure = None
+
+            def call(self, method, params, safe_retry=False, team_id=None):
+                if self.failure:
+                    raise self.failure
+                return {"ok": True, "messages": [{"ts": "1720000000.000100", "text": "see chart", "files": [{"id": "F1", "name": "chart.png", "mimetype": "image/png", "size": len(png), "url_private_download": "https://files.slack.com/F1"}]}]}
+
+            def download(self, url, hosts, maximum, team_id=None):
+                return png, "image/png"
+
+        api = Api()
+        result = self.request(api, 3, "slack.read_thread", {"channel": "C12345678", "ts": "1720000000.000100"})[1]
+        self.assertEqual((result["ok"], result["result"]["method"]), (True, "conversations.replies"))
+        self.assertEqual(result["result"]["response"]["messages"][0]["files"][0]["image"], 0)
+        self.assertEqual((result["media"][0]["mime_type"], base64.b64decode(result["media"][0]["payload_base64"])), ("image/png", png))
+        refusals = ((4, "slack.add_reaction", {"channel": "U12345678", "timestamp": "1720000000.000100", "name": "eyes"}, "invalid_arguments"), (5, "slack.remove_user", {}, "unknown_operation"))
+        for seq, operation, arguments, code in refusals:
+            self.assertEqual(self.request(api, seq, operation, arguments)[1]["error"]["code"], code)
+        self.assertIsNone(self.request(api, 6, "slack.post_message", {"text": "x"}, label="slack.operation"))
+        api.failure = SlackWireError("slack_error", "Slack chat.delete refused the request: message_not_found", 200, details={"error_code": "message_not_found"})
+        self.assertEqual(self.request(api, 7, "slack.delete_message", {"channel": "C12345678", "ts": "1720000000.000100"})[1]["error"]["code"], "slack_refused")
+        api.failure = SlackWireError("transport_error", "Slack transport failed")
+        self.assertEqual(self.request(api, 8, "slack.delete_message", {"channel": "C12345678", "ts": "1720000000.000100"})[1]["error"]["code"], "indeterminate_external_effect")
+        self.assertEqual(self.request(api, 9, "slack.read_history", {"channel": "C12345678"})[1]["error"]["code"], "slack_unreachable")
+        api.failure = None
+        self.life.record_request("slack-result-10-" + f"{10:064x}"[:16], {"operation": "slack.delete_message"})
+        self.assertEqual(self.request(api, 10, "slack.delete_message", {"channel": "C12345678", "ts": "1720000000.000100"})[1]["error"]["code"], "indeterminate_external_effect")
 
     def test_tokens_and_members_fail_closed(self):
         with mock.patch.dict(os.environ, {"SLACK_BOT_TOKEN": "", "SLACK_APP_TOKEN": ""}):

@@ -1,0 +1,30 @@
+[package]
+name = "octopus-shell-command"
+edition = "2024"
+version.workspace = true
+license.workspace = true
+rust-version = "1.85"
+
+[lib]
+doctest = false
+
+[dependencies]
+base64 = "0.22.1"
+libc = "0.2.182"
+once_cell = "1.20.2"
+regex = "1.12.3"
+shlex = "1.3.0"
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25"
+url = "2"
+which = "8"
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+octopus-substrate-contract = { path = "../../../../worker_environment_kind/process_session/packages/octopus-substrate-contract" }
+octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
+
+[dev-dependencies]
+anyhow.workspace = true
+pretty_assertions = "1.4.1"

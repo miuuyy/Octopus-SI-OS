@@ -1397,7 +1397,7 @@ impl FrontierAdmission {
                     octopus_runtime::SystemInterfaceEmitter {
                         run: &source_runtime.run,
                         checkpoint: &source_runtime.checkpoint,
-                        epoch: octopus_runtime::GrantEpoch(source_runtime.epoch),
+                        epoch: octopus_run_record::GrantEpoch(source_runtime.epoch),
                     },
                     &InterfaceId::new(DOOR),
                     target,
@@ -2287,7 +2287,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
     let provider_input = InterfaceArtifactFile::write(root.join("provider-initial-input"), "operator.message", br#"{"text":"Use the declared immutable input"}"#).unwrap();
     admission.arrive("world_provider_input_test", &provider_input).await.unwrap();
     let stable = admission.deliveries.lock().unwrap().iter().rev().find(|delivery| delivery.from.as_str() == "world_provider_input_test" && delivery.to.as_str() == "world_provider_test").cloned().unwrap();
-    let pinned = octopus_runtime::run_record::RunRecord::from_bytes(&std::fs::read(admission.run_records.join("run_code_mode_test.json")).unwrap()).unwrap();
+    let pinned = octopus_run_record::RunRecord::from_bytes(&std::fs::read(admission.run_records.join("run_code_mode_test.json")).unwrap()).unwrap();
     let payloads = vec![octopus_interfaces::ArtifactBindingPayload::new(input_ref.clone(), input_bytes.to_vec())];
     assert!(octopus_run_authoring::context_artifact_payloads(&pinned, &stable.metadata, &payloads).unwrap().is_empty());
     let mut changed = payloads.clone(); changed[0].artifact.content = ContentHash::of_bytes(b"different manifest");
@@ -2660,7 +2660,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
     assert_eq!(recovery, octopus_run_authoring::ProviderSourceRecovery::Completed);
     assert!(matches!(replayed.as_slice(), [octopus_run_authoring::ProviderHandoffOutcome::Admitted { artifact, .. }] if *artifact == boundary), "{replayed:?}");
     assert_eq!(admission.door.lock().await.len(), ledger);
-    let retained = octopus_runtime::run_record::RunRecord::from_bytes(&std::fs::read(&run_path).unwrap()).unwrap();
+    let retained = octopus_run_record::RunRecord::from_bytes(&std::fs::read(&run_path).unwrap()).unwrap();
     assert_eq!(octopus_run_authoring::payload_artifact_bindings(&retained, &InterfaceId::new("world_provider_test")).unwrap(), vec![input_ref.clone()]);
     assert!(retained.checkpoints.iter().filter(|cp| retained.active_checkpoints.contains(&cp.id) && cp.inbound_interface() == Some(&InterfaceId::new("world_provider_input_test"))).all(|cp| cp.artifact_bindings.iter().any(|binding| binding.id == input_ref.id && binding.access.read)));
     let wait = envelope(

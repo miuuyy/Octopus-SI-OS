@@ -15,12 +15,14 @@ use octopus_code_mode_engine::{
     normalize_code_mode_identifier,
 };
 use octopus_descriptors::InterfaceId;
-use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope, InvocationMetadata};
+use octopus_interfaces::{InterfaceArtifactFile, InterfaceInvocationEnvelope};
+use octopus_tool_door_runtime::room::{
+    TOOL_CALL_LABEL, decode_tool_call, emit_artifact, formed_scope, strict_object,
+};
 use octopus_tool_door_runtime::{
     DeliveryVerdict, SystemInterfaceEmissionArtifact, ToolProcessEnvironment, ToolProcessError,
     ToolProcessHandler, ToolProcessInvocation, ToolProcessIo, WorkerEnvironmentLifecycleRecorder,
-    WorkerEnvironmentLiveStateRecorder, WorkerEnvironmentReleaseContext,
-    WorkerEnvironmentReleaseMode,
+    WorkerEnvironmentLiveStateRecorder,
 };
 use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact, ToolResultError};
 use octopus_worker_env::{
@@ -38,7 +40,7 @@ use continuation::{ContinuationContext, OriginalRun};
 use config::CodeModeConfig;
 use config::ResolvedContext;
 
-const TOOL_CALL_LABEL: &str = "tool.call";
+const ROOM: &str = "code mode room";
 const SUBSTRATE_FAMILY: &str = "code_mode";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -107,12 +109,6 @@ impl CodeModeRoom {
             worker_environment_kind,
             source_movement_seq,
         } = invocation;
-        if descriptor.interface != self.environment.interface {
-            return Err(ToolProcessError::Capability(format!(
-                "tool descriptor '{}' belongs to interface '{}', not code mode door '{}'",
-                descriptor.id, descriptor.interface, self.environment.interface
-            )));
-        }
         let formation = worker_environment.ok_or_else(|| {
             ToolProcessError::Capability(
                 "code mode invocation has no formed worker environment".to_string(),
@@ -123,7 +119,6 @@ impl CodeModeRoom {
                 "code mode invocation has no formed kind descriptor".to_string(),
             )
         })?;
-        validate_formation(&self.environment, &formation, &kind)?;
         let config = CodeModeConfig::load_formed(&self.environment, &formation, &kind)
             .map_err(ToolProcessError::Capability)?;
         let readiness = envelope
@@ -159,7 +154,7 @@ impl CodeModeRoom {
             )
             .map_err(ToolProcessError::Capability)?
         } else {
-            let call = decode_tool_call(&envelope)?;
+            let call = decode_tool_call(ROOM, &envelope)?;
             if config
                 .continuation
                 .as_ref()
@@ -189,10 +184,7 @@ impl CodeModeRoom {
                 "code mode continuation descriptor does not declare the resume operation".into(),
             ));
         }
-        let metadata = envelope
-            .metadata()
-            .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-        validate_coordinates(metadata, &formation)?;
+        formed_scope(ROOM, &envelope, &formation)?;
         let state = self
             .room_state(
                 &formation,
@@ -352,11 +344,8 @@ impl CodeModeRoom {
                 )));
             }
         }
-        Ok(vec![materialize_artifact(
-            &envelope,
-            &response.label,
-            &bytes,
-        )?])
+        Ok(vec![emit_artifact(&envelope, &response.label, &bytes)
+            .map_err(ToolProcessError::Capability)?])
     }
 
     async fn room_state(
@@ -535,6 +524,14 @@ fn evidence_write_error(stage: &str, error: impl Into<String>) -> Value {
 }
 
 impl ToolProcessHandler for CodeModeRoom {
+    fn substrate_family(&self) -> &str {
+        SUBSTRATE_FAMILY
+    }
+
+    fn releases_cold(&self) -> bool {
+        true
+    }
+
     fn execute<'a>(
         &'a self,
         invocation: ToolProcessInvocation,
@@ -557,17 +554,6 @@ impl ToolProcessHandler for CodeModeRoom {
         })
     }
 
-    fn release_with_context<'a>(
-        &'a self,
-        context: WorkerEnvironmentReleaseContext<'a>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ToolProcessError>> + Send + 'a>> {
-        match context.mode {
-            WorkerEnvironmentReleaseMode::LiveOwner
-            | WorkerEnvironmentReleaseMode::ColdRecovery => {
-                self.release(context.formation, context.kind)
-            }
-        }
-    }
 }
 
 pub async fn run_code_mode_room_tool_process() -> Result<(), String> {
@@ -725,7 +711,7 @@ async fn resume_script(
             continuation.application_input(envelope)?
         {
             if decision {
-                let boundary = materialize_artifact(envelope,"code_mode.application_boundary",&serde_json::to_vec(&json!({"phase":"retire","pending_digest":application.pending_digest,"request_id":application.request.request_id,"worker_environment_id":state.formation.worker_environment_id})).map_err(|e| e.to_string())?).map_err(tool_process_message)?;
+                let boundary = emit_artifact(envelope,"code_mode.application_boundary",&serde_json::to_vec(&json!({"phase":"retire","pending_digest":application.pending_digest,"request_id":application.request.request_id,"worker_environment_id":state.formation.worker_environment_id})).map_err(|e| e.to_string())?)?;
                 match sink.arrive(&boundary).await? {
                     DeliveryVerdict::Admitted { .. } => {}
                     refusal => return Err(format!("application retirement refused: {refusal:?}")),
@@ -741,7 +727,7 @@ async fn resume_script(
             continuation.suspend_application(envelope, source_movement_seq)?
         {
             state.delegate.require_pending(&cell_id, runtime_id)?;
-            let boundary = materialize_artifact(envelope,"code_mode.application_boundary",&serde_json::to_vec(&json!({"phase":"request","pending_digest":application.pending_digest,"request_id":application.request.request_id,"worker_environment_id":state.formation.worker_environment_id})).map_err(|e| e.to_string())?).map_err(tool_process_message)?;
+            let boundary = emit_artifact(envelope,"code_mode.application_boundary",&serde_json::to_vec(&json!({"phase":"request","pending_digest":application.pending_digest,"request_id":application.request.request_id,"worker_environment_id":state.formation.worker_environment_id})).map_err(|e| e.to_string())?)?;
             match sink.arrive(&boundary).await? {
                 DeliveryVerdict::Admitted { .. } => {}
                 refusal => return Err(format!("application request refused: {refusal:?}")),
@@ -753,7 +739,7 @@ async fn resume_script(
             state.delegate.require_pending(&cell_id, runtime_id)?;
             let result: ToolResultArtifact = serde_json::from_slice(&envelope.read_artifact_payload_bounded(config.max_output_bytes as u64).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
             if result.body.as_ref().is_some_and(|body| body.get("generated_artifacts").is_some()) {
-                let boundary = materialize_artifact(envelope,"code_mode.artifact_boundary",&serde_json::to_vec(&json!({"correlation_id":format!("code-mode-artifact:{}:{}",state.formation.worker_environment_id,envelope.artifact.content.to_hex()),"source_artifact":envelope.artifact,"source_movement_seq":source_movement_seq})).map_err(|e|e.to_string())?).map_err(tool_process_message)?;
+                let boundary = emit_artifact(envelope,"code_mode.artifact_boundary",&serde_json::to_vec(&json!({"correlation_id":format!("code-mode-artifact:{}:{}",state.formation.worker_environment_id,envelope.artifact.content.to_hex()),"source_artifact":envelope.artifact,"source_movement_seq":source_movement_seq})).map_err(|e|e.to_string())?)?;
                 match sink.arrive(&boundary).await? {
                     DeliveryVerdict::Admitted { .. } => {}
                     refusal => return Err(format!("generated artifact read binding refused: {refusal:?}")),
@@ -999,14 +985,11 @@ async fn materialize_frontier(
             None
         };
         let artifact = if let Some(pending) = &pending {
-            materialize_artifact(
+            emit_artifact(
                 envelope,
                 TOOL_CALL_LABEL,
                 &serde_json::to_vec(&pending.tool_call()).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| match e {
-                ToolProcessError::Capability(s) | ToolProcessError::Unavailable(s) => s,
-            })?
+            )?
         } else {
             nested_tool_artifact(envelope, &invocation)?
         };
@@ -1190,10 +1173,7 @@ async fn admit_notification(
     if bytes.len() > config.max_output_bytes {
         return Err("code mode notification exceeds its output byte limit".into());
     }
-    let artifact =
-        materialize_artifact(envelope, "code_mode.notification", &bytes).map_err(|e| match e {
-            ToolProcessError::Capability(s) | ToolProcessError::Unavailable(s) => s,
-        })?;
+    let artifact = emit_artifact(envelope, "code_mode.notification", &bytes)?;
     match sink.arrive(&artifact).await? {
         DeliveryVerdict::Admitted { .. } => Ok(()),
         DeliveryVerdict::Refused { reason, detail } => Err(format!(
@@ -1299,12 +1279,6 @@ pub fn decode_code_mode_door_artifact(
         }
     }
     Ok(call)
-}
-
-fn tool_process_message(error: ToolProcessError) -> String {
-    match error {
-        ToolProcessError::Capability(s) | ToolProcessError::Unavailable(s) => s,
-    }
 }
 
 fn require_live_wait(operation: &str, outcome: WaitOutcome) -> Result<RuntimeResponse, String> {
@@ -2106,96 +2080,6 @@ impl EmissionSink for ToolProcessIo {
     ) -> Pin<Box<dyn Future<Output = Result<DeliveryVerdict, String>> + Send + 'a>> {
         Box::pin(async move { self.hand_system_emission(artifact, to_interface).await })
     }
-}
-
-fn validate_formation(
-    environment: &ToolProcessEnvironment,
-    formation: &WorkerEnvironmentFormation,
-    kind: &WorkerEnvKindSpec,
-) -> Result<(), ToolProcessError> {
-    if formation.door_interface != environment.interface {
-        return Err(ToolProcessError::Capability(format!(
-            "code mode formation belongs to door '{}', not '{}'",
-            formation.door_interface, environment.interface
-        )));
-    }
-    if kind.worker_environment_kind_id != formation.worker_environment_kind
-        || kind.substrate_family != SUBSTRATE_FAMILY
-    {
-        return Err(ToolProcessError::Capability(format!(
-            "code mode tool was formed for incompatible worker_environment_kind '{}'",
-            formation.worker_environment_kind
-        )));
-    }
-    Ok(())
-}
-
-fn validate_coordinates(
-    metadata: &InvocationMetadata,
-    formation: &WorkerEnvironmentFormation,
-) -> Result<(), ToolProcessError> {
-    let runtime = metadata.runtime.as_ref().ok_or_else(|| {
-        ToolProcessError::Capability("code mode invocation has no runtime coordinates".to_string())
-    })?;
-    if runtime.run.as_str() != formation.run || runtime.ee.as_str() != formation.ee {
-        return Err(ToolProcessError::Capability(
-            "code mode formation does not match invocation coordinates".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn decode_tool_call(
-    envelope: &InterfaceInvocationEnvelope,
-) -> Result<ToolCallArtifact, ToolProcessError> {
-    let manifest = envelope
-        .read_artifact_manifest()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    if manifest.label != TOOL_CALL_LABEL {
-        return Err(ToolProcessError::Capability(format!(
-            "code mode room expected '{TOOL_CALL_LABEL}', got '{}'",
-            manifest.label
-        )));
-    }
-    let payload = envelope
-        .read_artifact_payload()
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))?;
-    serde_json::from_slice(&payload).map_err(|error| {
-        ToolProcessError::Capability(format!("code mode tool.call is malformed: {error}"))
-    })
-}
-
-fn materialize_artifact(
-    input: &InterfaceInvocationEnvelope,
-    label: &str,
-    bytes: &[u8],
-) -> Result<InterfaceArtifactFile, ToolProcessError> {
-    let parent = input
-        .artifact_file
-        .manifest_path()
-        .parent()
-        .ok_or_else(|| {
-            ToolProcessError::Capability("code mode tool input manifest has no parent".to_string())
-        })?;
-    InterfaceArtifactFile::write(parent.join("emitted"), label, bytes)
-        .map_err(|error| ToolProcessError::Capability(error.to_string()))
-}
-
-fn strict_object<'a>(
-    tool: &str,
-    value: &'a Value,
-    allowed: &[&str],
-) -> Result<&'a Map<String, Value>, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("{tool} arguments must be a JSON object"))?;
-    if let Some(field) = object
-        .keys()
-        .find(|field| !allowed.contains(&field.as_str()))
-    {
-        return Err(format!("{tool} arguments contain unknown field '{field}'"));
-    }
-    Ok(object)
 }
 
 fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, String> {

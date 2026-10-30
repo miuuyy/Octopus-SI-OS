@@ -392,12 +392,12 @@ fn diagnose_run_worker_policies(home: &Path, registry_root: &Path) -> Result<Vec
         if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;
         }
-        let read = || -> Result<octopus_runtime::run_record::RunRecord, String> {
+        let read = || -> Result<octopus_run_record::RunRecord, String> {
             if !entry.file_type().map_err(|error| error.to_string())?.is_file() {
                 return Err("run record must be a regular file".into());
             }
             let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
-            let record = octopus_runtime::run_record::RunRecord::from_bytes(&bytes)
+            let record = octopus_run_record::RunRecord::from_bytes(&bytes)
                 .map_err(|error| error.to_string())?;
             if path.file_stem().and_then(|stem| stem.to_str()) != Some(record.id.as_str()) {
                 return Err("run identity differs from its filename".into());

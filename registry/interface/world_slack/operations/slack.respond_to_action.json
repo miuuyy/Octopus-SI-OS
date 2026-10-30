@@ -1,0 +1,32 @@
+{
+  "id": "slack.respond_to_action",
+  "request_label": "slack.operation.request",
+  "output_label": "slack.operation.result",
+  "handler_config": {
+    "operation": "callback.respond"
+  },
+  "description": "Answer a slash command or interactive action through its response URL. handle is the callback_handle from that slack.event; body is a Slack message payload such as {\"text\": \"Done\", \"response_type\": \"in_channel\"} or {\"replace_original\": true, \"text\": \"Approved\"}.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "handle": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "callback_handle from the slack.event."
+      },
+      "body": {
+        "type": "object"
+      },
+      "team_id": {
+        "type": "string",
+        "pattern": "^T[A-Z0-9]{8,32}$",
+        "description": "Workspace: team_id from the slack.event. Needed only when this interface serves several workspaces."
+      }
+    },
+    "required": [
+      "handle",
+      "body"
+    ],
+    "additionalProperties": false
+  }
+}

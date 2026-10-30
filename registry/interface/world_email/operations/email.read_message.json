@@ -1,0 +1,55 @@
+{
+  "id": "email.read_message",
+  "request_label": "email.operation.request",
+  "output_label": "email.operation.result",
+  "handler_config": {
+    "operation": "message.fetch",
+    "read_only": true
+  },
+  "description": "Read a whole message: headers, body and attachments. Name it by exactly one of ref or message_id. Image attachments arrive as pictures you see with the result; small text attachments carry text_preview, and each attachment's path can be attached to a reply.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "uidvalidity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "uid": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          }
+        },
+        "required": [
+          "mailbox",
+          "uidvalidity",
+          "uid"
+        ],
+        "additionalProperties": false,
+        "description": "message.ref from an email.event or a search result."
+      },
+      "message_id": {
+        "type": "string",
+        "pattern": "^<[^<>\\s]{1,994}>$",
+        "description": "Message-ID such as <id@example.com>, when no ref is at hand."
+      },
+      "mailbox": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "description": "Folder to look in for message_id; INBOX, All Mail, Sent and Archive by default."
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}
