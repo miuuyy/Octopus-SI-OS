@@ -49,7 +49,6 @@ pub enum ProviderEmissionRoute {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderVerifiedInput {
     pub also_deliver_to_tool: Option<String>,
-    pub also_deliver_to_interface: Option<InterfaceId>,
     pub artifact_label: String,
     pub required_verified_artifact: RequiredVerifiedArtifact,
 }

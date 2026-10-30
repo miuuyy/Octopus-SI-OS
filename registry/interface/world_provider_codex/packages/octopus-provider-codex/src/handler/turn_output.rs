@@ -602,7 +602,6 @@ pub(crate) fn provider_route_from_lifecycle(route: LifecycleRoute) -> ProviderEm
                     .into_iter()
                     .map(|input| ProviderVerifiedInput {
                         also_deliver_to_tool: None,
-                        also_deliver_to_interface: None,
                         artifact_label: input.artifact_label,
                         required_verified_artifact: input.required_verified_artifact,
                     })

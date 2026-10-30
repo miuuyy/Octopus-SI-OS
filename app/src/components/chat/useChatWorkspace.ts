@@ -2651,8 +2651,7 @@ export function useChatWorkspace(
     const applicationApproval = message.eventData?.kind === "application";
     const uploadApproval = message.eventData?.kind === "browser_file_upload";
     const historyApproval = message.eventData?.kind === "browser_history_read";
-    const operationApproval = message.eventData?.kind === "interface_operation";
-    const boundToolApproval = applicationApproval || uploadApproval || historyApproval || operationApproval;
+    const boundToolApproval = applicationApproval || uploadApproval || historyApproval;
     const callId = eventString(message.eventData?.call_id);
     if (boundToolApproval && (!callId || response.kind !== "approval")) {
       const detail = "The tool approval has no exact call identity or supported response.";

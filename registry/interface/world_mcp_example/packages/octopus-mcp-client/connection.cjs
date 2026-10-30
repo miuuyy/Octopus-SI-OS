@@ -166,9 +166,8 @@ async function probe(ctx) {
 
 async function publish(ctx, result) {
   if (typeof ctx.publishOperations !== "function") return presented(result);
-  const { published, approvalRequired = [], skipped } = await ctx.publishOperations(result.tools);
+  const { published, skipped } = await ctx.publishOperations(result.tools);
   const parts = [`${published} tool${published === 1 ? " is" : "s are"} available to connected tasks.`];
-  if (approvalRequired.length) parts.push(`${approvalRequired.length} of them wait for your approval before they act.`);
   if (skipped.length) parts.push(`Only through call_tool: ${skipped.join("; ")}`);
   const message = parts.join(" ");
   return { ...presented(result), message: message.length > 300 ? `${message.slice(0, 299)}…` : message };

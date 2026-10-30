@@ -2152,12 +2152,12 @@ fn prepare_definition_edit(
 }
 
 #[tokio::test]
-async fn operation_results_wait_per_call_and_a_gated_answer_rearms_the_same_wait() {
+async fn operation_results_wait_per_call_and_return_only_to_the_calling_task() {
     let mut fixture = CompletedInputReplayFixture::new();
     let h = &mut fixture.handoff;
     h.run_path = h.run_path.canonicalize().unwrap();
     h.ctx.root_slots.insert("run_records_root".into(), h.run_path.parent().unwrap().to_path_buf());
-    h.granted_mark_outcomes.extend(["tool.result.corresponds".to_string(), "operator.approval".to_string()]);
+    h.granted_mark_outcomes.insert("tool.result.corresponds".to_string());
     h.granted_interfaces.insert("world_app".into());
     let names = |label: &str| InterfaceBindingConfig { artifact_policy: BindingArtifactPolicy::Allow { names: vec![label.into()], namespaces: Vec::new() } };
     let output = RunAuthoringCheckpoint {
@@ -2220,48 +2220,19 @@ async fn operation_results_wait_per_call_and_a_gated_answer_rearms_the_same_wait
     let var_dir = fixture.handoff.var_dir.clone();
     let answer = |name: &str, body: serde_json::Value| InterfaceArtifactFile::write(var_dir.join(name), "app.result",
         &serde_json::to_vec(&body).unwrap()).unwrap();
-    let gated = answer("gated", serde_json::json!({"label":"app.result","operation":"app.send","correlation_id":"call-1","ok":true,
-        "result":{"effect_performed":false,"operator_request":{"request_id":"blake3:00"}}}));
-    let envelope = InterfaceInvocationEnvelope { artifact: artifact_identity(&gated, &fixture.handoff.var_dir).unwrap().artifact,
-        artifact_file: gated.clone(), artifact_binding_payloads: vec![octopus_interfaces::ArtifactBindingPayload::new(
-            call.artifact.clone(), call_file.read_payload_bytes().unwrap())], metadata: None };
-    result_inputs::validate_invocation(&envelope, &wait).unwrap();
-    let current = std::fs::read(&fixture.handoff.run_path).unwrap();
-    fixture.edge(&current, &first_generation.id, &gated, "provider".into(), MovementKind::InterfaceOutbound);
-    fixture.handoff.source_movement_seq = fixture.rows.len() as u64 - 1;
-    fixture.handoff.invocation_metadata = fixture.rows.last().unwrap().invocation_metadata.as_ref().unwrap().invocation().unwrap().clone();
-    let request = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("approval"), "operator.approval.request", br#"{"request_id":"blake3:00"}"#).unwrap();
-    let client = fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone();
-    let approval = fixture.handoff.config.verified_input_checkpoints(&ProviderHandoffRoute::ClientProjectionWithVerifiedInputs { inputs: vec![ProviderVerifiedInput {
-        also_deliver_to_tool: None, also_deliver_to_interface: Some("world_app".into()), artifact_label: "operator.approval.response".into(),
-        required_verified_artifact: serde_json::from_value(serde_json::json!({"mark":"operator.approval","artifact_label":"operator.approval.response",
-            "verifier":"operator_approval","params":{"request_id":"blake3:00","call_id":"call-1"}})).unwrap(),
-    }] }, &client, &[], &fixture.handoff.granted_mark_outcomes, &fixture.handoff.granted_tools, &fixture.handoff.granted_interfaces).unwrap();
-    let context = current_context_artifacts(&published, &fixture.handoff.config).unwrap();
-    let rearmed = fixture.handoff.author_run_with_bindings(&current, &context, &[PreparedHandoff {
-        identity: artifact_identity(&request, &fixture.handoff.var_dir).unwrap(), output_checkpoint: client.clone(), verified_inputs: approval,
-    }], false, None, false, true, &[]).unwrap();
-    fixture.install(&rearmed);
-    let waiting = fixture.reload_definition();
-    let second_generation = waiting.checkpoints.iter().find(|cp| checkpoint_record_matches_template(cp, &wait, &waiting.id)).unwrap().clone();
-    assert_eq!((second_generation.epoch.0, &second_generation.artifact_bindings), (0, &first_generation.artifact_bindings));
-    result_inputs::validate_saved(&fixture.handoff.ctx, &published, &waiting, &fixture.handoff.config).unwrap();
-    let mut forged = waiting.clone();
-    forged.checkpoints.iter_mut().find(|cp| cp.id == second_generation.id).unwrap().artifact_bindings.pop();
-    assert!(result_inputs::validate_transition(&published, &forged, &fixture.handoff.config).is_err());
-
     let delivered = answer("delivered", serde_json::json!({"label":"app.result","operation":"app.send","correlation_id":"call-1","ok":true,"result":{"sent":true}}));
     let current = std::fs::read(&fixture.handoff.run_path).unwrap();
-    fixture.edge(&current, &second_generation.id, &delivered, "provider".into(), MovementKind::InterfaceOutbound);
+    fixture.edge(&current, &first_generation.id, &delivered, "provider".into(), MovementKind::InterfaceOutbound);
     fixture.handoff.source_movement_seq = fixture.rows.len() as u64 - 1;
     fixture.handoff.invocation_metadata = fixture.rows.last().unwrap().invocation_metadata.as_ref().unwrap().invocation().unwrap().clone();
     let reply = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("sent"), "reply", br#"{"text":"sent"}"#).unwrap();
-    let context = current_context_artifacts(&waiting, &fixture.handoff.config).unwrap();
+    let client = fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone();
+    let context = current_context_artifacts(&published, &fixture.handoff.config).unwrap();
     let consumed = fixture.handoff.author_run_with_bindings(&current, &context, &[PreparedHandoff {
         identity: artifact_identity(&reply, &fixture.handoff.var_dir).unwrap(), output_checkpoint: client, verified_inputs: Vec::new(),
     }], false, None, false, true, &[]).unwrap();
     fixture.install(&consumed);
     let settled = fixture.reload_definition();
     assert!(!fixture.handoff.config.checkpoints.contains(&wait));
-    result_inputs::validate_saved(&fixture.handoff.ctx, &waiting, &settled, &fixture.handoff.config).unwrap();
+    result_inputs::validate_saved(&fixture.handoff.ctx, &published, &settled, &fixture.handoff.config).unwrap();
 }

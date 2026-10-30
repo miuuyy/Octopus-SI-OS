@@ -178,7 +178,7 @@ fn exercise_peer_verified_input_lifecycle(
         .unwrap()
         .clone();
     let route = ProviderHandoffRoute::ClientProjectionWithVerifiedInputs { inputs: vec![ProviderVerifiedInput {
-        artifact_label:"operator.input.response".into(), also_deliver_to_tool:None, also_deliver_to_interface:None,
+        artifact_label:"operator.input.response".into(), also_deliver_to_tool:None,
         required_verified_artifact:serde_json::from_value(serde_json::json!({"mark":"operator.input.provided","artifact_label":"operator.input.response","verifier":"operator_input","params":{"request_id":"peer-request"}})).unwrap(),
     }] };
     let verified = owner

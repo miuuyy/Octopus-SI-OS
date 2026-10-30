@@ -146,9 +146,7 @@ without a module are connected once their required setup fields are saved. The
 connection check is presentation only: the interface still refuses to work with
 bad credentials, and nothing is recorded in a run or the ledger. For an MCP
 application that declares `server_tool_operations`, Connect also turns each tool
-the server lists into an operation of that application, keeping the server's own
-annotations (`readOnlyHint`, `destructiveHint` and the rest) in the operation.
-Every Connect of an application with operations, and every publication of a
+the server lists into an operation of that application. Every Connect of an application with operations, and every publication of a
 server's tools, rewrites its operation catalog artifact
 (`artifact-operation-catalog-<interface>`) from the whole `operations/` folder.
 Connected tasks bind that catalog, so the model sees each operation as its own
@@ -165,15 +163,6 @@ connected task receives unprompted, such as a connector's incoming messages;
 those start a turn, and nothing else from the interface reaches the task.
 Interfaces that receive such events are never copied privately, so one poller or
 socket serves every task.
-
-A server tool that is not declared read-only — or has no annotations at all —
-waits for your approval before anything reaches the server. The application
-answers the call with an approval request instead of running it; the chat shows
-**Allow once**, **Decline** and **Cancel**. Your answer is checked against that
-exact request, recorded in the task's evidence, and only then does the
-application send the call; a declined call returns `operator_declined` to the
-model. The call's wait stays armed until that final answer arrives. The same
-rule covers the generic call by tool name.
 
 A configured local Home opens after local client unlock and verification by the
 existing setup owner of its complete aggregate receipt, followed by matching

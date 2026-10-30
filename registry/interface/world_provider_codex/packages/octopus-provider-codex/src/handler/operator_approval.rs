@@ -35,26 +35,6 @@ impl CodexAppServerInterfaceDriver {
             control,
             handoff_barrier,
         } = frame;
-        let pending = recovered.as_ref().and_then(|state| state.pending.as_ref());
-        if let Some(request) = OperationOperatorRequest::from_payload(effective_request_bytes)? {
-            request.validate_source(input, pending)?;
-            let output = request.projection(&self.operator_continuity()?);
-            self.retain_operation_operator_wait(scope, sink, control, handoff_barrier, pending, &request.call_id, output)
-                .await?;
-            return Ok(Arrival::Settled);
-        }
-        if let ProviderInput::OperatorResponse(OperatorResponseArtifact::Approval { request_id, .. }) = &*provider_input
-            && recovered.as_ref().is_none_or(|state| state.tool_operator_request.is_none())
-            && let Some(call_id) = operation_decision_call(input, request_id)?
-        {
-            let output = CodexTurnOutput::client(
-                INTERFACE_CONTEXT_UPDATED_LABEL,
-                serde_json::json!({"operator_response_artifact": input.artifact}),
-            );
-            self.retain_operation_operator_wait(scope, sink, control, handoff_barrier, pending, &call_id, output)
-                .await?;
-            return Ok(Arrival::Settled);
-        }
         if let ProviderInput::ToolResult(result) = &*provider_input
             && let Some(request) = ToolOperatorRequest::from_result(result)?
         {

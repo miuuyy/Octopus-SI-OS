@@ -7,7 +7,6 @@ use crate::{
     emit_catalog_as_inbound_artifacts, emit_operation_catalog,
     load_interface_config_from_descriptor, load_operation_catalog, mcp_interface_process,
     McpInterfaceConfig, McpInterfaceProcess, McpOperationCatalog, McpOperationRequest,
-    OPERATOR_APPROVAL_RESPONSE_LABEL,
 };
 
 pub fn catalog_interface_life() -> InterfaceLiftFn {
@@ -150,21 +149,6 @@ async fn serve_remote_operations(
                     continue;
                 }
             };
-            if manifest.label == OPERATOR_APPROVAL_RESPONSE_LABEL {
-                match process.decide(catalog, envelope, &output_root).await {
-                    Ok(artifact) => offer_result(ctx, artifact).await?,
-                    Err(error) => {
-                        ctx.hand_admitted_failure(
-                            own.movement.seq.0,
-                            "operator_decision_refused",
-                            serde_json::json!({"error": error}),
-                        )
-                        .await?;
-                    }
-                };
-                reader.commit_through(&own)?;
-                continue;
-            }
             if manifest.label != catalog.request_label {
                 reader.commit_through(&own)?;
                 continue;

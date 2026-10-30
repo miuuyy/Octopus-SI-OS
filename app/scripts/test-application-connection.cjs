@@ -190,8 +190,8 @@ test("connecting publishes server tools as operations of the declaring interface
   const published = [];
   globalThis.demoConnection.connect = async (ctx) => {
     published.push(await ctx.publishOperations([
-      { name: "search", description: "Search mail", inputSchema: schema, annotations: { readOnlyHint: true, title: "Search", extra: 1 } },
-      { name: "demo.read", title: "Read mail", inputSchema: schema, annotations: { readOnlyHint: "yes", destructiveHint: true } },
+      { name: "search", description: "Search mail", inputSchema: schema },
+      { name: "demo.read", title: "Read mail", inputSchema: schema },
       { name: "call_tool", inputSchema: schema },
       { name: "bad/name", inputSchema: schema },
     ]));
@@ -199,7 +199,6 @@ test("connecting publishes server tools as operations of the declaring interface
   };
   await host.connect({ operationId: operationId(), applicationId: id, interfaceId: id, input: { DEMO_ADDRESS: "me@example.com" } });
   assert.deepEqual(published[0].published, 2);
-  assert.deepEqual(published[0].approvalRequired, ["demo.read"]);
   assert.deepEqual(published[0].skipped, ["call_tool: it would replace an operation of the application", "bad/name: its name cannot be an operation id"]);
   const catalog = path.join(registry, "interface", id, "operations");
   assert.deepEqual(fs.readdirSync(catalog).sort(), ["demo.call_tool.json", "demo.read.json", "demo.search.json"]);
@@ -207,13 +206,12 @@ test("connecting publishes server tools as operations of the declaring interface
     id: "demo.search",
     request_label: "mcp.operation.request",
     output_label: "mcp.tool.result",
-    handler_config: { operation: "call_tool", mcp_tool_name: "search", annotations: { title: "Search", readOnlyHint: true } },
+    handler_config: { operation: "call_tool", mcp_tool_name: "search" },
     description: "Search mail",
     input_schema: schema,
   });
   const read = JSON.parse(fs.readFileSync(path.join(catalog, "demo.read.json"), "utf8"));
   assert.equal(read.description, "Read mail");
-  assert.deepEqual(read.handler_config.annotations, { destructiveHint: true });
   const artifact = JSON.parse(fs.readFileSync(path.join(registry, "artifact", `artifact-operation-catalog-${id}`, "artifact.json"), "utf8"));
   assert.deepEqual(artifact, {
     id: `artifact-operation-catalog-${id}`, label: "mcp.operation_catalog", interface: id, request_label: "mcp.operation.request",

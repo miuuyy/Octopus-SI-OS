@@ -376,12 +376,8 @@ async function published(ctx, inspected) {
     const accounts = linked.map((entry) => `${entry.link_id}${isText(entry.profile_email) ? ` (${entry.profile_email})` : ""}`).join(", ");
     return { ...tool, description: `${isText(tool.description) ? `${tool.description}\n\n` : ""}Linked accounts, by link_id: ${accounts}.` };
   });
-  const { published: count, approvalRequired = [], skipped } = await ctx.publishOperations(tools);
-  const message = [
-    `${count} tool${count === 1 ? " is" : "s are"} available to connected tasks.`,
-    approvalRequired.length ? `${approvalRequired.length} of them wait for your approval before they act.` : "",
-    skipped.length ? `Only through call_tool: ${skipped.join("; ")}` : "",
-  ].filter(Boolean).join(" ");
+  const { published: count, skipped } = await ctx.publishOperations(tools);
+  const message = [`${count} tool${count === 1 ? " is" : "s are"} available to connected tasks.`, skipped.length ? `Only through call_tool: ${skipped.join("; ")}` : ""].filter(Boolean).join(" ");
   return finish({ ...inspected.state, message });
 }
 

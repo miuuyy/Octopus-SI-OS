@@ -16,7 +16,6 @@ const SERVER_TOOL_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 const SERVER_TOOL_LIMIT = 512;
 const SERVER_TOOL_SCHEMA_BYTES = 64 * 1024;
 const SERVER_TOOL_DESCRIPTION_CHARS = 4096;
-const SERVER_TOOL_HINTS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"];
 
 class ApplicationConnectionStopped extends Error {
   constructor(message, code) {
@@ -301,16 +300,6 @@ function serverToolDescription(tool) {
   return text.length > SERVER_TOOL_DESCRIPTION_CHARS ? `${text.slice(0, SERVER_TOOL_DESCRIPTION_CHARS - 1)}…` : text;
 }
 
-function serverToolAnnotations(tool) {
-  const source = isPlainRecord(tool?.annotations) ? tool.annotations : {};
-  const annotations = {};
-  if (typeof source.title === "string" && source.title.trim()) annotations.title = source.title.trim().slice(0, 256);
-  for (const hint of SERVER_TOOL_HINTS) {
-    if (typeof source[hint] === "boolean") annotations[hint] = source[hint];
-  }
-  return Object.keys(annotations).length ? annotations : null;
-}
-
 function generatedServerTool(document) {
   return document?.handler_config?.operation === "call_tool" && typeof document.handler_config.mcp_tool_name === "string";
 }
@@ -328,7 +317,6 @@ async function writeServerToolOperations(target, tools) {
     (generatedServerTool(document) ? generated : authored).add(entry.name);
   }
   const skipped = [];
-  const approvalRequired = [];
   const files = new Map();
   for (const tool of tools) {
     const name = typeof tool?.name === "string" ? tool.name : "";
@@ -345,16 +333,14 @@ async function writeServerToolOperations(target, tools) {
       skipped.push(`${name || "(unnamed)"}: ${reason}`);
       continue;
     }
-    const annotations = serverToolAnnotations(tool);
     files.set(`${id}.json`, `${JSON.stringify({
       id,
       request_label: target.requestLabel,
       output_label: "mcp.tool.result",
-      handler_config: { operation: "call_tool", mcp_tool_name: name, ...(annotations ? { annotations } : {}) },
+      handler_config: { operation: "call_tool", mcp_tool_name: name },
       description: serverToolDescription(tool),
       input_schema: tool.inputSchema,
     }, null, 2)}\n`);
-    if (annotations?.readOnlyHint !== true) approvalRequired.push(id);
   }
   for (const [file, content] of files) {
     const destination = path.join(target.root, file);
@@ -365,7 +351,7 @@ async function writeServerToolOperations(target, tools) {
   for (const file of generated) {
     if (!files.has(file)) await fs.rm(path.join(target.root, file));
   }
-  return { published: files.size, approvalRequired, skipped };
+  return { published: files.size, skipped };
 }
 
 function connectionContext({ descriptor, interfaceId, values, input, privateDirectory, signal, progress, saveValues, launchEnvironment, openExternal, publishOperations = null }) {

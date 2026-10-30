@@ -201,7 +201,6 @@ impl OperatorContinuityConfig {
             .into_iter()
             .map(|edge| ProviderVerifiedInput {
                 also_deliver_to_tool: None,
-                also_deliver_to_interface: None,
                 artifact_label: self.approval.response_label.clone(),
                 required_verified_artifact: edge
                     .required(&self.approval.response_label, request_id),
@@ -216,7 +215,6 @@ impl OperatorContinuityConfig {
     ) -> Vec<ProviderVerifiedInput> {
         vec![ProviderVerifiedInput {
             also_deliver_to_tool: None,
-            also_deliver_to_interface: None,
             artifact_label: continuity.response_label.clone(),
             required_verified_artifact: continuity
                 .provided
