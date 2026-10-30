@@ -93,7 +93,7 @@ export function HomeSurface({
         initial={false}
         transition={transition}
       >
-        <VoiceView accessProfile={accessProfile} activity={homeActivity} builtinWidgetSources={builtinVoiceWidgetSources} commandsActive={commandsActive && homeViewMode === "voice"} homeRunId={homeRunId} installedWidgetIds={installedVoiceWidgetIds} installedWidgetsReady={installedVoiceWidgetsReady} onViewModeChange={onHomeViewModeChange} onWidgetsOpenChange={setWidgetsOpen} session={voiceSession} surfaces={voiceSurfaces} topology={topology} workerEnvironmentSurfaces={workerEnvironmentSurfaces} widgetsOpen={widgetsOpen} workspace={chatWorkspace} viewMode="voice" />
+        <VoiceView accessProfile={accessProfile} activity={homeActivity} builtinWidgetSources={builtinVoiceWidgetSources} commandsActive={commandsActive && homeViewMode === "voice"} homeRunId={homeRunId} installedWidgetIds={installedVoiceWidgetIds} installedWidgetsReady={installedVoiceWidgetsReady} onViewModeChange={onHomeViewModeChange} onWidgetsOpenChange={setWidgetsOpen} session={voiceSession} surfaces={voiceSurfaces} topology={topology} widgetsOpen={widgetsOpen} workspace={chatWorkspace} viewMode="voice" />
       </motion.div>
       <div aria-hidden={!activityOpen} className="home-view-transition__surface" inert={!activityOpen}>
         <WorkspacePaneHeaderActionsProvider host={activityOpen ? swapActionHost : null}>

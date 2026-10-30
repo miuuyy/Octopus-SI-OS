@@ -34,7 +34,6 @@ export type InsightsWidget = {
 
 export function buildVoiceWidgetDocuments(input: {
   context: VoiceWidgetItem[];
-  environmentAvailable: boolean;
   goals: VoiceWidgetItem[];
   insights: InsightsWidget;
   memory: VoiceWidgetItem[];
@@ -48,7 +47,7 @@ export function buildVoiceWidgetDocuments(input: {
       schema_version: 1,
       release_channel: "lab",
       id: "builtin.voice.live-context",
-      revision: 4,
+      revision: 5,
       title: "Live context",
       glyph: "layers",
       target: {
@@ -72,13 +71,12 @@ export function buildVoiceWidgetDocuments(input: {
           type: "stack",
           gap: "md",
           children: [
-            ...input.context.slice(0, 5).map((item): ClientSurfaceNode => ({
+            ...input.context.map((item): ClientSurfaceNode => ({
               type: "key_value",
               label: item.label,
               tone: item.tone,
               value: item.detail || "—",
             })),
-            footer("View context", "voice.open-detail", "context"),
           ],
         },
       },
@@ -227,7 +225,7 @@ export function buildVoiceWidgetDocuments(input: {
       schema_version: 1,
       release_channel: "lab",
       id: "builtin.voice.active-tools",
-      revision: 5,
+      revision: 6,
       title: "Active tools",
       glyph: "plugins",
       target: {
@@ -251,15 +249,12 @@ export function buildVoiceWidgetDocuments(input: {
           type: "stack",
           gap: "none",
           children: [
-            ...input.tools.slice(0, 4).map((item): ClientSurfaceNode => ({
+            ...input.tools.map((item): ClientSurfaceNode => ({
               type: "key_value",
               label: item.state || "Ready",
               tone: item.tone,
               value: item.label,
             })),
-            input.environmentAvailable
-              ? footer("Open environment", "voice.open-environment", "environment")
-              : footer("Manage tools", "voice.open-detail", "tools"),
           ],
         },
       },
@@ -269,7 +264,7 @@ export function buildVoiceWidgetDocuments(input: {
       schema_version: 1,
       release_channel: "lab",
       id: "builtin.voice.current-goals",
-      revision: 4,
+      revision: 5,
       title: "Current goals",
       glyph: "target",
       target: {
@@ -293,13 +288,12 @@ export function buildVoiceWidgetDocuments(input: {
           type: "stack",
           gap: "xs",
           children: [
-            ...input.goals.slice(0, 3).map((item, index): ClientSurfaceNode => ({
+            ...input.goals.map((item, index): ClientSurfaceNode => ({
               type: "key_value",
               label: `Goal ${index + 1}`,
               tone: item.tone,
               value: item.label,
             })),
-            footer("View goals", "voice.open-detail", "goals"),
           ],
         },
       },
@@ -309,7 +303,7 @@ export function buildVoiceWidgetDocuments(input: {
       schema_version: 1,
       release_channel: "lab",
       id: "builtin.voice.memory",
-      revision: 5,
+      revision: 6,
       title: "Memory",
       glyph: "memory",
       target: {
@@ -336,22 +330,17 @@ export function buildVoiceWidgetDocuments(input: {
             { type: "key_value", label: "Files", value: { path: "sources.vault.files", fallback: memorySummary(input.memory), format: "number" } },
             { type: "key_value", label: "Recent", value: { path: "sources.vault.entries.0.path", fallback: input.memory[0]?.label || "Nothing available" } },
             { type: "key_value", label: "Source", value: { path: "sources.vault.name", fallback: input.memory.length ? "Bound artifacts" : "Not configured" } },
-            footer("View memory", "voice.open-detail", "memory"),
+            ...input.memory.slice(1).map((item): ClientSurfaceNode => ({
+              type: "key_value",
+              label: item.state || "Artifact",
+              tone: item.tone,
+              value: item.label,
+            })),
           ],
         },
       },
     }),
   ];
-}
-
-function footer(label: string, event: string, panel: string): ClientSurfaceNode {
-  return {
-    type: "button",
-    label,
-    glyph: "chevronDown",
-    variant: "footer",
-    action: { event, payload: { panel } },
-  };
 }
 
 function compileWidget(document: ClientSurfaceDocument): AdmittedClientSurfaceDocument {

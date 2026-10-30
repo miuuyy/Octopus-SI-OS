@@ -12,7 +12,7 @@ if (!fs.existsSync(source)) {
 if (!fs.existsSync(model)) {
   throw new Error("bundled hand_landmarker.task is missing");
 }
-const loadedFileset = ["vision_wasm_internal.js", "vision_wasm_internal.wasm"];
+const loadedFileset = ["vision_wasm_module_internal.js", "vision_wasm_module_internal.wasm"];
 for (const name of loadedFileset) {
   if (!fs.statSync(path.join(source, name), { throwIfNoEntry: false })?.isFile()) {
     throw new Error(`@mediapipe/tasks-vision no longer ships ${name}`);

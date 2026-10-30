@@ -1,7 +1,7 @@
 {
   "name": "@mediapipe/tasks-vision",
-  "version": "0.10.35",
-  "description": "MediaPipe Vision Tasks",
+  "version": "1.2.0",
+  "description": "MediaPipe Vision Tasks. See the privacy notice at https://goo.gle/mediapipe-privacy.",
   "main": "vision_bundle.cjs",
   "browser": "vision_bundle.mjs",
   "module": "vision_bundle.mjs",
@@ -12,6 +12,7 @@
       "default": "./vision_bundle.mjs",
       "types": "./vision.d.ts"
     },
+    "./vision_bundle.js": "./vision_bundle.js",
     "./vision_wasm_internal.js": "./wasm/vision_wasm_internal.js",
     "./vision_wasm_internal.wasm": "./wasm/vision_wasm_internal.wasm",
     "./vision_wasm_nosimd_internal.js": "./wasm/vision_wasm_nosimd_internal.js",

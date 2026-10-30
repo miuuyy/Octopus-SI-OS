@@ -7,7 +7,7 @@ export type GestureGuideEntry = Readonly<{ title: string; sentence: string; art:
 export const GESTURE_GUIDE: Readonly<Record<GestureGuideId, GestureGuideEntry>> = {
   point: {
     title: "Point and move",
-    sentence: "Point with your index finger. Where your hand is in the camera view is where focus goes; the edges of the view are the edges of the window.",
+    sentence: "Point with your index finger. Where your hand is in the camera view is where focus goes; a comfortable area around your hand covers the whole window.",
     art: "point",
   },
   pinch: {

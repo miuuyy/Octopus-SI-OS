@@ -74,15 +74,23 @@ const SIDE_MISMATCH_COST = 0.06;
 const SIDE_VOTE_RATE = 0.2;
 const SIDE_FLIP_LOW = 0.3;
 const SIDE_FLIP_HIGH = 0.7;
-const POSE_CONFIRM_FRAMES = 2;
+const POSE_WINDOW = 5;
+const POSE_VOTES = 3;
 const PINCH_CONFIRM_FRAMES = 2;
 const PINCH_ENTER_RATIO = 0.38;
-const PINCH_FIRM_RATIO = 0.24;
 const PINCH_RELEASE_RATIO = 0.55;
+const PINCH_REFRACTORY_MS = 250;
 const PINCH_MIN_INDEX_REACH = 1.05;
 const POINT_GRACE_MS = 220;
 const POINT_SETTLE_MS = 150;
-const POINT_MARGIN = 0.1;
+const AIM_SIDE_SHIFT = 0.05;
+const AIM_CENTER_Y = 0.47;
+const AIM_EDGE = 0.001;
+const AIM_SIZE: Readonly<Record<GestureSensitivity, Readonly<{ width: number; height: number }>>> = {
+  responsive: { width: 0.54, height: 0.56 },
+  balanced: { width: 0.62, height: 0.64 },
+  deliberate: { width: 0.72, height: 0.74 },
+};
 const DRAG_START_HANDS = 0.6;
 const DRAG_START_MIN = 0.045;
 const DRAG_START_MAX = 0.11;
@@ -121,7 +129,7 @@ export class AirHandGestureEngine {
     const hands = Number.isFinite(options.aspect) && options.aspect > 0
       ? observations.map((observation) => parseObservation(observation, options)).filter((hand): hand is ParsedHand => hand != null)
       : [];
-    const matched = this.associate(hands, now, options.aspect, interactions);
+    const matched = this.associate(hands, now, options, interactions);
     for (const track of this.tracks) {
       if (!matched.has(track)) this.miss(track, now, options, commands);
     }
@@ -141,14 +149,14 @@ export class AirHandGestureEngine {
     };
   }
 
-  private associate(hands: ParsedHand[], now: number, aspect: number, interactions: GestureInteraction[]): Set<HandTrack> {
+  private associate(hands: ParsedHand[], now: number, options: AirHandOptions, interactions: GestureInteraction[]): Set<HandTrack> {
     const matched = new Set<HandTrack>();
     const used = new Set<number>();
-    for (const [trackIndex, handIndex] of bestAssignment(this.tracks, hands, aspect)) {
+    for (const [trackIndex, handIndex] of bestAssignment(this.tracks, hands, options.aspect)) {
       const track = this.tracks[trackIndex];
       const hand = hands[handIndex];
       if (!track || !hand) continue;
-      track.observe(hand, now, aspect);
+      track.observe(hand, now, options);
       matched.add(track);
       used.add(handIndex);
     }
@@ -161,7 +169,7 @@ export class AirHandGestureEngine {
       }
       const track = new HandTrack(this.nextId, hand, now);
       this.nextId += 1;
-      track.observe(hand, now, aspect);
+      track.observe(hand, now, options);
       this.tracks.push(track);
       matched.add(track);
     });
@@ -224,7 +232,7 @@ export class AirHandGestureEngine {
     const hand = track.current;
     const pointing = track.pose === "point";
     const pointHeld = pointing || (track.pose === "none" && now < track.pointUntil);
-    const swipeEligible = idle && (track.pose === "open" || track.pose === "two" || (track.pose === "none" && !pointHeld));
+    const swipeEligible = idle && (track.pose === "open" || track.pose === "two");
     const threshold = Math.min(swipeThreshold(options.sensitivity), Math.max(SWIPE_MIN_TRAVEL, hand.palmWidth * SWIPE_HAND_WIDTHS));
     const swiped = swipeCommand(track.swipe.update(hand.screen, now, swipeEligible, threshold, swipeSpeed(options.sensitivity)));
     if (swiped) commands.push(swiped);
@@ -235,7 +243,7 @@ export class AirHandGestureEngine {
         this.pointerBegun = true;
         track.aimSent = track.aim;
         interactions.push({ type: "point", side: track.side, phase: "begin", x: track.aim.x, y: track.aim.y });
-      } else if (pointing && this.pointerBegun && (track.aim.x !== track.aimSent.x || track.aim.y !== track.aimSent.y)) {
+      } else if (this.pointerBegun && (onEdge(track.aim) || track.aim.x !== track.aimSent.x || track.aim.y !== track.aimSent.y)) {
         track.aimSent = track.aim;
         interactions.push({ type: "point", side: track.side, phase: "move", x: track.aim.x, y: track.aim.y });
       }
@@ -379,10 +387,10 @@ class HandTrack {
   private seen = 0;
   private pinched = false;
   private pinchFrames = 0;
-  private candidate: HandPose = "none";
-  private candidateFrames = 0;
+  private releasedAt = Number.NEGATIVE_INFINITY;
+  private votes: HandPose[] = [];
   private stabilizer = new PointStabilizer(2.2, 1.2, 0.14, 0.11);
-  private aimFilter = new PointStabilizer(1.0, 6.0, 0.2, 0.15);
+  private aimFilter = new PointStabilizer(0.8, 25, 0.2, 0.15);
   private history: { at: number; x: number; y: number }[] = [];
 
   constructor(id: number, hand: ParsedHand, now: number) {
@@ -393,11 +401,11 @@ class HandTrack {
     this.lastSeen = now;
     this.stable = hand.screen;
     this.scale = hand.scale;
-    this.aim = aimPoint(hand.screen);
+    this.aim = { x: 0.5, y: 0.5 };
     this.aimSent = this.aim;
   }
 
-  observe(hand: ParsedHand, now: number, aspect: number): void {
+  observe(hand: ParsedHand, now: number, options: AirHandOptions): void {
     this.current = hand;
     this.lastSeen = now;
     this.coasting = false;
@@ -410,11 +418,11 @@ class HandTrack {
     }
     this.scale += (hand.scale - this.scale) * HAND_SCALE_RATE;
     this.stable = this.stabilizer.update(hand.screen, now);
-    this.aim = this.aimFilter.update(aimPoint(hand.screen), now);
-    this.history.push({ at: now, x: hand.screen.x * aspect, y: hand.screen.y });
+    this.aim = this.aimFilter.update(aimPoint(hand.screen, this.side, options), now);
+    this.history.push({ at: now, x: hand.screen.x * options.aspect, y: hand.screen.y });
     while (this.history.length > 2 && now - (this.history[0]?.at ?? now) > HISTORY_MS) this.history.shift();
     const wasPointing = this.pose === "point";
-    this.updatePose(hand);
+    this.updatePose(hand, now);
     if (this.pose !== "point") return;
     if (!wasPointing) this.pointSince = now;
     this.pointUntil = now + POINT_GRACE_MS;
@@ -459,28 +467,26 @@ class HandTrack {
     };
   }
 
-  private updatePose(hand: ParsedHand): void {
+  private updatePose(hand: ParsedHand, now: number): void {
     const reaching = hand.indexReach >= PINCH_MIN_INDEX_REACH;
-    const closing = reaching && hand.pinchRatio < PINCH_ENTER_RATIO;
+    const closing = reaching && hand.pinchRatio < PINCH_ENTER_RATIO && now - this.releasedAt >= PINCH_REFRACTORY_MS;
     const opening = !reaching || hand.pinchRatio > PINCH_RELEASE_RATIO;
     this.pinchFrames = (this.pinched ? opening : closing) ? this.pinchFrames + 1 : 0;
-    const firm = !this.pinched && reaching && hand.pinchRatio < PINCH_FIRM_RATIO;
-    if (firm || this.pinchFrames >= PINCH_CONFIRM_FRAMES) {
+    if (this.pinchFrames >= PINCH_CONFIRM_FRAMES) {
       this.pinched = !this.pinched;
       this.pinchFrames = 0;
+      if (!this.pinched) this.releasedAt = now;
     }
-    const shape = this.pinched ? "pinch" : classifyShape(hand.curls, this.pose);
-    if (shape === "pinch" || this.pose === "pinch" || shape === this.pose) {
-      this.pose = shape;
-      this.candidate = shape;
-      this.candidateFrames = 0;
+    if (this.pinched) {
+      this.pose = "pinch";
+      this.votes = [];
       return;
     }
-    this.candidateFrames = shape === this.candidate ? this.candidateFrames + 1 : 1;
-    this.candidate = shape;
-    if (this.candidateFrames < POSE_CONFIRM_FRAMES) return;
-    this.pose = shape;
-    this.candidateFrames = 0;
+    const shape = classifyShape(hand.curls, this.pose);
+    this.votes.push(shape);
+    if (this.votes.length > POSE_WINDOW) this.votes.shift();
+    if (this.pose === "pinch") this.pose = shape;
+    else if (shape !== this.pose && this.votes.filter((vote) => vote === shape).length >= POSE_VOTES) this.pose = shape;
   }
 }
 
@@ -524,18 +530,15 @@ function parseObservation(observation: HandObservation, options: AirHandOptions)
   const control = handControlPoint(image);
   const shape = handShape(world);
   if (!shape) return null;
-  const thumbTip = image[4];
-  const indexTip = image[8];
   const wrist = image[0];
   const middleMcp = image[9];
   const indexMcp = image[5];
   const littleMcp = image[17];
-  if (!wrist || !middleMcp || !indexMcp || !littleMcp || !thumbTip || !indexTip) return null;
+  if (!wrist || !middleMcp || !indexMcp || !littleMcp) return null;
   const aspect = options.aspect;
   const length = Math.hypot((wrist.x - middleMcp.x) * aspect, wrist.y - middleMcp.y);
   const width = Math.hypot((indexMcp.x - littleMcp.x) * aspect, indexMcp.y - littleMcp.y);
   const scale = Math.max(length, width * 1.15, 0.02);
-  const imageRatio = Math.hypot((thumbTip.x - indexTip.x) * aspect, thumbTip.y - indexTip.y) / scale;
   return {
     image,
     observedSide: observedSide(observation.label, options.mirrorX),
@@ -544,7 +547,7 @@ function parseObservation(observation: HandObservation, options: AirHandOptions)
     scale,
     palmWidth: Math.max(distance(indexMcp, littleMcp), 0.04),
     curls: shape.curls,
-    pinchRatio: Math.min(shape.pinchRatio, imageRatio),
+    pinchRatio: shape.pinchRatio,
     indexReach: shape.indexReach,
   };
 }
@@ -815,11 +818,17 @@ function handControlPoint(landmarks: readonly HandLandmark[]): Point {
   };
 }
 
-function aimPoint(screen: Point): Point {
+function aimPoint(screen: Point, side: HandSide, options: AirHandOptions): Point {
+  const size = AIM_SIZE[options.sensitivity];
+  const center = 0.5 + ((side === "right") === options.mirrorX ? AIM_SIDE_SHIFT : -AIM_SIDE_SHIFT);
   return {
-    x: clamp((screen.x - POINT_MARGIN) / (1 - POINT_MARGIN * 2)),
-    y: clamp((screen.y - POINT_MARGIN) / (1 - POINT_MARGIN * 2)),
+    x: clamp((screen.x - center) / size.width + 0.5),
+    y: clamp((screen.y - AIM_CENTER_Y) / size.height + 0.5),
   };
+}
+
+function onEdge(aim: Point): boolean {
+  return aim.x <= AIM_EDGE || aim.x >= 1 - AIM_EDGE || aim.y <= AIM_EDGE || aim.y >= 1 - AIM_EDGE;
 }
 
 function holdDuration(sensitivity: GestureSensitivity): number {

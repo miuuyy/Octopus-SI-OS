@@ -73,7 +73,9 @@ const CARRY_GAIN = 1.6;
 const MIN_TARGET_SIZE = 6;
 const SCROLL_FRACTION = 0.6;
 const DIRECTION_WORDS: Record<NavigationDirection, string> = { left: "left", right: "right", up: "above", down: "below" };
-const AIM_OPTIONS: AimOptions = { dwellMs: 90, marginMin: 6, marginMax: 18, marginFraction: 0.3 };
+const AIM_OPTIONS: AimOptions = { dwellMs: 110, marginMin: 8, marginMax: 24, marginFraction: 0.35 };
+const PRESS_LOOKBACK_MS = 180;
+const FOCUS_LOG_MS = 2_000;
 const TARGET_TTL_MS = 250;
 const EDGE_SCROLL_MS = 450;
 const EDGE_LIMIT = 0.001;
@@ -113,6 +115,7 @@ class GestureFocusController {
   private targets: { at: number; entered: HTMLElement | null; list: Target[] } | null = null;
   private edge: { direction: NavigationDirection; scrolledAt: number } | null = null;
   private lastCenter: { x: number; y: number } | null = null;
+  private focusLog: { element: HTMLElement; at: number }[] = [];
   private idleTimer = 0;
   private timers = new Set<number>();
   private disposers: Array<() => void> = [];
@@ -249,7 +252,7 @@ class GestureFocusController {
   }
 
   private press(): void {
-    const element = this.current();
+    const element = this.settledFocus();
     if (!element) {
       this.record("Pinch", "Nothing focused");
       return;
@@ -392,6 +395,15 @@ class GestureFocusController {
     return commandScope().contains(element) ? element : null;
   }
 
+  private settledFocus(): HTMLElement | null {
+    const current = this.current();
+    const before = performance.now() - PRESS_LOOKBACK_MS;
+    const settled = [...this.focusLog].reverse().find((entry) => entry.at <= before)?.element;
+    if (!current || !settled || settled === current || !settled.isConnected || settled.closest(BLOCKED_SELECTOR) || !commandScope().contains(settled)) return current;
+    this.focus(settled, null, false);
+    return settled;
+  }
+
   private initialTarget(targets: Target[]): HTMLElement | null {
     const active = document.activeElement;
     const focused = targets.find((target) => target.element === active);
@@ -406,6 +418,8 @@ class GestureFocusController {
     }
     element.setAttribute(FOCUS_ATTR, "true");
     if (revealTarget) reveal(element);
+    const now = performance.now();
+    this.focusLog = [...this.focusLog.filter((entry) => now - entry.at < FOCUS_LOG_MS), { element, at: now }];
     const rect = element.getBoundingClientRect();
     this.lastCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     setView({
@@ -429,6 +443,7 @@ class GestureFocusController {
     this.aim = IDLE_AIM;
     this.aimCandidate = null;
     this.edge = null;
+    this.focusLog = [];
     for (const element of Array.from(document.querySelectorAll(`[${FOCUS_ATTR}]`))) element.removeAttribute(FOCUS_ATTR);
     if (view.element || view.hint || view.bump) setView({ element: null, state: "focus", hint: "", target: "", bump: null });
   }

@@ -228,7 +228,7 @@ export function GestureManager({ accessProfile }: { accessProfile: OctopusClient
                 value={preferences.sensitivity}
               />
             )}
-            description="Controls how far the hand travels per focus step, how long a fist is held, and the distance required for a swipe."
+            description="Controls how far the hand travels across the window, how long a fist is held, and the distance required for a swipe."
             label="Response"
           />
           <OcSettingsRow

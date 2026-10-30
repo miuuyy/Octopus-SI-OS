@@ -332,8 +332,10 @@ To understand updates and local JSON changes, read
 
 **Settings → Gestures** turns the camera into a second way to drive the
 client. It includes camera selection, command mappings, custom pose recording,
-and a live preview. Camera access is required. Treat these controls as
-experimental, particularly across different cameras and lighting.
+and a live preview. Camera access is required. Hand tracking runs on the GPU in
+a background worker, off the thread that draws the client; if the GPU cannot
+start it, Settings shows that error instead of tracking on the CPU. Treat these
+controls as experimental, particularly across different cameras and lighting.
 
 Every gesture in Settings has a small looping illustration of the hand, a plain
 description, and its current command or effect.
@@ -343,7 +345,7 @@ targets — buttons, fields, tabs, list rows, and Home widgets:
 
 | Gesture | Effect |
 |---------|--------|
-| **Point** (index finger out) | Where the hand is in the camera view picks the target. The inner 80% of the view spans the whole window, so a hand in the outer 10% on any side reaches that edge of the window. Focus goes to the target nearest that point. Holding the hand past an edge scrolls the list under focus. |
+| **Point** (index finger out) | Where the hand is picks the target. An inner region of the camera view spans the whole window — about 62% of its width and 64% of its height at Balanced response, smaller at Responsive and larger at Deliberate — so each window edge is reached with the hand still well inside the frame. Each hand's region is shifted a little toward its own side, so a right hand reaches the left sidebar without crossing the body. Focus goes to the target nearest that point. Holding the hand past an edge scrolls the list under focus. |
 | **Pinch** (thumb to index, then release) | The ring fills while pinched; releasing selects the focused target. On a Home widget it opens the widget's own controls, and on a field it places the text cursor there. |
 | **Pinch and move** | Carries the focused Home widget; releasing drops it. |
 | **Throw** | Releasing a carried widget mid-motion hides it. |
@@ -352,19 +354,27 @@ targets — buttons, fields, tabs, list rows, and Home widgets:
 | **Fist hold** | Runs a mapped client command, none by default. |
 
 Both hands are tracked at once, and each keeps its side as it moves or briefly
-leaves the frame. The pointing position is smoothed by an adaptive filter, and
-focus moves only to a target that is clearly closer and stays closer for a
-moment, so tremor near a border does not flip it. Pointing starts a moment
-after the pose settles, and a hand that blurs or leaves keeps the last target
-instead of teleporting focus. Focus stays inside an open dialog or menu. A
-pinch is judged by how close the thumb and index fingertips are relative to the
-size of the hand, with separate thresholds for closing and opening, and it does
-not depend on what the other fingers do. A small wobble while pinching still
-selects, and a pinch on a control that cannot move always selects when
-released. A pinch survives a few blurred or dropped frames, and a hand that
-leaves the camera mid-pinch cancels instead of selecting. A swipe is
-judged by speed and straightness, so a frame lost to motion blur still counts
-and the hand returning is not read as a swipe the other way. **Spatial widget
+leaves the frame. The pointing position is smoothed by an adaptive filter that
+stays still at rest and keeps up with a moving hand, and focus moves only to a
+target that is clearly closer and stays closer for a moment, so tremor near a
+border does not flip it. A pose is read by a vote over the last few frames, so
+a frame or two misread mid-gesture does not interrupt pointing. Pointing starts
+a moment after the pose settles, and a hand that blurs or leaves keeps the last
+target instead of teleporting focus. Focus stays inside an open dialog or menu.
+A pinch is judged by the 3D distance between the thumb and index fingertips
+relative to the size of the hand, with separate thresholds for closing and
+opening, so a finger pointed toward the camera, whose tip only appears to touch
+the thumb, is not a pinch. It does not depend on what the other fingers do.
+Releasing selects the target that had focus just before the fingers started to
+close, so the motion of pinching does not move the selection, and a new pinch is
+ignored for a quarter of a second after a release, so one wobbly pinch never
+selects several times. A small wobble while pinching still selects, and a pinch
+on a control that cannot move always selects when released. A pinch survives a
+few blurred or dropped frames, and a hand that leaves the camera mid-pinch
+cancels instead of selecting. A swipe needs an open hand or two fingers and is
+judged by speed and straightness, so a frame lost to motion blur still counts,
+the hand returning is not read as a swipe the other way, and a hand turning
+through an unclear pose never swipes. **Spatial widget
 control** turns carrying, resizing, and throwing on or off; focus and selection
 work without it.
 

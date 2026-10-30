@@ -159,7 +159,7 @@ test("stopping Home keeps the activity layout and scroll position while showing 
   }
 });
 
-const widgetInput = { context: [], environmentAvailable: false, goals: [], memory: [], scheduled: [], tools: [],
+const widgetInput = { context: [], goals: [], memory: [], scheduled: [], tools: [],
   insights: { change: "+1%", changeDetail: "vs last week", label: "Leads", series: [1, 2], value: "12" },
   taskProgress: { completion: 50, failed: 0, running: 1, scheduled: 0, unseenDone: 0, waiting: 0 } };
 

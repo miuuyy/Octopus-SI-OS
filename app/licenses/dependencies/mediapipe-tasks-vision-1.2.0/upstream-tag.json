@@ -1,0 +1,10 @@
+{
+  "ref": "refs/tags/v1.2.0",
+  "node_id": "MDM6UmVmMTkxODIwMTAwOnJlZnMvdGFncy92MS4yLjA=",
+  "url": "https://api.github.com/repos/google-ai-edge/mediapipe/git/refs/tags/v1.2.0",
+  "object": {
+    "sha": "f329091f2f20a9143209897d7081e629421b9c9a",
+    "type": "commit",
+    "url": "https://api.github.com/repos/google-ai-edge/mediapipe/git/commits/f329091f2f20a9143209897d7081e629421b9c9a"
+  }
+}

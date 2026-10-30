@@ -6,56 +6,56 @@
   "entries": [
     {
       "name": "@mediapipe/tasks-vision",
-      "version": "0.10.35",
-      "package": "@mediapipe/tasks-vision@0.10.35",
+      "version": "1.2.0",
+      "package": "@mediapipe/tasks-vision@1.2.0",
       "declared_license": "Apache-2.0",
       "status": "notice-recovered",
       "npm_release": {
-        "upstream_url": "https://registry.npmjs.org/@mediapipe%2ftasks-vision/0.10.35",
-        "tarball_url": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-0.10.35.tgz",
-        "tarball_sha256": "84597a25e13d123b5f4cbe768bb72e97a2c28c7a465f0ace287d8cbe5246bff0",
-        "integrity": "sha512-HOvadwVRE6JC+45nyYhmnywnr5h/J8KZvOeUNVOG9q/0875pZgItznFB9bRTvLc264YSJqiZ1NsIpCStJw/egg==",
+        "upstream_url": "https://registry.npmjs.org/@mediapipe%2ftasks-vision/1.2.0",
+        "tarball_url": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-1.2.0.tgz",
+        "tarball_sha256": "535175845f4ef8509b0240a0831abe8bcb3fa882accda6d080a4ede562a50a71",
+        "integrity": "sha512-7+dr9GbGyTtcuLh11wE5TOn4dNFRncIT9oAWs72620WX99KW5FfzF6rFJ/ChTgXG9vJ6dCiE9FrEEY4CnwPWKQ==",
         "git_head": null,
         "package_manifest_matches_installed": true
       },
       "upstream": {
         "repository_url": "https://github.com/google-ai-edge/mediapipe",
-        "revision": "f8ef212d5c962c0e853db7e59d217056b187084b",
-        "tag": "v0.10.35"
+        "revision": "f329091f2f20a9143209897d7081e629421b9c9a",
+        "tag": "v1.2.0"
       },
       "notices": [
         {
-          "path": "app/licenses/dependencies/mediapipe-tasks-vision-0.10.35/LICENSE",
+          "path": "app/licenses/dependencies/mediapipe-tasks-vision-1.2.0/LICENSE",
           "sha256": "8707eef0533987efc5b155d64761eeb6e20793f50b9bd1a68dad1cf4719d0ed8",
           "bytes": 12331,
-          "upstream_url": "https://raw.githubusercontent.com/google-ai-edge/mediapipe/f8ef212d5c962c0e853db7e59d217056b187084b/LICENSE",
-          "upstream_revision": "f8ef212d5c962c0e853db7e59d217056b187084b",
+          "upstream_url": "https://raw.githubusercontent.com/google-ai-edge/mediapipe/f329091f2f20a9143209897d7081e629421b9c9a/LICENSE",
+          "upstream_revision": "f329091f2f20a9143209897d7081e629421b9c9a",
           "source_path": "LICENSE"
         }
       ],
       "evidence": [
         {
-          "path": "app/licenses/dependencies/mediapipe-tasks-vision-0.10.35/npm-release.json",
-          "sha256": "e8ad148f571429604f5a908ff8b6e88fa4874477646fd2be572a4935b24ebbe5",
-          "bytes": 2226,
-          "upstream_url": "https://registry.npmjs.org/@mediapipe%2ftasks-vision/0.10.35",
-          "upstream_revision": "npm:@mediapipe/tasks-vision@0.10.35",
+          "path": "app/licenses/dependencies/mediapipe-tasks-vision-1.2.0/npm-release.json",
+          "sha256": "42dbaef52ebf7c32d35fe4c4d8a861113eebb0b31d24bef998924b218fe1fb5f",
+          "bytes": 2547,
+          "upstream_url": "https://registry.npmjs.org/@mediapipe%2ftasks-vision/1.2.0",
+          "upstream_revision": "npm:@mediapipe/tasks-vision@1.2.0",
           "source_path": null
         },
         {
-          "path": "app/licenses/dependencies/mediapipe-tasks-vision-0.10.35/package.json",
-          "sha256": "5c96247445e57a2d087758114b116fed7d46eb401342aee19b1acc56d36fe707",
-          "bytes": 1084,
-          "upstream_url": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-0.10.35.tgz",
-          "upstream_revision": "npm:@mediapipe/tasks-vision@0.10.35",
+          "path": "app/licenses/dependencies/mediapipe-tasks-vision-1.2.0/package.json",
+          "sha256": "bf558f63285c8b46b8a6ce6344f38453dcfec741e79dc2ebf124feac74a7288b",
+          "bytes": 1192,
+          "upstream_url": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-1.2.0.tgz",
+          "upstream_revision": "npm:@mediapipe/tasks-vision@1.2.0",
           "source_path": "package/package.json"
         },
         {
-          "path": "app/licenses/dependencies/mediapipe-tasks-vision-0.10.35/upstream-tag.json",
-          "sha256": "598b58a0f5e9d1ab3583f1e544888e6efcac0c409c4eed91d582ec99b27b78d4",
-          "bytes": 365,
-          "upstream_url": "https://api.github.com/repos/google-ai-edge/mediapipe/git/ref/tags/v0.10.35",
-          "upstream_revision": "f8ef212d5c962c0e853db7e59d217056b187084b",
+          "path": "app/licenses/dependencies/mediapipe-tasks-vision-1.2.0/upstream-tag.json",
+          "sha256": "27be802469686cc229b51ac0da90f85ef739951208bacaf87627b29c14550701",
+          "bytes": 396,
+          "upstream_url": "https://api.github.com/repos/google-ai-edge/mediapipe/git/ref/tags/v1.2.0",
+          "upstream_revision": "f329091f2f20a9143209897d7081e629421b9c9a",
           "source_path": null
         }
       ],
@@ -462,5 +462,5 @@
     }
   ],
   "blockers": [],
-  "updated_at_utc": "2026-10-07T06:02:45.429414+00:00"
+  "updated_at_utc": "2026-10-30T02:42:51.376676+00:00"
 }

@@ -34,6 +34,7 @@ const POSES = {
   fist: [CURLED, CURLED, CURLED, CURLED],
   pinch: [[30, 45, 30], CURLED, CURLED, CURLED],
   okPinch: [[30, 45, 30], STRAIGHT, STRAIGHT, STRAIGHT],
+  loose: [STRAIGHT, CURLED, STRAIGHT, CURLED],
 };
 
 function shape(pose) {
@@ -69,13 +70,13 @@ function hand(x, y, pose, label = "Left") {
 
 const OPTIONS = { aspect: 1, mirrorX: true, sensitivity: "balanced" };
 
-function run(frames) {
+function run(frames, options = OPTIONS) {
   const engine = new AirHandGestureEngine();
   const out = { commands: [], interactions: [], hands: [], times: [] };
   let now = 0;
   for (const frame of frames) {
     now += frame.dt ?? 33;
-    const result = engine.process(frame.hands, now, OPTIONS);
+    const result = engine.process(frame.hands, now, options);
     out.commands.push(...result.commands);
     out.interactions.push(...result.interactions);
     out.times.push(...result.interactions.map(() => now));
@@ -113,19 +114,40 @@ test("slow drift, the return stroke, and a moving pointing hand are not swipes",
   assert.deepEqual(run([...still(0.35, 4, "point"), ...move(0.35, 0.65, 10, "point")]).commands, []);
 });
 
-test("a pointing hand aims at an absolute window point with a ten percent margin on each side", () => {
-  const settled = (x, y = 0.5) => {
-    const points = aims(still(x, 12, "point", y));
+test("a pointing hand aims where it is inside an inner region shifted toward its own side", () => {
+  const settled = (frames, options) => {
+    const points = run(frames, options).interactions.filter((entry) => entry.type === "point");
     return points[points.length - 1];
   };
-  const center = settled(0.5);
-  assert.ok(center.x > 0.45 && center.x < 0.6, `center aim ${center.x}`);
-  assert.equal(settled(0.95).x, 0);
-  assert.equal(settled(0.05).x, 1);
-  assert.equal(settled(0.5, 0.97).y, 1);
-  assert.ok(Math.abs(settled(0.3).x - (1.024 - 0.3 - 0.1) / 0.8) < 0.01);
-  const moved = aims([...still(0.7, 8, "point"), ...move(0.7, 0.3, 15, "point"), ...still(0.3, 15, "point")]);
-  assert.ok(Math.abs(moved[moved.length - 1].x - (1.024 - 0.3 - 0.1) / 0.8) < 0.02);
+  const center = settled(still(0.474, 15, "point"));
+  assert.ok(Math.abs(center.x - 0.5) < 0.02 && Math.abs(center.y - 0.555) < 0.03, `center aim ${center.x}, ${center.y}`);
+  assert.ok(settled(still(0.8, 15, "point")).x < 0.001);
+  assert.ok(settled(still(0.15, 15, "point")).x > 0.999);
+  assert.ok(settled(still(0.5, 15, "point", 0.8)).y > 0.999);
+  assert.ok(settled(still(0.8, 15, "point"), { ...OPTIONS, sensitivity: "deliberate" }).x > 0.02);
+  const otherHand = settled(still(0.5, 15, "point").map(() => ({ hands: [hand(0.5, 0.5, "point", "Right")] })));
+  assert.ok(otherHand.x - settled(still(0.5, 15, "point")).x > 0.12, `left hand aim ${otherHand.x}`);
+  assert.ok(settled([...still(0.5, 12, "point"), ...move(0.5, 0.8, 10, "point"), ...still(0.8, 15, "point")]).x < 0.001);
+});
+
+test("a pointing finger turned toward the camera does not click, and a flickering pinch clicks once", () => {
+  const actions = (frames) => kinds(run(frames).interactions.filter((entry) => entry.type !== "point"));
+  const foreshortened = () => {
+    const observation = hand(0.5, 0.5, "point");
+    const image = observation.image.map((point) => ({ ...point }));
+    image[4] = { ...image[8] };
+    return { hands: [{ ...observation, image }] };
+  };
+  assert.deepEqual(actions([...still(0.5, 12, "point"), ...Array.from({ length: 20 }, foreshortened)]), []);
+  const flicker = Array.from({ length: 4 }, () => [...still(0.5, 2, "pinch"), ...still(0.5, 2, "point")]).flat();
+  const clicks = actions([...still(0.5, 12, "point"), ...flicker, ...still(0.5, 6, "point")]).filter((entry) => entry === "release:select");
+  assert.ok(clicks.length <= 2, `flicker produced ${clicks.length} clicks`);
+});
+
+test("brief pose dropouts keep pointing, and a hand of no clear pose never swipes", () => {
+  const points = aims([...still(0.5, 12, "point"), ...Array.from({ length: 6 }, (_, cycle) => [at(0.5 + cycle * 0.01, "point"), at(0.5, "open"), at(0.5, "open"), at(0.5, "point"), at(0.5, "point")]).flat()]);
+  assert.deepEqual([points.filter((entry) => entry.phase === "begin").length, points.filter((entry) => entry.phase === "end").length], [1, 0]);
+  assert.deepEqual(run([...still(0.35, 4, "loose"), ...move(0.35, 0.65, 10, "loose")]).commands, []);
 });
 
 test("aiming starts only after the pose settles, ignores jitter, and a hand that leaves does not teleport it", () => {
