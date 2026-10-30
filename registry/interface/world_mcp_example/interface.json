@@ -19,6 +19,7 @@
       "operation_catalog_dir": "operations",
       "operation_catalog_label": "mcp.operation_catalog",
       "operation_request_label": "mcp.operation.request",
+      "operator_approval": true,
       "process_env_keys": [
         "WORLD_MCP_EXAMPLE_URL",
         "WORLD_MCP_EXAMPLE_BEARER",

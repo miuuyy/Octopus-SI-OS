@@ -4286,8 +4286,10 @@ while IFS= read -r _; do :; done
             operation,
             serde_json::json!({"uri": "drive://document"}),
             "call-1".to_string(),
+            Some("never"),
         );
         assert_eq!(output.label, "mcp.operation.request");
+        assert_eq!(output.value["approval_policy"], "never");
         assert_eq!(
             output.route,
             ProviderEmissionRoute::Operation {

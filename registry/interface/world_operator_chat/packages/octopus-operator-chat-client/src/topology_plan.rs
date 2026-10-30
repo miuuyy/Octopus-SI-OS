@@ -358,6 +358,7 @@ pub(crate) fn plan_operator_chat_topology_files_for_source(
         &private_worker_role_artifacts,
         &catalogue.inline_ids(),
         request.interface_private_state_root.as_deref(),
+        &request.door_host_slots,
         &mut writes,
     )?;
     home_voice::plan_descriptors(registry_root, &config, &topology, &identity, &mut writes)?;

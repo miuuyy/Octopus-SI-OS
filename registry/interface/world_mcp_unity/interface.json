@@ -19,6 +19,7 @@
       "operation_catalog_dir": "operations",
       "operation_catalog_label": "mcp.operation_catalog",
       "operation_request_label": "mcp.operation.request",
+      "operator_approval": true,
       "max_catalog_pages": 64,
       "max_catalog_items": 4096,
       "max_catalog_bytes": 16777216,

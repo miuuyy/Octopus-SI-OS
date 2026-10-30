@@ -92,6 +92,18 @@ pub(super) fn select_call_result(
     Ok(())
 }
 
+fn rearms(
+    template: &RunAuthoringCheckpoint,
+    old: &[RunAuthoringCheckpoint],
+    next: &[RunAuthoringCheckpoint],
+) -> bool {
+    next.iter().any(|input| {
+        input.role == RunAuthoringCheckpointRole::VerifiedInput
+            && !old.contains(input)
+            && input.outbound_interfaces().skip(1).any(|id| id == template.interface())
+    })
+}
+
 fn active_rows(record: &RunRecord, template: &RunAuthoringCheckpoint) -> Vec<octopus_run_record::CheckpointRecord> {
     record
         .checkpoints
@@ -769,9 +781,11 @@ pub(super) fn prepare(
         ) {
             return Err("result retirement changed its admitted binding evidence".into());
         }
+        let retained = topology.checkpoints.clone();
         topology.checkpoints.retain(|template| {
             template.role != RunAuthoringCheckpointRole::ResultInput
                 || !checkpoint_record_matches_template(checkpoint, template, &record.id)
+                || rearms(template, &handoff.config.checkpoints, &retained)
         });
     }
     for output in outputs
@@ -828,6 +842,14 @@ pub(super) fn materialize(
     consumed: Option<&CheckpointId>,
     deferred_context: Option<&[ArtifactBinding]>,
 ) -> Result<(), String> {
+    let rearmed = consumed
+        .and_then(|id| before.checkpoint(id))
+        .and_then(|row| {
+            next.checkpoints.iter().find(|template| {
+                template.role == RunAuthoringCheckpointRole::ResultInput
+                    && checkpoint_record_matches_template(row, template, &before.id)
+            })
+        });
     if consumed.is_none()
         && !next.checkpoints.iter().any(|template| {
             template.role == RunAuthoringCheckpointRole::ResultInput
@@ -853,6 +875,7 @@ pub(super) fn materialize(
             template.role == RunAuthoringCheckpointRole::ResultInput
                 && !config.checkpoints.contains(template)
         })
+        .chain(rearmed)
     {
         let call = correspondence(template)?;
         let mut bindings = context.clone();
@@ -896,7 +919,25 @@ pub(super) fn validate_transition(
         .filter(|template| template.role == RunAuthoringCheckpointRole::ResultInput)
     {
         if next.checkpoints.contains(template) && rows(before, template) != rows(after, template) {
-            return Err("outstanding result input changed before consumption".into());
+            if !rearms(template, &old.checkpoints, &next.checkpoints) {
+                return Err("outstanding result input changed before consumption".into());
+            }
+            let call = correspondence(template)?;
+            let mut expected = effective_context_bindings(after, &old.checkpoints, &config.provider_interface)?;
+            if !expected.iter().any(|binding| binding.id == call.call_artifact.id) {
+                expected.push(ArtifactBinding { id: call.call_artifact.id.clone(), access: Default::default() });
+            }
+            let (prior, rearmed) = (rows(before, template), rows(after, template));
+            let ([prior], [row]) = (prior.as_slice(), rearmed.as_slice()) else {
+                return Err("re-armed result input has no unique replaced generation".into());
+            };
+            if after.checkpoint(&prior.id).is_some()
+                || before.checkpoint(&row.id).is_some()
+                || row.epoch.0 != 0
+                || row.artifact_bindings != expected
+            {
+                return Err("re-armed result input differs from a fresh generation of its exact wait".into());
+            }
         }
     }
     for template in next.checkpoints.iter().filter(|template| {

@@ -4,7 +4,10 @@
   "output_label": "mcp.tool.result",
   "handler_config": {
     "operation": "call_tool",
-    "mcp_tool_name": "search"
+    "mcp_tool_name": "search",
+    "annotations": {
+      "readOnlyHint": true
+    }
   },
   "description": "Call the search tool exposed by the external MCP server behind world_mcp_example. Each server tool is a model-callable registry descriptor with its own package-local process declaration; the result arrives as an artifact.",
   "input_schema": {

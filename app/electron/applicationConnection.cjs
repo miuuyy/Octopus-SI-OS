@@ -218,8 +218,8 @@ async function registryConnectionContext({ kind, input, signal, progress, descri
       return typeof environment[name] === "string" ? environment[name] : undefined;
     },
     openExternal,
-    publishOperations: serverTools ? async (tools) => {
-      const published = await writeServerToolOperations(serverTools, tools);
+    publishOperations: serverTools ? async (operations, generated) => {
+      const published = await writeServerToolOperations(serverTools, operations, generated);
       await writeOperationCatalog(catalog);
       return published;
     } : null,
@@ -233,14 +233,15 @@ function operationCatalogTarget(descriptor, directory, interfaceId, registry) {
   const catalogLabel = stringValue(config.operation_catalog_label);
   const requestLabel = stringValue(config.operation_request_label);
   const inputLabels = config.task_input_labels ?? [];
+  const operatorApproval = config.operator_approval ?? false;
   if (!catalogDir || path.isAbsolute(catalogDir) || catalogDir.split(/[\\/]/).some((part) => !part || part === "." || part === "..")
     || !catalogLabel || !requestLabel || !Array.isArray(inputLabels)
     || inputLabels.some((label) => typeof label !== "string" || !label || label.trim() !== label)
-    || new Set(inputLabels).size !== inputLabels.length) {
-    throw new Error(`Interface '${interfaceId}' declares an operation catalog without a valid directory, catalog label, request label and task input labels.`);
+    || new Set(inputLabels).size !== inputLabels.length || typeof operatorApproval !== "boolean") {
+    throw new Error(`Interface '${interfaceId}' declares an operation catalog without a valid directory, catalog label, request label, task input labels and operator approval.`);
   }
   const artifactId = `artifact-operation-catalog-${interfaceId}`;
-  return { interfaceId, root: path.join(directory, catalogDir), catalogLabel, requestLabel, inputLabels, artifactId,
+  return { interfaceId, root: path.join(directory, catalogDir), catalogLabel, requestLabel, inputLabels, operatorApproval, artifactId,
     file: path.join(registry, "artifact", artifactId, "artifact.json") };
 }
 
@@ -271,6 +272,7 @@ async function writeOperationCatalog(target) {
     interface: target.interfaceId,
     request_label: target.requestLabel,
     ...(target.inputLabels.length ? { task_input_labels: target.inputLabels } : {}),
+    ...(target.operatorApproval ? { operator_approval: true } : {}),
     operations,
   }, null, 2)}\n`;
   await fs.mkdir(path.dirname(target.file), { recursive: true });
@@ -294,34 +296,24 @@ function serverToolOperationTarget(descriptor, directory, interfaceId) {
   return { interfaceId, prefix: declaration.prefix, root: path.join(directory, catalogDir), requestLabel };
 }
 
-function serverToolDescription(tool) {
-  const text = [tool.description, tool.title, tool.annotations?.title]
-    .find((value) => typeof value === "string" && value.trim())?.trim() ?? `Call the server tool ${tool.name}.`;
-  return text.length > SERVER_TOOL_DESCRIPTION_CHARS ? `${text.slice(0, SERVER_TOOL_DESCRIPTION_CHARS - 1)}…` : text;
-}
-
-function generatedServerTool(document) {
-  return document?.handler_config?.operation === "call_tool" && typeof document.handler_config.mcp_tool_name === "string";
-}
-
-async function writeServerToolOperations(target, tools) {
-  if (!Array.isArray(tools) || tools.length > SERVER_TOOL_LIMIT) {
-    throw new Error(`Server tools for '${target.interfaceId}' must be a list of at most ${SERVER_TOOL_LIMIT} tools.`);
+async function writeServerToolOperations(target, operations, generated) {
+  if (!Array.isArray(operations) || operations.length > SERVER_TOOL_LIMIT || typeof generated !== "function") {
+    throw new Error(`Server tool operations for '${target.interfaceId}' must be a list of at most ${SERVER_TOOL_LIMIT} operations with their owner's generation test.`);
   }
   await requirePlainDirectory(target.root, `Operation catalog of '${target.interfaceId}'`);
   const authored = new Set();
-  const generated = new Set();
+  const replaced = new Set();
   for (const entry of await fs.readdir(target.root, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const { document } = await readRegularJsonDocument(path.join(target.root, entry.name), `operation ${entry.name}`);
-    (generatedServerTool(document) ? generated : authored).add(entry.name);
+    (generated(document) === true ? replaced : authored).add(entry.name);
   }
   const skipped = [];
   const files = new Map();
-  for (const tool of tools) {
-    const name = typeof tool?.name === "string" ? tool.name : "";
+  for (const operation of operations) {
+    const name = typeof operation?.name === "string" ? operation.name : "";
     const id = name.startsWith(`${target.prefix}.`) ? name : `${target.prefix}.${name}`;
-    const schemaBytes = isPlainRecord(tool?.inputSchema) ? JSON.stringify(tool.inputSchema).length : Infinity;
+    const schemaBytes = isPlainRecord(operation?.input_schema) ? JSON.stringify(operation.input_schema).length : Infinity;
     const encodedLength = id.length + (id.match(/[.-]/g) ?? []).length;
     const reason = !SERVER_TOOL_NAME.test(name) ? "its name cannot be an operation id"
       : encodedLength > 64 ? "its name is too long for a model tool"
@@ -333,14 +325,24 @@ async function writeServerToolOperations(target, tools) {
       skipped.push(`${name || "(unnamed)"}: ${reason}`);
       continue;
     }
-    files.set(`${id}.json`, `${JSON.stringify({
+    const outputLabel = stringValue(operation.output_label);
+    const description = stringValue(operation.description);
+    if (!outputLabel || outputLabel.trim() !== outputLabel || !description || description.length > SERVER_TOOL_DESCRIPTION_CHARS
+      || !isPlainRecord(operation.handler_config)) {
+      throw new Error(`Server tool operation '${id}' of '${target.interfaceId}' lacks an output label, description or handler configuration.`);
+    }
+    const document = {
       id,
       request_label: target.requestLabel,
-      output_label: "mcp.tool.result",
-      handler_config: { operation: "call_tool", mcp_tool_name: name },
-      description: serverToolDescription(tool),
-      input_schema: tool.inputSchema,
-    }, null, 2)}\n`);
+      output_label: outputLabel,
+      handler_config: operation.handler_config,
+      description,
+      input_schema: operation.input_schema,
+    };
+    if (generated(document) !== true) {
+      throw new Error(`Server tool operation '${id}' of '${target.interfaceId}' is not one its owner recognizes as generated.`);
+    }
+    files.set(`${id}.json`, `${JSON.stringify(document, null, 2)}\n`);
   }
   for (const [file, content] of files) {
     const destination = path.join(target.root, file);
@@ -348,7 +350,7 @@ async function writeServerToolOperations(target, tools) {
     await fs.writeFile(temporary, content, { flag: "wx", mode: 0o644 });
     await fs.rename(temporary, destination);
   }
-  for (const file of generated) {
+  for (const file of replaced) {
     if (!files.has(file)) await fs.rm(path.join(target.root, file));
   }
   return { published: files.size, skipped };
@@ -376,9 +378,9 @@ function connectionContext({ descriptor, interfaceId, values, input, privateDire
     signal,
     fetch: globalThis.fetch,
     ...(publishOperations ? {
-      async publishOperations(tools) {
+      async publishOperations(operations, generated) {
         if (signal.aborted) throw signal.reason;
-        return publishOperations(structuredClone(tools));
+        return publishOperations(structuredClone(operations), generated);
       },
     } : {}),
   });
@@ -409,7 +411,10 @@ async function loadConnectionModule(registryRoot, descriptor) {
   if (await fs.realpath(file) !== file || !(await fs.stat(file)).isFile()) {
     throw new Error(`Connection module ${declaration.module} must be a regular registry file.`);
   }
-  delete require.cache[file];
+  const owners = `${path.join(root, "interface")}${path.sep}`;
+  for (const cached of Object.keys(require.cache)) {
+    if (cached.startsWith(owners)) delete require.cache[cached];
+  }
   const module = require(file);
   if (module?.schemaVersion !== 1 || typeof module.probe !== "function" || typeof module.connect !== "function"
     || (module.disconnect !== undefined && typeof module.disconnect !== "function")) {

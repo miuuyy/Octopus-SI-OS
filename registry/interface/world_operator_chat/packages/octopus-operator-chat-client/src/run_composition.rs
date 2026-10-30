@@ -675,6 +675,7 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
         &private_roles,
         &catalogue.inline_ids(),
         Some(&roots.interface_private_state_root),
+        &request.door_host_slots,
         &mut writes,
     )?;
     if let Some(binding) = native_run_authoring::plan(

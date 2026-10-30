@@ -1,5 +1,7 @@
 use super::*;
 
+const HOST_FILESYSTEM_ROOT_SLOT: &str = "host_filesystem_root";
+
 pub(crate) fn plan_provider_interface(
     interface_root: &Path,
     config: &ClientConfig,
@@ -9,6 +11,7 @@ pub(crate) fn plan_provider_interface(
     worker_role_artifacts: &[String],
     inline_context_ids: &[String],
     interface_private_state_root: Option<&Path>,
+    door_host_slots: &BTreeMap<String, BTreeMap<String, PathBuf>>,
     writes: &mut Vec<PlannedClientWrite>,
 ) -> Result<(), String> {
     let mut provider_interface = provider.interface.clone();
@@ -62,6 +65,13 @@ pub(crate) fn plan_provider_interface(
         );
     } else {
         driver_config.private_config.remove("reasoning_effort");
+    }
+    if driver_config.private_config.contains_key("approval_policy") {
+        let full_access = door_host_slots.values().any(|slots| slots.contains_key(HOST_FILESYSTEM_ROOT_SLOT));
+        driver_config.private_config.insert(
+            "approval_policy".into(),
+            serde_json::json!(if full_access { "never" } else { "on-request" }),
+        );
     }
     if let Some(tier) = &provider.service_tier {
         driver_config.private_config.insert("service_tier".into(), serde_json::json!(tier));

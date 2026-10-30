@@ -439,6 +439,7 @@ pub fn plan_maintenance_observer(
         &roles,
         &[],
         Some(&request.roots.interface_private_state_root),
+        &BTreeMap::new(),
         &mut writes,
     )?;
     clone_source_life(

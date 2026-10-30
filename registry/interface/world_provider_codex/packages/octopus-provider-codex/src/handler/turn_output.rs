@@ -229,14 +229,19 @@ impl CodexTurnOutput {
         operation: &InterfaceOperationAffordance,
         arguments: serde_json::Value,
         correlation_id: String,
+        approval_policy: Option<&str>,
     ) -> Self {
+        let mut value = serde_json::json!({
+            "operation": operation.name,
+            "arguments": arguments,
+            "correlation_id": correlation_id,
+        });
+        if let Some(policy) = approval_policy {
+            value["approval_policy"] = serde_json::json!(policy);
+        }
         Self {
             label: operation.request_label.clone(),
-            value: serde_json::json!({
-                "operation": operation.name,
-                "arguments": arguments,
-                "correlation_id": correlation_id,
-            }),
+            value,
             route: ProviderEmissionRoute::Operation {
                 interface: operation.interface.clone(),
                 result_label: operation.output_label.clone(),
@@ -602,6 +607,7 @@ pub(crate) fn provider_route_from_lifecycle(route: LifecycleRoute) -> ProviderEm
                     .into_iter()
                     .map(|input| ProviderVerifiedInput {
                         also_deliver_to_tool: None,
+                        also_deliver_to_interface: None,
                         artifact_label: input.artifact_label,
                         required_verified_artifact: input.required_verified_artifact,
                     })

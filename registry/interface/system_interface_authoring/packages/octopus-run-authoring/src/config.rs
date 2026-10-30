@@ -162,14 +162,17 @@ impl RunAuthoringConfig {
                     }
                     if let [_, door] = checkpoint.outbound_interface_bindings.as_slice() {
                         let connected = self.checkpoints.iter().any(|route| {
-                            route.role == RunAuthoringCheckpointRole::ProviderToolOutput
+                            (matches!(route.role, RunAuthoringCheckpointRole::ProviderToolOutput | RunAuthoringCheckpointRole::ProviderInterfaceOutput)
                                 && route.interface() == &self.provider_interface
                                 && route.outbound_interface_bindings.len() == 1
-                                && route.outbound_interfaces().next() == Some(&door.interface)
+                                && route.outbound_interfaces().next() == Some(&door.interface))
+                                || (matches!(route.role, RunAuthoringCheckpointRole::Stable | RunAuthoringCheckpointRole::IndependentInput)
+                                    && route.interface() == &door.interface
+                                    && route.outbound_interfaces().any(|id| id == &self.provider_interface))
                         });
                         if !connected || door.interface == checkpoint.interface_binding.interface {
                             return Err(format!(
-                                "run_authoring {owner} verified input tool door is not connected"
+                                "run_authoring {owner} verified input recipient is not connected to this provider"
                             ));
                         }
                     }
@@ -553,26 +556,38 @@ impl RunAuthoringConfig {
                     artifact_policy: policy.clone(),
                 },
             }];
-            if let Some(tool) = &input.also_deliver_to_tool {
-                let route = self.output_checkpoint(
-                    &ProviderHandoffRoute::Tool { tool: tool.clone() },
-                    granted_tools,
-                    granted_interfaces,
-                    &self.file_write_label,
-                )?;
-                let [door] = route.outbound_interface_bindings.as_slice() else {
-                    return Err(format!("{owner} has no exact tool door"));
-                };
-                if !granted_interfaces.contains(&door.interface)
-                    || door.interface == self.provider_interface
-                    || door.interface == client_binding.interface
+            let recipient = match (&input.also_deliver_to_tool, &input.also_deliver_to_interface) {
+                (Some(_), Some(_)) => {
+                    return Err(format!(
+                        "{owner} names both a tool door and an interface as its second recipient"
+                    ))
+                }
+                (None, Some(interface)) => Some(interface.clone()),
+                (Some(tool), None) => {
+                    let route = self.output_checkpoint(
+                        &ProviderHandoffRoute::Tool { tool: tool.clone() },
+                        granted_tools,
+                        granted_interfaces,
+                        &self.file_write_label,
+                    )?;
+                    let [door] = route.outbound_interface_bindings.as_slice() else {
+                        return Err(format!("{owner} has no exact tool door"));
+                    };
+                    Some(door.interface.clone())
+                }
+                (None, None) => None,
+            };
+            if let Some(recipient) = recipient {
+                if !granted_interfaces.contains(&recipient)
+                    || recipient == self.provider_interface
+                    || recipient == client_binding.interface
                 {
                     return Err(format!(
-                        "{owner} tool door is not a distinct granted interface"
+                        "{owner} second recipient is not a distinct granted interface"
                     ));
                 }
                 outbound_interface_bindings.push(AuthoredInterfaceBinding {
-                    interface: door.interface.clone(),
+                    interface: recipient,
                     config: InterfaceBindingConfig {
                         artifact_policy: policy,
                     },

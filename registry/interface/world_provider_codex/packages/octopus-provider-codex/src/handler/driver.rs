@@ -447,6 +447,16 @@ impl CodexAppServerInterfaceDriver {
         }
     }
 
+    pub(crate) fn operation_approval_policy(&self) -> Result<&'static str, InterfaceDriverError> {
+        match self.interface_private_config.get("approval_policy").and_then(serde_json::Value::as_str) {
+            Some("on-request") => Ok("on-request"),
+            Some("never") => Ok("never"),
+            _ => Err(InterfaceDriverError::FailedClosed(
+                "interface_driver_config.private_config.approval_policy must be 'on-request' or 'never'".into(),
+            )),
+        }
+    }
+
     pub(crate) fn native_web_search_mode(&self) -> Result<WebSearchMode, InterfaceDriverError> {
         match self.interface_private_config.get("web_search") {
             None => Ok(WebSearchMode::Disabled),

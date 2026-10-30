@@ -9,6 +9,8 @@ pub(crate) struct InterfaceOperationCatalogArtifact {
     pub(crate) request_label: String,
     #[serde(default)]
     pub(crate) task_input_labels: BTreeSet<String>,
+    #[serde(default)]
+    pub(crate) operator_approval: bool,
     pub(crate) operations: Vec<InterfaceOperationCatalogEntry>,
 }
 
@@ -154,6 +156,7 @@ pub(crate) fn extract_interface_operation_affordances(
                         request_label: operation.request_label,
                         output_label: operation.output_label,
                         input_labels: catalog.task_input_labels.clone(),
+                        operator_approval: catalog.operator_approval,
                     },
                 )
                 .is_some()

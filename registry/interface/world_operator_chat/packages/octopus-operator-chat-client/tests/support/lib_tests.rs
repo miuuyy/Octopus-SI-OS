@@ -1455,6 +1455,8 @@
             for slot in ["workspace_root", "host_filesystem_root"] {
                 assert_eq!(workspace["interface_driver_config"]["host_slots"][slot]["path"], "/");
             }
+            let provider = exact(format!("interface:{}", plan.model_interface_id));
+            assert_eq!(provider["interface_driver_config"]["private_config"]["approval_policy"], "never");
             for tool in ["workspace.read_file", "workspace.write_file", "workspace.exec", "workspace.write_stdin", "workspace.process.terminate"] {
                 assert!(worker_policy["ceiling"]["tools"].as_array().unwrap().contains(&serde_json::json!(plan.capability_tools[tool])));
             }
@@ -1958,6 +1960,7 @@
             serde_json::json!("ultra")
         );
         assert_eq!(provider_config.private_config["service_tier"], serde_json::json!("priority"));
+        assert_eq!(provider_config.private_config["approval_policy"], serde_json::json!("on-request"));
         assert_eq!(
             serde_json::from_value::<BTreeSet<String>>(provider.interface_policy.values["models"].clone()).unwrap(),
             serde_json::from_value::<BTreeSet<String>>(load_interface_descriptor(&request.registry_root.join("interface"), &request.provider_interface_id)

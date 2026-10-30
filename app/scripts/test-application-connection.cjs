@@ -5,6 +5,7 @@ const path = require("node:path");
 const { after, beforeEach, test } = require("node:test");
 const { createApplicationConnectionHost, createRegistryConnectionTargets } = require("../electron/applicationConnection.cjs");
 const { parseApplicationManifest } = require("../electron/projection/sidecars.cjs");
+const { publishServerTools } = require("../../registry/interface/world_mcp_example/packages/octopus-mcp-client/server_operations.cjs");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-application-connection-"));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -189,9 +190,9 @@ test("connecting publishes server tools as operations of the declaring interface
   const schema = { type: "object", properties: { query: { type: "string" } } };
   const published = [];
   globalThis.demoConnection.connect = async (ctx) => {
-    published.push(await ctx.publishOperations([
-      { name: "search", description: "Search mail", inputSchema: schema },
-      { name: "demo.read", title: "Read mail", inputSchema: schema },
+    published.push(await publishServerTools(ctx, [
+      { name: "search", description: "Search mail", inputSchema: schema, annotations: { readOnlyHint: true, title: "Search", extra: 1 } },
+      { name: "demo.read", title: "Read mail", inputSchema: schema, annotations: { readOnlyHint: "yes", destructiveHint: true } },
       { name: "call_tool", inputSchema: schema },
       { name: "bad/name", inputSchema: schema },
     ]));
@@ -206,12 +207,13 @@ test("connecting publishes server tools as operations of the declaring interface
     id: "demo.search",
     request_label: "mcp.operation.request",
     output_label: "mcp.tool.result",
-    handler_config: { operation: "call_tool", mcp_tool_name: "search" },
+    handler_config: { operation: "call_tool", mcp_tool_name: "search", annotations: { title: "Search", readOnlyHint: true } },
     description: "Search mail",
     input_schema: schema,
   });
   const read = JSON.parse(fs.readFileSync(path.join(catalog, "demo.read.json"), "utf8"));
   assert.equal(read.description, "Read mail");
+  assert.deepEqual(read.handler_config.annotations, { destructiveHint: true });
   const artifact = JSON.parse(fs.readFileSync(path.join(registry, "artifact", `artifact-operation-catalog-${id}`, "artifact.json"), "utf8"));
   assert.deepEqual(artifact, {
     id: `artifact-operation-catalog-${id}`, label: "mcp.operation_catalog", interface: id, request_label: "mcp.operation.request",

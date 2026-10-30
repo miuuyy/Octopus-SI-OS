@@ -901,6 +901,11 @@ impl CodexAppServerInterfaceDriver {
                             operation,
                             arguments,
                             call_id.clone(),
+                            if operation.operator_approval {
+                                Some(self.operation_approval_policy()?)
+                            } else {
+                                None
+                            },
                         ),
                     ),
                     None => (

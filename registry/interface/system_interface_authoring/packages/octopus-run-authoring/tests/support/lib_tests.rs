@@ -2645,6 +2645,7 @@
             inputs: vec![
                 ProviderVerifiedInput {
                     also_deliver_to_tool: None,
+                    also_deliver_to_interface: None,
                     artifact_label: "operator.approval.response".to_string(),
                     required_verified_artifact: requirement(
                         "operator.approval",
@@ -2653,6 +2654,7 @@
                 },
                 ProviderVerifiedInput {
                     also_deliver_to_tool: None,
+                    also_deliver_to_interface: None,
                     artifact_label: "operator.approval.response".to_string(),
                     required_verified_artifact: requirement(
                         "operator.input.provided",
@@ -2723,6 +2725,30 @@
             )
             .unwrap_err();
         assert!(error.contains("outside the formed invocation grant"));
+
+        let ProviderHandoffRoute::ClientProjectionWithVerifiedInputs { mut inputs } = route else {
+            unreachable!()
+        };
+        let recipient = InterfaceId::new("world_input_test");
+        for input in &mut inputs {
+            input.also_deliver_to_interface = Some(recipient.clone());
+        }
+        let route = ProviderHandoffRoute::ClientProjectionWithVerifiedInputs { inputs };
+        let unadmitted = config
+            .verified_input_checkpoints(&route, output, &static_context, &marks, &BTreeSet::new(), &BTreeSet::new())
+            .unwrap_err();
+        assert!(unadmitted.contains("not a distinct granted interface"));
+        let delivered = config
+            .verified_input_checkpoints(&route, output, &static_context, &marks, &BTreeSet::new(), &BTreeSet::from([recipient.clone()]))
+            .unwrap();
+        assert!(delivered.iter().all(|checkpoint| {
+            checkpoint
+                .outbound_interfaces()
+                .eq([&config.provider_interface, &recipient])
+        }));
+        let mut next = config.clone();
+        next.checkpoints.extend(delivered);
+        next.validate(&next.provider_interface, &next.run).unwrap();
     }
 
     #[test]
@@ -3714,6 +3740,7 @@
             .into_iter()
             .map(|(mark, verifier)| ProviderVerifiedInput {
                 also_deliver_to_tool: Some("coder.exec".into()),
+                also_deliver_to_interface: None,
                 artifact_label: "operator.approval.response".into(),
                 required_verified_artifact: RequiredVerifiedArtifact {
                     mark: octopus_descriptors::MarkId::new(mark),

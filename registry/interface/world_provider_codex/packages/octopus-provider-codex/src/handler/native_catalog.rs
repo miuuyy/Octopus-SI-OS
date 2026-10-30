@@ -7,6 +7,7 @@ pub(crate) struct InterfaceOperationAffordance {
     pub(crate) request_label: String,
     pub(crate) output_label: String,
     pub(crate) input_labels: BTreeSet<String>,
+    pub(crate) operator_approval: bool,
 }
 
 pub(crate) struct NativeAffordanceCatalog {

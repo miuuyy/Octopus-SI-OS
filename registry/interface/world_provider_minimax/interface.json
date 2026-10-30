@@ -53,6 +53,7 @@
       "worker_instruction_artifacts": [],
       "model_tool_names": {},
       "native_thread_sandbox": "danger-full-access",
+      "approval_policy": "on-request",
       "native_mcp_resource_discovery": true,
       "run_affordance_profile": {
         "catalog": {

@@ -865,10 +865,10 @@ pub(crate) fn lifecycle_route_from_provider(
         ProviderEmissionRoute::ClientProjectionWithVerifiedInputs { inputs } => {
             if inputs
                 .iter()
-                .any(|input| input.also_deliver_to_tool.is_some())
+                .any(|input| input.also_deliver_to_tool.is_some() || input.also_deliver_to_interface.is_some())
             {
                 return Err(InterfaceDriverError::FailedClosed(
-                    "lifecycle-held projection cannot discard a verified tool-door recipient"
+                    "lifecycle-held projection cannot discard a verified second recipient"
                         .to_string(),
                 ));
             }

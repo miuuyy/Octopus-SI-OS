@@ -1,3 +1,5 @@
+const { publishServerTools } = require("./server_operations.cjs");
+
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_CHARS = 4 * 1024 * 1024;
 const LOOPBACK_WAIT_MS = 120_000;
@@ -166,7 +168,7 @@ async function probe(ctx) {
 
 async function publish(ctx, result) {
   if (typeof ctx.publishOperations !== "function") return presented(result);
-  const { published, skipped } = await ctx.publishOperations(result.tools);
+  const { published, skipped } = await publishServerTools(ctx, result.tools);
   const parts = [`${published} tool${published === 1 ? " is" : "s are"} available to connected tasks.`];
   if (skipped.length) parts.push(`Only through call_tool: ${skipped.join("; ")}`);
   const message = parts.join(" ");

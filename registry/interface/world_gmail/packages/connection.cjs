@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const fsPromises = require("node:fs/promises");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
+const { publishServerTools } = require("../../world_mcp_example/packages/octopus-mcp-client/server_operations.cjs");
 
 const MAX_ACCOUNT_FILE_BYTES = 1024 * 1024;
 const ACCESS_TOKEN_EXPIRY_SKEW_MS = 30_000;
@@ -376,7 +377,7 @@ async function published(ctx, inspected) {
     const accounts = linked.map((entry) => `${entry.link_id}${isText(entry.profile_email) ? ` (${entry.profile_email})` : ""}`).join(", ");
     return { ...tool, description: `${isText(tool.description) ? `${tool.description}\n\n` : ""}Linked accounts, by link_id: ${accounts}.` };
   });
-  const { published: count, skipped } = await ctx.publishOperations(tools);
+  const { published: count, skipped } = await publishServerTools(ctx, tools);
   const message = [`${count} tool${count === 1 ? " is" : "s are"} available to connected tasks.`, skipped.length ? `Only through call_tool: ${skipped.join("; ")}` : ""].filter(Boolean).join(" ");
   return finish({ ...inspected.state, message });
 }
