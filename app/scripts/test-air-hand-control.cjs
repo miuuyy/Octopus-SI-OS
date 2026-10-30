@@ -99,19 +99,25 @@ const kinds = (interactions) => interactions.map((entry) => entry.type === "rele
 const aims = (frames) => run(frames).interactions.filter((entry) => entry.type === "point");
 
 test("a quick open-hand or two-finger flick is one swipe in the mirrored direction", () => {
-  assert.deepEqual(run([...still(0.35, 4, "open"), ...move(0.35, 0.65, 10, "open")]).commands, ["swipe_left"]);
-  assert.deepEqual(run([...still(0.65, 4, "v"), ...move(0.65, 0.35, 10, "v")]).commands, ["swipe_right"]);
+  assert.deepEqual(run([...still(0.35, 12, "open"), ...move(0.35, 0.65, 8, "open")]).commands, ["swipe_left"]);
+  assert.deepEqual(run([...still(0.65, 12, "v"), ...move(0.65, 0.35, 8, "v")]).commands, ["swipe_right"]);
 });
 
 test("frames lost to motion blur or the frame edge do not drop the swipe", () => {
-  assert.deepEqual(run([...still(0.35, 4, "open"), ...move(0.35, 0.45, 3, "open"), ...lost(2), ...move(0.5, 0.65, 4, "open")]).commands, ["swipe_left"]);
-  assert.deepEqual(run([...still(0.4, 4, "open"), ...move(0.4, 0.475, 3, "open"), ...lost(2)]).commands, ["swipe_left"]);
+  assert.deepEqual(run([...still(0.35, 12, "open"), ...move(0.35, 0.45, 3, "open"), ...lost(2), ...move(0.5, 0.65, 4, "open")]).commands, ["swipe_left"]);
+  assert.deepEqual(run([...still(0.3, 12, "open"), ...move(0.3, 0.5, 4, "open"), ...lost(2)]).commands, ["swipe_left"]);
 });
 
 test("slow drift, the return stroke, and a moving pointing hand are not swipes", () => {
   assert.deepEqual(run(move(0.3, 0.7, 60, "open")).commands, []);
-  assert.deepEqual(run([...still(0.35, 4, "open"), ...move(0.35, 0.65, 8, "open"), ...move(0.65, 0.35, 8, "open")]).commands, ["swipe_left"]);
-  assert.deepEqual(run([...still(0.35, 4, "point"), ...move(0.35, 0.65, 10, "point")]).commands, []);
+  assert.deepEqual(run([...still(0.35, 12, "open"), ...move(0.35, 0.65, 8, "open"), ...move(0.65, 0.35, 8, "open")]).commands, ["swipe_left"]);
+  assert.deepEqual(run([...still(0.35, 12, "point"), ...move(0.35, 0.65, 10, "point")]).commands, []);
+});
+
+test("a hand moving around, arriving, or leaving the frame is not a swipe", () => {
+  assert.deepEqual(run([...still(0.4, 12, "open"), ...move(0.4, 0.475, 3, "open"), ...lost(2)]).commands, []);
+  assert.deepEqual(run([...still(0.4, 12, "open"), ...move(0.4, 0.5, 6, "open")]).commands, []);
+  assert.deepEqual(run(move(0.2, 0.6, 7, "open")).commands, []);
 });
 
 test("a pointing hand aims where it is inside an inner region shifted toward its own side", () => {
@@ -201,30 +207,47 @@ test("both hands keep their side through a reordered result and a flickering lab
 
 test("a pinch tap selects, a held pinch carries, and a thrown pinch flings", () => {
   const actions = (frames) => run(frames).interactions.filter((entry) => entry.type !== "point");
-  assert.deepEqual(kinds(actions([...still(0.5, 4, "point"), ...still(0.5, 4, "pinch"), ...still(0.5, 3, "point")])), ["press", "release:select"]);
-  const carried = actions([...still(0.5, 4, "point"), ...still(0.5, 3, "pinch"), ...move(0.5, 0.4, 12, "pinch"), ...still(0.4, 3, "pinch"), ...still(0.4, 3, "point")]);
+  assert.deepEqual(kinds(actions([...still(0.5, 12, "point"), ...still(0.5, 4, "pinch"), ...still(0.5, 3, "point")])), ["press", "release:select"]);
+  const carried = actions([...still(0.5, 12, "point"), ...still(0.5, 4, "pinch"), ...move(0.5, 0.4, 12, "pinch"), ...still(0.4, 3, "pinch"), ...still(0.4, 3, "point")]);
   const carriedKinds = kinds(carried);
   assert.deepEqual([carriedKinds[0], carriedKinds[1], carriedKinds[carriedKinds.length - 1]], ["press", "grab:begin", "release:drop"]);
   assert.ok(carriedKinds.slice(2, -1).every((kind) => kind === "grab:move"));
   assert.ok(Math.abs(carried[carried.length - 1].dx - 0.1) < 0.01, `dropped at ${carried[carried.length - 1].dx}`);
-  const thrown = kinds(actions([...still(0.5, 4, "point"), ...still(0.5, 3, "pinch"), ...move(0.5, 0.2, 5, "pinch"), ...still(0.2, 3, "point")]));
+  const thrown = kinds(actions([...still(0.5, 12, "point"), ...still(0.5, 4, "pinch"), ...move(0.5, 0.2, 5, "pinch"), ...still(0.2, 3, "point")]));
   assert.equal(thrown[thrown.length - 1], "release:fling");
 });
 
 test("a pinch is recognized whatever the other fingers do, even fast at a low frame rate, and a fist never pinches", () => {
-  const tap = (pose, dt) => kinds(run([...still(0.5, 4, "point").map((frame) => ({ ...frame, dt })), ...still(0.5, 2, pose).map((frame) => ({ ...frame, dt })), ...still(0.5, 3, "point").map((frame) => ({ ...frame, dt }))]).interactions.filter((entry) => entry.type !== "point"));
-  assert.deepEqual(tap("pinch", 33), ["press", "release:select"]);
-  assert.deepEqual(tap("okPinch", 33), ["press", "release:select"]);
-  assert.deepEqual(tap("pinch", 66), ["press", "release:select"]);
-  const wobble = kinds(run([...still(0.5, 4, "point"), ...still(0.5, 2, "pinch"), ...move(0.5, 0.47, 4, "pinch"), ...still(0.47, 3, "point")]).interactions.filter((entry) => entry.type !== "point"));
+  const tap = (pose, dt, frames) => kinds(run([...still(0.5, Math.ceil(400 / dt), "point").map((frame) => ({ ...frame, dt })), ...still(0.5, frames, pose).map((frame) => ({ ...frame, dt })), ...still(0.5, 3, "point").map((frame) => ({ ...frame, dt }))]).interactions.filter((entry) => entry.type !== "point"));
+  assert.deepEqual(tap("pinch", 33, 4), ["press", "release:select"]);
+  assert.deepEqual(tap("okPinch", 33, 4), ["press", "release:select"]);
+  assert.deepEqual(tap("pinch", 66, 3), ["press", "release:select"]);
+  const wobble = kinds(run([...still(0.5, 12, "point"), ...still(0.5, 4, "pinch"), ...move(0.5, 0.47, 4, "pinch"), ...still(0.47, 3, "point")]).interactions.filter((entry) => entry.type !== "point"));
   assert.deepEqual(wobble, ["press", "release:select"]);
   assert.deepEqual(kinds(run(still(0.5, 12, "fist")).interactions), []);
 });
 
+test("only a held, deliberate pinch clicks", () => {
+  const actions = (frames) => kinds(run(frames).interactions.filter((entry) => entry.type !== "point"));
+  assert.deepEqual(actions([...still(0.5, 12, "point"), ...still(0.5, 3, "pinch"), ...still(0.5, 6, "point")]), []);
+  assert.deepEqual(actions([...still(0.5, 15, "pinch"), ...still(0.5, 6, "point")]), []);
+  assert.deepEqual(actions([...still(0.3, 12, "point"), ...move(0.3, 0.7, 12, "pinch"), ...still(0.7, 6, "point")]), []);
+  const worldOnly = () => {
+    const observation = hand(0.5, 0.5, "point");
+    const world = observation.world.map((point) => ({ ...point }));
+    world[4] = { ...world[8] };
+    return { hands: [{ ...observation, world }] };
+  };
+  assert.deepEqual(actions([...still(0.5, 12, "point"), ...Array.from({ length: 12 }, worldOnly)]), []);
+  const twitches = Array.from({ length: 4 }, () => [...still(0.5, 4, "pinch"), ...still(0.5, 3, "point")]).flat();
+  const clicks = actions([...still(0.5, 12, "point"), ...twitches]).filter((entry) => entry === "release:select");
+  assert.equal(clicks.length, 2);
+});
+
 test("a pinch survives blurred frames and a hand that leaves never selects", () => {
   const actions = (frames) => run(frames).interactions.filter((entry) => entry.type !== "point");
-  assert.deepEqual(kinds(actions([...still(0.5, 4, "point"), ...still(0.5, 4, "pinch"), ...lost(12)])), ["press", "cancel"]);
-  const blurred = kinds(actions([...still(0.5, 4, "point"), ...still(0.5, 3, "pinch"), ...move(0.5, 0.42, 6, "pinch"), ...lost(2), ...move(0.42, 0.36, 4, "pinch"), ...still(0.36, 3, "point")]));
+  assert.deepEqual(kinds(actions([...still(0.5, 12, "point"), ...still(0.5, 5, "pinch"), ...lost(12)])), ["press", "cancel"]);
+  const blurred = kinds(actions([...still(0.5, 12, "point"), ...still(0.5, 4, "pinch"), ...move(0.5, 0.42, 6, "pinch"), ...lost(2), ...move(0.42, 0.36, 4, "pinch"), ...still(0.36, 3, "point")]));
   assert.equal(blurred.filter((kind) => kind === "grab:begin").length, 1);
   assert.deepEqual(blurred.filter((kind) => kind.startsWith("release") || kind === "cancel"), ["release:drop"]);
 });
@@ -232,8 +255,8 @@ test("a pinch survives blurred frames and a hand that leaves never selects", () 
 test("pinching with both hands and spreading them scales instead of selecting", () => {
   const pair = (left, right, pose) => ({ hands: [hand(1 - left, 0.5, pose, "Right"), hand(1 - right, 0.5, pose, "Left")] });
   const frames = [
-    ...Array.from({ length: 4 }, () => pair(0.4, 0.6, "point")),
-    ...Array.from({ length: 3 }, () => pair(0.4, 0.6, "pinch")),
+    ...Array.from({ length: 12 }, () => pair(0.4, 0.6, "point")),
+    ...Array.from({ length: 4 }, () => pair(0.4, 0.6, "pinch")),
     ...Array.from({ length: 10 }, (_, index) => pair(0.4 - 0.015 * (index + 1), 0.6 + 0.015 * (index + 1), "pinch")),
     ...Array.from({ length: 3 }, () => pair(0.25, 0.75, "pinch")),
     ...Array.from({ length: 3 }, () => pair(0.25, 0.75, "point")),

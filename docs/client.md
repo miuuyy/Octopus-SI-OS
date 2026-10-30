@@ -365,6 +365,9 @@ controls as experimental, particularly across different cameras and lighting.
 Every gesture in Settings has a small looping illustration of the hand, a plain
 description, and its current command or effect.
 
+A hand counts a quarter second after it comes into view, and a pinch has to be
+held for a moment, so a passing hand or a twitch does nothing.
+
 There is no hand cursor. Gestures move one visible focus ring between concrete
 targets — buttons, fields, tabs, list rows, and Home widgets:
 

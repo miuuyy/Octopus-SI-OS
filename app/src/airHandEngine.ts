@@ -56,6 +56,7 @@ type ParsedHand = {
   palmWidth: number;
   curls: FingerCurls;
   pinchRatio: number;
+  imagePinchRatio: number;
   indexReach: number;
 };
 
@@ -69,6 +70,7 @@ const IDLE: Mode = { kind: "idle" };
 const MAX_HANDS = 2;
 const TRACK_CONFIRM_FRAMES = 3;
 const TRACK_GRACE_MS = 300;
+const TRACK_ENGAGE_MS = 250;
 const ASSOCIATION_GATE = 0.32;
 const SIDE_MISMATCH_COST = 0.06;
 const SIDE_VOTE_RATE = 0.2;
@@ -76,11 +78,15 @@ const SIDE_FLIP_LOW = 0.3;
 const SIDE_FLIP_HIGH = 0.7;
 const POSE_WINDOW = 5;
 const POSE_VOTES = 3;
-const PINCH_CONFIRM_FRAMES = 2;
+const PINCH_ENTER_MS = 80;
+const PINCH_RELEASE_FRAMES = 2;
 const PINCH_ENTER_RATIO = 0.38;
+const PINCH_IMAGE_ENTER_RATIO = 0.45;
 const PINCH_RELEASE_RATIO = 0.55;
-const PINCH_REFRACTORY_MS = 250;
+const PINCH_REFRACTORY_MS = 450;
 const PINCH_MIN_INDEX_REACH = 1.05;
+const PINCH_MAX_HAND_SPEED = 1;
+const PINCH_SPEED_WINDOW_MS = 120;
 const POINT_GRACE_MS = 220;
 const POINT_SETTLE_MS = 150;
 const AIM_SIDE_SHIFT = 0.05;
@@ -232,7 +238,7 @@ export class AirHandGestureEngine {
     const hand = track.current;
     const pointing = track.pose === "point";
     const pointHeld = pointing || (track.pose === "none" && now < track.pointUntil);
-    const swipeEligible = idle && (track.pose === "open" || track.pose === "two");
+    const swipeEligible = idle && track.engaged(now) && (track.pose === "open" || track.pose === "two");
     const threshold = Math.min(swipeThreshold(options.sensitivity), Math.max(SWIPE_MIN_TRAVEL, hand.palmWidth * SWIPE_HAND_WIDTHS));
     const swiped = swipeCommand(track.swipe.update(hand.screen, now, swipeEligible, threshold, swipeSpeed(options.sensitivity)));
     if (swiped) commands.push(swiped);
@@ -247,12 +253,12 @@ export class AirHandGestureEngine {
         track.aimSent = track.aim;
         interactions.push({ type: "point", side: track.side, phase: "move", x: track.aim.x, y: track.aim.y });
       }
-    } else if (this.pointerId == null && idle && pointing) {
+    } else if (this.pointerId == null && idle && pointing && track.engaged(now)) {
       this.pointerId = track.id;
       this.pointerBegun = false;
     }
 
-    if (!idle || track.pose !== "fist") {
+    if (!idle || track.pose !== "fist" || !track.engaged(now)) {
       track.hold = null;
       return;
     }
@@ -268,6 +274,9 @@ export class AirHandGestureEngine {
   private arbitrate(now: number, aspect: number, interactions: GestureInteraction[]): void {
     for (const id of [...this.spent]) {
       if (this.track(id)?.pose !== "pinch") this.spent.delete(id);
+    }
+    for (const track of this.tracks) {
+      if (track.pose === "pinch" && !track.engaged(now)) this.spent.add(track.id);
     }
     const pinching = this.tracks.filter((track) => track.confirmed && track.pose === "pinch" && !this.spent.has(track.id));
     const mode = this.mode;
@@ -385,8 +394,10 @@ class HandTrack {
   readonly swipe = new SwipeDetector();
   private vote: number;
   private seen = 0;
+  private readonly firstSeen: number;
   private pinched = false;
-  private pinchFrames = 0;
+  private closingSince: number | null = null;
+  private openingFrames = 0;
   private releasedAt = Number.NEGATIVE_INFINITY;
   private votes: HandPose[] = [];
   private stabilizer = new PointStabilizer(2.2, 1.2, 0.14, 0.11);
@@ -399,6 +410,7 @@ class HandTrack {
     this.vote = this.side === "right" ? 0.75 : 0.25;
     this.current = hand;
     this.lastSeen = now;
+    this.firstSeen = now;
     this.stable = hand.screen;
     this.scale = hand.scale;
     this.aim = { x: 0.5, y: 0.5 };
@@ -426,6 +438,10 @@ class HandTrack {
     if (this.pose !== "point") return;
     if (!wasPointing) this.pointSince = now;
     this.pointUntil = now + POINT_GRACE_MS;
+  }
+
+  engaged(now: number): boolean {
+    return now - this.firstSeen >= TRACK_ENGAGE_MS;
   }
 
   assignSide(side: HandSide): void {
@@ -469,13 +485,24 @@ class HandTrack {
 
   private updatePose(hand: ParsedHand, now: number): void {
     const reaching = hand.indexReach >= PINCH_MIN_INDEX_REACH;
-    const closing = reaching && hand.pinchRatio < PINCH_ENTER_RATIO && now - this.releasedAt >= PINCH_REFRACTORY_MS;
-    const opening = !reaching || hand.pinchRatio > PINCH_RELEASE_RATIO;
-    this.pinchFrames = (this.pinched ? opening : closing) ? this.pinchFrames + 1 : 0;
-    if (this.pinchFrames >= PINCH_CONFIRM_FRAMES) {
-      this.pinched = !this.pinched;
-      this.pinchFrames = 0;
-      if (!this.pinched) this.releasedAt = now;
+    if (this.pinched) {
+      this.openingFrames = !reaching || hand.pinchRatio > PINCH_RELEASE_RATIO ? this.openingFrames + 1 : 0;
+      if (this.openingFrames >= PINCH_RELEASE_FRAMES) {
+        this.pinched = false;
+        this.openingFrames = 0;
+        this.releasedAt = now;
+      }
+    } else {
+      const closing = reaching
+        && hand.pinchRatio < PINCH_ENTER_RATIO
+        && hand.imagePinchRatio < PINCH_IMAGE_ENTER_RATIO
+        && now - this.releasedAt >= PINCH_REFRACTORY_MS
+        && this.peakSpeed(now, PINCH_SPEED_WINDOW_MS) < PINCH_MAX_HAND_SPEED;
+      this.closingSince = closing ? this.closingSince ?? now : null;
+      if (this.closingSince != null && now - this.closingSince >= PINCH_ENTER_MS) {
+        this.pinched = true;
+        this.closingSince = null;
+      }
     }
     if (this.pinched) {
       this.pose = "pinch";
@@ -534,7 +561,9 @@ function parseObservation(observation: HandObservation, options: AirHandOptions)
   const middleMcp = image[9];
   const indexMcp = image[5];
   const littleMcp = image[17];
-  if (!wrist || !middleMcp || !indexMcp || !littleMcp) return null;
+  const thumbTip = image[4];
+  const indexTip = image[8];
+  if (!wrist || !middleMcp || !indexMcp || !littleMcp || !thumbTip || !indexTip) return null;
   const aspect = options.aspect;
   const length = Math.hypot((wrist.x - middleMcp.x) * aspect, wrist.y - middleMcp.y);
   const width = Math.hypot((indexMcp.x - littleMcp.x) * aspect, indexMcp.y - littleMcp.y);
@@ -548,6 +577,7 @@ function parseObservation(observation: HandObservation, options: AirHandOptions)
     palmWidth: Math.max(distance(indexMcp, littleMcp), 0.04),
     curls: shape.curls,
     pinchRatio: shape.pinchRatio,
+    imagePinchRatio: Math.hypot((thumbTip.x - indexTip.x) * aspect, thumbTip.y - indexTip.y) / scale,
     indexReach: shape.indexReach,
   };
 }
@@ -616,15 +646,14 @@ function thumbCurl(world: readonly HandLandmark[], length: number): number {
   return clamp(tucked * 0.55 + clamp((bend - 20) / 110) * 0.45);
 }
 
-const SWIPE_WINDOW_MS = 480;
+const SWIPE_WINDOW_MS = 400;
 const SWIPE_STALE_MS = 250;
 const SWIPE_POSE_GRACE_MS = 200;
 const SWIPE_LOST_GRACE_MS = 220;
-const SWIPE_EXIT_FRACTION = 0.6;
-const SWIPE_MIN_TRAVEL = 0.05;
-const SWIPE_HAND_WIDTHS = 1.8;
-const SWIPE_DOMINANCE = 1.4;
-const SWIPE_STRAIGHTNESS = 0.7;
+const SWIPE_MIN_TRAVEL = 0.1;
+const SWIPE_HAND_WIDTHS = 2.5;
+const SWIPE_DOMINANCE = 1.8;
+const SWIPE_STRAIGHTNESS = 0.8;
 const SWIPE_SAME_DIRECTION_MS = 380;
 const SWIPE_RETURN_SUPPRESS_MS = 750;
 
@@ -663,7 +692,7 @@ class SwipeDetector {
     if (this.samples.length === 0) return 0;
     if (this.lostAt == null) {
       this.lostAt = now;
-      return this.evaluate(now, Math.min(threshold, this.threshold || threshold) * SWIPE_EXIT_FRACTION, speed);
+      return this.evaluate(now, Math.min(threshold, this.threshold || threshold), speed);
     }
     if (now - this.lostAt > SWIPE_LOST_GRACE_MS) this.samples = [];
     return 0;
@@ -838,15 +867,15 @@ function holdDuration(sensitivity: GestureSensitivity): number {
 }
 
 function swipeThreshold(sensitivity: GestureSensitivity): number {
-  if (sensitivity === "responsive") return 0.08;
-  if (sensitivity === "deliberate") return 0.15;
-  return 0.11;
+  if (sensitivity === "responsive") return 0.14;
+  if (sensitivity === "deliberate") return 0.24;
+  return 0.18;
 }
 
 function swipeSpeed(sensitivity: GestureSensitivity): number {
-  if (sensitivity === "responsive") return 0.45;
-  if (sensitivity === "deliberate") return 0.7;
-  return 0.55;
+  if (sensitivity === "responsive") return 0.65;
+  if (sensitivity === "deliberate") return 1.05;
+  return 0.85;
 }
 
 function finiteLandmark(landmark: HandLandmark | undefined): boolean {
