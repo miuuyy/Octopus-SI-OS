@@ -13,6 +13,9 @@
     "category": "plugin",
     "icon": "github"
   },
+  "required_packages": [
+    "world_mcp_example"
+  ],
   "members": [
     {
       "registry_kind": "interface",

@@ -234,3 +234,31 @@ test("connecting publishes server tools as operations of the declaring interface
   globalThis.demoConnection.probe = async (ctx) => ({ state: typeof ctx.publishOperations === "function" ? "error" : "not_connected" });
   assert.equal((await host.probe({ applicationId: id })).interfaces[0].state.state, "not_connected");
 });
+
+test("distributed applications install every interface their connection modules load", () => {
+  const repository = path.resolve(__dirname, "../..");
+  const library = path.join(repository, "app/distribution/local-packages/packages");
+  const manifests = new Map(fs.readdirSync(library).map((name) => JSON.parse(fs.readFileSync(path.join(library, name), "utf8")))
+    .map((manifest) => [manifest.id, manifest]));
+  const closure = (id, seen = new Set()) => {
+    if (seen.has(id)) return seen;
+    seen.add(id);
+    for (const required of manifests.get(id)?.required_packages ?? []) closure(required, seen);
+    return seen;
+  };
+  const interfaceOwners = (manifest) => manifest.members.filter((member) => member.registry_kind === "interface").map((member) => member.owner);
+  for (const manifest of manifests.values()) {
+    const installed = new Set([...closure(manifest.id)].flatMap((id) => interfaceOwners(manifests.get(id))));
+    for (const owner of interfaceOwners(manifest)) {
+      const folder = path.join(repository, "registry/interface", owner);
+      const packages = path.join(folder, "packages");
+      const modules = fs.existsSync(packages) ? fs.readdirSync(packages).filter((name) => name.endsWith(".cjs")) : [];
+      const sources = [fs.readFileSync(path.join(folder, "interface.json"), "utf8"), ...modules.map((name) => fs.readFileSync(path.join(packages, name), "utf8"))];
+      for (const source of sources) {
+        for (const [, imported] of source.matchAll(/(?:interface:\/\/|require\("\.\.\/\.\.\/)([A-Za-z0-9_-]+)\//g)) {
+          assert.ok(installed.has(imported), `${manifest.id} loads ${imported} without installing it`);
+        }
+      }
+    }
+  }
+});

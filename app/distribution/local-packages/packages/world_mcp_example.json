@@ -1,0 +1,23 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_mcp_example",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_mcp_example",
+  "release_status": "optional",
+  "display": {
+    "name": "MCP client",
+    "description": "The connection module and client life that connected MCP servers share.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "plugins"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_mcp_example",
+      "primary": true
+    }
+  ]
+}

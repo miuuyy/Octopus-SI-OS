@@ -141,8 +141,11 @@ introducing a new runtime identity.
 interface can declare a connection module under its `packages/` folder in
 `private_config.client_connection`; the client runs its `probe`, `connect` and
 `disconnect` to check what you enter against the real service, show the
-connected account and walk you through browser sign-in or pairing. Applications
-without a module are connected once their required setup fields are saved. The
+connected account and walk you through browser sign-in or pairing. A module may
+live in a family owner's folder; the Application's package then names that
+owner's package in `required_packages`, so installing it installs the module.
+Applications without a module are connected once their required setup fields
+are saved. The
 connection check is presentation only: the interface still refuses to work with
 bad credentials, and nothing is recorded in a run or the ledger. For an MCP
 application that declares `server_tool_operations`, Connect also turns each tool
