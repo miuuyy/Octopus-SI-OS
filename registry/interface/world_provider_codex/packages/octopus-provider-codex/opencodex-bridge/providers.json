@@ -471,6 +471,7 @@
       "name": "Azure OpenAI",
       "developer": "Microsoft",
       "description": "A model deployment in your Azure OpenAI resource.",
+      "logo": "application-logo.svg",
       "key": {
         "env": "OCTOPUS_PROVIDER_AZURE_OPENAI_API_KEY",
         "label": "Azure OpenAI API key",
@@ -495,6 +496,7 @@
       "name": "Custom OpenAI-compatible",
       "developer": "Octopus",
       "description": "Any server that speaks the OpenAI Chat Completions API.",
+      "logo": "application-logo.svg",
       "key": {
         "env": "OCTOPUS_PROVIDER_CUSTOM_API_KEY",
         "label": "API key"

@@ -15,6 +15,7 @@ type ProviderSpec = {
   description: string;
   icon?: string;
   icon_dark?: string[];
+  logo?: string;
   local?: boolean;
   default_context_window?: number;
   input_modalities?: string[];
@@ -345,6 +346,11 @@ for (const provider of spec.providers) {
   const rows = provider.model ? setupModel(provider) : registryModels(provider, seed);
   const folder = path.join(interfaceRoot, provider.interface);
   const logos: { logo?: string; logo_dark?: string } = {};
+  if (provider.icon && provider.logo) throw new Error(`${provider.interface}: a logo comes either from an OpenCodex icon or from the interface folder`);
+  if (provider.logo) {
+    if (!fs.existsSync(path.join(folder, provider.logo))) throw new Error(`${provider.interface}: logo ${provider.logo} is not in the interface folder`);
+    logos.logo = provider.logo;
+  }
   if (provider.icon) {
     const svg = fs.readFileSync(path.join(iconRoot, provider.icon), "utf8");
     outputs.set(path.join(folder, "application-logo.svg"), svg);
