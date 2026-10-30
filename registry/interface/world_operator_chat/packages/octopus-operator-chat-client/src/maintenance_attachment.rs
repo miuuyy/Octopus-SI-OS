@@ -38,7 +38,7 @@ pub(super) fn wire(
             return Ok((content, Vec::new()));
         };
         let relay = validate_retained(existing, declaration, identity)?;
-        retain_source_ceiling(&request, &relay, writes)?;
+        retain_source_ceiling(request.capabilities.registry_root(), identity, &relay, writes)?;
         let content = wire_source_terminal_declaration(&content, declaration)?;
         required_interfaces.push(relay);
         required_interfaces.sort();
@@ -180,20 +180,24 @@ fn validate_retained(existing: &Value, declaration: &Value, identity: &PlannedId
     Ok(relay.into())
 }
 
-fn retain_source_ceiling(request: &AttachmentRequest<'_>, relay: &str, writes: &mut [PlannedClientWrite]) -> Result<(), String> {
-    let root = request.capabilities.registry_root().join("interface");
+fn retain_source_ceiling(registry_root: &Path, identity: &PlannedIdentity, relay: &str, writes: &mut [PlannedClientWrite]) -> Result<(), String> {
+    let root = registry_root.join("interface");
     let descriptor = load_interface_descriptor(&root, relay)?;
     if descriptor.id.as_str() != relay || descriptor.interface_type != octopus_interfaces::InterfaceType::System {
         return Err("accepted maintenance relay is not its exact System interface".into());
     }
-    let bytes = std::fs::read(root.join(&request.identity.worker_interface_id).join("policy.json"))
+    let bytes = std::fs::read(root.join(&identity.worker_interface_id).join("policy.json"))
         .map_err(|e| e.to_string())?;
     let policy: WorkerInterfacePolicy = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let id = InterfaceId::new(relay);
-    if policy.id.as_str() != request.identity.worker_interface_id || !policy.ceiling.interfaces.contains(&id) {
+    if policy.id.as_str() != identity.worker_interface_id || !policy.ceiling.interfaces.contains(&id) {
         return Err("accepted maintenance relay is outside its existing worker ceiling".into());
     }
-    extend_source_ceiling(request.identity, &[relay.into()], Some(&policy), writes)
+    let tag = format!("policy:{}", identity.worker_interface_id);
+    if !writes.iter().any(|write| write.tag == tag) {
+        return Ok(());
+    }
+    extend_source_ceiling(identity, &[relay.into()], Some(&policy), writes)
 }
 
 fn extend_source_ceiling(identity: &PlannedIdentity, interfaces: &[String], previous: Option<&WorkerInterfacePolicy>, writes: &mut [PlannedClientWrite]) -> Result<(), String> {
@@ -218,3 +222,7 @@ fn extend_source_ceiling(identity: &PlannedIdentity, interfaces: &[String], prev
     write.content = pretty_json(&policy)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../tests/support/retained_source_ceiling.rs"]
+mod retained_source_ceiling_tests;

@@ -1,0 +1,103 @@
+{
+  "schema": "octopus.local_application_pack",
+  "schema_version": 1,
+  "id": "claude-native",
+  "version": "0.1.0",
+  "name": "Claude (Agent SDK) Pack",
+  "description": "Claude through Claude Code's own sign-in on the Claude Agent SDK, with Octopus's agent working context.",
+  "components": [
+    {
+      "package_id": "world_provider_claude_native",
+      "selection": "included",
+      "reason": "Provides the model interface: Claude Code driven by the Claude Agent SDK with only Octopus's tools."
+    },
+    {
+      "package_id": "artifact.codex_context",
+      "selection": "included",
+      "reason": "Gives Home and tasks the declared architecture and working-role context."
+    },
+    {
+      "package_id": "world_operator_chat",
+      "selection": "included",
+      "reason": "Provides the Home and task conversation interface."
+    },
+    {
+      "package_id": "driver.system_room",
+      "selection": "included",
+      "reason": "Provides the room where run records are written."
+    },
+    {
+      "package_id": "system_memory",
+      "selection": "included",
+      "reason": "Provides Home memory, which the conversation interface requires."
+    },
+    {
+      "package_id": "driver.browser_session",
+      "selection": "included",
+      "reason": "Required by the conversation interface."
+    },
+    {
+      "package_id": "driver.filesystem_workspace",
+      "selection": "included",
+      "reason": "Required by the conversation interface."
+    },
+    {
+      "package_id": "driver.code_mode",
+      "selection": "included",
+      "reason": "Required by the conversation interface."
+    },
+    {
+      "package_id": "driver.desktop_session",
+      "selection": "included",
+      "reason": "Required by the conversation interface."
+    },
+    {
+      "package_id": "driver.audio_device_session",
+      "selection": "included",
+      "reason": "Required by the desktop environment."
+    },
+    {
+      "package_id": "world_provider_realtime",
+      "selection": "included",
+      "reason": "Required by the conversation interface for voice."
+    }
+  ],
+  "workspace_setup": {
+    "selection": "included",
+    "home": {
+      "provider_interface_id": "world_provider_claude_native",
+      "worker_interface_id": "system_worker_operator_home",
+      "context_artifact_bindings": [
+        {
+          "id": "artifact-worker-role-template"
+        },
+        {
+          "id": "artifact-worker-role-operator-home"
+        }
+      ],
+      "selected_worker_environment_kinds": [
+        "system_room"
+      ]
+    },
+    "task": {
+      "worker_interface_id": "system_worker_operator_task",
+      "context_artifact_bindings": [
+        {
+          "id": "artifact-worker-role-template"
+        },
+        {
+          "id": "artifact-worker-role-operator-task"
+        }
+      ],
+      "selected_worker_environment_kinds": [
+        "system_room"
+      ]
+    },
+    "project_defaults": [
+      {
+        "package_id": "world_provider_claude_native",
+        "default_for_new_tasks": true
+      }
+    ]
+  }
+}

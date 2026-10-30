@@ -16,6 +16,7 @@
       "world_cron",
       "world_provider_realtime",
       "world_provider_claude_cli",
+      "world_provider_claude_native",
       "system_service_input",
       "system_worker_memory_observer",
       "system_workspace_env"

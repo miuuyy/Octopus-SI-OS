@@ -1,0 +1,14 @@
+{
+  "schema_version": 3,
+  "id": "world_provider_claude_native",
+  "name": "Claude (Agent SDK)",
+  "description": "Claude models through Claude Code's own sign-in, driven by the Claude Agent SDK with Octopus's tools only.",
+  "category": "provider",
+  "developer": "Anthropic",
+  "version": "0.1.0",
+  "icon": "sparkles",
+  "logo": "application-logo.svg",
+  "interfaces": [
+    "world_provider_claude_native"
+  ]
+}

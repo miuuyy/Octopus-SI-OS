@@ -1,0 +1,80 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_provider_claude_native",
+  "version": "0.1.0",
+  "product_kind": "application",
+  "product_id": "world_provider_claude_native",
+  "release_status": "optional",
+  "display": {
+    "name": "Claude (Agent SDK)",
+    "description": "Claude models through Claude Code's own sign-in, driven by the Claude Agent SDK with Octopus's tools only.",
+    "developer": "Anthropic",
+    "category": "provider",
+    "icon": "sparkles"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_provider_claude_native",
+      "primary": true,
+      "configuration": [
+        {
+          "path": "interface.json",
+          "fields": [
+            {
+              "pointer": "/interface_driver_config/private_config/model",
+              "schema": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            {
+              "pointer": "/interface_driver_config/private_config/reasoning_effort",
+              "schema": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              }
+            },
+            {
+              "pointer": "/interface_driver_config/private_config/sdk_child/claude_executable",
+              "schema": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            }
+          ]
+        },
+        {
+          "path": "life.json",
+          "fields": [
+            {
+              "pointer": "/processes/0/authority/executable_paths",
+              "schema": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^/",
+                  "minLength": 2,
+                  "maxLength": 4096
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "required_packages": [
+    "driver.system_room"
+  ]
+}

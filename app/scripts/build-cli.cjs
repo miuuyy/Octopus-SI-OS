@@ -28,12 +28,15 @@ async function buildCli({ runtime = false } = {}) {
     const bridge = path.join(provider, "opencodex-bridge");
     run("npm", ["ci"], bridge);
     run("npm", ["run", "build"], bridge);
+    packager.buildOwnedNpmPackages();
     const desktop = path.join(registry, "worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native");
     require(path.join(desktop, "build.cjs")).buildDesktopNative(path.join(desktop, "bin/octopus-desktop-native"));
-    const bins = [...new Set([...packager.collectBundledBinaries(registry), "octopus-provider-opencodex-life", "octopus-input-intake-life"])];
+    const ownedLives = packager.ownedProviderLives(registry);
+    const bins = [...new Set([...packager.collectBundledBinaries(registry), "octopus-provider-opencodex-life", "octopus-input-intake-life", ...ownedLives.map((life) => life.binary)])];
     run("cargo", ["build", "--locked", "--release", ...bins.flatMap((bin) => ["--bin", bin])], repoRoot);
     packager.materializeProviderLife(provider, "octopus-provider-opencodex-life");
     packager.materializeProviderLife(path.join(provider, "intake"), "octopus-input-intake-life");
+    for (const life of ownedLives) packager.materializeProviderLife(life.ownerRoot, life.binary, life.crateRoot);
     packager.validateOpenCodexOwnerAssets(provider);
     require("./package-cli.cjs").packageCliRuntime({ appRoot });
   }

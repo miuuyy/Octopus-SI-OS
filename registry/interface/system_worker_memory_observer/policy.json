@@ -7,6 +7,7 @@
       "world_provider_cerebras",
       "world_provider_chatgpt",
       "world_provider_claude_cli",
+      "world_provider_claude_native",
       "world_provider_codex",
       "world_provider_custom",
       "world_provider_deepseek",

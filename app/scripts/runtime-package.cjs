@@ -123,7 +123,46 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
     return [...new Set([...installationBinaries, ...installationReferences])].sort();
   }
 
-  function materializeProviderLife(ownerRoot, binary) {
+  function ownedProviderLives(registry = path.join(repoRoot, "registry")) {
+    const interfaces = path.join(registry, "interface");
+    const lives = [];
+    for (const owner of fs.readdirSync(interfaces).sort()) {
+      const lifePath = path.join(interfaces, owner, "life.json");
+      if (!fs.existsSync(lifePath)) continue;
+      for (const process of JSON.parse(fs.readFileSync(lifePath, "utf8")).processes ?? []) {
+        const match = /^owner:\/\/packages\/([A-Za-z0-9][A-Za-z0-9._-]*)\/life-bin\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(process.bin ?? "");
+        if (!match) continue;
+        const ownerRoot = path.join(interfaces, owner, "packages", match[1]);
+        if (!fs.statSync(path.join(ownerRoot, "Cargo.toml")).isFile()) throw new Error(`owner life '${process.bin}' has no Cargo package: ${ownerRoot}`);
+        lives.push({ ownerRoot, binary: match[2], crateRoot: ownerRoot });
+      }
+    }
+    return lives;
+  }
+
+  function ownedNpmBuildPackages() {
+    const packages = [];
+    for (const declared of generatedOutputs) {
+      const relative = typeof declared === "string" ? declared : declared?.path;
+      if (typeof relative !== "string" || !relative.startsWith("registry/interface/") || !relative.endsWith("/build-receipt.json")) continue;
+      const root = path.join(repoRoot, path.dirname(relative));
+      const manifestPath = path.join(root, "package.json");
+      if (!fs.existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (typeof manifest?.scripts?.build !== "string") throw new Error(`declared npm-built owner package has no build script: ${root}`);
+      packages.push(root);
+    }
+    return [...new Set(packages)].sort();
+  }
+
+  function buildOwnedNpmPackages() {
+    for (const root of ownedNpmBuildPackages()) {
+      run("npm", ["ci", "--ignore-scripts"], root);
+      run("npm", ["run", "build"], root);
+    }
+  }
+
+  function materializeProviderLife(ownerRoot, binary, crateRoot = openCodexOwnerRoot) {
     const source = path.join(repoRoot, "target", "release", binary);
     const destination = path.join(ownerRoot, "life-bin", binary);
     assertDeclaredGeneratedOutput(destination, repoRoot, generatedOutputs);
@@ -141,7 +180,7 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
       executable_bytes: bytes.length,
       inputs: {
         "Cargo.lock": crypto.createHash("sha256").update(fs.readFileSync(path.join(repoRoot, "Cargo.lock"))).digest("hex"),
-        "Cargo.toml": crypto.createHash("sha256").update(fs.readFileSync(path.join(openCodexOwnerRoot, "Cargo.toml"))).digest("hex"),
+        "Cargo.toml": crypto.createHash("sha256").update(fs.readFileSync(path.join(crateRoot, "Cargo.toml"))).digest("hex"),
       },
     };
     fs.writeFileSync(path.join(ownerRoot, "build-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o644 });
@@ -471,14 +510,35 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
     }
   }
 
+  function providerCompilerReceipts(registry) {
+    const interfaces = path.join(registry, "interface");
+    if (!fs.existsSync(interfaces)) return [];
+    const receipts = [];
+    const pending = fs.readdirSync(interfaces).sort()
+      .map((owner) => path.join(interfaces, owner, "packages"))
+      .filter((packages) => fs.existsSync(packages));
+    while (pending.length) {
+      const directory = pending.shift();
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const candidate = path.join(directory, entry.name);
+        if (!registryCopyFilter(candidate) || entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) pending.push(candidate);
+        else if (entry.isFile() && entry.name === "build-receipt.json") receipts.push(candidate);
+      }
+    }
+    return receipts;
+  }
+
   function captureProviderSigningInputs(registries) {
     const records = [];
     for (const registry of registries) {
-      const provider = path.join(registry, "interface", "world_provider_codex", "packages", "octopus-provider-codex");
-      if (!fs.existsSync(provider)) continue;
-      for (const owner of [provider, path.join(provider, "intake"), path.join(provider, "opencodex-bridge")]) {
-        const receiptPath = path.join(owner, "build-receipt.json");
+      for (const receiptPath of providerCompilerReceipts(registry)) {
+        const owner = path.dirname(receiptPath);
         const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+        if (receipt?.schema_version !== 1 || typeof receipt.executable !== "string"
+          || path.isAbsolute(receipt.executable) || receipt.executable.split("/").some((part) => !part || part === "." || part === "..")) {
+          throw new Error(`Provider compiler receipt does not name an owned executable: ${receiptPath}`);
+        }
         const executable = path.join(owner, receipt.executable);
         const bytes = fs.readFileSync(executable);
         if (bytes.length !== receipt.executable_bytes || crypto.createHash("sha256").update(bytes).digest("hex") !== receipt.executable_sha256) {
@@ -528,6 +588,8 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
     if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed with status ${result.status}`);
   }
   return Object.freeze({
+    ownedProviderLives,
+    buildOwnedNpmPackages,
     captureProviderSigningInputs,
     sealProviderSigningInputs,
     signClientResources,
