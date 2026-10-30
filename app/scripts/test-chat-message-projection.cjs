@@ -50,9 +50,13 @@ test('Triggers includes bound event sensors without treating them as cron activa
   const sensor = (id) => ({ id, interface_type: 'world', role: 'sensor', direction: 'inbound', source_names: ['issue.opened'] });
   const projection = projectionFixture({
     descriptors: { interface: [sensor('world_events'), sensor('world_unused'),
-      { ...sensor('world_provider'), role: 'provider' }], ee_template: [] },
+      { ...sensor('world_provider'), role: 'provider' },
+      { ...sensor('world_mail'), role: 'service', direction: 'bidirectional', source_names: ['mail'],
+        interface_driver_config: { private_config: { task_input_labels: ['mail.event'] } } },
+      { ...sensor('world_drive'), role: 'service' }], ee_template: [] },
     runRecords: [
-      { run_id: 'task', checkpoints: [{ status: 'projected', interface: 'world_events' }] },
+      { run_id: 'task', checkpoints: [{ status: 'projected', interface: 'world_events' }, { status: 'projected', interface: 'world_mail' },
+        { status: 'projected', interface: 'world_drive' }] },
       { run_id: 'old', checkpoints: [{ status: 'made', interface: 'world_unused' }] },
     ],
   });
@@ -63,14 +67,21 @@ test('Triggers includes bound event sensors without treating them as cron activa
     operatorOsScope: () => ({ client_runs: [{ run_id: 'task', interface_id: 'chat' }] }),
     operatorChatRunIndex: async () => [entry], operatorChatTitle: async () => 'Review new issues',
     readIndexedInterfaceArtifactRows: async (_projection, run, id, labels) => {
-      assert.equal(run, ''); assert.equal(id, 'world_events'); assert.equal(labels.size, 0);
+      assert.equal(run, '');
+      if (id === 'world_mail') {
+        assert.deepEqual([...labels], ['mail.event']);
+        return [{ ...movement(7, 'mail.event', {}, { from: 'world_mail', kind: 'InterfaceArrival' }), invocation_metadata: { runtime: { run: 'task' } } },
+          { ...movement(8, 'mail.result', {}, { from: 'world_mail', kind: 'InterfaceArrival' }), invocation_metadata: { runtime: { run: 'task' } } }];
+      }
+      assert.equal(id, 'world_events'); assert.equal(labels.size, 0);
       return [event, { ...event, seq: 6, kind: 'DeliveryRefused' }];
     },
   });
   t.after(() => store.close());
   const rows = await store.scheduledInterfaceRows(projection);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].interface_id, 'world_events');
+  assert.deepEqual(rows.map((row) => row.interface_id), ['world_events', 'world_mail']);
+  assert.equal(rows[1].last_movement_seq, 7);
+  assert.deepEqual(rows[1].event_source.sources, ['mail']);
   assert.equal(rows[0].valid, true);
   assert.equal(rows[0].clone_eligible, false);
   assert.equal(rows[0].schedule, undefined);

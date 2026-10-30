@@ -115,18 +115,23 @@ function scheduledInterfacesProjection(store) {
       }
     }
     const scheduledIds = new Set(rows.map((row) => row.interface_id));
+    const taskInputLabels = (descriptor) => arrayValue(descriptor.interface_driver_config?.private_config?.task_input_labels)
+      .filter((label) => typeof label === "string" && label);
     const eventSources = interfaces.filter((descriptor) => descriptor.interface_type === "world"
-      && descriptor.role === "sensor" && ["inbound", "bidirectional"].includes(descriptor.direction)
+      && (descriptor.role === "sensor" || taskInputLabels(descriptor).length > 0)
+      && ["inbound", "bidirectional"].includes(descriptor.direction)
       && !scheduledIds.has(stringValue(descriptor.rule_id ?? descriptor.id)));
     for (const descriptor of eventSources) {
       const interfaceId = stringValue(descriptor.rule_id ?? descriptor.id);
+      const labels = new Set(taskInputLabels(descriptor));
       const targets = arrayValue(projection.runRecords).filter((record) => arrayValue(record.checkpoints)
         .some((checkpoint) => checkpoint.status === "projected" && checkpoint.interface === interfaceId));
       if (!targets.length) continue;
-      const indexed = await store.readIndexedInterfaceArtifactRows(projection, "", interfaceId, new Set(), -1);
+      const indexed = await store.readIndexedInterfaceArtifactRows(projection, "", interfaceId, labels, -1);
       if (indexed === null) await store.refreshLedgerProjection(projection);
       const evidence = await scheduledInterfaceEvidence(projection, interfaceId, { schedule: {} },
-        (indexed ?? projection.ledgerRows).filter(isAdmittedInterfaceArtifactMovement));
+        (indexed ?? projection.ledgerRows).filter((movement) => isAdmittedInterfaceArtifactMovement(movement)
+          && (labels.size === 0 || labels.has(ledgerArtifactLabel(movement)))));
       const entries = new Map((await store.operatorChatRunIndex(projection)).map((entry) => [entry.runId, entry]));
       const sidecars = octopusOsInterfaceSidecars(projection);
       const eventTargets = [];

@@ -678,9 +678,12 @@ same clone, each with its own interface id and quiet period, only when its
 package was selected; a retried setup finds the armed trigger and creates
 nothing.
 
-Triggers also lists World sensor interfaces with active inbound run bindings,
-including event sources without a clock activation. Their receiving tasks and
-admitted deliveries come from run records and the ledger. An active binding is
+Triggers also lists World event sources with active inbound run bindings: sensor
+interfaces, and applications whose `private_config.task_input_labels` declares
+what a connected task receives unprompted, such as incoming mail or messages.
+Their receiving tasks and admitted deliveries come from run records and the
+ledger; an application's deliveries count only its declared task inputs, not its
+operation results. An active binding is
 not evidence that an external event has arrived. Event sources expose no cron
 edit, pause or delete controls; their configuration belongs to their package.
 
