@@ -929,6 +929,7 @@ def compile_cron(expression):
         "days_of_week": expand_cron_field(day_of_week, 0, 6, "day-of-week", True),
         "day_of_month_wildcard": day_of_month == "*",
         "day_of_week_wildcard": day_of_week == "*",
+        "clock_wildcard": minute.startswith("*") or hour.startswith("*"),
     }
 
 
@@ -949,13 +950,33 @@ def cron_matches(compiled, moment):
     return day_of_month_match or day_of_week_match
 
 
+def minute_before(minute):
+    return (minute.astimezone(timezone.utc) - timedelta(minutes=1)).astimezone(minute.tzinfo)
+
+
+def cron_due(compiled, minute, previous):
+    if cron_matches(compiled, minute):
+        return minute.fold == 0 or compiled["clock_wildcard"]
+    if compiled["clock_wildcard"] or minute.utcoffset() == previous.utcoffset():
+        return False
+    skipped = previous.replace(tzinfo=None) + timedelta(minutes=1)
+    while skipped < minute.replace(tzinfo=None):
+        if cron_matches(compiled, skipped):
+            return True
+        skipped += timedelta(minutes=1)
+    return False
+
+
 def next_cron_minute(compiled, moment):
-    candidate = moment.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    candidate = moment.astimezone(timezone.utc).replace(second=0, microsecond=0)
     limit = candidate + timedelta(days=366 * 8)
+    previous = candidate.astimezone(moment.tzinfo)
     while candidate < limit:
-        if cron_matches(compiled, candidate):
-            return candidate
         candidate += timedelta(minutes=1)
+        local = candidate.astimezone(moment.tzinfo)
+        if cron_due(compiled, local, previous):
+            return local
+        previous = local
     raise ValueError("cron expression has no occurrence in the next eight years")
 
 
@@ -2972,7 +2993,7 @@ def run_cron(schedule, reminder):
             moment = now(schedule)
             minute = moment.replace(second=0, microsecond=0)
             minute_key = minute.isoformat(timespec="minutes")
-            if cron_matches(compiled, minute) and minute_key != last_minute:
+            if cron_due(compiled, minute, minute_before(minute)) and minute_key != last_minute:
                 emit_fire_on_start(minute, reminder, "cron", schedule)
                 last_minute = minute_key
                 commit_last_fired_minute(minute_key)
@@ -2988,7 +3009,7 @@ def run_cron(schedule, reminder):
         moment = now(schedule)
         minute = moment.replace(second=0, microsecond=0)
         minute_key = minute.isoformat(timespec="minutes")
-        if cron_matches(compiled, minute) and minute_key != last_minute:
+        if cron_due(compiled, minute, minute_before(minute)) and minute_key != last_minute:
             emit_time_artifact(minute, reminder, "cron", schedule)
             last_minute = minute_key
             commit_last_fired_minute(minute_key)
