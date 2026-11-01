@@ -1,0 +1,652 @@
+{
+  "id": "world_provider_claude_native",
+  "interface_type": "world",
+  "role": "provider",
+  "direction": "bidirectional",
+  "source_names": [
+    "claude_native"
+  ],
+  "interface_driver_ref": "claude_agent_sdk",
+  "interface_policy": {
+    "variables": {
+      "max_attempts": {
+        "reduce": "min",
+        "default": 5
+      },
+      "max_in_flight": {
+        "reduce": "min",
+        "default": 1
+      },
+      "models": {
+        "reduce": "intersection",
+        "default": [
+          "claude-fable-5-1",
+          "claude-fable-5",
+          "claude-sonnet-5-5",
+          "claude-sonnet-5",
+          "claude-opus-5-5",
+          "claude-opus-5",
+          "claude-opus-4-8",
+          "claude-opus-4-7",
+          "claude-opus-4-6",
+          "claude-sonnet-4-6",
+          "claude-haiku-5-5",
+          "claude-haiku-4-5"
+        ]
+      }
+    }
+  },
+  "interface_driver_config": {
+    "supported_reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "private_config": {
+      "model": "claude-sonnet-5",
+      "reasoning_effort": "medium",
+      "sdk_child": {
+        "executable": "interface://world_provider_claude_native/packages/octopus-claude-sdk-child/bin/octopus-claude-sdk-child",
+        "protocol": "octopus.claude_sdk_child/1",
+        "claude_executable": "claude"
+      },
+      "client_metadata": {
+        "schema_version": 1,
+        "module": "interface://world_provider_claude_native/packages/octopus-provider-claude-native/client-metadata.cjs"
+      },
+      "model_catalog": [
+        {
+          "model": "claude-fable-5-1",
+          "display_name": "Claude Fable 5.1",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Fable 5.1 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-fable-5",
+          "display_name": "Claude Fable 5",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Fable 5 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "display_name": "Claude Sonnet 5.5",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Sonnet 5.5 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-sonnet-5",
+          "display_name": "Claude Sonnet 5",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Sonnet 5 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-opus-5-5",
+          "display_name": "Claude Opus 5.5",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Opus 5.5 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-opus-5",
+          "display_name": "Claude Opus 5",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Opus 5 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-opus-4-8",
+          "display_name": "Claude Opus 4.8",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Opus 4.8 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-opus-4-7",
+          "display_name": "Claude Opus 4.7",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Opus 4.7 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-opus-4-6",
+          "display_name": "Claude Opus 4.6",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Opus 4.6 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "display_name": "Claude Sonnet 4.6",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Sonnet 4.6 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "display_name": "Claude Haiku 5.5",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Haiku 5.5 through the Claude Agent SDK."
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "display_name": "Claude Haiku 4.5",
+          "context_window": 200000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true,
+          "description": "Claude Haiku 4.5 through the Claude Agent SDK."
+        }
+      ],
+      "input_messages": {
+        "operator.message": {
+          "text_fields": [
+            "text",
+            "prompt"
+          ],
+          "client_context_field": "client_context",
+          "attachments_field": "attachments",
+          "identity_field": "message_id",
+          "identity_required": false
+        },
+        "realtime.delegation": {
+          "text_fields": [
+            "input_text"
+          ],
+          "client_context_field": "client_context",
+          "identity_field": "delegation_id",
+          "identity_required": true,
+          "context_fields": [
+            "call_id",
+            "correlation_id"
+          ],
+          "request_context_fields": {
+            "transcript": "array"
+          }
+        }
+      },
+      "run_authoring_profile": {
+        "file_write_tool": "file.write",
+        "file_write_label": "tool.call",
+        "file_write_result_label": "file.write.result",
+        "result_timeout_ms": 30000
+      },
+      "model_hidden_tools": [
+        "file.write",
+        "gui.app_resume",
+        "browser.filechooser_resume",
+        "code_mode.resume"
+      ],
+      "context_output_labels": [
+        "interface.artifact.output",
+        "interface.context.updated",
+        "tool.call",
+        "turn.control.acknowledged",
+        "turn.interrupted.result",
+        "turn.context.compaction",
+        "turn.error",
+        "operator.approval.request",
+        "operator.elicitation.request",
+        "operator.user_input.request",
+        "turn.agent_message",
+        "turn.reasoning",
+        "turn.plan.update"
+      ],
+      "client_projection_output_labels": [
+        "turn.input.acknowledged",
+        "interface.artifact.output",
+        "interface.context.updated",
+        "tool.call",
+        "turn.error",
+        "turn.control.acknowledged",
+        "turn.control.failed",
+        "turn.interrupted.result",
+        "operator.approval.request",
+        "operator.elicitation.request",
+        "operator.user_input.request",
+        "provider.models.catalog",
+        "provider.operation.error",
+        "provider.account.login.completed",
+        "provider.account.updated",
+        "provider.account.rate_limits.updated",
+        "provider.account.login.started",
+        "provider.account.login.cancelled",
+        "provider.account.login.status",
+        "provider.account.logged_out",
+        "provider.account.snapshot",
+        "provider.account.rate_limits",
+        "provider.account.rate_limit_reset.consumed",
+        "provider.account.usage",
+        "provider.account.workspace_messages",
+        "provider.capabilities",
+        "turn.stream",
+        "agent.message.delta",
+        "turn.agent_message",
+        "turn.reasoning",
+        "turn.reasoning.delta",
+        "turn.plan.update",
+        "turn.plan.delta",
+        "turn.exec.command",
+        "turn.exec.output_delta",
+        "turn.exec.terminal_interaction",
+        "turn.file.change",
+        "turn.file.change_delta",
+        "turn.diff.updated",
+        "turn.web_search",
+        "lifecycle.event",
+        "hook.catalog",
+        "hook.catalog.error",
+        "hook.result",
+        "turn.hook.prompt",
+        "turn.mcp.tool_call",
+        "turn.mcp.progress",
+        "turn.mcp.status",
+        "turn.dynamic_tool_call",
+        "turn.collaboration",
+        "turn.subagent.activity",
+        "turn.image.view",
+        "turn.sleep",
+        "turn.image.generation",
+        "turn.review.entered",
+        "turn.review.exited",
+        "turn.context.compaction",
+        "turn.token_usage",
+        "turn.started",
+        "turn.completed",
+        "turn.model.rerouted",
+        "turn.model.verification",
+        "turn.auth_recovery.started",
+        "turn.auth_recovery.completed",
+        "turn.warning",
+        "turn.auto_review.started",
+        "turn.auto_review.completed",
+        "turn.operator_request.resolved",
+        "goal.status",
+        "account.rate_limits"
+      ],
+      "session_snapshot_labels": [
+        "interface.artifact.output",
+        "turn.interrupted.result",
+        "turn.error"
+      ],
+      "instruction_artifacts": [],
+      "worker_instruction_artifacts": []
+    }
+  }
+}

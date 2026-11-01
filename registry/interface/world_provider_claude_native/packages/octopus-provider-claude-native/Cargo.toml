@@ -1,0 +1,36 @@
+[package]
+name = "octopus-provider-claude-native"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "octopus_provider_claude_native"
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "octopus-provider-claude-native-life"
+path = "src/bin/life.rs"
+
+[dependencies]
+blake3.workspace = true
+sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "macros", "rt"] }
+octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
+octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
+octopus-interface-transport = { path = "../../../../../crates/octopus-interface-transport" }
+octopus-world-pyecho-life-runtime = { path = "../../../world_pyecho/packages/octopus-world-pyecho-life-runtime" }
+octopus-run-authoring = { path = "../../../system_interface_authoring/packages/octopus-run-authoring" }
+octopus-model-context-render = { path = "../../../world_provider_codex/packages/octopus-model-context-render" }
+octopus-runtime = { path = "../../../../../crates/octopus-runtime" }
+octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
+sha2 = "0.10"

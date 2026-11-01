@@ -6,6 +6,10 @@
     "registry/interface/world_provider_codex/packages/octopus-provider-codex/build-receipt.json",
     "registry/interface/world_provider_codex/packages/octopus-provider-codex/intake/life-bin/",
     "registry/interface/world_provider_codex/packages/octopus-provider-codex/intake/build-receipt.json",
-    "registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/bin/"
+    "registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/bin/",
+    "registry/interface/world_provider_claude_native/packages/octopus-claude-sdk-child/bin/",
+    "registry/interface/world_provider_claude_native/packages/octopus-claude-sdk-child/build-receipt.json",
+    "registry/interface/world_provider_claude_native/packages/octopus-provider-claude-native/life-bin/",
+    "registry/interface/world_provider_claude_native/packages/octopus-provider-claude-native/build-receipt.json"
   ]
 }

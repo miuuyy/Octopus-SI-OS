@@ -1,0 +1,96 @@
+{
+  "processes": [
+    {
+      "bin": "owner://packages/octopus-provider-claude-native/life-bin/octopus-provider-claude-native-life",
+      "doctor": {
+        "args": [
+          "--doctor"
+        ],
+        "timeout_ms": 5000
+      },
+      "io_limits": {
+        "max_control_frame_bytes": 1048576,
+        "max_stderr_bytes": 262144,
+        "max_manifest_bytes": 1048576,
+        "max_payload_bytes": 268435456
+      },
+      "args": [],
+      "read_handles": [
+        "ledger",
+        "ledger_index",
+        "blobs"
+      ],
+      "coordinate_root_slots": [
+        "run_records_root",
+        "app_server_control_root",
+        "registry_interface_root"
+      ],
+      "inherit_env": [
+        "HOME",
+        "PATH",
+        "USER",
+        "LANG",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY"
+      ],
+      "authority": {
+        "read_root_slots": [
+          "run_records_root",
+          "registry_interface_root"
+        ],
+        "write_root_slots": [
+          "interface_hand_in_root"
+        ],
+        "executable_root_slots": [],
+        "read_paths": [
+          "/etc"
+        ],
+        "write_paths": [
+          "/tmp/octopus-provider-cwd"
+        ],
+        "executable_paths": [],
+        "executable_root_subpaths": [
+          {
+            "root_slot": "registry_interface_root",
+            "relative_path": "world_provider_claude_native/packages/octopus-claude-sdk-child/bin/octopus-claude-sdk-child"
+          }
+        ],
+        "executable_commands": [
+          "claude",
+          "security"
+        ],
+        "read_env_paths": [],
+        "write_env_paths": [],
+        "executable_env_paths": [],
+        "read_env_subpaths": [
+          {
+            "env": "HOME",
+            "relative_path": ".claude"
+          },
+          {
+            "env": "HOME",
+            "relative_path": ".claude.json"
+          },
+          {
+            "env": "HOME",
+            "relative_path": "Library/Keychains"
+          }
+        ],
+        "write_env_subpaths": [
+          {
+            "env": "HOME",
+            "relative_path": ".claude"
+          },
+          {
+            "env": "HOME",
+            "relative_path": ".claude.json"
+          }
+        ],
+        "allow_network": true,
+        "allow_local_ipc": true
+      }
+    }
+  ]
+}

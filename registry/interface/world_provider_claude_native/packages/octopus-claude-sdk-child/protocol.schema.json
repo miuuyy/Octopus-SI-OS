@@ -1,0 +1,808 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octopus.local/schemas/claude_sdk_child_protocol.schema.json",
+  "title": "Octopus Claude SDK child protocol",
+  "description": "One JSON object per line. The provider life writes `command` frames to the child's stdin; the child writes `event` frames to stdout. Every command is answered by exactly one `ack` or one `error` carrying its request_id.",
+  "$defs": {
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "start"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "system_prompt": {
+                  "type": "string"
+                },
+                "cwd": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ]
+                },
+                "resume": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "max_turns": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "tools": {
+                  "maxItems": 512,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "input_schema": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "description",
+                      "input_schema"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "model",
+                "system_prompt",
+                "cwd",
+                "resume",
+                "tools"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "config"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "turn"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "input": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "turn",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "steer"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "as_turn": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "turn",
+            "as_turn",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "interrupt"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "turn"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "call_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "content": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "is_error": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "turn",
+            "call_id",
+            "content",
+            "is_error"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "close"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ready"
+            },
+            "protocol": {
+              "type": "string",
+              "const": "octopus.claude_sdk_child/1"
+            },
+            "sdk_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "claude_version": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "protocol",
+            "sdk_version",
+            "claude_version"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ack"
+            },
+            "request_id": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "request_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "claude_session_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "claude_session_id",
+            "model",
+            "tools"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "item"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "item": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "thinking"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "message_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "text",
+                "message_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "item"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text_delta"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "message_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "message_id",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "input_recorded"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "text": {
+              "type": "string"
+            },
+            "synthetic": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "text",
+            "synthetic"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "call_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "input": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "call_id",
+            "name",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "usage"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "usage": {
+              "type": "object",
+              "properties": {
+                "input_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "output_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "cache_creation_input_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "cache_read_input_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "input_tokens",
+                "output_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens"
+              ],
+              "additionalProperties": false
+            },
+            "total_cost_usd": {
+              "type": "number",
+              "minimum": 0
+            },
+            "duration_ms": {
+              "type": "number",
+              "minimum": 0
+            },
+            "num_turns": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "usage",
+            "total_cost_usd",
+            "duration_ms",
+            "num_turns"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "turn_end"
+            },
+            "session": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "turn": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "interrupted",
+                "failed"
+              ]
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "claude_session_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "turn",
+            "status",
+            "result",
+            "claude_session_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "error"
+            },
+            "request_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "turn": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "code": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "fatal": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "session",
+            "turn",
+            "code",
+            "message",
+            "fatal"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

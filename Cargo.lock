@@ -7595,6 +7595,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "octopus-provider-claude-native"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "octopus-descriptors",
+ "octopus-interface-transport",
+ "octopus-interfaces",
+ "octopus-model-context-render",
+ "octopus-run-authoring",
+ "octopus-runtime",
+ "octopus-tool-handlers",
+ "octopus-world-pyecho-life-runtime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "octopus-provider-codex"
 version = "0.1.0"
 dependencies = [

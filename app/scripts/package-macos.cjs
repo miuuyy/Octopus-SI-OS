@@ -46,7 +46,7 @@ const managedCodexRoot = path.join(openCodexOwnerRoot, "managed-cli");
 const managedCodexDistribution = require(path.join(managedCodexRoot, "bootstrap.cjs"));
 const openCodexLifeBinary = "octopus-provider-opencodex-life";
 const inputIntakeLifeBinary = "octopus-input-intake-life";
-const { captureProviderSigningInputs, sealProviderSigningInputs, signClientResources, bundleManagedCodex, copyRegistrySurface, copyLocalPackageDefinitions, copyRegistryBaseline, collectBundledBinaries, sharedBinaries, materializeProviderLife, validateOpenCodexOwnerAssets, copyBundledBinaries, registryExecutableOwnership, rewriteBundledExecutablePaths, stripExecutables, transformExecutableCopies, validateBundledLayout } =
+const { ownedProviderLives, buildOwnedNpmPackages, captureProviderSigningInputs, sealProviderSigningInputs, signClientResources, bundleManagedCodex, copyRegistrySurface, copyLocalPackageDefinitions, copyRegistryBaseline, collectBundledBinaries, sharedBinaries, materializeProviderLife, validateOpenCodexOwnerAssets, copyBundledBinaries, registryExecutableOwnership, rewriteBundledExecutablePaths, stripExecutables, transformExecutableCopies, validateBundledLayout } =
   require("./runtime-package.cjs").createRuntimePackager({ repoRoot, appRoot, outputRoot: bundledAppRoot });
 
 for (const asset of [
@@ -61,6 +61,7 @@ const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encodi
 const sourceStatus = spawnSync("git", ["status", "--porcelain", "--untracked-files=normal"], { cwd: repoRoot, encoding: "utf8" });
 run("npm", ["run", "build"], appRoot);
 buildOpenCodexBridge();
+buildOwnedNpmPackages();
 const desktopNativeRoot = path.join(registryRoot, "worker_environment_kind", "desktop_session", "packages", "octopus-system-gui-env", "native");
 const desktopNativeExecutable = path.join(desktopNativeRoot, "bin", "octopus-desktop-native");
 assertDeclaredGeneratedOutput(desktopNativeExecutable, repoRoot, generatedOutputs);
@@ -77,9 +78,11 @@ process.once("exit", () => fs.rmSync(pipOutput, { recursive: true, force: true }
 const pipReceipt = pipBuilder.build({ compiler: pipCompiler, swiftCompiler: pipSwiftCompiler, sdk: pipSdk, headers: fs.realpathSync(pipHeaders),
   outputRoot: pipOutput, architecture: process.arch, target: "addon", deploymentTarget: minimumSystemVersion });
 const bundledBinaries = collectBundledBinaries(registryRoot);
-buildBundledBinaries([...bundledBinaries, openCodexLifeBinary, inputIntakeLifeBinary]);
+const ownedLives = ownedProviderLives();
+buildBundledBinaries([...bundledBinaries, openCodexLifeBinary, inputIntakeLifeBinary, ...ownedLives.map((life) => life.binary)]);
 materializeProviderLife(openCodexOwnerRoot, openCodexLifeBinary);
 materializeProviderLife(path.join(openCodexOwnerRoot, "intake"), inputIntakeLifeBinary);
+for (const life of ownedLives) materializeProviderLife(life.ownerRoot, life.binary, life.crateRoot);
 validateOpenCodexOwnerAssets(openCodexOwnerRoot);
 
 fs.rmSync(bundleRoot, { recursive: true, force: true });

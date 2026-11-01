@@ -6,7 +6,10 @@ members = [
     "registry/worker_environment_kind/*/packages/*",
 ]
 # Managed provider executables are distribution inputs, not Rust packages.
-exclude = ["registry/interface/world_provider_codex/packages/bin"]
+exclude = [
+    "registry/interface/world_provider_codex/packages/bin",
+    "registry/interface/world_provider_claude_native/packages/octopus-claude-sdk-child",
+]
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
