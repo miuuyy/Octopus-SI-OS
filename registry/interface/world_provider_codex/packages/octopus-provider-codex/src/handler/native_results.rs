@@ -221,9 +221,9 @@ pub(crate) fn emit_native_effect(
 ) -> Result<(), InterfaceDriverError> {
     let value = serde_json::to_value(&operation).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
     let effect = operation.effect;
-    sink.set_pending(Some(CodexPendingContinuity::DynamicTool {
+    sink.replace_pending(CodexPendingContinuity::DynamicTool {
         turn_id: turn_id.into(), call_id: effect.correlation_id.clone(), tool: effect.tool.clone(), native_operation: Some(value),
-    }));
+    })?;
     let output = CodexTurnOutput::native_tool_call(effect.tool, effect.arguments, effect.correlation_id);
     if let Some(amendment) = amendment {
         if !bindings.is_empty() {
@@ -340,6 +340,7 @@ pub(crate) struct RecoveredToolResultRolloutEvidence {
     pub(crate) output_persisted: bool,
     pub(crate) successor_turn_id: Option<String>,
     pub(crate) native_function_calls: usize,
+    pub(crate) native_receipt: bool,
 }
 
 impl RecoveredToolResultRolloutEvidence {
@@ -544,23 +545,9 @@ pub(crate) fn recovered_tool_result_rollout_evidence(
                     && item.get("type").and_then(serde_json::Value::as_str) == Some("DynamicToolCall")
                     && item.get("id").and_then(serde_json::Value::as_str) == Some(expected_call_id)
                 {
-                    let content: Vec<DynamicToolCallOutputContentItem> = serde_json::from_value(
-                        item.get("content_items").cloned().unwrap_or(serde_json::Value::Null),
-                    ).map_err(|error| InterfaceDriverError::FailedClosed(format!(
-                        "Codex recovery receipt for '{expected_call_id}' has invalid content: {error}"
-                    )))?;
-                    let output = recovered_result_output(content)?;
-                    let matches = payload.get("thread_id") == activity.get("thread_id")
+                    if payload.get("thread_id") == activity.get("thread_id")
                         && payload.get("turn_id") == activity.get("turn_id")
-                        && item.get("namespace") == activity.get("namespace")
-                        && activity.get("tool").and_then(serde_json::Value::as_str)
-                            .is_some_and(|tool| item.get("tool").and_then(serde_json::Value::as_str)
-                                == Some(encode_tool_name(tool).as_str()))
-                        && item.get("success") == activity.get("success")
-                        && item.get("status") == activity.get("status")
-                        && item.get("error").is_none_or(serde_json::Value::is_null)
-                        && expected_output == &output;
-                    if matches {
+                    {
                         dynamic_exact += 1;
                         after_exact = true;
                     } else {
@@ -599,6 +586,7 @@ pub(crate) fn recovered_tool_result_rollout_evidence(
             output_persisted: true,
             successor_turn_id: successor_turn_ids.pop(),
             native_function_calls,
+            native_receipt: dynamic_exact == 1,
         }),
         (0..=1, 0..=1, 0, _) => Err(InterfaceDriverError::FailedClosed(format!(
             "Codex recovery rollout '{}' carries {} successor TurnStarted receipts after call_id '{}'",
@@ -612,6 +600,37 @@ pub(crate) fn recovered_tool_result_rollout_evidence(
             expected_call_id
         ))),
     }
+}
+
+pub(crate) fn verify_native_tool_receipt(
+    entry: &octopus_appserver_proto::ThreadItemEntry,
+    expected: &serde_json::Value,
+    activity: &serde_json::Value,
+) -> Result<(), InterfaceDriverError> {
+    let call_id = expected.get("call_id").and_then(serde_json::Value::as_str);
+    let ThreadItem::DynamicToolCall { id, namespace, tool, status, content_items, success, .. } = &entry.item else {
+        return Err(InterfaceDriverError::FailedClosed(format!(
+            "Codex native receipt for {call_id:?} is not a dynamic tool call"
+        )));
+    };
+    let content = content_items.clone().ok_or_else(|| InterfaceDriverError::FailedClosed(format!(
+        "Codex native receipt for '{id}' carries no content items"
+    )))?;
+    let matches = Some(id.as_str()) == call_id
+        && activity.get("turn_id").and_then(serde_json::Value::as_str) == Some(entry.turn_id.as_str())
+        && activity.get("namespace").and_then(serde_json::Value::as_str) == namespace.as_deref()
+        && activity.get("tool").and_then(serde_json::Value::as_str)
+            .is_some_and(|exact| encode_tool_name(exact) == *tool)
+        && activity.get("success").and_then(serde_json::Value::as_bool) == *success
+        && activity.get("status") == Some(&serde_json::to_value(status)
+            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?)
+        && expected.get("output") == Some(&recovered_result_output(content)?);
+    if !matches {
+        return Err(InterfaceDriverError::FailedClosed(format!(
+            "Codex native receipt for '{id}' conflicts with the admitted tool result"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

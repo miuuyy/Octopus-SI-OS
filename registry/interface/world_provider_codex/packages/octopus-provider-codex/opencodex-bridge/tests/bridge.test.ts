@@ -165,7 +165,9 @@ function sse(events: Array<[string | null, unknown]>): Response {
   return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
 }
 
-async function exchange(provider: Record<string, unknown>, upstreamReply: Response, model = "test-model", tools: unknown[] = []) {
+const userInput = [{ role: "user", content: [{ type: "input_text", text: "hi" }] }];
+
+async function exchange(provider: Record<string, unknown>, upstreamReply: Response, model = "test-model", tools: unknown[] = [], input: unknown[] = userInput) {
   let observed: { path: string; search: string; headers: Headers; body: Record<string, unknown> } | undefined;
   const upstream = Bun.serve({
     hostname: "127.0.0.1",
@@ -182,7 +184,7 @@ async function exchange(provider: Record<string, unknown>, upstreamReply: Respon
   const response = await fetch(`${bridge.origin}/v1/responses`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }], tools }),
+    body: JSON.stringify({ model, stream: true, input, tools }),
   });
   return { status: response.status, text: await response.text(), observed: observed! };
 }
@@ -249,19 +251,23 @@ test("gemini generateContent streams through the bridge", async () => {
   expect(result.text).toContain("response.completed");
 });
 
+function responsesStream(text: string): Response {
+  const item = { id: "msg_1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
+  return sse([
+    ["response.created", { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", model: "test-model", output: [] } }],
+    ["response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress", content: [] } }],
+    ["response.content_part.added", { type: "response.content_part.added", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }],
+    ["response.output_text.delta", { type: "response.output_text.delta", item_id: "msg_1", output_index: 0, content_index: 0, delta: text }],
+    ["response.output_text.done", { type: "response.output_text.done", item_id: "msg_1", output_index: 0, content_index: 0, text }],
+    ["response.content_part.done", { type: "response.content_part.done", item_id: "msg_1", output_index: 0, content_index: 0, part: item.content[0] }],
+    ["response.output_item.done", { type: "response.output_item.done", output_index: 0, item }],
+    ["response.completed", { type: "response.completed", response: { id: "resp_1", object: "response", status: "completed", model: "test-model", output: [item], usage: { input_tokens: 3, output_tokens: 3, total_tokens: 6 } } }],
+  ]);
+}
+
 for (const adapter of ["openai-responses", "azure"]) {
   test(`${adapter} Responses stream through the bridge`, async () => {
-    const item = { id: "msg_1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "responses says hi", annotations: [] }] };
-    const result = await exchange({ adapter, ...(adapter === "azure" ? { base_url: "/openai", auth_header: "api-key", auth_value_prefix: "" } : {}) }, sse([
-      ["response.created", { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", model: "test-model", output: [] } }],
-      ["response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress", content: [] } }],
-      ["response.content_part.added", { type: "response.content_part.added", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }],
-      ["response.output_text.delta", { type: "response.output_text.delta", item_id: "msg_1", output_index: 0, content_index: 0, delta: "responses says hi" }],
-      ["response.output_text.done", { type: "response.output_text.done", item_id: "msg_1", output_index: 0, content_index: 0, text: "responses says hi" }],
-      ["response.content_part.done", { type: "response.content_part.done", item_id: "msg_1", output_index: 0, content_index: 0, part: item.content[0] }],
-      ["response.output_item.done", { type: "response.output_item.done", output_index: 0, item }],
-      ["response.completed", { type: "response.completed", response: { id: "resp_1", object: "response", status: "completed", model: "test-model", output: [item], usage: { input_tokens: 3, output_tokens: 3, total_tokens: 6 } } }],
-    ]));
+    const result = await exchange({ adapter, ...(adapter === "azure" ? { base_url: "/openai", auth_header: "api-key", auth_value_prefix: "" } : {}) }, responsesStream("responses says hi"));
     expect(result.status).toBe(200);
     expect(result.observed.path).toBe(adapter === "azure" ? "/openai/v1/responses" : "/v1/responses");
     expect(result.observed.headers.get(adapter === "azure" ? "api-key" : "authorization")).toBe(adapter === "azure" ? "test-secret" : "Bearer test-secret");
@@ -269,6 +275,22 @@ for (const adapter of ["openai-responses", "azure"]) {
     expect(result.text).toContain("response.completed");
   });
 }
+
+test("Codex configuration_update items reach neither a translated nor a passthrough upstream", async () => {
+  const input = [...userInput, { type: "configuration_update", reasoning: { effort: "high" } }];
+  const chat = await exchange({}, sse([
+    [null, { id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "chat ok" }, finish_reason: null }] }],
+    [null, { id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }],
+    [null, "[DONE]"],
+  ]), "test-model", [], input);
+  const passthrough = await exchange({ adapter: "openai-responses" }, responsesStream("passthrough ok"), "test-model", [], input);
+  for (const result of [chat, passthrough]) {
+    expect(result.status).toBe(200);
+    expect(result.text).toContain("response.completed");
+    expect(JSON.stringify(result.observed.body)).toContain("hi");
+    expect(JSON.stringify(result.observed.body)).not.toContain("configuration_update");
+  }
+});
 
 test("claude-cli turns run through the signed-in CLI with a scoped env and the bridge's own capture MCP", async () => {
   const home = mkdtempSync(join(tmpdir(), "octopus-claude-cli-"));

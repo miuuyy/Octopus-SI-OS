@@ -8,6 +8,7 @@
     include!("result_continuity.rs");
     include!("native_planning_read.rs");
     include!("native_catalog.rs");
+    include!("parallel_dynamic_calls.rs");
 
     fn metadata_input(
         interface_affordance_specs: serde_json::Value,
@@ -509,6 +510,7 @@
             turn_input: None,
             pending,
             interrupted_pending: None,
+            parallel_pending: BTreeMap::new(),
             tool_operator_request: None,
             native_terminal: None,
             context_refresh: None,
@@ -1248,23 +1250,37 @@
                 "content_items":[{"type":"inputText", "text":"missing directory"}]}
         }});
         std::fs::write(&rollout, format!("{receipt}\n")).unwrap();
-        assert!(recovered_tool_result_rollout_evidence(&rollout, &expected, Some(&activity.value)).unwrap().output_persisted);
+        let located = recovered_tool_result_rollout_evidence(&rollout, &expected, Some(&activity.value)).unwrap();
+        assert!(located.output_persisted && located.native_receipt);
         assert!(!recovered_tool_result_rollout_evidence(&rollout, &expected, None).unwrap().output_persisted);
-        for (pointer, value) in [
-            ("/payload/thread_id", serde_json::json!("other")),
-            ("/payload/turn_id", serde_json::json!("other")),
-            ("/payload/item/namespace", serde_json::json!("other")),
-            ("/payload/item/tool", serde_json::json!("other")),
-            ("/payload/item/success", serde_json::json!(true)),
-            ("/payload/item/content_items/0/text", serde_json::json!("invented")),
-        ] {
+        for pointer in ["/payload/thread_id", "/payload/turn_id"] {
             let mut bad = receipt.clone();
-            *bad.pointer_mut(pointer).unwrap() = value;
+            *bad.pointer_mut(pointer).unwrap() = serde_json::json!("other");
             std::fs::write(&rollout, format!("{bad}\n")).unwrap();
             assert!(recovered_tool_result_rollout_evidence(&rollout, &expected, Some(&activity.value)).is_err(), "{pointer}");
         }
         std::fs::write(&rollout, format!("{receipt}\n{receipt}\n")).unwrap();
         assert!(recovered_tool_result_rollout_evidence(&rollout, &expected, Some(&activity.value)).is_err());
+        let mut native = activity.value.clone();
+        native["tool"] = serde_json::json!("workspace.list");
+        let entry = serde_json::json!({"turnId":"turn-a", "startedAtMs":10, "completedAtMs":11, "item":{
+            "type":"dynamicToolCall", "id":"exec-call", "namespace":"formed_interfaces", "tool":"workspace-dlist",
+            "arguments":{}, "status":"failed", "success":false, "durationMs":1,
+            "contentItems":[{"type":"inputText", "text":"missing directory"}]}});
+        verify_native_tool_receipt(&serde_json::from_value(entry.clone()).unwrap(), &expected, &native).unwrap();
+        for (pointer, value) in [
+            ("/turnId", serde_json::json!("other")),
+            ("/item/id", serde_json::json!("other")),
+            ("/item/namespace", serde_json::json!("other")),
+            ("/item/tool", serde_json::json!("other")),
+            ("/item/success", serde_json::json!(true)),
+            ("/item/status", serde_json::json!("inProgress")),
+            ("/item/contentItems/0/text", serde_json::json!("invented")),
+        ] {
+            let mut bad = entry.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(verify_native_tool_receipt(&serde_json::from_value(bad).unwrap(), &expected, &native).is_err(), "{pointer}");
+        }
     }
 
     #[test]
@@ -1329,6 +1345,7 @@
                 output_persisted: true,
                 successor_turn_id: Some("turn-successor".to_string()),
                 native_function_calls: 0,
+                native_receipt: false,
             }
         );
         assert!(reconcile_recovered_successor_dispatch(&rollout_evidence, &[]).is_err());
@@ -2543,6 +2560,153 @@
     }
 
     #[tokio::test]
+    async fn declared_account_sessions_read_lists_chatgpt_sign_ins_through_admitted_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("account-sessions-app-server.sock");
+        let mut listener = crate::uds::UnixListener::bind(&socket_path).await.unwrap();
+        let sessions = serde_json::json!({
+            "activeSessionId": "session-1",
+            "sessions": [{
+                "sessionId": "session-1",
+                "email": "owner@example.test",
+                "userId": "user-1",
+                "displayName": null,
+                "imageUrl": null,
+                "lastUsedAt": 1,
+                "isActive": true,
+                "selectedWorkspaceAccountId": "team-1",
+                "workspaces": [
+                    {"accountId": "personal-1", "name": null, "imageUrl": null, "kind": "personal"},
+                    {"accountId": "team-1", "name": "Team", "imageUrl": null, "kind": "workspace"},
+                ],
+            }],
+        });
+        let listed = sessions.clone();
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let octopus_appserver_proto::JSONRPCMessage::Request(init) = next_test_rpc(&mut socket).await else {
+                panic!("expected initialize request")
+            };
+            send_test_result(
+                &mut socket,
+                init.id,
+                serde_json::json!({"userAgent": "codex/test", "codexHome": "/tmp"}),
+            )
+            .await;
+            assert!(matches!(
+                next_test_rpc(&mut socket).await,
+                octopus_appserver_proto::JSONRPCMessage::Notification(_)
+            ));
+            let octopus_appserver_proto::JSONRPCMessage::Request(list) = next_test_rpc(&mut socket).await else {
+                panic!("expected accountSession/list request")
+            };
+            assert_eq!(list.method, "accountSession/list");
+            assert_eq!(list.params.as_ref().unwrap()["refreshWorkspaceMetadata"], true);
+            send_test_result(&mut socket, list.id, listed).await;
+        });
+        let client = crate::RemoteAppServerClient::connect(crate::RemoteAppServerConnectArgs {
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: octopus_util_abspath::AbsolutePathBuf::from_absolute_path(
+                    &socket_path,
+                )
+                .unwrap(),
+            },
+            client_name: "octopus-test".to_string(),
+            client_version: "0".to_string(),
+            experimental_api: true,
+            mcp_server_openai_form_elicitation: false,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        })
+        .await
+        .unwrap();
+        let mut operations = provider_operations_value();
+        operations["account_sessions_read"] = serde_json::json!({
+            "request_label": PROVIDER_ACCOUNT_SESSIONS_READ_LABEL,
+            "output_label": PROVIDER_ACCOUNT_SESSIONS_LABEL,
+        });
+        let mut projected = codex_client_projection_labels();
+        projected.insert(PROVIDER_ACCOUNT_SESSIONS_LABEL.to_string());
+        let private_config = serde_json::json!({
+            "provider_operations": operations,
+            "instruction_artifacts": [],
+            "worker_instruction_artifacts": [],
+            "context_output_labels": codex_context_labels(),
+            "session_snapshot_labels": codex_snapshot_labels(),
+            "client_projection_output_labels": projected.iter().cloned().collect::<Vec<_>>(),
+            "live_stream": live_stream_config_value(),
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let config = InterfaceDriverConfig {
+            private_config,
+            ..InterfaceDriverConfig::default()
+        };
+        let driver = CodexAppServerInterfaceDriver::new_with_config(
+            AppServerClient::Remote(client),
+            Some(&config),
+        );
+        let operation = driver
+            .configured_provider_operation(PROVIDER_ACCOUNT_SESSIONS_READ_LABEL)
+            .unwrap()
+            .unwrap();
+        let (output, mut output_rx) = ProviderOutputStream::channel();
+        let labels = BTreeSet::new();
+        let output_root = temp.path().join("emitted");
+        let live_stream_root = temp.path().join("streams");
+        let live_stream_rules = live_stream_rules();
+        let provider_interface = InterfaceId::new("world_provider_codex");
+        let sink = TurnSink {
+            emit: &output,
+            output_root: &output_root,
+            live_stream_root: &live_stream_root,
+            provider_interface: &provider_interface,
+            run: "run-a",
+            source_movement_seq: 7,
+            attempt: 1,
+            context_output_labels: &labels,
+            client_projection_output_labels: &projected,
+            live_stream_rules: &live_stream_rules,
+            live_stream: std::sync::Mutex::new(None),
+            continuity: Arc::new(std::sync::Mutex::new(ContinuityEmitterState::default())),
+        };
+        let handled = driver.handle_provider_operation(
+            operation,
+            &provider_interface,
+            br#"{"refresh_workspace_metadata":true}"#,
+            &sink,
+        );
+        let receive = async {
+            let ProviderStreamEmission::TransportDispatch { artifact, admitted } =
+                output_rx.recv().await.unwrap()
+            else {
+                panic!("expected transport dispatch emission")
+            };
+            let dispatch: serde_json::Value =
+                serde_json::from_slice(&artifact.read_payload_bytes().unwrap()).unwrap();
+            assert_eq!(dispatch["method"], "accountSession/list");
+            admitted.send(Ok(())).unwrap();
+            let ProviderStreamEmission::Turn(emission) = output_rx.recv().await.unwrap() else {
+                panic!("expected provider turn emission")
+            };
+            emission
+        };
+        let (result, emission) = tokio::join!(handled, receive);
+        result.unwrap();
+        assert_eq!(
+            emission.artifact.read_manifest().unwrap().label,
+            PROVIDER_ACCOUNT_SESSIONS_LABEL
+        );
+        let payload: serde_json::Value =
+            serde_json::from_slice(&emission.artifact.read_payload_bytes().unwrap()).unwrap();
+        assert_eq!(payload["activeSessionId"], sessions["activeSessionId"]);
+        assert_eq!(payload["sessions"], sessions["sessions"]);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn cold_continuity_resumes_and_reads_the_exact_native_thread() {
         use octopus_appserver_proto::{
             ApprovalsReviewer, AskForApproval, SandboxPolicy, SessionSource, Thread, ThreadStatus,
@@ -2933,8 +3097,6 @@ printf '%s\n' '{"id":6,"result":{"turn":{"id":"turn-continued","items":[],"items
 printf '%s\n' '{"method":"item/started","params":{"threadId":"thr-exact","turnId":"turn-continued","startedAtMs":1,"item":{"type":"webSearch","id":"web-1","query":"example","action":null}}}'
 printf '%s\n' '{"method":"item/completed","params":{"threadId":"thr-exact","turnId":"turn-continued","completedAtMs":2,"item":{"type":"webSearch","id":"web-1","query":"example","action":{"type":"search","query":"example"},"results":[{"url":"https://example.com","title":"Example","snippet":"search evidence"}]}}}'
 printf '%s\n' '{"id":"server-tool-1","method":"item/tool/call","params":{"threadId":"thr-exact","turnId":"turn-continued","callId":"call-2","namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":"pwd"}}}'
-printf '%s\n' '{"method":"item/completed","params":{"threadId":"thr-exact","turnId":"turn-continued","completedAtMs":3,"item":{"type":"agentMessage","id":"commentary-after-result","text":"Continuing","phase":"commentary"}}}'
-printf '%s\n' '{"id":"server-tool-2","method":"item/tool/call","params":{"threadId":"thr-exact","turnId":"turn-continued","callId":"call-3","namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":"ls"}}}'
 IFS= read -r _
 printf '%s\n' '{"id":7,"result":{"data":[]}}'
 IFS= read -r probe
@@ -2945,6 +3107,8 @@ case "$turns" in *'"method":"thread/turns/list"'*) ;; *) exit 1;; esac
 printf '%s\n' "$8"
 IFS= read -r response
 printf '%s\n' "$response" > "$2"
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thr-exact","turnId":"turn-continued","completedAtMs":3,"item":{"type":"agentMessage","id":"commentary-after-result","text":"Continuing","phase":"commentary"}}}'
+printf '%s\n' '{"id":"server-tool-2","method":"item/tool/call","params":{"threadId":"thr-exact","turnId":"turn-continued","callId":"call-3","namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":"ls"}}}'
 while IFS= read -r _; do :; done
 "#,
         )
@@ -6245,7 +6409,7 @@ while IFS= read -r _; do :; done
                     lifecycle: None, lifecycle_prompt: None };
                 if cold || !terminal_case {
                     let checked = tokio::time::timeout(std::time::Duration::from_secs(3), driver.complete_native_terminal_result(
-                        context, &recovered, (!cold).then_some(&pending),
+                        context, &recovered, "tool:call-a", (!cold).then_some(&pending),
                         CodexTurnOutput::dynamic_tool_completed_after_interrupt("formed_interfaces".into(), result.tool.clone(), "call-a".into(), "thread-a".into(), "turn-a".into(), result.ok, result.body.clone(), result.error.clone()),
                         false, CodexTurnOutput::interrupted_result_closed("tool_result", "call-a".into(), "thread-a".into(), "turn-a".into(), result.ok, &source.artifact),
                         false,

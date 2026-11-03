@@ -301,8 +301,8 @@ function validateOperatorRecordedInput(value, header) {
     || !["item/started", "item/completed", "thread/resume"].includes(value.source_event)) {
     throw new Error("turn.stream input_recorded has invalid observation stage/source");
   }
-  if (value.source_event === "thread/resume" ? Object.hasOwn(value, "native_event_at_ms")
-    : !Number.isSafeInteger(value.native_event_at_ms) || value.native_event_at_ms < 0) {
+  if ((value.source_event !== "thread/resume" || Object.hasOwn(value, "native_event_at_ms"))
+    && (!Number.isSafeInteger(value.native_event_at_ms) || value.native_event_at_ms < 0)) {
     throw new Error("turn.stream input_recorded has invalid native event time");
   }
 }

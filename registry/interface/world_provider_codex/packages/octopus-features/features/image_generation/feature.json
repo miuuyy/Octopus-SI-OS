@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "image_generation",
-  "stage": {
-    "kind": "stable"
-  }
-}

@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "in_app_browser",
-  "stage": {
-    "kind": "stable"
-  }
-}

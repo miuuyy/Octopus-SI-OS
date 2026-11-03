@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "resize_all_images",
-  "stage": {
-    "kind": "under_development"
-  }
-}

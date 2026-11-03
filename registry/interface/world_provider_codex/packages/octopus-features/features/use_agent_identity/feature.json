@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "use_agent_identity",
-  "stage": {
-    "kind": "under_development"
-  }
-}

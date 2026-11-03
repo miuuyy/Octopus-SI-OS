@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "tool_call_mcp_elicitation",
-  "stage": {
-    "kind": "stable"
-  }
-}

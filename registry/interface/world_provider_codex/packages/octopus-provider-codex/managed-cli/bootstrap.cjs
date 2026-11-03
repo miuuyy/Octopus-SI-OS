@@ -13,6 +13,8 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const SCHEMA_NAME = /^(v2\/)?[A-Za-z][A-Za-z0-9]*\.json$/;
+const NOTIFICATION_METHOD = /^[A-Za-z][A-Za-z0-9]*(\/[A-Za-z][A-Za-z0-9]*)*$/;
+const NOTIFICATION_SCHEMA = "ServerNotification.json";
 
 function record(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
@@ -49,15 +51,26 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function notificationMethods(value) {
+  return Array.isArray(value) && value.every(method => typeof method === "string" && NOTIFICATION_METHOD.test(method))
+    && new Set(value).size === value.length;
+}
+
+function notificationPolicy(value) {
+  return fields(value, ["mirrored", "opt_out"]) && notificationMethods(value.mirrored) && value.mirrored.length > 0
+    && notificationMethods(value.opt_out) && value.opt_out.every(method => !value.mirrored.includes(method));
+}
+
 function releaseManifest(file = path.join(__dirname, "release.json")) {
   const manifest = readJson(file);
-  if (!fields(manifest, ["schema_version", "version", "tag", "release_url", "platforms", "schemas", "legal"], ["source_tag_object"])
+  if (!fields(manifest, ["schema_version", "version", "tag", "release_url", "platforms", "schemas", "legal", "notifications"], ["source_tag_object"])
       || manifest.schema_version !== 2 || typeof manifest.version !== "string" || !VERSION.test(manifest.version)
       || manifest.tag !== `rust-v${manifest.version}`
       || manifest.release_url !== `https://github.com/openai/codex/releases/tag/${manifest.tag}`
       || !record(manifest.platforms) || !Object.keys(manifest.platforms).length
       || !record(manifest.schemas) || !Object.keys(manifest.schemas).length
       || !fields(manifest.legal, ["LICENSE"], ["NOTICE"])
+      || !notificationPolicy(manifest.notifications)
       || (manifest.source_tag_object !== undefined && !/^[0-9a-f]{40}$/.test(manifest.source_tag_object))) {
     throw new Error("Invalid pinned Codex release manifest");
   }
@@ -218,6 +231,31 @@ function execute(command, args, options = {}) {
   return result.stdout.trim();
 }
 
+function generatedNotificationMethods(file) {
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.size > 16 * 1024 * 1024) throw new Error(`Official Codex protocol has no bounded ${NOTIFICATION_SCHEMA}`);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let text;
+  try { text = fs.readFileSync(fd, "utf8"); } finally { fs.closeSync(fd); }
+  const schema = JSON.parse(text);
+  if (!record(schema) || !Array.isArray(schema.oneOf)) throw new Error(`Official Codex ${NOTIFICATION_SCHEMA} is not a oneOf of notifications`);
+  return schema.oneOf.map(variant => {
+    const method = variant?.properties?.method?.enum;
+    if (!Array.isArray(method) || method.length !== 1 || typeof method[0] !== "string" || !NOTIFICATION_METHOD.test(method[0])) {
+      throw new Error(`Official Codex ${NOTIFICATION_SCHEMA} has a notification without one declared method`);
+    }
+    return method[0];
+  });
+}
+
+function verifyNotificationCoverage(schemas, policy) {
+  const declared = new Set([...policy.mirrored, ...policy.opt_out]);
+  const undeclared = [...new Set(generatedNotificationMethods(path.join(schemas, NOTIFICATION_SCHEMA)))].filter(method => !declared.has(method)).sort();
+  if (undeclared.length) {
+    throw new Error(`Official Codex emits notifications Octopus neither mirrors nor opts out of: ${undeclared.join(", ")}`);
+  }
+}
+
 function verifySchema(binary, manifest, stage) {
   const home = path.join(stage, "probe-home"), schemas = path.join(stage, "schema");
   fs.mkdirSync(home);
@@ -226,6 +264,7 @@ function verifySchema(binary, manifest, stage) {
     throw new Error("Official Codex executable reports an unexpected version");
   }
   execute(binary, ["app-server", "generate-json-schema", "--experimental", "--out", schemas], { env, cwd: home });
+  verifyNotificationCoverage(schemas, manifest.notifications);
   for (const [name, expected] of Object.entries(manifest.schemas)) {
     if (digest(path.join(schemas, name)) !== expected) throw new Error(`Official Codex protocol differs from validated schema: ${name}`);
   }
@@ -367,7 +406,7 @@ function sealSigning(inputs) {
   }
 }
 
-module.exports = { materialize, releaseManifest, verifyInstallation, verifySchema, copyInstallation, captureSigning, sealSigning, digest, RECEIPT };
+module.exports = { materialize, releaseManifest, verifyInstallation, verifySchema, verifyNotificationCoverage, copyInstallation, captureSigning, sealSigning, digest, RECEIPT };
 
 if (require.main === module) {
   const args = process.argv.slice(2);

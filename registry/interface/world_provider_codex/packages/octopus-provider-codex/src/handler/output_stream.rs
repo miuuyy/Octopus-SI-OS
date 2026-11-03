@@ -58,6 +58,7 @@ pub(crate) enum PendingServerRequestKind {
 pub(crate) enum TurnDrainOutcome {
     Complete,
     Suspended(PendingServerRequest),
+    AwaitingResults,
 }
 
 pub(crate) enum ProviderStreamEmission {

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "tool_search_always_defer_mcp_tools",
-  "stage": {
-    "kind": "under_development"
-  }
-}

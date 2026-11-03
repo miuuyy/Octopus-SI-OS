@@ -55,37 +55,15 @@ impl CodexAppServerInterfaceDriver {
         if interrupted_by_control
             || recovered.is_some_and(|state| state.interrupted_pending.is_some())
         {
-            let interrupted = if let Some(interrupted) =
-                recovered.and_then(|state| state.interrupted_pending.as_ref())
-            {
-                interrupted
-            } else {
-                let recovered = recovered.ok_or_else(|| {
+            let interrupted = self.interrupted_result_source(context, recovered, &pending, "tool")?;
+            validate_recovered_tool_result(
+                &result,
+                interrupted.outstanding_call(&pending.key).ok_or_else(|| {
                     InterfaceDriverError::FailedClosed(
-                        "interrupted live tool result has no durable continuity artifact"
-                            .to_string(),
+                        "interrupted live tool result lost its durable pending correlation".to_string(),
                     )
-                })?;
-                let interrupted = recovered.pending.as_ref().ok_or_else(|| {
-                    InterfaceDriverError::FailedClosed(
-                        "interrupted live tool result lost its durable pending correlation"
-                            .to_string(),
-                    )
-                })?;
-                let (continuity, retained) = interrupted_continuity(Some(recovered.clone()))
-                    .map_err(InterfaceDriverError::FailedClosed)?;
-                if !retained {
-                    return Err(InterfaceDriverError::FailedClosed(
-                        "interrupted live tool result does not carry an external effect"
-                            .to_string(),
-                    ));
-                }
-                context
-                    .sink
-                    .set_continuity(continuity.expect("interrupted continuity remains durable"));
-                interrupted
-            };
-            validate_recovered_tool_result(&result, interrupted)?;
+                })?,
+            )?;
             self.validate_pending_continuity(
                 context.scope,
                 recovered,
@@ -93,9 +71,16 @@ impl CodexAppServerInterfaceDriver {
                 context_generation,
             )
             .await?;
-            context.sink.set_pending(None);
-            let drain = self
-                .drain_interrupted_result(context, pending.clone(), effect_guard)
+            let closure = CodexTurnOutput::interrupted_result_closed(
+                "tool_result",
+                correlation_id.to_string(),
+                pending.thread_id.clone(),
+                pending.turn_id.clone(),
+                result.ok,
+                context.source_artifact,
+            );
+            let closure = self
+                .settle_interrupted_request(context, &interrupted, pending.clone(), effect_guard, closure)
                 .await?;
             let native_namespace = self.native_tool_namespace()?.name;
             let activity = (!interrupted_activity_already_admitted).then(|| {
@@ -113,21 +98,15 @@ impl CodexAppServerInterfaceDriver {
             context.sink.send_interrupted_result(
                 activity,
                 interrupted_activity_already_admitted,
-                CodexTurnOutput::interrupted_result_closed(
-                    "tool_result",
-                    correlation_id.to_string(),
-                    pending.thread_id.clone(),
-                    pending.turn_id.clone(),
-                    result.ok,
-                    context.source_artifact,
-                ).with_interrupted_drain(drain)?,
+                closure,
             )?;
             return Ok(true);
         }
         self.validate_pending_continuity(context.scope, recovered, &pending, context_generation)
             .await?;
+        let source = recovered.ok_or_else(|| InterfaceDriverError::FailedClosed("ordinary tool result has no source continuity".into()))?;
         if self.complete_native_terminal_result(
-            context, recovered.ok_or_else(|| InterfaceDriverError::FailedClosed("ordinary tool result has no source continuity".into()))?, Some(&pending),
+            context, source, &pending.key, Some(&pending),
             CodexTurnOutput::dynamic_tool_completed_after_interrupt(
                 self.native_tool_namespace()?.name, result.tool.clone(), correlation_id.to_string(),
                 pending.thread_id.clone(), pending.turn_id.clone(), result.ok, result.body.clone(), result.error.clone(),
@@ -135,7 +114,7 @@ impl CodexAppServerInterfaceDriver {
             CodexTurnOutput::interrupted_result_closed("tool_result", correlation_id.to_string(), pending.thread_id.clone(), pending.turn_id.clone(), result.ok, context.source_artifact),
             false,
         ).await?.settled() { return Ok(true); }
-        if let Some(operation) = recovered.and_then(|state| state.pending.as_ref()).map(native_pending_operation).transpose()?.flatten() {
+        if let Some(operation) = source.outstanding_call(&pending.key).map(native_pending_operation).transpose()?.flatten() {
             let receipt = serde_json::to_value(&result).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
             match operation.advance(&receipt).map_err(InterfaceDriverError::FailedClosed)? {
                 NativeStep::Effect { effect, pending: next_operation, outgoing_bindings } => {
@@ -157,7 +136,7 @@ impl CodexAppServerInterfaceDriver {
                     return Ok(true);
                 }
                 NativeStep::Complete { result } => {
-                    context.sink.set_pending(None);
+                    context.sink.settle_pending(&pending.key);
                     context.sink.send(CodexTurnOutput::dynamic_tool_completed(
                         self.native_tool_namespace()?.name, operation.operation_name, operation.call_id,
                         pending.thread_id.clone(), pending.turn_id.clone(), native_result_success(&result), Some(result.clone()), None,
@@ -182,6 +161,57 @@ impl CodexAppServerInterfaceDriver {
         self.resolve_and_continue(context, pending, response, effect_guard)
             .await?;
         Ok(true)
+    }
+
+    pub(crate) fn interrupted_result_source(
+        &self,
+        context: TurnContext<'_, '_>,
+        recovered: Option<&CodexContinuityState>,
+        pending: &PendingServerRequest,
+        family: &str,
+    ) -> Result<CodexContinuityState, InterfaceDriverError> {
+        if let Some(state) = recovered.filter(|state| state.interrupted_pending.is_some()) {
+            return Ok(state.clone());
+        }
+        let recovered = recovered.ok_or_else(|| {
+            InterfaceDriverError::FailedClosed(format!(
+                "interrupted live {family} result has no durable continuity artifact"
+            ))
+        })?;
+        if recovered.outstanding_call(&pending.key).is_none() {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "interrupted live {family} result lost its durable pending correlation"
+            )));
+        }
+        let (continuity, retained) = interrupted_continuity(Some(recovered.clone()))
+            .map_err(InterfaceDriverError::FailedClosed)?;
+        if !retained {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "interrupted live {family} result does not carry an external effect"
+            )));
+        }
+        let continuity = continuity.expect("interrupted continuity remains durable");
+        context.sink.set_continuity(continuity.clone());
+        Ok(continuity)
+    }
+
+    pub(crate) async fn settle_interrupted_request(
+        &self,
+        context: TurnContext<'_, '_>,
+        interrupted: &CodexContinuityState,
+        pending: PendingServerRequest,
+        effect_guard: tokio::sync::OwnedMutexGuard<()>,
+        closure: CodexTurnOutput,
+    ) -> Result<CodexTurnOutput, InterfaceDriverError> {
+        if interrupted.outstanding_len() > 1 {
+            self.remove_pending_request(context.scope, &pending).await?;
+            drop(effect_guard);
+            return Ok(closure);
+        }
+        let drain = self
+            .drain_interrupted_result(context, pending, effect_guard)
+            .await?;
+        closure.with_interrupted_drain(drain)
     }
 
     pub(crate) fn publish_native_effect(
@@ -278,37 +308,16 @@ impl CodexAppServerInterfaceDriver {
         if interrupted_by_control
             || recovered.is_some_and(|state| state.interrupted_pending.is_some())
         {
-            let interrupted = if let Some(interrupted) =
-                recovered.and_then(|state| state.interrupted_pending.as_ref())
-            {
-                interrupted
-            } else {
-                let recovered = recovered.ok_or_else(|| {
-                    InterfaceDriverError::FailedClosed(
-                        "interrupted live interface result has no durable continuity artifact"
-                            .to_string(),
-                    )
-                })?;
-                let interrupted = recovered.pending.as_ref().ok_or_else(|| {
+            let interrupted = self.interrupted_result_source(context, recovered, &pending, "interface")?;
+            validate_recovered_interface_operation_input(
+                result,
+                interrupted.outstanding_call(&pending.key).ok_or_else(|| {
                     InterfaceDriverError::FailedClosed(
                         "interrupted live interface result lost its durable pending correlation"
                             .to_string(),
                     )
-                })?;
-                let (continuity, retained) = interrupted_continuity(Some(recovered.clone()))
-                    .map_err(InterfaceDriverError::FailedClosed)?;
-                if !retained {
-                    return Err(InterfaceDriverError::FailedClosed(
-                        "interrupted live interface result does not carry an external effect"
-                            .to_string(),
-                    ));
-                }
-                context
-                    .sink
-                    .set_continuity(continuity.expect("interrupted continuity remains durable"));
-                interrupted
-            };
-            validate_recovered_interface_operation_input(result, interrupted)?;
+                })?,
+            )?;
             self.validate_pending_continuity(
                 context.scope,
                 recovered,
@@ -316,9 +325,16 @@ impl CodexAppServerInterfaceDriver {
                 context_generation,
             )
             .await?;
-            context.sink.set_pending(None);
-            let drain = self
-                .drain_interrupted_result(context, pending.clone(), effect_guard)
+            let closure = CodexTurnOutput::interrupted_result_closed(
+                "interface_operation_result",
+                result.correlation_id.clone(),
+                pending.thread_id.clone(),
+                pending.turn_id.clone(),
+                result.ok,
+                context.source_artifact,
+            );
+            let closure = self
+                .settle_interrupted_request(context, &interrupted, pending.clone(), effect_guard, closure)
                 .await?;
             let activity = (!interrupted_activity_already_admitted).then(|| {
                 CodexTurnOutput::interface_operation_completed_after_interrupt(
@@ -333,21 +349,15 @@ impl CodexAppServerInterfaceDriver {
             context.sink.send_interrupted_result(
                 activity,
                 interrupted_activity_already_admitted,
-                CodexTurnOutput::interrupted_result_closed(
-                    "interface_operation_result",
-                    result.correlation_id.clone(),
-                    pending.thread_id.clone(),
-                    pending.turn_id.clone(),
-                    result.ok,
-                    context.source_artifact,
-                ).with_interrupted_drain(drain)?,
+                closure,
             )?;
             return Ok(true);
         }
         self.validate_pending_continuity(context.scope, recovered, &pending, context_generation)
             .await?;
+        let source = recovered.ok_or_else(|| InterfaceDriverError::FailedClosed("ordinary interface result has no source continuity".into()))?;
         if self.complete_native_terminal_result(
-            context, recovered.ok_or_else(|| InterfaceDriverError::FailedClosed("ordinary interface result has no source continuity".into()))?, Some(&pending),
+            context, source, &pending.key, Some(&pending),
             CodexTurnOutput::interface_operation_completed_after_interrupt(
                 result.operation.clone(), result.correlation_id.clone(), pending.thread_id.clone(), pending.turn_id.clone(), result.ok, result.value.clone(),
             ), interrupted_activity_already_admitted,
@@ -375,7 +385,7 @@ impl CodexAppServerInterfaceDriver {
         client: &AppServerClient,
         thread_id: &str,
         turn_id: &str,
-    ) -> Result<Vec<ThreadItem>, InterfaceDriverError> {
+    ) -> Result<Vec<octopus_appserver_proto::ThreadItemEntry>, InterfaceDriverError> {
         let handle = client.request_handle();
         let turn = read_native_turn(&handle, &self.next_request_id, thread_id, turn_id).await?
             .ok_or_else(|| InterfaceDriverError::FailedClosed(format!(
@@ -386,7 +396,7 @@ impl CodexAppServerInterfaceDriver {
                 "thread/turns/list pending operator turn '{turn_id}' is not in progress",
             )));
         }
-        read_native_turn_items(&handle, &self.next_request_id, thread_id, turn_id).await
+        native_history::read_native_turn_entries(&handle, &self.next_request_id, thread_id, turn_id).await
     }
 
     pub(crate) async fn resume_replayed_operator_response(
@@ -456,15 +466,15 @@ impl CodexAppServerInterfaceDriver {
                     turn_id, recovered.thread_id
                 )));
             }
-            let items = self.read_pending_operator_turn(&client, &resumed.thread.id, turn_id).await?;
+            let entries = self.read_pending_operator_turn(&client, &resumed.thread.id, turn_id).await?;
             context.sink.bind_live_stream(&resumed.thread.id, turn_id)?;
-            for item in &items {
+            for entry in &entries {
                 context.sink.record_input_item(
-                    item,
+                    &entry.item,
                     &resumed.thread.id,
                     turn_id,
                     InputRecordedSource::ThreadResume,
-                    None,
+                    entry.started_at_ms,
                 )?;
             }
 
@@ -661,7 +671,7 @@ impl CodexAppServerInterfaceDriver {
             let events = take_native_terminal_events(&mut *client, &terminal, &pending.thread_id, &pending.turn_id)?;
             drop(client);
             self.remove_pending_request(context.scope, &pending).await?;
-            context.control.publish_interrupted_draining()?;
+            self.publish_interrupted_drain_target(context)?;
             return Ok(InterruptedTurnDrainEvidence {
                 disposition: "native_terminal_read_confirmed",
                 provider_error: None,
@@ -670,7 +680,7 @@ impl CodexAppServerInterfaceDriver {
             });
         }
         self.remove_pending_request(context.scope, &pending).await?;
-        context.control.publish_interrupted_draining()?;
+        self.publish_interrupted_drain_target(context)?;
         let mut state =
             InterruptedTurnDrainState::new(pending.thread_id.clone(), pending.turn_id.clone());
         let mut client = self.client.lock().await;
@@ -703,6 +713,24 @@ impl CodexAppServerInterfaceDriver {
         }
     }
 
+    pub(crate) fn publish_interrupted_drain_target(
+        &self,
+        context: TurnContext<'_, '_>,
+    ) -> Result<(), InterfaceDriverError> {
+        if context.control.is_starting() {
+            let continuity = context.sink.continuity_snapshot().ok_or_else(|| {
+                InterfaceDriverError::FailedClosed(
+                    "interrupted exact-result drain lost its durable continuity".to_string(),
+                )
+            })?;
+            context
+                .control
+                .publish_recovered_interrupted_pending(&continuity)
+                .map_err(InterfaceDriverError::FailedClosed)?;
+        }
+        context.control.publish_interrupted_draining()
+    }
+
     pub(crate) async fn resolve_and_continue(
         &self,
         context: TurnContext<'_, '_>,
@@ -727,7 +755,7 @@ impl CodexAppServerInterfaceDriver {
             request_handle
         };
         self.remove_pending_request(context.scope, &pending).await?;
-        context.sink.set_pending(None);
+        context.sink.settle_pending(&pending.key);
         context.control.publish(CodexTurnControlTarget::Draining {
             handle: request_handle,
             request_ids: self.next_request_id.clone(),
@@ -751,7 +779,7 @@ impl CodexAppServerInterfaceDriver {
             .drain_turn(resumed_context, &pending.thread_id, &pending.turn_id)
             .await?;
         match outcome {
-            TurnDrainOutcome::Suspended(_) | TurnDrainOutcome::Complete => Ok(()),
+            TurnDrainOutcome::Suspended(_) | TurnDrainOutcome::AwaitingResults | TurnDrainOutcome::Complete => Ok(()),
         }
     }
 }

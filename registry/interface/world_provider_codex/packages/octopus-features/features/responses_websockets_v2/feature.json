@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "responses_websockets_v2",
-  "stage": {
-    "kind": "removed"
-  }
-}

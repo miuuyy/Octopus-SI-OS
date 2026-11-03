@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "js_repl",
-  "stage": {
-    "kind": "removed"
-  }
-}

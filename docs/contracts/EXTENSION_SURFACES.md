@@ -215,7 +215,9 @@ shows **Allow once**, **Decline** and **Cancel**. Your answer is checked by the
 `operator_approval` verifier against that exact request and recorded in the
 task's evidence, and only then does the application send the call; a declined
 call returns `operator_declined` to the model. The call's wait stays armed until
-that final answer arrives. The same rule covers the generic call by tool name.
+that final answer arrives. The same rule covers the generic call by tool name. Other calls of
+the same native turn keep waiting or settling while one call waits for your
+answer.
 
 A configured local Home opens after local client unlock and verification by the
 existing setup owner of its complete aggregate receipt, followed by matching
@@ -520,7 +522,11 @@ clock, and a local one (loopback, private, `.local`, `.lan`) uses the
 interface's request timeout, so a silent local stream fails instead of
 hanging. The managed Codex CLI pin lists every app-server notification Octopus
 decodes and the ones it opts out of; installing a binary that sends any other
-notification fails closed and names it.
+notification fails closed and names it. The provider descriptor also pins
+which Codex features are on and which are off; a binary that reports a
+different state for a feature the provider must prove fails the compatibility
+check, and features that change what the model sees are listed as residual
+sources.
 
 For the desktop picker, declare `private_config.model_catalog` in
 `interface_driver_config`. Each entry names its `model`, `display_name`,
@@ -612,6 +618,27 @@ that admitted call, with matching provider, run and transport coordinates.
 Completing an older result can project the same generation as a newly admitted
 call. That projection cannot clear the new call's wait: its exact call evidence
 prevails until an equally new recorded continuity carrier proves a successor.
+
+A native turn may wait on several external calls at once. The provider admits
+every ordinary dynamic tool or interface-operation request that has already
+arrived while earlier calls wait, emits each as its own call artifact and
+records the whole set in its continuity, so every snapshot names exactly the
+calls still outstanding. Results settle their own call in any order. When the
+native turn has already ended while several of its calls are outstanding,
+whether the app-server completed or aborted it or the provider process died,
+each late result except the last settles only its own call: its closure carries
+the exact terminal proof, records that the result never returned to the model,
+and leaves the remaining calls outstanding. The last result settles exactly as a
+single call does: a completed or failed turn closes with its retained native
+outputs, and a turn cut by process death continues in a new turn whose context
+carries every late result. A native turn still running on a restarted provider
+with several lost requests fails closed. Native run operations, operator
+requests and lifecycle-held calls are admitted one at a time, and an operator
+hold belongs to one outstanding call. After a Stop each outstanding call closes
+with its own interrupted result and only the last observes the native terminal;
+a request issued before the interrupt was acknowledged stays buffered and is
+quarantined by that last drain. Changed tools or instructions refresh a native
+turn only once a single call remains outstanding.
 
 The provider's explicit `reseed_from_session_context` cold-start policy rebuilds
 its private transport from the admitted session snapshot. It requires that

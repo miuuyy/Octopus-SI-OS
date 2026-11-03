@@ -8,7 +8,7 @@ const ts = require("typescript");
 const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-const signedIn = { signedIn: true, authType: "chatgpt", email: "first@example.test", planType: "pro", credentialHome: "/native", octopusHome: "/home" };
+const signedIn = { signedIn: true, authType: "chatgpt", email: "first@example.test", planType: "pro", workspaceName: null, credentialHome: "/native", octopusHome: "/home" };
 const signedOut = { ...signedIn, signedIn: false, authType: null, email: null, planType: null };
 const limit = { limitId: "core", limitName: "Core", primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2000000000 }, secondary: null, credits: null, individualLimit: null, planType: "pro", rateLimitReachedType: null, spendControlReached: null };
 
@@ -37,12 +37,19 @@ const usageViews = loadTs("components/account/AccountUsage.tsx", {
   "../IconGlyphs": { Glyph: ({ name }) => React.createElement("svg", { "data-glyph": name }) },
 });
 const logoutView = loadTs("components/account/AccountLogoutDialog.tsx", { "../../design-system/components": ui });
+const accountStateModule = loadTs("account/chatgptAccountState.ts");
+const workspaceModel = loadTs("account/chatgptWorkspaces.ts");
+const accountModels = { "../../account/chatgptAccountState": accountStateModule, "../../account/chatgptWorkspaces": workspaceModel };
 const emptyUsage = { identity: null, value: null, loading: false, error: "" };
 
 function nativeFixture(env = {}) {
   let home = "/native", persisted = { type: "chatgpt", email: "first@example.test", planType: "pro" }, stamp = 1n, changes = 0;
   const children = [], calls = [];
-  const control = { refuseLogout: false, quotaError: "", quotaHook: null };
+  const control = { refuseLogout: false, quotaError: "", quotaHook: null, selected: "personal-1", ssoWorkspace: "", sessionsList: null,
+    workspaces: [{ accountId: "personal-1", name: null, imageUrl: null, kind: "personal" }, { accountId: "team-1", name: "Team", imageUrl: null, kind: "workspace" }] };
+  const sessionList = (child) => child.cachedAccount?.type !== "chatgpt" ? { activeSessionId: null, sessions: [] } : { activeSessionId: "session-1", sessions: [{
+    sessionId: "session-1", email: child.cachedAccount.email, userId: "user-1", displayName: null, imageUrl: null, lastUsedAt: 1, isActive: true,
+    selectedWorkspaceAccountId: control.selected, workspaces: control.workspaces }] };
   const module = { exports: {} };
   const fileSystem = { constants: { X_OK: 1 }, accessSync() {}, mkdirSync() {}, statSync() {
     if (control.authMissing) throw Object.assign(new Error("Missing"), { code: "ENOENT" });
@@ -71,6 +78,17 @@ function nativeFixture(env = {}) {
       }
       if (request.method === "account/login/start") result = { type: "chatgpt", loginId: `login-${children.length}`, authUrl: "https://example.test/login" };
       if (request.method === "account/login/cancel") result = { status: "canceled" };
+      if (request.method === "accountSession/list") result = control.sessionsList?.(child) ?? sessionList(child);
+      if (request.method === "accountSession/switch" && request.params.accountId === control.ssoWorkspace) {
+        result = { loginId: "workspace-login", authUrl: "https://example.test/sso" };
+      } else if (request.method === "accountSession/switch" && control.switchError) {
+        stamp += 1n; error = { message: control.switchError };
+      } else if (request.method === "accountSession/switch") {
+        control.selected = request.params.accountId;
+        persisted = child.cachedAccount = { ...child.cachedAccount, workspaceName: control.workspaces.find((workspace) => workspace.accountId === control.selected)?.name ?? null };
+        stamp += 1n;
+        result = sessionList(child);
+      }
       if (request.method === "model/list") result = { data: control.modelRows ?? [{ model: "model", displayName: "Model", defaultReasoningEffort: "high", supportedReasoningEfforts: [{ reasoningEffort: "high" }] }], nextCursor: null };
       if (request.method === "account/logout" && !control.refuseLogout) { persisted = child.cachedAccount = null; stamp += 1n; }
       const reply = () => child.stdout.emit("data", JSON.stringify({ id: request.id, ...(error ? { error } : { result }) }) + "\n");
@@ -238,6 +256,78 @@ test("native identity, plan, named limits, logout and login replacement use one 
   } finally { client.dispose(); }
 });
 
+test("account sessions list workspaces and switch them in the shared credential scope or through browser sign-in", async () => {
+  const fixture = nativeFixture(), { client } = fixture;
+  try {
+    const listed = await client.sessions();
+    assert.equal(fixture.calls.find((call) => call.method === "initialize").params.capabilities.experimentalApi, true);
+    assert.equal(fixture.calls.find((call) => call.method === "accountSession/list").params.refreshWorkspaceMetadata, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(listed.sessions[0].workspaces)), [{ accountId: "personal-1", name: null, kind: "personal" }, { accountId: "team-1", name: "Team", kind: "workspace" }]);
+    assert.equal(listed.sessions[0].selectedWorkspaceId, "personal-1"); assert.equal(listed.credentialHome, "/native");
+    const changes = fixture.changes;
+    const switched = await client.switchWorkspace({ sessionId: "session-1", accountId: "team-1" });
+    assert.equal(switched.state, "switched"); assert.equal(switched.account.workspaceName, "Team");
+    assert.equal(switched.sessions.sessions[0].selectedWorkspaceId, "team-1");
+    assert.ok(fixture.changes > changes, "a switch publishes an account change so model catalogues reload");
+    assert.equal((await client.account()).workspaceName, "Team");
+    fixture.control.ssoWorkspace = "personal-1";
+    assert.deepEqual(JSON.parse(JSON.stringify(await client.switchWorkspace({ sessionId: "session-1", accountId: "personal-1" }))),
+      { state: "browser", loginId: "workspace-login", authUrl: "https://example.test/sso" });
+    assert.equal(client.status("workspace-login").state, "pending");
+    await assert.rejects(client.switchWorkspace({ sessionId: "session-1", accountId: "team-1" }), /already in progress/);
+    await client.cancel("workspace-login");
+    await assert.rejects(client.switchWorkspace({ sessionId: " session-1", accountId: "team-1" }), /Choose a workspace/);
+    fixture.control.switchError = "could not restore the previous workspace";
+    const beforeFailure = fixture.changes;
+    await assert.rejects(client.switchWorkspace({ sessionId: "session-1", accountId: "team-1" }), /could not restore/);
+    assert.ok(fixture.changes > beforeFailure, "a failed switch that rewrote the shared credential still publishes an account change");
+    fixture.control.switchError = "";
+    fixture.control.sessionsList = () => ({ activeSessionId: "session-1", sessions: [] });
+    await assert.rejects(client.sessions(), /invalid account list/);
+    assert.ok(fixture.calls.every((call) => call.home === "/native"));
+  } finally { client.dispose(); }
+});
+
+test("workspace switching replaces the observation, drops stale workspace lists and discloses the shared sign-in", async () => {
+  const { createChatgptAccountState } = accountStateModule;
+  const team = { ...signedIn, workspaceName: "Team" };
+  const sessions = (selected) => ({ activeSessionId: "session-1", credentialHome: "/native", octopusHome: "/home", sessions: [{ sessionId: "session-1",
+    email: signedIn.email, displayName: null, active: true, selectedWorkspaceId: selected,
+    workspaces: [{ accountId: "personal-1", name: null, kind: "personal" }, { accountId: "team-1", name: "Team", kind: "workspace" }] }] });
+  let account = signedIn, listed = 0, switchResult;
+  const bridge = { chatgptAccount: async () => account, chatgptAccountSessions: async () => { listed += 1; return sessions(account.workspaceName ? "team-1" : "personal-1"); },
+    chatgptSwitchWorkspace: async () => switchResult(), chatgptSignInStatus: async () => ({ state: "completed", error: "" }), onChatgptAccountChanged: () => () => {} };
+  const controller = createChatgptAccountState(bridge, "/home");
+  await controller.refresh(); await controller.loadSessions();
+  assert.equal(controller.getSnapshot().sessions.sessions[0].selectedWorkspaceId, "personal-1");
+  await controller.refresh(); assert.ok(controller.getSnapshot().sessions, "an unchanged account keeps its workspace list");
+  switchResult = () => { account = team; return { state: "switched", account: team, sessions: sessions("team-1") }; };
+  assert.equal(await controller.switchWorkspace("session-1", "team-1"), "switched");
+  assert.equal(controller.getSnapshot().account.workspaceName, "Team");
+  assert.equal(controller.getSnapshot().sessions.sessions[0].selectedWorkspaceId, "team-1"); assert.equal(listed, 1);
+  account = signedIn; await controller.refresh();
+  assert.equal(controller.getSnapshot().sessions, null, "another workspace observation invalidates the listed workspaces");
+  switchResult = () => ({ state: "browser", loginId: "workspace-login", authUrl: "https://example.test/sso" });
+  assert.equal(await controller.switchWorkspace("session-1", "team-1"), "browser");
+  assert.equal(controller.getSnapshot().action, "waiting"); assert.equal(controller.getSnapshot().signInUrl, "https://example.test/sso");
+  await tick(); await tick();
+  assert.equal(controller.getSnapshot().action, "idle");
+  switchResult = () => { throw new Error("The selected workspace is unavailable"); };
+  assert.equal(await controller.switchWorkspace("session-1", "team-1"), "failed");
+  assert.match(controller.getSnapshot().error, /workspace is unavailable/); assert.equal(controller.getSnapshot().action, "idle");
+  await controller.loadSessions();
+  const { AccountSettingsSection } = loadTs("components/settings/AccountSettingsSection.tsx", {
+    "../../design-system/LoadingSkeleton": loadingViews, "../../account/useChatgptAccount": { useChatgptAccount: () => ({ ...controller.getSnapshot(), switchWorkspace: controller.switchWorkspace }) },
+    "../../account/useChatgptUsage": { useChatgptUsage: () => emptyUsage }, "../../account/chatgptUsageModel": usageModel,
+    "../../design-system/components": ui, "../account/AccountUsage": usageViews, "../account/AccountLogoutDialog": logoutView, ...accountModels,
+    "./SettingsHeading": { SettingsHeading: () => null }, "./settingsCatalog": { settingsTargetProps: () => ({}) },
+  });
+  const markup = renderToStaticMarkup(React.createElement(AccountSettingsSection));
+  assert.match(markup, /Workspaces/); assert.match(markup, /Personal account/); assert.match(markup, /Current/); assert.match(markup, /Switch/);
+  assert.match(markup, /Add account/); assert.match(markup, /shared with Codex on this computer/); assert.match(markup, /your own Codex CLI/);
+  assert.doesNotMatch(markup, /\/native/);
+});
+
 test("native logout refusal, unverified login, cancellation and scope races never become success", async () => {
   const fixture = nativeFixture(), { client } = fixture;
   try {
@@ -309,7 +399,7 @@ test("client clears native signed-out identity and rejects stale reads and stale
     "../../account/useChatgptUsage": { useChatgptUsage: () => emptyUsage },
     "../../account/chatgptUsageModel": usageModel,
     "../../design-system/components": ui, "../account/AccountUsage": usageViews,
-    "../account/AccountLogoutDialog": logoutView,
+    "../account/AccountLogoutDialog": logoutView, ...accountModels,
     "./SettingsHeading": { SettingsHeading: () => null }, "./settingsCatalog": { settingsTargetProps: () => ({}) },
   });
   assert.match(renderToStaticMarkup(React.createElement(ChatGptSignInGate)), /Retry sign-in check/);
@@ -537,12 +627,12 @@ test("account menu prefers top placement and retains viewport collision handling
     "../../keyboardShortcuts": { useKeyboardShortcuts: () => ({}), formatKeyboardShortcuts: () => "" },
     "../../account/useChatgptAccount": { useChatgptAccount: () => ({ account, loading: false, action: "idle" }) },
     "../../account/useChatgptUsage": { useChatgptUsage: () => emptyUsage }, "../../account/chatgptUsageModel": usageModel,
-        "../chat/MessageTooltip": { MessageTooltip: ({ children }) => children },
+        "../chat/MessageTooltip": { MessageTooltip: ({ children }) => children }, ...accountModels,
   });
   const menu = () => renderToStaticMarkup(React.createElement(AccountRailButton, { accessProfile: "live", runtimeHost: {}, onLogOut() {}, onOpenSettings() {} }));
   assert.match(menu(), /Account: Administrator/); assert.match(menu(), /<small>ChatGPT Pro \(Max\)<\/small>/);
   assert.doesNotMatch(menu(), /first@example.test/); assert.ok(menu().indexOf("Settings") < menu().indexOf("Usage"));
-  assert.doesNotMatch(menu(), /Log out of ChatGPT|Usage remaining|Using ChatGPT/);
+  assert.doesNotMatch(menu(), /Log out of ChatGPT|Usage remaining|Using ChatGPT/); assert.match(menu(), /Add account/);
   account = null; assert.match(menu(), /Administrator/); assert.match(menu(), /ChatGPT unavailable/);
   const { dropdownPlacement } = loadTs("design-system/OcDropdown.tsx", { "./components": ui, "./modalFocus": {} }, "\nexport { dropdownPlacement };\n");
   const anchor = { left: 24, right: 64, top: 350, bottom: 390 };
@@ -654,6 +744,7 @@ test("completed Home uses checked local receipts offline and cancels proof acros
     "../../account/useChatgptAccount": accountHook, "../../account/useChatgptUsage": { useChatgptUsage: () => emptyUsage },
     "../../account/chatgptUsageModel": usageModel, "../../design-system/components": ui, "../account/AccountUsage": usageViews,
     "../account/AccountLogoutDialog": logoutView, "./SettingsHeading": { SettingsHeading: () => null }, "./settingsCatalog": { settingsTargetProps: () => ({}) },
+    ...accountModels,
   });
   const { WorkspaceSetupGate } = loadTs("components/onboarding/WorkspaceSetupGate.tsx", {
     "../../account/useChatgptAccount": accountHook, "./ChatGptSignInGate": { ChatGptSignInGate },

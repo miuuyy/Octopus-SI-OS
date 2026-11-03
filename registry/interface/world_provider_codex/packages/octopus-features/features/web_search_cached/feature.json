@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "web_search_cached",
-  "stage": {
-    "kind": "deprecated"
-  }
-}

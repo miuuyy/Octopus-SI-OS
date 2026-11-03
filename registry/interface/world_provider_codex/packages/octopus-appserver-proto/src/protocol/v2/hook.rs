@@ -9,7 +9,7 @@ use octopus_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use octopus_protocol::protocol::HookScope as CoreHookScope;
 use octopus_protocol::protocol::HookSource as CoreHookSource;
 use octopus_protocol::protocol::HookTrustStatus as CoreHookTrustStatus;
-use octopus_util_abspath::AbsolutePathBuf;
+use octopus_util_pathuri::LegacyAppPathString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -106,7 +106,7 @@ pub struct HookRunSummary {
     pub handler_type: HookHandlerType,
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
-    pub source_path: AbsolutePathBuf,
+    pub source_path: LegacyAppPathString,
     #[serde(default = "default_hook_source")]
     pub source: HookSource,
     pub display_order: i64,
@@ -126,7 +126,7 @@ impl From<CoreHookRunSummary> for HookRunSummary {
             handler_type: value.handler_type.into(),
             execution_mode: value.execution_mode.into(),
             scope: value.scope.into(),
-            source_path: value.source_path,
+            source_path: value.source_path.into(),
             source: value.source.into(),
             display_order: value.display_order,
             status: value.status.into(),

@@ -212,11 +212,7 @@ pub(crate) fn validate_live_pending_continuity(
             "Codex pending continuity has stale transport coordinates".to_string(),
         ));
     }
-    let durable_pending = recovered
-        .pending
-        .as_ref()
-        .or(recovered.interrupted_pending.as_ref());
-    if !pending_coordinates_match(durable_pending, pending) {
+    if !pending_coordinates_match(recovered.outstanding_call(&pending.key), pending) {
         return Err(InterfaceDriverError::FailedClosed(
             "Codex durable pending coordinates do not match the live app-server request".into(),
         ));

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "shell_zsh_fork",
-  "stage": {
-    "kind": "under_development"
-  }
-}

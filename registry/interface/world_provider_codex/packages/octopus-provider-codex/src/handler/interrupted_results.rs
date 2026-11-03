@@ -141,13 +141,18 @@ pub(crate) fn exact_interrupted_result_payload(
     bytes: &[u8],
     continuity: &CodexContinuityState,
 ) -> Result<bool, String> {
-    let Some(interrupted) = continuity.interrupted_pending.as_ref() else {
+    let Some(head) = continuity.interrupted_pending.as_ref() else {
         return Ok(false);
     };
     let value = match serde_json::from_slice::<serde_json::Value>(bytes) {
         Ok(value) => value,
         Err(_) => return Ok(false),
     };
+    let interrupted = value
+        .get("correlation_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|call| continuity.outstanding_call(&format!("tool:{call}")))
+        .unwrap_or(head);
     match interrupted {
         CodexPendingContinuity::DynamicTool { .. } => {
             let Some(result) =
@@ -349,10 +354,12 @@ pub(crate) fn native_terminal_result_closure_ref(
     input: &InterfaceInvocationEnvelope,
     context_output_labels: &BTreeSet<String>,
 ) -> Result<Option<ArtifactRef>, String> {
-    if source.interrupted_pending.is_some() || source.pending.as_ref().is_none_or(|pending| !interrupted_pending_has_external_result(pending)) {
+    let ordinary = source.interrupted_pending.is_none();
+    if ordinary && source.pending.as_ref().is_none_or(|pending| !interrupted_pending_has_external_result(pending)) {
         return Err("control-free closure has no original ordinary external pending source".into());
     }
-    let mut exact = source.clone(); exact.interrupted_pending = exact.pending.take();
+    let mut exact = source.clone();
+    if ordinary { exact.interrupted_pending = exact.pending.take(); }
     if !exact_interrupted_result_source(input, &exact)? {
         return Err("control-free closure changed its original correlated result source".into());
     }
@@ -394,6 +401,9 @@ pub(crate) fn interrupted_result_closure_payload(
         .map_err(|error| format!("provider closure payload is malformed: {error}"))?;
     let native_source;
     let ordinary = interrupted.pending.is_some() && interrupted.interrupted_pending.is_none();
+    if ordinary && interrupted.outstanding_len() > 1 {
+        return native_terminal_sibling_closure(&payload, interrupted, source_artifact, context_output_labels).map(Some);
+    }
     let enriched = interrupted.native_terminal.is_none()
         && payload.get("result_origin").and_then(serde_json::Value::as_str) == Some("interrupted_turn_completion");
     let interrupted = if ordinary || enriched {
@@ -415,9 +425,23 @@ pub(crate) fn interrupted_result_closure_payload(
         native_source = retired;
         &native_source
     } else { interrupted };
+    let focused_source;
+    let interrupted = match payload
+        .get("correlation_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|call| interrupted.focused(&format!("tool:{call}")))
+    {
+        Some(state) => {
+            focused_source = state;
+            &focused_source
+        }
+        None => interrupted,
+    };
     let pending = interrupted.interrupted_pending.as_ref().ok_or_else(|| {
         "provider closure arbitration lost its interrupted exact effect".to_string()
     })?;
+    let mut remaining = interrupted.clone();
+    remaining.settle_outstanding(&pending_request_key(pending));
     let (result_kind, correlation_id, turn_id) = match pending {
         CodexPendingContinuity::DynamicTool {
             turn_id, call_id, ..
@@ -510,7 +534,8 @@ pub(crate) fn interrupted_result_closure_payload(
         || closure.thread_shape_fingerprint != interrupted.thread_shape_fingerprint
         || closure.static_context_fingerprint != interrupted.static_context_fingerprint
         || closure.pending.is_some()
-        || closure.interrupted_pending.is_some()
+        || closure.interrupted_pending != remaining.interrupted_pending
+        || closure.parallel_pending != remaining.parallel_pending
         || closure.native_terminal != interrupted.native_terminal
         || native_status.as_ref().is_some_and(|status| payload.get("native_terminal_status") != serde_json::to_value(status).ok().as_ref())
         || if let Some(generation) = native_generation { closure.context_generation != generation }
@@ -522,4 +547,66 @@ pub(crate) fn interrupted_result_closure_payload(
         );
     }
     Ok(Some(closure))
+}
+
+fn native_terminal_sibling_closure(
+    payload: &serde_json::Value,
+    source: &CodexContinuityState,
+    source_artifact: &ArtifactRef,
+    context_output_labels: &BTreeSet<String>,
+) -> Result<CodexContinuityState, String> {
+    let refused = |message: &str| message.to_string();
+    if payload.get("native_terminal_source_continuity") != Some(&serde_json::to_value(source).map_err(|error| error.to_string())?)
+        || payload.get("result_origin").and_then(serde_json::Value::as_str) != Some("native_turn_completion")
+        || payload.get("terminal_evidence_source").and_then(serde_json::Value::as_str) != Some("thread/read")
+        || payload.get("retained_native_outputs").is_some()
+        || payload.get("native_terminal_events").is_some()
+    {
+        return Err(refused("parallel native result closure changed its original source continuity"));
+    }
+    let key = payload.get("correlation_id").and_then(serde_json::Value::as_str)
+        .map(|call| format!("tool:{call}"))
+        .ok_or_else(|| refused("parallel native result closure names no correlated call"))?;
+    let pending = source.outstanding_call(&key).filter(|pending| interrupted_pending_has_external_result(pending))
+        .ok_or_else(|| refused("parallel native result closure names no outstanding external call"))?;
+    let (result_kind, correlation_id, turn_id) = match pending {
+        CodexPendingContinuity::DynamicTool { turn_id, call_id, .. } => ("tool_result", call_id, turn_id),
+        CodexPendingContinuity::InterfaceOperation { turn_id, call_id, .. } => ("interface_operation_result", call_id, turn_id),
+        CodexPendingContinuity::Operator { .. } => return Err(refused("provider closure cannot arbitrate an operator request")),
+    };
+    let terminal: NativeTerminalEvidence = serde_json::from_value(
+        payload.get("native_terminal").cloned().ok_or_else(|| refused("parallel native result closure has no exact terminal proof"))?,
+    ).map_err(|error| error.to_string())?;
+    let status = terminal.exact_turn(&source.thread_id, Some(turn_id)).map_err(|error| error.to_string())?.status;
+    if payload.get("label").and_then(serde_json::Value::as_str) != Some(TURN_INTERRUPTED_RESULT_LABEL)
+        || payload.get("result_kind").and_then(serde_json::Value::as_str) != Some(result_kind)
+        || payload.get("correlation_id").and_then(serde_json::Value::as_str) != Some(correlation_id.as_str())
+        || payload.get("thread_id").and_then(serde_json::Value::as_str) != Some(source.thread_id.as_str())
+        || payload.get("turn_id").and_then(serde_json::Value::as_str) != Some(turn_id.as_str())
+        || payload.get("ok").and_then(serde_json::Value::as_bool).is_none()
+        || payload.get("turn_interrupted").and_then(serde_json::Value::as_bool) != Some(status == TurnStatus::Interrupted)
+        || payload.get("native_terminal_status") != serde_json::to_value(status).ok().as_ref()
+        || payload.get("returned_to_model").and_then(serde_json::Value::as_bool) != Some(false)
+        || payload.get("result_disposition").and_then(serde_json::Value::as_str) != Some("durably_admitted_after_native_terminal")
+        || payload.get("source_artifact") != Some(&serde_json::to_value(source_artifact).map_err(|error| error.to_string())?)
+    {
+        return Err(refused("parallel native result closure conflicts with durable arbitration"));
+    }
+    let closure = parse_codex_continuity(
+        payload.get(CODEX_CONTINUITY_FIELD).ok_or_else(|| refused("parallel native result closure has no continuity evidence"))?,
+        &source.provider_interface,
+        source.run.as_str(),
+    ).map_err(|error| error.to_string())?;
+    let input_context = payload.get("native_terminal_input_context").and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| refused("parallel native result closure lost its exact input context consumption"))?;
+    let mut expected = source.clone();
+    expected.settle_outstanding(&key);
+    expected.context_generation = source.context_generation
+        .checked_add(u64::from(input_context))
+        .and_then(|generation| generation.checked_add(u64::from(context_output_labels.contains(TURN_INTERRUPTED_RESULT_LABEL))))
+        .ok_or_else(|| refused("parallel native result closure generation overflowed"))?;
+    if closure != expected {
+        return Err(refused("parallel native result closure does not settle exactly its own call"));
+    }
+    Ok(closure)
 }

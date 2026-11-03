@@ -249,12 +249,17 @@ impl CodexAppServerInterfaceDriver {
         {
             return Ok(Arrival::Settled);
         }
+        let source = recovered.as_ref();
+        let recovered = &result
+            .correlation_id
+            .as_ref()
+            .and_then(|call| recovered.as_ref()?.focused(&format!("tool:{call}")))
+            .or_else(|| recovered.clone());
         if let Some(interrupted) = recovered
             .as_ref()
             .and_then(|state| state.interrupted_pending.as_ref())
         {
             validate_recovered_tool_result(result, interrupted)?;
-            sink.set_pending(None);
             let CodexPendingContinuity::DynamicTool {
                 native_operation: _,
                 turn_id,
@@ -321,10 +326,14 @@ impl CodexAppServerInterfaceDriver {
                     "cold tool result has stale source context generation".into(),
                 ));
             }
+            let source = source.ok_or_else(|| {
+                InterfaceDriverError::FailedClosed("cold tool result has no source continuity".into())
+            })?;
             match self
                 .complete_native_terminal_result(
                     turn_context,
-                    state,
+                    source,
+                    &pending_request_key(pending),
                     None,
                     CodexTurnOutput::dynamic_tool_completed_after_interrupt(
                         self.native_tool_namespace()?.name,
@@ -374,6 +383,9 @@ impl CodexAppServerInterfaceDriver {
                             .as_deref()
                             .is_some_and(|label| label != PROVIDER_TRANSPORT_DISPATCH_LABEL),
                     });
+                }
+                NativeTerminalCheck::Open if source.outstanding_len() > 1 => {
+                    return Err(lost_parallel_requests());
                 }
                 NativeTerminalCheck::Open => {}
             }
@@ -522,7 +534,7 @@ impl CodexAppServerInterfaceDriver {
         if !lifecycle_resumed_provider_input && let Some(binding) = lifecycle.as_ref() {
             let pending_is_subagent = recovered
                 .as_ref()
-                .and_then(|state| state.pending.as_ref())
+                .and_then(|state| state.outstanding_call(&format!("tool:{}", result.correlation_id)))
                 .is_some_and(|pending| match pending {
                     CodexPendingContinuity::InterfaceOperation { interface, .. } => {
                         binding.is_subagent_interface(interface)
@@ -582,12 +594,16 @@ impl CodexAppServerInterfaceDriver {
         {
             return Ok(Arrival::Settled);
         }
+        let source = recovered.as_ref();
+        let recovered = &recovered
+            .as_ref()
+            .and_then(|state| state.focused(&format!("tool:{}", result.correlation_id)))
+            .or_else(|| recovered.clone());
         if let Some(interrupted) = recovered
             .as_ref()
             .and_then(|state| state.interrupted_pending.as_ref())
         {
             validate_recovered_interface_operation_input(result, interrupted)?;
-            sink.set_pending(None);
             let CodexPendingContinuity::InterfaceOperation {
                 turn_id,
                 call_id,
@@ -651,10 +667,14 @@ impl CodexAppServerInterfaceDriver {
                     "cold interface result has stale source context generation".into(),
                 ));
             }
+            let source = source.ok_or_else(|| {
+                InterfaceDriverError::FailedClosed("cold interface result has no source continuity".into())
+            })?;
             match self
                 .complete_native_terminal_result(
                     turn_context,
-                    state,
+                    source,
+                    &pending_request_key(pending),
                     None,
                     CodexTurnOutput::interface_operation_completed_after_interrupt(
                         result.operation.clone(),
@@ -694,6 +714,9 @@ impl CodexAppServerInterfaceDriver {
                             .as_deref()
                             .is_some_and(|label| label != PROVIDER_TRANSPORT_DISPATCH_LABEL),
                     });
+                }
+                NativeTerminalCheck::Open if source.outstanding_len() > 1 => {
+                    return Err(lost_parallel_requests());
                 }
                 NativeTerminalCheck::Open => {}
             }
@@ -741,4 +764,11 @@ impl CodexAppServerInterfaceDriver {
         }
         Ok(Arrival::Continue)
     }
+}
+
+fn lost_parallel_requests() -> InterfaceDriverError {
+    InterfaceDriverError::FailedClosed(
+        "the native turn still awaits several app-server requests the provider process lost; one late result cannot settle them"
+            .to_string(),
+    )
 }

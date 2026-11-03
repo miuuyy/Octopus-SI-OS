@@ -47,5 +47,6 @@ export function useChatgptAccount(enabled = true, home?: string) {
     if (!enabled || scoped !== connection) return;
     recordChatgptSignIn(state.account?.signedIn === true);
   }, [enabled, scoped, state.account]);
-  return { ...state, refresh: current?.refresh, retrySignInStatus: current?.retrySignInStatus, signIn: current?.signIn, cancel: current?.cancel, logout: current?.logout };
+  return { ...state, refresh: current?.refresh, loadSessions: current?.loadSessions, switchWorkspace: current?.switchWorkspace,
+    retrySignInStatus: current?.retrySignInStatus, signIn: current?.signIn, cancel: current?.cancel, logout: current?.logout };
 }

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "secret_auth_storage",
-  "stage": {
-    "kind": "stable"
-  }
-}

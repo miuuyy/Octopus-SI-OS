@@ -485,9 +485,14 @@ impl std::fmt::Display for UsageLimitReachedError {
             ),
             Some(PlanType::Known(
                 KnownPlan::Team
+                | KnownPlan::SelfServeBusinessProLite
                 | KnownPlan::SelfServeBusinessUsageBased
                 | KnownPlan::Business
-                | KnownPlan::EnterpriseCbpUsageBased,
+                | KnownPlan::Ent26
+                | KnownPlan::EnterpriseCbpAutomation
+                | KnownPlan::EnterpriseCbpUsageBased
+                | KnownPlan::Sci
+                | KnownPlan::SciPlus,
             )) => {
                 format!(
                     "You've hit your usage limit. To get more access now, send a request to your admin{}",
@@ -500,12 +505,13 @@ impl std::fmt::Display for UsageLimitReachedError {
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }
-            Some(PlanType::Known(KnownPlan::Pro | KnownPlan::ProLite)) => format!(
+            Some(PlanType::Known(KnownPlan::Pro | KnownPlan::ProLite | KnownPlan::ProMax)) => format!(
                 "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
-            Some(PlanType::Known(KnownPlan::Enterprise))
-            | Some(PlanType::Known(KnownPlan::Edu)) => format!(
+            Some(PlanType::Known(
+                KnownPlan::Enterprise | KnownPlan::Edu | KnownPlan::EduPlus | KnownPlan::EduPro,
+            )) => format!(
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())
             ),

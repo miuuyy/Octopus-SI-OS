@@ -35,8 +35,13 @@ impl CodexAppServerInterfaceDriver {
             control,
             handoff_barrier,
         } = frame;
-        let pending = recovered.as_ref().and_then(|state| state.pending.as_ref());
+        let outstanding = |call: &str| {
+            recovered
+                .as_ref()
+                .and_then(|state| state.outstanding_call(&format!("tool:{call}")))
+        };
         if let Some(request) = OperationOperatorRequest::from_payload(effective_request_bytes)? {
+            let pending = outstanding(&request.call_id);
             request.validate_source(input, pending)?;
             let output = request.projection(&self.operator_continuity()?);
             self.retain_operation_operator_wait(scope, sink, control, handoff_barrier, pending, &request.call_id, output)
@@ -44,14 +49,16 @@ impl CodexAppServerInterfaceDriver {
             return Ok(Arrival::Settled);
         }
         if let ProviderInput::OperatorResponse(OperatorResponseArtifact::Approval { request_id, .. }) = &*provider_input
-            && recovered.as_ref().is_none_or(|state| state.tool_operator_request.is_none())
+            && recovered.as_ref().is_none_or(|state| {
+                state.held_operator_call(|hold| hold.request.request_id == *request_id).is_none()
+            })
             && let Some(call_id) = operation_decision_call(input, request_id)?
         {
             let output = CodexTurnOutput::client(
                 INTERFACE_CONTEXT_UPDATED_LABEL,
                 serde_json::json!({"operator_response_artifact": input.artifact}),
             );
-            self.retain_operation_operator_wait(scope, sink, control, handoff_barrier, pending, &call_id, output)
+            self.retain_operation_operator_wait(scope, sink, control, handoff_barrier, outstanding(&call_id), &call_id, output)
                 .await?;
             return Ok(Arrival::Settled);
         }
@@ -63,14 +70,20 @@ impl CodexAppServerInterfaceDriver {
                     "application request has no durable native DynamicTool".to_string(),
                 )
             })?;
-            request.validate_pending(&state)?;
+            let call = format!("tool:{}", request.call_id);
+            let focused = state.focused(&call).ok_or_else(|| {
+                InterfaceDriverError::FailedClosed(
+                    "application request no longer names an outstanding native DynamicTool".to_string(),
+                )
+            })?;
+            request.validate_pending(&focused)?;
             request.validate_original(
                 &input,
                 &run_record,
                 &current_session_context,
                 &hidden_tools,
             )?;
-            if state.interrupted_pending.is_some() || state.tool_operator_request.is_some() {
+            if state.interrupted_pending.is_some() || state.operator_request_for(&call).is_some() {
                 return Err(InterfaceDriverError::FailedClosed(
                     "application request repeats or follows an interrupted native call".to_string(),
                 ));
@@ -88,16 +101,17 @@ impl CodexAppServerInterfaceDriver {
                 phase: ToolOperatorPhase::AwaitingOperator,
             };
             let output = request.projection(&config);
-            state.tool_operator_request = Some(operator_request);
+            state.set_operator_request(&call, Some(operator_request))?;
             sink.set_continuity(state);
-            self.retain_tool_operator_wait(&scope, &sink, control, &handoff_barrier, output)
+            self.retain_tool_operator_wait(&scope, &sink, control, &handoff_barrier, &call, output)
                 .await?;
             return Ok(Arrival::Settled);
         }
         if let Some(mut state) = recovered.clone()
-            && let Some(mut request) = state.tool_operator_request.clone()
+            && let Some(call) = held_operator_input_call(&state, provider_input)
         {
-            request.request.validate_pending(&state)?;
+            let mut request = state.operator_request_for(&call).cloned().expect("held call has its operator request");
+            request.request.validate_pending(&state.focused(&call).expect("held call is outstanding"))?;
             if request.payload_artifact_bindings != *payload_selection {
                 return Err(InterfaceDriverError::FailedClosed(
                     "pending operator continuation changed its exact payload selection".into(),
@@ -112,13 +126,14 @@ impl CodexAppServerInterfaceDriver {
                         ));
                     }
                     request.admit(&input, &self.operator_continuity()?)?;
-                    state.tool_operator_request = Some(request);
+                    state.set_operator_request(&call, Some(request))?;
                     sink.set_continuity(state);
                     self.retain_tool_operator_wait(
                         &scope,
                         &sink,
                         control,
                         &handoff_barrier,
+                        &call,
                         CodexTurnOutput::client(
                             INTERFACE_CONTEXT_UPDATED_LABEL,
                             serde_json::json!({
@@ -145,5 +160,33 @@ impl CodexAppServerInterfaceDriver {
             }
         }
         Ok(Arrival::Continue)
+    }
+}
+
+pub(crate) fn held_operator_input_call(
+    state: &CodexContinuityState,
+    input: &ProviderInput,
+) -> Option<String> {
+    let first = state.held_operator_call(|_| true)?;
+    if let Some(call) = state.held_operator_call(|hold| match input {
+        ProviderInput::OperatorResponse(response) => response
+            .request_id()
+            .is_ok_and(|request_id| request_id == hold.request.request_id),
+        ProviderInput::ToolResult(result) => {
+            result.tool == hold.request.resume.tool
+                && result.correlation_id.as_deref() == Some(hold.request.resume.correlation_id.as_str())
+        }
+        _ => false,
+    }) {
+        return Some(call);
+    }
+    let other = match input {
+        ProviderInput::ToolResult(result) => result.correlation_id.as_ref().map(|call| format!("tool:{call}")),
+        ProviderInput::InterfaceOperationResult(result) => Some(format!("tool:{}", result.correlation_id)),
+        _ => None,
+    };
+    match other {
+        Some(call) if state.outstanding_call(&call).is_some() && state.operator_request_for(&call).is_none() => None,
+        _ => Some(first),
     }
 }

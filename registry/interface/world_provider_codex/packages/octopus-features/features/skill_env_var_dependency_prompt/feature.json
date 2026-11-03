@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "skill_env_var_dependency_prompt",
-  "stage": {
-    "kind": "removed"
-  }
-}

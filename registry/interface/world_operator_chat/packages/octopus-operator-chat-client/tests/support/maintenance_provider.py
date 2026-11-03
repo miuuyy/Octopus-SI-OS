@@ -18,7 +18,7 @@ for line in sys.stdin:
         log.write(json.dumps(request) + "\n")
     if method == "initialize":
         result = {
-            "userAgent": "codex_cli_rs/0.162.0",
+            "userAgent": "codex_cli_rs/0.166.0",
             "codexHome": os.environ["CODEX_HOME"],
             "platformFamily": "unix",
             "platformOs": "macos",
@@ -36,7 +36,7 @@ for line in sys.stdin:
             "id": "capture-thread", "sessionId": "capture-thread", "preview": "",
             "ephemeral": True, "modelProvider": "fixture", "createdAt": 1,
             "updatedAt": 1, "status": {"type": "idle"}, "cwd": cwd,
-            "cliVersion": "0.162.0", "source": "exec", "turns": [],
+            "cliVersion": "0.166.0", "source": "exec", "turns": [],
         }
         result = {
             "thread": thread, "model": "fixture-a", "modelProvider": "fixture",

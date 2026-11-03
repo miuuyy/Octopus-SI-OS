@@ -491,6 +491,7 @@ impl CodexAppServerInterfaceDriver {
             lifecycle_prompt: lifecycle_prompt_event.as_ref(),
         };
         if let Some(model_context) = &early_model_context
+            && recovered.as_ref().is_none_or(|state| state.outstanding_len() <= 1)
             && self.refresh_native_context(
                 turn_context, &provider_input, recovered.as_ref(), context_generation,
                 CurrentNativeContext {
@@ -520,26 +521,15 @@ impl CodexAppServerInterfaceDriver {
             )?;
         }
         let mut continuations = ArrivalContinuations::default();
-        let interrupted_result_recovery = matches!(
-            (
-                &provider_input,
-                recovered
-                    .as_ref()
-                    .and_then(|state| state.interrupted_pending.as_ref())
-            ),
-            (
-                ProviderInput::ToolResult(_),
-                Some(CodexPendingContinuity::DynamicTool { .. })
-            ) | (
-                ProviderInput::InterfaceOperationResult(_),
-                Some(CodexPendingContinuity::InterfaceOperation { .. })
-            )
-        );
-        let pending_result_recovery = matches!(
-            (
-                &provider_input,
-                recovered.as_ref().and_then(|state| state.pending.as_ref())
-            ),
+        let result_target = match &provider_input {
+            ProviderInput::ToolResult(result) => result.correlation_id.as_ref().map(|call| format!("tool:{call}")),
+            ProviderInput::InterfaceOperationResult(result) => Some(format!("tool:{}", result.correlation_id)),
+            _ => None,
+        }
+        .and_then(|call| recovered.as_ref()?.outstanding_call(&call))
+        .or_else(|| recovered.as_ref().and_then(|state| state.pending.as_ref().or(state.interrupted_pending.as_ref())));
+        let result_recovery = matches!(
+            (&provider_input, result_target),
             (
                 ProviderInput::ToolResult(_),
                 Some(CodexPendingContinuity::DynamicTool { .. })
@@ -548,6 +538,10 @@ impl CodexAppServerInterfaceDriver {
                 Some(CodexPendingContinuity::InterfaceOperation { .. })
             )
         );
+        let interrupted_result_recovery = result_recovery
+            && recovered.as_ref().is_some_and(|state| state.interrupted_pending.is_some());
+        let pending_result_recovery = result_recovery
+            && recovered.as_ref().is_some_and(|state| state.pending.is_some());
         if recovered
             .as_ref()
             .is_some_and(|state| state.interrupted_pending.is_some())
@@ -700,6 +694,7 @@ impl CodexAppServerInterfaceDriver {
                 .as_ref()
                 .and_then(|_| recovered.as_ref().and_then(|state| state.pending.clone())),
             interrupted_pending: None,
+            parallel_pending: BTreeMap::new(),
             native_terminal: None,
             context_refresh: retained_refresh,
             native_history_retirement,
@@ -872,7 +867,7 @@ impl CodexAppServerInterfaceDriver {
 
         let outcome = self.drain_turn(turn_context, &thread_id, &turn_id).await?;
         match outcome {
-            TurnDrainOutcome::Suspended(_) | TurnDrainOutcome::Complete => Ok(()),
+            TurnDrainOutcome::Suspended(_) | TurnDrainOutcome::AwaitingResults | TurnDrainOutcome::Complete => Ok(()),
         }
     }
 }

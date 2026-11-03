@@ -36,6 +36,7 @@
   },
   "interface_driver_config": {
     "supported_reasoning_efforts": [
+      "none",
       "low",
       "medium",
       "high"
@@ -2450,6 +2451,7 @@
             "provider.account.rate_limit_reset.consumed",
             "provider.account.usage",
             "provider.account.workspace_messages",
+            "provider.account.sessions",
             "provider.capabilities",
             "turn.stream",
             "agent.message.delta",
@@ -2601,19 +2603,15 @@
           ],
           "supports_tools": true,
           "supports_reasoning": true,
-          "default_reasoning_effort": "medium",
+          "default_reasoning_effort": "high",
           "supported_reasoning_efforts": [
             {
-              "effort": "low",
-              "description": "Fast responses with lighter reasoning"
-            },
-            {
-              "effort": "medium",
-              "description": "Balances speed and reasoning depth for everyday tasks"
+              "effort": "none",
+              "description": "Thinking off"
             },
             {
               "effort": "high",
-              "description": "Greater reasoning depth for complex problems"
+              "description": "Thinking on"
             }
           ],
           "show_in_picker": true
@@ -2630,19 +2628,15 @@
           ],
           "supports_tools": true,
           "supports_reasoning": true,
-          "default_reasoning_effort": "medium",
+          "default_reasoning_effort": "high",
           "supported_reasoning_efforts": [
             {
-              "effort": "low",
-              "description": "Fast responses with lighter reasoning"
-            },
-            {
-              "effort": "medium",
-              "description": "Balances speed and reasoning depth for everyday tasks"
+              "effort": "none",
+              "description": "Thinking off"
             },
             {
               "effort": "high",
-              "description": "Greater reasoning depth for complex problems"
+              "description": "Thinking on"
             }
           ],
           "show_in_picker": true
@@ -2659,19 +2653,15 @@
           ],
           "supports_tools": true,
           "supports_reasoning": true,
-          "default_reasoning_effort": "medium",
+          "default_reasoning_effort": "high",
           "supported_reasoning_efforts": [
             {
-              "effort": "low",
-              "description": "Fast responses with lighter reasoning"
-            },
-            {
-              "effort": "medium",
-              "description": "Balances speed and reasoning depth for everyday tasks"
+              "effort": "none",
+              "description": "Thinking off"
             },
             {
               "effort": "high",
-              "description": "Greater reasoning depth for complex problems"
+              "description": "Thinking on"
             }
           ],
           "show_in_picker": true
@@ -2714,7 +2704,7 @@
         "include_hidden": false
       },
       "model": "mimo-v2.6-flash",
-      "reasoning_effort": "medium",
+      "reasoning_effort": "high",
       "reasoning_summary": "auto",
       "private_thread_cold_start": "resume_compatible",
       "model_result_projection": {
@@ -2790,6 +2780,7 @@
         "provider.account.rate_limit_reset.consumed",
         "provider.account.usage",
         "provider.account.workspace_messages",
+        "provider.account.sessions",
         "provider.capabilities",
         "turn.stream",
         "agent.message.delta",
@@ -2859,19 +2850,15 @@
               "slug": "mimo-v2.6-flash",
               "display_name": "MiMo V2.6 Flash",
               "description": "MiMo V2.6 Flash through Xiaomi MiMo.",
-              "default_reasoning_level": "medium",
+              "default_reasoning_level": "high",
               "supported_reasoning_levels": [
                 {
-                  "effort": "low",
-                  "description": "Fast responses with lighter reasoning"
-                },
-                {
-                  "effort": "medium",
-                  "description": "Balances speed and reasoning depth for everyday tasks"
+                  "effort": "none",
+                  "description": "Thinking off"
                 },
                 {
                   "effort": "high",
-                  "description": "Greater reasoning depth for complex problems"
+                  "description": "Thinking on"
                 }
               ],
               "shell_type": "shell_command",
@@ -2899,19 +2886,15 @@
               "slug": "mimo-v2.6-pro",
               "display_name": "MiMo V2.6 Pro",
               "description": "MiMo V2.6 Pro through Xiaomi MiMo.",
-              "default_reasoning_level": "medium",
+              "default_reasoning_level": "high",
               "supported_reasoning_levels": [
                 {
-                  "effort": "low",
-                  "description": "Fast responses with lighter reasoning"
-                },
-                {
-                  "effort": "medium",
-                  "description": "Balances speed and reasoning depth for everyday tasks"
+                  "effort": "none",
+                  "description": "Thinking off"
                 },
                 {
                   "effort": "high",
-                  "description": "Greater reasoning depth for complex problems"
+                  "description": "Thinking on"
                 }
               ],
               "shell_type": "shell_command",
@@ -2939,19 +2922,15 @@
               "slug": "mimo-v2.6-pro-ultraspeed",
               "display_name": "MiMo V2.6 Pro Ultraspeed",
               "description": "MiMo V2.6 Pro Ultraspeed through Xiaomi MiMo.",
-              "default_reasoning_level": "medium",
+              "default_reasoning_level": "high",
               "supported_reasoning_levels": [
                 {
-                  "effort": "low",
-                  "description": "Fast responses with lighter reasoning"
-                },
-                {
-                  "effort": "medium",
-                  "description": "Balances speed and reasoning depth for everyday tasks"
+                  "effort": "none",
+                  "description": "Thinking off"
                 },
                 {
                   "effort": "high",
-                  "description": "Greater reasoning depth for complex problems"
+                  "description": "Thinking on"
                 }
               ],
               "shell_type": "shell_command",
@@ -3029,10 +3008,15 @@
           "executable": "interface://world_provider_codex/packages/bin/codex"
         },
         "compatibility": {
-          "minimum_version": "0.162.0",
+          "minimum_version": "0.166.0",
           "required_features": {
             "code_mode_host": true,
-            "instant_interrupt": true
+            "code_mode_interrupt": true,
+            "incremental_tools": true,
+            "instant_interrupt": true,
+            "plugin_discovery_prefetch": false,
+            "reasoning_effort_override": true,
+            "retain_client_tool_outputs": true
           }
         },
         "extra_argv": [],
@@ -3057,6 +3041,7 @@
           "features.computer_use=false",
           "features.remote_plugin=false",
           "features.plugin_sharing=false",
+          "features.plugin_discovery_prefetch=false",
           "features.skill_mcp_dependency_install=false",
           "features.skill_search=false",
           "features.mentions_v2=false",
@@ -3065,10 +3050,16 @@
           "features.auth_elicitation=false",
           "features.personality=false",
           "features.workspace_dependencies=false",
+          "features.cli_daybreak=false",
           "features.code_mode_host=true",
           "features.instant_interrupt=true",
+          "features.code_mode_interrupt=true",
           "features.unified_image_budget=true",
           "features.image_resize_notice=true",
+          "features.incremental_tools=true",
+          "features.reasoning_effort_override=true",
+          "features.retain_client_tool_outputs=true",
+          "features.mcp_oauth_refresh_coordination=true",
           "personality=none",
           "sandbox_mode=read-only",
           "skills.include_instructions=false",
@@ -3113,6 +3104,28 @@
           "suppressible_by_current_config": false,
           "octopus_authority": false,
           "execution_boundary": "interface handler fails closed on server-initiated native tool requests; Octopus tools execute only as artifacts through granted worker-environment interfaces"
+        },
+        {
+          "name": "codex_incremental_tool_declarations",
+          "fields": [
+            "additional_tools"
+          ],
+          "adopted_by": "features.incremental_tools=true",
+          "applies_when": "the selected model uses Responses Lite",
+          "suppressible_by_current_config": true,
+          "octopus_authority": false,
+          "execution_boundary": "the declarations carry the interface-assembled tool catalog; catalog changes append to model history instead of replacing the request tool list"
+        },
+        {
+          "name": "codex_reasoning_effort_configuration_update",
+          "fields": [
+            "configuration_update.reasoning.effort"
+          ],
+          "adopted_by": "features.reasoning_effort_override=true",
+          "applies_when": "the OpenAI provider serves a model that supports reasoning effort updates",
+          "suppressible_by_current_config": true,
+          "octopus_authority": false,
+          "execution_boundary": "the effort is the one Octopus binds for the turn; Codex records a change as a model-history item and keeps the context window's request effort"
         }
       ],
       "suppressed_sources": [

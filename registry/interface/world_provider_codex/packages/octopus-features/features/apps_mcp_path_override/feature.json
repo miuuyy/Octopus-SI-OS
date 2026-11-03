@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "apps_mcp_path_override",
-  "stage": {
-    "kind": "removed"
-  }
-}

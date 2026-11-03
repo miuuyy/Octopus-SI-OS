@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "unified_exec",
-  "stage": {
-    "kind": "stable"
-  }
-}

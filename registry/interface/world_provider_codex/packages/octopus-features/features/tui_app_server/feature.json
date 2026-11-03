@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "tui_app_server",
-  "stage": {
-    "kind": "removed"
-  }
-}

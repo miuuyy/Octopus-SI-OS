@@ -202,33 +202,42 @@ impl TurnSink<'_> {
     }
 
     pub(crate) fn set_continuity(&self, continuity: CodexContinuityState) {
-        self.continuity.lock().expect("continuity lock").continuity = Some(continuity);
+        self.continuity.lock().expect("continuity lock").continuity = Some(continuity.canonical());
     }
 
-    pub(crate) fn set_pending(&self, pending: Option<CodexPendingContinuity>) {
-        if let Some(continuity) = self
-            .continuity
-            .lock()
-            .expect("continuity lock")
-            .continuity
-            .as_mut()
-        {
-            if continuity.pending != pending {
-                continuity.tool_operator_request = None;
-            }
-            continuity.pending = pending;
+    pub(crate) fn admit_pending(&self, pending: CodexPendingContinuity) -> Result<(), InterfaceDriverError> {
+        match self.continuity.lock().expect("continuity lock").continuity.as_mut() {
+            Some(continuity) => continuity.admit_outstanding(pending),
+            None => Ok(()),
         }
     }
 
-    pub(crate) fn set_interrupted_pending(&self, pending: Option<CodexPendingContinuity>) {
-        if let Some(continuity) = self
-            .continuity
-            .lock()
-            .expect("continuity lock")
-            .continuity
-            .as_mut()
+    pub(crate) fn replace_pending(&self, pending: CodexPendingContinuity) -> Result<(), InterfaceDriverError> {
+        if let Some(continuity) = self.continuity.lock().expect("continuity lock").continuity.as_mut() {
+            if !continuity.parallel_pending.is_empty() || continuity.interrupted_pending.is_some() {
+                return Err(InterfaceDriverError::FailedClosed(
+                    "a native operation cannot replace one of several outstanding native calls".to_string(),
+                ));
+            }
+            if continuity.pending.as_ref() != Some(&pending) {
+                continuity.tool_operator_request = None;
+            }
+            continuity.pending = Some(pending);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn settle_pending(&self, key: &str) {
+        if let Some(continuity) = self.continuity.lock().expect("continuity lock").continuity.as_mut() {
+            continuity.settle_outstanding(key);
+        }
+    }
+
+    pub(crate) fn clear_pending(&self) {
+        if let Some(continuity) = self.continuity.lock().expect("continuity lock").continuity.as_mut()
+            && continuity.interrupted_pending.is_none()
         {
-            continuity.interrupted_pending = pending;
+            continuity.store_outstanding(false, BTreeMap::new());
         }
     }
 
@@ -533,6 +542,10 @@ impl TurnSink<'_> {
             closure.value["native_terminal_input_context"] = serde_json::json!(
                 self.continuity.lock().expect("continuity lock").pending_input_context
             );
+        } else if closure.value.get("native_terminal").is_some() {
+            closure.value["native_terminal_input_context"] = serde_json::json!(
+                self.continuity.lock().expect("continuity lock").pending_input_context
+            );
         }
         if self.has_live_stream() {
             self.advance_continuity(false)?;
@@ -564,7 +577,16 @@ impl TurnSink<'_> {
                 ));
             }
         };
-        self.set_interrupted_pending(None);
+        let settled = closure.value.get("correlation_id").and_then(serde_json::Value::as_str)
+            .map(|correlation| format!("tool:{correlation}"))
+            .ok_or_else(|| InterfaceDriverError::FailedClosed(
+                "interrupted-result closure names no exact settled call".to_string(),
+            ))?;
+        if let Some(continuity) = self.continuity.lock().expect("continuity lock").continuity.as_mut()
+            && continuity.outstanding_call(&settled).is_some()
+        {
+            continuity.settle_outstanding(&settled);
+        }
         let mut retained_outputs = Vec::new();
         if let Some(terminal) = &native_terminal {
             let events = native_terminal_events(&closure.value)?;
@@ -1042,6 +1064,9 @@ pub(crate) fn intentionally_unprojected_server_notification(notification: &Serve
         notification,
         ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
+            | ServerNotification::ThreadReadStateChanged(_)
+            | ServerNotification::ThreadReverted(_)
+            | ServerNotification::ThreadPredictionUpdated(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadDeleted(_)
             | ServerNotification::ThreadUnarchived(_)
@@ -1052,6 +1077,7 @@ pub(crate) fn intentionally_unprojected_server_notification(notification: &Serve
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::TurnModerationMetadata(_)
+            | ServerNotification::StrictReviewRequired(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportProgress(_)

@@ -1,34 +1,7 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use octopus_descriptors::InterfaceId;
-use octopus_login::AuthManager;
 use octopus_secrets::{SecretName, SecretScope, SecretsBackendKind, SecretsManager};
-
-#[derive(Debug)]
-pub enum CredentialError {
-    NotAuthenticated,
-    Unusable(String),
-}
-
-impl std::fmt::Display for CredentialError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotAuthenticated => write!(
-                f,
-                "not authenticated: the auth store holds no Codex credential (log in via \
-                 octopus-login — ChatGPT/OAuth or an API key). Failing closed rather than \
-                 calling the model with no identity."
-            ),
-            Self::Unusable(reason) => write!(
-                f,
-                "stored Codex credential is present but unusable as a transport bearer: {reason}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CredentialError {}
 
 #[derive(Debug)]
 pub(crate) enum ScopedSecretError {
@@ -146,98 +119,9 @@ fn parse_scoped_secret_handle(
     ))
 }
 
-#[derive(Clone)]
-pub struct ProviderCredential {
-    bearer: String,
-}
-
-impl ProviderCredential {
-    pub fn bearer(&self) -> &str {
-        &self.bearer
-    }
-
-    pub fn into_bearer(self) -> String {
-        self.bearer
-    }
-}
-
-impl std::fmt::Debug for ProviderCredential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProviderCredential")
-            .field("bearer", &"<redacted>")
-            .finish()
-    }
-}
-
-pub async fn resolve_credential(
-    auth_manager: &Arc<AuthManager>,
-) -> Result<ProviderCredential, CredentialError> {
-    let Some(auth) = auth_manager.auth().await else {
-        return Err(CredentialError::NotAuthenticated);
-    };
-    bearer_from_auth(&auth)
-}
-
-fn bearer_from_auth(
-    auth: &octopus_login::CodexAuth,
-) -> Result<ProviderCredential, CredentialError> {
-    match auth.get_token() {
-        Ok(bearer) if !bearer.trim().is_empty() => Ok(ProviderCredential { bearer }),
-        Ok(_) => Err(CredentialError::Unusable(
-            "auth store returned an empty bearer token".to_string(),
-        )),
-        Err(err) => Err(CredentialError::Unusable(err.to_string())),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use octopus_login::CodexAuth;
-
-    #[tokio::test]
-    async fn resolves_api_key_bearer_from_the_store() {
-        let manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test-binding"));
-        let credential = resolve_credential(&manager)
-            .await
-            .expect("api-key auth in the store must resolve a bearer");
-        assert_eq!(credential.bearer(), "sk-test-binding");
-    }
-
-    #[tokio::test]
-    async fn empty_store_fails_closed_not_authenticated() {
-        let manager = AuthManager::new(
-            std::path::PathBuf::from("/nonexistent-codex-home-for-test"),
-            false,
-            octopus_login::AuthCredentialsStoreMode::Ephemeral,
-            None,
-            None,
-            octopus_login::AuthKeyringBackendKind::default(),
-        )
-        .await;
-        let manager = std::sync::Arc::new(manager);
-        let err = resolve_credential(&manager)
-            .await
-            .expect_err("an empty store must fail closed, never resolve a credential");
-        assert!(
-            matches!(err, CredentialError::NotAuthenticated),
-            "empty store must be the typed NotAuthenticated, got: {err:?}"
-        );
-    }
-
-    #[test]
-    fn credential_debug_is_redacted() {
-        let credential = ProviderCredential {
-            bearer: "super-secret".to_string(),
-        };
-        let rendered = format!("{credential:?}");
-        assert!(
-            !rendered.contains("super-secret"),
-            "bearer must be redacted in Debug"
-        );
-        assert!(rendered.contains("<redacted>"));
-    }
 
     #[test]
     fn scoped_secret_handles_are_exact_and_values_are_debug_redacted() {

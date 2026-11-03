@@ -265,7 +265,12 @@ async fn process(
         fence(cancel, budget.work_deadline)?;
         let source = validate_source(ctx, input, &request, sequence)?;
         let config = read_only(cancel, budget.work_deadline, async {
-            let auth = manager.auth().await.ok_or("Codex sign-in is unavailable")?;
+            let Some(auth) = manager.auth().await else {
+                return Err(match manager.auth_store_failure() {
+                    Some(reason) => format!("Codex auth store is unavailable: {reason}").into(),
+                    None => "Codex sign-in is unavailable".into(),
+                });
+            };
             if !auth.is_chatgpt_auth() {
                 return Ok(None);
             }
@@ -275,7 +280,8 @@ async fn process(
             let account = auth
                 .get_account_id()
                 .ok_or("Codex account identity is unavailable")?;
-            let response = octopus_login::default_client::create_client()
+            let response = octopus_login::default_client::try_create_client()
+                .map_err(|_| "Codex HTTP client could not be built")?
                 .get("https://chatgpt.com/backend-api/wham/predictions/config")
                 .bearer_auth(token)
                 .header("ChatGPT-Account-Id", account)
@@ -536,12 +542,14 @@ impl CodexAppServerInterfaceDriver {
                 || parent["model"]
                     .as_str()
                     .is_none_or(|model| model.trim().is_empty())
+                || !parent["status"]["type"].is_string()
             {
                 return Err(PredictionFailure::Integrity(
                     "prediction source read returned a different or incomplete thread".into(),
                 ));
             }
-            if parent["modelProvider"] != "openai"
+            if parent["status"]["type"] == "notLoaded"
+                || parent["modelProvider"] != "openai"
                 || config
                     .unsupported_models
                     .iter()
@@ -834,6 +842,7 @@ mod tests {
         enum Case {
             Complete,
             Read,
+            Unloaded,
             FirstHead,
             Fork,
             SecondHead,
@@ -849,6 +858,7 @@ mod tests {
         for case in [
             Case::Complete,
             Case::Read,
+            Case::Unloaded,
             Case::FirstHead,
             Case::Fork,
             Case::SecondHead,
@@ -912,7 +922,8 @@ mod tests {
                         "initialize" => json!({"userAgent":"test","codexHome":"/tmp"}),
                         "thread/read" => {
                             assert_eq!(request["params"], json!({"threadId":"parent"}));
-                            json!({"thread":{"id":"parent","modelProvider":"openai","model":"supported"}})
+                            let status = if case == Case::Unloaded { "notLoaded" } else { "idle" };
+                            json!({"thread":{"id":"parent","modelProvider":"openai","model":"supported","status":{"type":status}}})
                         }
                         "thread/turns/list" => {
                             assert_eq!(request["params"]["threadId"], "parent");
@@ -1110,8 +1121,11 @@ mod tests {
                     .count()
                     <= 1
             );
-            if matches!(case, Case::Read | Case::FirstHead) {
+            if matches!(case, Case::Read | Case::Unloaded | Case::FirstHead) {
                 assert!(!methods.iter().any(|m| m == "thread/fork"));
+            }
+            if case == Case::Unloaded {
+                assert!(!methods.iter().any(|m| m == "thread/turns/list"));
             }
             if matches!(case, Case::Fork | Case::SecondHead) {
                 assert!(!methods.iter().any(|m| m == "turn/start"));

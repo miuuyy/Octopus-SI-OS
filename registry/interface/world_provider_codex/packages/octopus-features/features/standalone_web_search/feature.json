@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "standalone_web_search",
-  "stage": {
-    "kind": "under_development"
-  }
-}

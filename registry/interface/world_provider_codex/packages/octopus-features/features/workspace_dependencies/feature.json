@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "workspace_dependencies",
-  "stage": {
-    "kind": "stable"
-  }
-}

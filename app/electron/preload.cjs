@@ -408,6 +408,12 @@ contextBridge.exposeInMainWorld("octopusTransport", {
   chatgptRateLimits() {
     return invokeAccess("octopus:chatgpt-rate-limits");
   },
+  chatgptAccountSessions() {
+    return invokeAccess("octopus:chatgpt-account-sessions");
+  },
+  chatgptSwitchWorkspace(request) {
+    return invokeAccess("octopus:chatgpt-switch-workspace", request);
+  },
   chatgptLogout() {
     return invokeAccess("octopus:chatgpt-logout");
   },

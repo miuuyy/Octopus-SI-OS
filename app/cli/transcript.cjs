@@ -470,7 +470,7 @@ function createTranscriptReducer(options = {}) {
       && integer(data.source_movement_seq) === m.sourceMovementSeq
       && ["item/started", "item/completed", "thread/resume"].includes(data.source_event)
       && /^[a-f0-9]{64}$/i.test(m.streamId) && integer(data.seq) === m.streamSeq && m.streamSeq > 0
-      && (data.source_event === "thread/resume" ? data.native_event_at_ms === undefined : integer(data.native_event_at_ms) !== null)
+      && (data.source_event === "thread/resume" && data.native_event_at_ms === undefined || integer(data.native_event_at_ms) !== null)
       && [data.thread_id, data.turn_id, data.item_id, data.client_id].every((value) => typeof value === "string" && value.length > 0 && value.trim() === value);
     const exactSource = m.sourceMovementSeq !== null && turn.sourceMovementSeqs.includes(m.sourceMovementSeq);
     if (!(input || exactSource) || !m.turnId) return;

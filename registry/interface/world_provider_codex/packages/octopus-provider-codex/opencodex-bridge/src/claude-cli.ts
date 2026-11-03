@@ -12,8 +12,6 @@ import { buildSystemPrompt } from "../node_modules/@bitkyc08/opencodex/src/adapt
 import { runCodingAgentTurn, type CodingAgentToolBridgeInput } from "../node_modules/@bitkyc08/opencodex/src/adapters/coding-agent/turn.ts";
 import { buildClaudeConversationInput } from "./claude-replay.ts";
 
-// Reuse the pinned CLI lifecycle and capture-only MCP transport. The input
-// projection belongs here because the upstream Claude adapter is text-only.
 export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: ClaudeCliAdapterDeps = {}): ProviderAdapter {
   return {
     name: "claude-cli",
@@ -27,7 +25,6 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
       }
       let bridge;
       try {
-        // Validate all image carriers before starting a native process.
         buildClaudeConversationInput(parsed);
         bridge = stableClaudeToolBridge(buildCodeBuddyToolBridge(parsed));
       } catch (error) {

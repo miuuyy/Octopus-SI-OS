@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "experimental_windows_sandbox",
-  "stage": {
-    "kind": "removed"
-  }
-}

@@ -603,6 +603,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadReadResponse,
     },
+    #[experimental("thread/readState/update")]
+    ThreadReadStateUpdate => "thread/readState/update" {
+        params: v2::ThreadReadStateUpdateParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadReadStateUpdateResponse,
+    },
     ThreadTurnsList => "thread/turns/list" {
         params: v2::ThreadTurnsListParams,
         serialization: None,
@@ -612,6 +618,12 @@ client_request_definitions! {
         params: v2::ThreadItemsListParams,
         serialization: None,
         response: v2::ThreadItemsListResponse,
+    },
+    #[experimental("thread/items/read")]
+    ThreadItemsRead => "thread/items/read" {
+        params: v2::ThreadItemsReadParams,
+        serialization: None,
+        response: v2::ThreadItemsReadResponse,
     },
     ThreadInjectItems => "thread/inject_items" {
         params: v2::ThreadInjectItemsParams,
@@ -630,7 +642,7 @@ client_request_definitions! {
     },
     HooksList => "hooks/list" {
         params: v2::HooksListParams,
-        serialization: global("config"),
+        serialization: global_shared_read("config"),
         response: v2::HooksListResponse,
     },
     MarketplaceAdd => "marketplace/add" {
@@ -955,6 +967,22 @@ client_request_definitions! {
         params: v2::CancelLoginAccountParams,
         serialization: global("account-auth"),
         response: v2::CancelLoginAccountResponse,
+    },
+
+    #[experimental("accountSession/list")]
+    AccountSessionsList => "accountSession/list" {
+        params: v2::AccountSessionsListParams,
+        serialization: global("account-auth"),
+        manual_payload_conversion: manual,
+        response: v2::AccountSessionsResponse,
+    },
+
+    #[experimental("accountSession/switch")]
+    AccountSessionsSwitch => "accountSession/switch" {
+        params: v2::AccountSessionsSwitchParams,
+        serialization: global("account-auth"),
+        manual_payload_conversion: manual,
+        response: v2::AccountSessionsSwitchResponse,
     },
 
     LogoutAccount => "account/logout" {
@@ -1520,16 +1548,23 @@ server_notification_definitions! {
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
+    #[experimental("thread/readState/changed")]
+    ThreadReadStateChanged => "thread/readState/changed" (v2::ThreadReadStateChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadDeleted => "thread/deleted" (v2::ThreadDeletedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
-    ThreadEnvironmentConnected => "thread/environment/connected" (v2::EnvironmentConnectionNotification),
-    ThreadEnvironmentDisconnected => "thread/environment/disconnected" (v2::EnvironmentConnectionNotification),
+    ThreadReverted => "thread/reverted" (v2::ThreadRevertedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
+    #[experimental("thread/prediction/updated")]
+    ThreadPredictionUpdated => "thread/prediction/updated" (v2::ThreadPredictionUpdatedNotification),
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
+    #[experimental("thread/environment/connected")]
+    EnvironmentConnected => "thread/environment/connected" (v2::EnvironmentConnectionNotification),
+    #[experimental("thread/environment/disconnected")]
+    EnvironmentDisconnected => "thread/environment/disconnected" (v2::EnvironmentConnectionNotification),
     #[experimental("thread/settings/updated")]
     ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
@@ -1542,8 +1577,11 @@ server_notification_definitions! {
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
+    #[experimental("autoApprovalReview/strictReviewRequired")]
+    StrictReviewRequired => "autoApprovalReview/strictReviewRequired" (v2::StrictReviewRequiredNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
+    RawResponseCompleted => "rawResponse/completed" (v2::RawResponseCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     PlanDelta => "item/plan/delta" (v2::PlanDeltaNotification),
     CommandExecOutputDelta => "command/exec/outputDelta" (v2::CommandExecOutputDeltaNotification),
@@ -1559,6 +1597,8 @@ server_notification_definitions! {
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
     McpServerStatusUpdated => "mcpServer/startupStatus/updated" (v2::McpServerStatusUpdatedNotification),
+    #[experimental("mcpServer/event/stream/notification")]
+    McpServerEventStream => "mcpServer/event/stream/notification" (v2::McpServerEventStreamNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
@@ -1574,9 +1614,9 @@ server_notification_definitions! {
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
     AuthRecoveryStarted => "modelProvider/authRecoveryStarted" (v2::AuthRecoveryNotification),
     AuthRecoveryCompleted => "modelProvider/authRecoveryCompleted" (v2::AuthRecoveryNotification),
-    ModelSafetyBufferingUpdated => "model/safetyBuffering/updated" (v2::ModelSafetyBufferingUpdatedNotification),
     #[experimental("turn/moderationMetadata")]
     TurnModerationMetadata => "turn/moderationMetadata" (v2::TurnModerationMetadataNotification),
+    ModelSafetyBufferingUpdated => "model/safetyBuffering/updated" (v2::ModelSafetyBufferingUpdatedNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
@@ -1618,7 +1658,6 @@ client_notification_definitions! {
 mod tests {
     use super::*;
     use anyhow::Result;
-    use octopus_protocol::account::AmazonBedrockCredentialSource;
     use octopus_protocol::account::PlanType;
     use octopus_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use octopus_protocol::parse_command::ParsedCommand;
@@ -2790,46 +2829,48 @@ mod tests {
         let chatgpt = v2::Account::Chatgpt {
             email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
+            workspace_name: None,
         };
         assert_eq!(
             json!({
                 "type": "chatgpt",
                 "email": "user@example.com",
                 "planType": "plus",
+                "workspaceName": null,
             }),
             serde_json::to_value(&chatgpt)?,
         );
 
         let codex_managed_bedrock = v2::Account::AmazonBedrock {
-            credential_source: AmazonBedrockCredentialSource::CodexManaged,
+            uses_codex_managed_credentials: true,
         };
         assert_eq!(
             json!({
                 "type": "amazonBedrock",
-                "credentialSource": "codexManaged",
+                "usesCodexManagedCredentials": true,
             }),
             serde_json::to_value(&codex_managed_bedrock)?,
         );
 
-        let aws_managed_bedrock = v2::Account::AmazonBedrock {
-            credential_source: AmazonBedrockCredentialSource::AwsManaged,
+        let externally_managed_bedrock = v2::Account::AmazonBedrock {
+            uses_codex_managed_credentials: false,
         };
         assert_eq!(
             json!({
                 "type": "amazonBedrock",
-                "credentialSource": "awsManaged",
+                "usesCodexManagedCredentials": false,
             }),
-            serde_json::to_value(&aws_managed_bedrock)?,
+            serde_json::to_value(&externally_managed_bedrock)?,
         );
 
         Ok(())
     }
 
     #[test]
-    fn account_defaults_legacy_bedrock_credential_source() -> Result<()> {
+    fn account_defaults_legacy_bedrock_managed_credentials_flag() -> Result<()> {
         assert_eq!(
             v2::Account::AmazonBedrock {
-                credential_source: AmazonBedrockCredentialSource::AwsManaged,
+                uses_codex_managed_credentials: false,
             },
             serde_json::from_value(json!({
                 "type": "amazonBedrock",

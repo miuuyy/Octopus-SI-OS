@@ -25,6 +25,7 @@ import {
   assertProviderDestinationAllowed,
   providerDestinationResolvedError,
 } from "../node_modules/@bitkyc08/opencodex/src/lib/destination-policy.ts";
+import { isLocalUpstream } from "../node_modules/@bitkyc08/opencodex/src/lib/local-upstream.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
 import type {
   AdapterEvent,
@@ -486,6 +487,7 @@ function deliver(
   maps: ReturnType<typeof buildToolBridgeMaps>,
   budget: TranslatorBudget,
   abort: AbortController,
+  stallTimeoutSec: number | undefined,
 ): Promise<Response> | Response {
   const options = {
     translatorBudget: budget,
@@ -507,7 +509,7 @@ function deliver(
       maps.toolSearchToolNames,
       () => abort.abort("client cancelled"),
       2000,
-      options,
+      { ...options, stallTimeoutSec },
     );
     return new Response(disposingStream(stream, budget, abort), { headers: SSE_HEADERS });
   }
@@ -562,11 +564,14 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
     return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : 400, "invalid_request_error", message);
   }
   const abort = new AbortController();
+  const stallTimeoutSec = isLocalUpstream(config.provider.base_url)
+    ? Math.ceil(config.limits.request_timeout_ms / 1000)
+    : undefined;
   if (adapter.localTerminal?.(parsed)) {
-    return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort);
+    return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort, stallTimeoutSec);
   }
   if (adapter.runTurn !== undefined) {
-    return deliver(parsed, responseModel, turnEvents(adapter, parsed, budget, abort, config.limits.request_timeout_ms), maps, budget, abort);
+    return deliver(parsed, responseModel, turnEvents(adapter, parsed, budget, abort, config.limits.request_timeout_ms), maps, budget, abort, stallTimeoutSec);
   }
   const timer = setTimeout(() => abort.abort("request timeout"), config.limits.request_timeout_ms);
   let upstream: Response;
@@ -615,13 +620,13 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
   const bounded = boundedStream(upstream, config.limits.max_response_bytes, abort);
   if (!parsed.stream && adapter.parseResponse) {
     try {
-      return deliver(parsed, responseModel, await adapter.parseResponse(bounded, budget, built.tierLog), maps, budget, abort);
+      return deliver(parsed, responseModel, await adapter.parseResponse(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec);
     } catch (error) {
       budget.dispose();
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider response translation failed");
     }
   }
-  return deliver(parsed, responseModel, adapter.parseStream(bounded, budget, built.tierLog), maps, budget, abort);
+  return deliver(parsed, responseModel, adapter.parseStream(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec);
 }
 
 function turnEvents(
@@ -674,8 +679,7 @@ function turnEvents(
 }
 
 async function serve(config: BridgeConfig): Promise<void> {
-  const adapter = adapterFor(config.provider);
-  if (adapter.fetchResponse !== undefined) {
+  if (adapterFor(config.provider).fetchResponse !== undefined) {
     throw new Error(`adapter ${config.provider.adapter} requires an undeclared retry surface`);
   }
   const server = Bun.serve({
@@ -693,7 +697,7 @@ async function serve(config: BridgeConfig): Promise<void> {
         });
       }
       if (request.method === "POST" && url.pathname === "/v1/responses") {
-        return responsesRequest(request, config, adapter);
+        return responsesRequest(request, config, adapterFor(config.provider));
       }
       return formatErrorResponse(404, "not_found", "route is not declared by this provider interface");
     },

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "artifact",
-  "stage": {
-    "kind": "under_development"
-  }
-}

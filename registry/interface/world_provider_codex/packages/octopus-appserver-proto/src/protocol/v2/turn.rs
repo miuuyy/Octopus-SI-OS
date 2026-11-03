@@ -7,6 +7,7 @@ use octopus_protocol::config_types::CollaborationMode;
 use octopus_protocol::config_types::MultiAgentMode;
 use octopus_protocol::config_types::Personality;
 use octopus_protocol::config_types::ReasoningSummary;
+use octopus_protocol::models::FunctionCallOutputBody;
 use octopus_protocol::models::ImageDetail;
 use octopus_protocol::openai_models::ReasoningEffort;
 use octopus_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
@@ -59,6 +60,17 @@ pub struct AdditionalContextEntry {
     pub kind: AdditionalContextKind,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnToolOutput {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub output: FunctionCallOutputBody,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retain: bool,
+}
+
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]
@@ -67,13 +79,24 @@ pub struct AdditionalContextEntry {
 pub struct TurnStartParams {
     pub thread_id: String,
     #[ts(optional = nullable)]
+    pub disabled_plugin_ids: Option<Vec<String>>,
+    #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
     #[ts(optional = nullable)]
     pub turn_trigger: Option<String>,
+    #[ts(optional = nullable)]
+    pub parent_turn_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub root_turn_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub tool_output: Option<Box<TurnToolOutput>>,
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    #[experimental("turn/start.responsesapiClientMetadataPatch")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata_patch: Option<HashMap<String, String>>,
     #[experimental("turn/start.additionalContext")]
     #[ts(optional = nullable)]
     pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
@@ -105,6 +128,8 @@ pub struct TurnStartParams {
     )]
     #[ts(optional = nullable)]
     pub service_tier: Option<Option<String>>,
+    #[ts(optional = nullable)]
+    pub service_tier_for_turn: Option<String>,
     #[ts(optional = nullable)]
     pub effort: Option<ReasoningEffort>,
     #[ts(optional = nullable)]

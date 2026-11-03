@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "workspace_owner_usage_nudge",
-  "stage": {
-    "kind": "removed"
-  }
-}

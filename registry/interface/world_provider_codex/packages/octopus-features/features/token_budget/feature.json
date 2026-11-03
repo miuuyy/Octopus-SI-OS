@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "token_budget",
-  "stage": {
-    "kind": "under_development"
-  }
-}

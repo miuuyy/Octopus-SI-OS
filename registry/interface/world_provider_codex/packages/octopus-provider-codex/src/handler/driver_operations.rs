@@ -58,6 +58,9 @@ impl CodexAppServerInterfaceDriver {
             ProviderOperation::CapabilitiesRead => {
                 self.handle_provider_capabilities(payload, sink).await
             }
+            ProviderOperation::AccountSessionsRead => {
+                self.handle_account_sessions_read(payload, sink).await
+            }
         }
     }
 

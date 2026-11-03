@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "runtime_metrics",
-  "stage": {
-    "kind": "under_development"
-  }
-}

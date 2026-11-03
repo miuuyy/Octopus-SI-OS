@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "search_tool",
-  "stage": {
-    "kind": "removed"
-  }
-}

@@ -734,6 +734,7 @@ test("the launch terminal belongs to the primary window, reuses its shell and op
     OCTOPUS_HOME: main.world.home,
     OCTOPUS_SOURCE_REGISTRY: path.join(main.world.root, "repo", "registry"),
     OCTOPUS_MACHINE_CODEX_AUTH_FILE: path.join(main.world.codexHome, "auth.json"),
+    OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE: path.join(main.world.codexHome, "auth.lock"),
   });
 });
 

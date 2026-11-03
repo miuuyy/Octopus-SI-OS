@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "use_legacy_landlock",
-  "stage": {
-    "kind": "deprecated"
-  }
-}

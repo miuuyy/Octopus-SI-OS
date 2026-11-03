@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "world_provider_chatgpt",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "product_kind": "application",
   "product_id": "world_provider_chatgpt",
   "release_status": "optional",

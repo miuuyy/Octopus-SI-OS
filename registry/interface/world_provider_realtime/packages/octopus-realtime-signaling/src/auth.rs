@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use octopus_login::{AuthCredentialsStoreMode, AuthKeyringBackendKind, AuthManager};
+use octopus_login::{AuthCredentialsStoreMode, AuthManager};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::Deserialize;
 
@@ -88,14 +88,17 @@ impl AuthConfig {
                         .to_path_buf(),
                     false,
                     AuthCredentialsStoreMode::File,
-                    None,
-                    None,
-                    AuthKeyringBackendKind::default(),
                 )
                 .await;
-                let auth = manager.auth().await.ok_or(
-                    "Codex authentication is unavailable; sign in through the Codex provider",
-                )?;
+                let Some(auth) = manager.auth().await else {
+                    return Err(match manager.auth_store_failure() {
+                        Some(reason) => format!("Codex auth store is unavailable: {reason}"),
+                        None => {
+                            "Codex authentication is unavailable; sign in through the Codex provider"
+                                .into()
+                        }
+                    });
+                };
                 if !auth.is_chatgpt_auth() {
                     return Err("codex_machine requires ChatGPT auth; public API authorization must be configured explicitly".into());
                 }

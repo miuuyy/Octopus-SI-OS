@@ -50,8 +50,13 @@ pub enum McpServerStatusDetail {
 #[ts(export_to = "v2/")]
 pub struct McpServerStatus {
     pub name: String,
+    pub plugin_id: Option<String>,
+    pub http_origin: Option<String>,
     pub server_info: Option<McpServerInfo>,
+    pub server_capabilities: Option<serde_json::Value>,
+    pub tool_list_meta: Option<serde_json::Value>,
     pub tools: std::collections::HashMap<String, McpTool>,
+    pub tools_error: Option<String>,
     pub resources: Vec<McpResource>,
     pub resource_templates: Vec<McpResourceTemplate>,
     pub auth_status: McpAuthStatus,
@@ -80,6 +85,22 @@ pub struct McpResourceReadParams {
 #[ts(export_to = "v2/")]
 pub struct McpResourceReadResponse {
     pub contents: Vec<McpResourceContent>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerEventNotification {
+    pub method: String,
+    pub params: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerEventStreamNotification {
+    pub subscription_id: String,
+    pub notification: McpServerEventNotification,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

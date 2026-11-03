@@ -3019,6 +3019,16 @@ ipcMain.handle("octopus:chatgpt-rate-limits", async (event, token) => {
   return getChatgptSignIn().rateLimits();
 });
 
+ipcMain.handle("octopus:chatgpt-account-sessions", async (event, token) => {
+  requireRuntimeStateAccess(event, token);
+  return getChatgptSignIn().sessions();
+});
+
+ipcMain.handle("octopus:chatgpt-switch-workspace", async (_event, token, request) => {
+  getClientAccessController().requireSession(token, ["live"]);
+  return getChatgptSignIn().switchWorkspace(request);
+});
+
 ipcMain.handle("octopus:chatgpt-logout", async (_event, token) => {
   getClientAccessController().requireSession(token, ["live"]);
   return getChatgptSignIn().logout();
@@ -5146,6 +5156,7 @@ function resolveRuntimeLaunchEnv() {
     OCTOPUS_HOME: resolveOctopusHome(),
     OCTOPUS_SOURCE_REGISTRY: resolveSourceRegistry(),
     OCTOPUS_MACHINE_CODEX_AUTH_FILE: path.join(resolveOperatorCodexHome(), "auth.json"),
+    OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE: path.join(resolveOperatorCodexHome(), "auth.lock"),
   };
   if (stringValue(process.env.OCTOPUS_RUNTIME_BIN)) return env;
   const root = resolveInstallationRoot();

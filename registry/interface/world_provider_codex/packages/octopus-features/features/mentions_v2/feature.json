@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "mentions_v2",
-  "stage": {
-    "kind": "stable"
-  }
-}

@@ -27,10 +27,12 @@
         "executable_paths": [],
         "executable_commands": [],
         "read_env_paths": [
-          "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+          "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+          "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
         ],
         "write_env_paths": [
-          "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+          "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+          "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
         ],
         "executable_env_paths": [],
         "allow_network": true,
@@ -41,7 +43,8 @@
         "app_server_control_root"
       ],
       "inherit_env": [
-        "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+        "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+        "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
       ]
     }
   ]

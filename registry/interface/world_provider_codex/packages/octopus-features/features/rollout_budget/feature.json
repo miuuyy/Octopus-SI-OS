@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "rollout_budget",
-  "stage": {
-    "kind": "under_development"
-  }
-}

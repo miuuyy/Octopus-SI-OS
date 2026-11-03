@@ -7,12 +7,13 @@ impl CodexAppServerInterfaceDriver {
         sink: &TurnSink<'_>,
         control: &CodexTurnControlBroker,
         handoff_barrier: &Arc<ProviderHandoffBarrier>,
+        call: &str,
         output: CodexTurnOutput,
     ) -> Result<(), InterfaceDriverError> {
         let state = sink.continuity_snapshot().ok_or_else(|| {
             InterfaceDriverError::FailedClosed("application wait lost continuity".to_string())
         })?;
-        let request = state.tool_operator_request.as_ref().ok_or_else(|| {
+        let request = state.operator_request_for(call).ok_or_else(|| {
             InterfaceDriverError::FailedClosed("application wait lost its request".to_string())
         })?;
         let Some(pending) = self
@@ -170,13 +171,17 @@ impl CodexAppServerInterfaceDriver {
         &self,
         context: TurnContext<'_, '_>,
         recovered: &CodexContinuityState,
+        call: &str,
         pending: Option<&PendingServerRequest>,
-        activity: CodexTurnOutput,
+        mut activity: CodexTurnOutput,
         activity_already_admitted: bool,
         mut closure: CodexTurnOutput,
         continue_cut_turn: bool,
     ) -> Result<NativeTerminalCheck, InterfaceDriverError> {
-        let Some(exact_pending) = recovered.pending.as_ref().filter(|pending| interrupted_pending_has_external_result(pending)) else {
+        if recovered.pending.is_none() {
+            return Ok(NativeTerminalCheck::Open);
+        }
+        let Some(exact_pending) = recovered.outstanding_call(call).filter(|pending| interrupted_pending_has_external_result(pending)) else {
             return Ok(NativeTerminalCheck::Open);
         };
         if recovered.interrupted_pending.is_some() || recovered.native_terminal.is_some()
@@ -191,6 +196,29 @@ impl CodexAppServerInterfaceDriver {
             .await.map_err(InterfaceDriverError::FailedClosed)? else {
             return Ok(NativeTerminalCheck::Open);
         };
+        if recovered.outstanding_len() > 1 {
+            context.sink.bind_live_stream(&recovered.thread_id, turn_id)?;
+            closure.value["native_terminal_source_continuity"] = serde_json::to_value(recovered)
+                .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+            closure.value["result_origin"] = serde_json::json!("native_turn_completion");
+            closure.value["terminal_evidence_source"] = serde_json::json!("thread/read");
+            closure.value["native_terminal"] = serde_json::to_value(&terminal)
+                .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+            terminal.apply_disposition(&mut closure)?;
+            terminal.apply_disposition(&mut activity)?;
+            if let Some(pending) = pending {
+                self.remove_pending_request(context.scope, pending).await?;
+            }
+            context.control.publish(CodexTurnControlTarget::InterruptedDraining {
+                output: Arc::downgrade(context.sink.emit), durable_handoff: context.handoff_barrier.clone(),
+                thread_id: recovered.thread_id.clone(), turn_id: turn_id.to_string(),
+            });
+            context.sink.set_continuity(recovered.clone());
+            context.sink.send_interrupted_result(
+                (!activity_already_admitted).then_some(activity), activity_already_admitted, closure,
+            )?;
+            return Ok(NativeTerminalCheck::Closed);
+        }
         if continue_cut_turn && terminal.exact_turn(&recovered.thread_id, Some(turn_id))?.status == TurnStatus::Interrupted {
             let events = take_native_terminal_events(&mut *self.client.lock().await, &terminal, &recovered.thread_id, turn_id)?;
             return Ok(NativeTerminalCheck::CutByProcessDeath(activity.with_native_terminal_events(events)));

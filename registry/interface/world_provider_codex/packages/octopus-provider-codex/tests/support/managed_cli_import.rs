@@ -21,13 +21,13 @@ fn managed_cli_import_resolves_the_declared_owner_and_checks_exact_bytes() {
     std::fs::copy(&binary, &helper).unwrap();
     let receipt = ManagedCliReceipt {
         schema_version: 2,
-        version: "0.162.0".into(),
-        release_url: "https://github.com/openai/codex/releases/tag/rust-v0.162.0".into(),
+        version: "0.166.0".into(),
+        release_url: "https://github.com/openai/codex/releases/tag/rust-v0.166.0".into(),
         archive_sha256: "a".repeat(64),
         executable: "codex".into(),
         executable_sha256: format!("{:x}", Sha256::digest(bytes)),
         executable_bytes: bytes.len() as u64,
-        schema_baseline: "rust-v0.162.0".into(),
+        schema_baseline: "rust-v0.166.0".into(),
         schemas: std::collections::BTreeMap::from([(
             "TurnSteerParams.json".into(),
             "b".repeat(64),

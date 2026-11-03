@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "use_linux_sandbox_bwrap",
-  "stage": {
-    "kind": "removed"
-  }
-}

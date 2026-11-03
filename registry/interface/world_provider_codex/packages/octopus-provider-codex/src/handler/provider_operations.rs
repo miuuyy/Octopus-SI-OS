@@ -26,6 +26,8 @@ pub(crate) struct ProviderOperations {
     pub(crate) capabilities_read: ProviderOperationBinding,
     #[serde(default)]
     pub(crate) thread_compact_start: Option<ProviderOperationBinding>,
+    #[serde(default)]
+    pub(crate) account_sessions_read: Option<ProviderOperationBinding>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +42,7 @@ pub(crate) enum ProviderOperation {
     AccountUsageRead,
     AccountWorkspaceMessagesRead,
     CapabilitiesRead,
+    AccountSessionsRead,
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +163,14 @@ pub(crate) fn validate_provider_operations(
             binding,
             PROVIDER_THREAD_COMPACT_START_LABEL,
             TURN_CONTEXT_COMPACTION_LABEL,
+        ));
+    }
+    if let Some(binding) = operations.account_sessions_read.as_ref() {
+        bindings.push((
+            "account_sessions_read",
+            binding,
+            PROVIDER_ACCOUNT_SESSIONS_READ_LABEL,
+            PROVIDER_ACCOUNT_SESSIONS_LABEL,
         ));
     }
     let mut labels = BTreeSet::new();

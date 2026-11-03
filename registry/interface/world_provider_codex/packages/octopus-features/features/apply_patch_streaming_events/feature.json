@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "apply_patch_streaming_events",
-  "stage": {
-    "kind": "under_development"
-  }
-}

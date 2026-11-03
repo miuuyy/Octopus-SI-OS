@@ -51,9 +51,10 @@ export function ChatGptSignInGate() {
         <h1 id="chatgpt-signin-title" className={waiting ? "sr-only" : "chatgpt-signin-title"}>{!state.account && state.error && !busy ? "ChatGPT account unavailable" : "Sign in to ChatGPT"}</h1>
         {waiting ? <p className="chatgpt-signin-body">Continue signing in with your browser</p> : null}
       </div>
-      {!waiting && (state.error || state.account?.authType === "apiKey" || state.account?.authType === "amazonBedrock") ? <p className="chatgpt-signin-body">
+      {!waiting && (state.error || state.account?.authType === "apiKey" || state.account?.authType === "amazonBedrock" || state.account?.authType === "gcp") ? <p className="chatgpt-signin-body">
         {state.account?.authType === "apiKey" ? "This native credential location uses an API key. Sign in with ChatGPT to continue."
           : state.account?.authType === "amazonBedrock" ? "This native credential location uses Amazon Bedrock. Sign in with ChatGPT to continue."
+          : state.account?.authType === "gcp" ? "This native credential location uses Google Cloud. Sign in with ChatGPT to continue."
             : "Your native account could not be checked. Retry the account check or sign in with ChatGPT."}
       </p> : null}
       {error ? <p className="chatgpt-signin-body account-error" role="alert">{error}</p> : null}

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "remote_plugin",
-  "stage": {
-    "kind": "under_development"
-  }
-}

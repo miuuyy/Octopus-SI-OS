@@ -98,6 +98,8 @@ pub(crate) struct CodexContinuityState {
     pub(crate) pending: Option<CodexPendingContinuity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) interrupted_pending: Option<CodexPendingContinuity>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) parallel_pending: BTreeMap<String, ParallelPendingCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tool_operator_request: Option<ToolOperatorContinuity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,6 +108,215 @@ pub(crate) struct CodexContinuityState {
     pub(crate) context_refresh: Option<ContextRefresh>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_history_retirement: Option<NativeHistoryRetirement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ParallelPendingCall {
+    pub(crate) pending: CodexPendingContinuity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_operator_request: Option<ToolOperatorContinuity>,
+}
+
+pub(crate) fn pending_request_key(pending: &CodexPendingContinuity) -> String {
+    match pending {
+        CodexPendingContinuity::DynamicTool { call_id, .. }
+        | CodexPendingContinuity::InterfaceOperation { call_id, .. } => format!("tool:{call_id}"),
+        CodexPendingContinuity::Operator { request_key, .. } => request_key.clone(),
+    }
+}
+
+impl CodexContinuityState {
+    pub(crate) fn outstanding(&self) -> impl Iterator<Item = &CodexPendingContinuity> {
+        self.pending
+            .iter()
+            .chain(self.interrupted_pending.iter())
+            .chain(self.parallel_pending.values().map(|call| &call.pending))
+    }
+
+    pub(crate) fn outstanding_call(&self, key: &str) -> Option<&CodexPendingContinuity> {
+        self.outstanding().find(|pending| pending_request_key(pending) == key)
+    }
+
+    pub(crate) fn outstanding_len(&self) -> usize {
+        self.outstanding().count()
+    }
+
+    pub(crate) fn outstanding_calls(&self) -> (bool, BTreeMap<String, ParallelPendingCall>) {
+        let mut calls = self.parallel_pending.clone();
+        if let Some(head) = self.pending.as_ref().or(self.interrupted_pending.as_ref()) {
+            calls.insert(
+                pending_request_key(head),
+                ParallelPendingCall {
+                    pending: head.clone(),
+                    tool_operator_request: self.tool_operator_request.clone(),
+                },
+            );
+        }
+        (self.interrupted_pending.is_some(), calls)
+    }
+
+    pub(crate) fn store_outstanding(
+        &mut self,
+        interrupted: bool,
+        mut calls: BTreeMap<String, ParallelPendingCall>,
+    ) {
+        self.pending = None;
+        self.interrupted_pending = None;
+        self.tool_operator_request = None;
+        if let Some((_, head)) = calls.pop_first() {
+            if interrupted {
+                self.interrupted_pending = Some(head.pending);
+            } else {
+                self.pending = Some(head.pending);
+            }
+            self.tool_operator_request = head.tool_operator_request;
+        }
+        self.parallel_pending = calls;
+    }
+
+    pub(crate) fn canonical(mut self) -> Self {
+        let (interrupted, calls) = self.outstanding_calls();
+        self.store_outstanding(interrupted, calls);
+        self
+    }
+
+    pub(crate) fn admit_outstanding(
+        &mut self,
+        pending: CodexPendingContinuity,
+    ) -> Result<(), InterfaceDriverError> {
+        if self.interrupted_pending.is_some() {
+            return Err(InterfaceDriverError::FailedClosed(
+                "a native call cannot join an interrupted native turn".to_string(),
+            ));
+        }
+        if let Some(head) = self.pending.as_ref()
+            && (!parallel_pending_admissible(head)
+                || !parallel_pending_admissible(&pending)
+                || pending_turn_id(head) != pending_turn_id(&pending))
+        {
+            return Err(InterfaceDriverError::FailedClosed(
+                "only ordinary external calls of one native turn may wait together".to_string(),
+            ));
+        }
+        let (_, mut calls) = self.outstanding_calls();
+        if calls
+            .insert(
+                pending_request_key(&pending),
+                ParallelPendingCall {
+                    pending,
+                    tool_operator_request: None,
+                },
+            )
+            .is_some()
+        {
+            return Err(InterfaceDriverError::FailedClosed(
+                "app-server repeated one unresolved native call inside the same turn".to_string(),
+            ));
+        }
+        self.store_outstanding(false, calls);
+        Ok(())
+    }
+
+    pub(crate) fn settle_outstanding(&mut self, key: &str) -> Option<CodexPendingContinuity> {
+        let (interrupted, mut calls) = self.outstanding_calls();
+        let settled = calls.remove(key)?;
+        self.store_outstanding(interrupted, calls);
+        Some(settled.pending)
+    }
+
+    pub(crate) fn focused(&self, key: &str) -> Option<Self> {
+        let (interrupted, mut calls) = self.outstanding_calls();
+        let focus = calls.remove(key)?;
+        let mut state = self.clone();
+        state.parallel_pending = calls;
+        state.pending = None;
+        state.interrupted_pending = None;
+        if interrupted {
+            state.interrupted_pending = Some(focus.pending);
+        } else {
+            state.pending = Some(focus.pending);
+        }
+        state.tool_operator_request = focus.tool_operator_request;
+        Some(state)
+    }
+
+    pub(crate) fn operator_request_for(&self, key: &str) -> Option<&ToolOperatorContinuity> {
+        match self.pending.as_ref().or(self.interrupted_pending.as_ref()) {
+            Some(head) if pending_request_key(head) == key => self.tool_operator_request.as_ref(),
+            _ => self
+                .parallel_pending
+                .get(key)
+                .and_then(|call| call.tool_operator_request.as_ref()),
+        }
+    }
+
+    pub(crate) fn held_operator_call(
+        &self,
+        held: impl Fn(&ToolOperatorContinuity) -> bool,
+    ) -> Option<String> {
+        let (_, calls) = self.outstanding_calls();
+        calls.into_iter().find_map(|(key, call)| {
+            call.tool_operator_request.as_ref().is_some_and(&held).then_some(key)
+        })
+    }
+
+    pub(crate) fn set_operator_request(
+        &mut self,
+        key: &str,
+        request: Option<ToolOperatorContinuity>,
+    ) -> Result<(), InterfaceDriverError> {
+        let (interrupted, mut calls) = self.outstanding_calls();
+        calls
+            .get_mut(key)
+            .ok_or_else(|| {
+                InterfaceDriverError::FailedClosed(
+                    "operator continuation names no outstanding native call".to_string(),
+                )
+            })?
+            .tool_operator_request = request;
+        self.store_outstanding(interrupted, calls);
+        Ok(())
+    }
+
+    pub(crate) fn validate_parallel_pending(&self) -> Result<(), InterfaceDriverError> {
+        if self.parallel_pending.is_empty() {
+            return Ok(());
+        }
+        let refused = |message: &str| InterfaceDriverError::FailedClosed(message.to_string());
+        let head = self
+            .pending
+            .as_ref()
+            .or(self.interrupted_pending.as_ref())
+            .ok_or_else(|| refused("Codex parallel calls have no native turn head"))?;
+        let head_key = pending_request_key(head);
+        if !parallel_pending_admissible(head) || self.native_terminal.is_some() {
+            return Err(refused(
+                "Codex parallel calls cannot share a native operation or a native terminal proof",
+            ));
+        }
+        for (key, call) in &self.parallel_pending {
+            validate_pending_continuity_coordinates(Some(&call.pending), "parallel pending")?;
+            if *key <= head_key
+                || *key != pending_request_key(&call.pending)
+                || !parallel_pending_admissible(&call.pending)
+                || pending_turn_id(&call.pending) != pending_turn_id(head)
+            {
+                return Err(refused(
+                    "Codex parallel call is not one ordered external call of the head native turn",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn parallel_pending_admissible(pending: &CodexPendingContinuity) -> bool {
+    match pending {
+        CodexPendingContinuity::DynamicTool { native_operation, .. } => native_operation.is_none(),
+        CodexPendingContinuity::InterfaceOperation { .. } => true,
+        CodexPendingContinuity::Operator { .. } => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -150,6 +361,13 @@ impl NativeTerminalEvidence {
         if !finals.is_empty() || turn.status == TurnStatus::Completed {
             let (id, text) = completed_turn_final_message(&turn)?;
             let mut output = CodexTurnOutput::final_message(&self.thread_id, &turn.id, id, text, None);
+            if let Some(completed_at_ms) = self.turn.get("items").and_then(serde_json::Value::as_array)
+                .and_then(|items| items.iter().find(|item| item.get("id").and_then(serde_json::Value::as_str) == Some(id)))
+                .and_then(|item| item.get("completedAtMs"))
+                .and_then(serde_json::Value::as_i64)
+            {
+                output.value["completed_at_ms"] = serde_json::json!(completed_at_ms);
+            }
             output.value["native_terminal_status"] = serde_json::to_value(turn.status)
                 .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
             output.value["native_completed_at"] = serde_json::to_value(turn.completed_at)
@@ -193,12 +411,24 @@ pub(crate) async fn read_exact_terminal_turn(
     if turn.status == TurnStatus::InProgress {
         return Ok(None);
     }
-    turn.items = read_native_turn_items(handle, request_ids, thread_id, turn_id)
+    let entries = native_history::read_native_turn_entries(handle, request_ids, thread_id, turn_id)
         .await.map_err(|error| error.to_string())?;
+    let timings = entries.iter()
+        .map(|entry| (entry.started_at_ms, entry.completed_at_ms))
+        .collect::<Vec<_>>();
+    turn.items = entries.into_iter().map(|entry| entry.item).collect();
     turn.items_view = TurnItemsView::Full;
+    let mut turn = serde_json::to_value(turn).map_err(|error| error.to_string())?;
+    let items = turn.get_mut("items").and_then(serde_json::Value::as_array_mut)
+        .ok_or("terminal turn encoded without items")?;
+    for (item, (started_at_ms, completed_at_ms)) in items.iter_mut().zip(timings) {
+        let item = item.as_object_mut().ok_or("terminal turn item encoded as a non-object")?;
+        item.insert("startedAtMs".into(), serde_json::json!(started_at_ms));
+        item.insert("completedAtMs".into(), serde_json::json!(completed_at_ms));
+    }
     let evidence = NativeTerminalEvidence {
         thread_id: thread_id.into(),
-        turn: serde_json::to_value(turn).map_err(|error| error.to_string())?,
+        turn,
     };
     evidence.exact_turn(thread_id, Some(turn_id)).map_err(|error| error.to_string())?;
     Ok(Some(evidence))

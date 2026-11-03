@@ -32,6 +32,7 @@
           "openai/gpt-5.6-terra",
           "openai/gpt-5.6-luna",
           "openai/gpt-6.1-sol",
+          "openai/gpt-6.1-terra",
           "openai/gpt-6-sol",
           "openai/gpt-6-luna"
         ]
@@ -2452,6 +2453,7 @@
             "provider.account.rate_limit_reset.consumed",
             "provider.account.usage",
             "provider.account.workspace_messages",
+            "provider.account.sessions",
             "provider.capabilities",
             "turn.stream",
             "agent.message.delta",
@@ -2723,6 +2725,28 @@
           "show_in_picker": true
         },
         {
+          "model": "openai/gpt-6.1-terra",
+          "display_name": "GPT 6.1 Terra",
+          "description": "GPT 6.1 Terra through OpenRouter.",
+          "context_window": 1050000,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": false,
+          "default_reasoning_effort": "none",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "none",
+              "description": "No reasoning"
+            }
+          ],
+          "show_in_picker": true
+        },
+        {
           "model": "openai/gpt-6-sol",
           "display_name": "GPT 6 Sol",
           "description": "GPT 6 Sol through OpenRouter.",
@@ -2851,6 +2875,7 @@
         "provider.account.rate_limit_reset.consumed",
         "provider.account.usage",
         "provider.account.workspace_messages",
+        "provider.account.sessions",
         "provider.capabilities",
         "turn.stream",
         "agent.message.delta",
@@ -3119,6 +3144,40 @@
               "use_responses_lite": false
             },
             {
+              "slug": "openai/gpt-6.1-terra",
+              "display_name": "GPT 6.1 Terra",
+              "description": "GPT 6.1 Terra through OpenRouter.",
+              "default_reasoning_level": "none",
+              "supported_reasoning_levels": [
+                {
+                  "effort": "none",
+                  "description": "No reasoning"
+                }
+              ],
+              "shell_type": "shell_command",
+              "visibility": "list",
+              "supported_in_api": true,
+              "priority": 6,
+              "base_instructions": "",
+              "supports_reasoning_summaries": false,
+              "default_reasoning_summary": "auto",
+              "support_verbosity": false,
+              "truncation_policy": {
+                "mode": "tokens",
+                "limit": 10000
+              },
+              "supports_parallel_tool_calls": false,
+              "context_window": 400000,
+              "max_context_window": 1050000,
+              "effective_context_window_percent": 95,
+              "experimental_supported_tools": [],
+              "input_modalities": [
+                "text"
+              ],
+              "supports_search_tool": false,
+              "use_responses_lite": false
+            },
+            {
               "slug": "openai/gpt-6-sol",
               "display_name": "GPT 6 Sol",
               "description": "GPT 6 Sol through OpenRouter.",
@@ -3132,7 +3191,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 6,
+              "priority": 7,
               "base_instructions": "",
               "supports_reasoning_summaries": false,
               "default_reasoning_summary": "auto",
@@ -3166,7 +3225,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 7,
+              "priority": 8,
               "base_instructions": "",
               "supports_reasoning_summaries": false,
               "default_reasoning_summary": "auto",
@@ -3200,10 +3259,15 @@
           "executable": "interface://world_provider_codex/packages/bin/codex"
         },
         "compatibility": {
-          "minimum_version": "0.162.0",
+          "minimum_version": "0.166.0",
           "required_features": {
             "code_mode_host": true,
-            "instant_interrupt": true
+            "code_mode_interrupt": true,
+            "incremental_tools": true,
+            "instant_interrupt": true,
+            "plugin_discovery_prefetch": false,
+            "reasoning_effort_override": true,
+            "retain_client_tool_outputs": true
           }
         },
         "extra_argv": [],
@@ -3228,6 +3292,7 @@
           "features.computer_use=false",
           "features.remote_plugin=false",
           "features.plugin_sharing=false",
+          "features.plugin_discovery_prefetch=false",
           "features.skill_mcp_dependency_install=false",
           "features.skill_search=false",
           "features.mentions_v2=false",
@@ -3236,10 +3301,16 @@
           "features.auth_elicitation=false",
           "features.personality=false",
           "features.workspace_dependencies=false",
+          "features.cli_daybreak=false",
           "features.code_mode_host=true",
           "features.instant_interrupt=true",
+          "features.code_mode_interrupt=true",
           "features.unified_image_budget=true",
           "features.image_resize_notice=true",
+          "features.incremental_tools=true",
+          "features.reasoning_effort_override=true",
+          "features.retain_client_tool_outputs=true",
+          "features.mcp_oauth_refresh_coordination=true",
           "personality=none",
           "sandbox_mode=read-only",
           "skills.include_instructions=false",
@@ -3284,6 +3355,28 @@
           "suppressible_by_current_config": false,
           "octopus_authority": false,
           "execution_boundary": "interface handler fails closed on server-initiated native tool requests; Octopus tools execute only as artifacts through granted worker-environment interfaces"
+        },
+        {
+          "name": "codex_incremental_tool_declarations",
+          "fields": [
+            "additional_tools"
+          ],
+          "adopted_by": "features.incremental_tools=true",
+          "applies_when": "the selected model uses Responses Lite",
+          "suppressible_by_current_config": true,
+          "octopus_authority": false,
+          "execution_boundary": "the declarations carry the interface-assembled tool catalog; catalog changes append to model history instead of replacing the request tool list"
+        },
+        {
+          "name": "codex_reasoning_effort_configuration_update",
+          "fields": [
+            "configuration_update.reasoning.effort"
+          ],
+          "adopted_by": "features.reasoning_effort_override=true",
+          "applies_when": "the OpenAI provider serves a model that supports reasoning effort updates",
+          "suppressible_by_current_config": true,
+          "octopus_authority": false,
+          "execution_boundary": "the effort is the one Octopus binds for the turn; Codex records a change as a model-history item and keeps the context window's request effort"
         }
       ],
       "suppressed_sources": [

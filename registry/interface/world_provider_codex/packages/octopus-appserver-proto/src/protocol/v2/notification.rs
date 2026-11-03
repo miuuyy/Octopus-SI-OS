@@ -42,6 +42,16 @@ pub struct GuardianWarningNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct StrictReviewRequiredNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ErrorNotification {
     pub error: TurnError,
     pub will_retry: bool,

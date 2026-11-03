@@ -249,6 +249,8 @@ fn thread_items_list_round_trips() {
         data: vec![ThreadItemEntry {
             turn_id: "turn_456".to_string(),
             item: ThreadItem::ContextCompaction { id: "item_1".to_string() },
+            started_at_ms: Some(100),
+            completed_at_ms: None,
         }],
         next_cursor: None,
         backwards_cursor: Some("cursor_0".to_string()),
@@ -257,7 +259,7 @@ fn thread_items_list_round_trips() {
     assert_eq!(
         serde_json::to_value(&response).expect("serialize response"),
         json!({
-            "data": [{"turnId":"turn_456", "item":{"type": "contextCompaction", "id": "item_1"}}],
+            "data": [{"turnId":"turn_456", "item":{"type": "contextCompaction", "id": "item_1"}, "startedAtMs": 100, "completedAtMs": null}],
             "nextCursor": null,
             "backwardsCursor": "cursor_0",
         })
@@ -1469,6 +1471,7 @@ fn process_notifications_round_trip() {
     let exited = ProcessExitedNotification {
         process_handle: "proc-1".to_string(),
         exit_code: 0,
+        output_drain_timed_out: Some(true),
         stdout: "out".to_string(),
         stdout_cap_reached: false,
         stderr: "err".to_string(),
@@ -1480,6 +1483,7 @@ fn process_notifications_round_trip() {
         json!({
             "processHandle": "proc-1",
             "exitCode": 0,
+            "outputDrainTimedOut": true,
             "stdout": "out",
             "stdoutCapReached": false,
             "stderr": "err",
@@ -2082,6 +2086,11 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
             name: "not-ready".to_string(),
+            plugin_id: None,
+            http_origin: None,
+            server_capabilities: None,
+            tool_list_meta: None,
+            tools_error: None,
             server_info: None,
             tools: HashMap::new(),
             resources: Vec::new(),
@@ -2096,6 +2105,11 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
         json!({
             "data": [{
                 "name": "not-ready",
+                "pluginId": null,
+                "httpOrigin": null,
+                "serverCapabilities": null,
+                "toolListMeta": null,
+                "toolsError": null,
                 "serverInfo": null,
                 "tools": {},
                 "resources": [],
@@ -2139,6 +2153,11 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
             name: "initialized".to_string(),
+            plugin_id: None,
+            http_origin: None,
+            server_capabilities: None,
+            tool_list_meta: None,
+            tools_error: None,
             server_info: Some(McpServerInfo {
                 name: "lookup-server".to_string(),
                 title: None,
@@ -2160,6 +2179,11 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
         json!({
             "data": [{
                 "name": "initialized",
+                "pluginId": null,
+                "httpOrigin": null,
+                "serverCapabilities": null,
+                "toolListMeta": null,
+                "toolsError": null,
                 "serverInfo": {
                     "name": "lookup-server",
                     "title": null,
@@ -3741,10 +3765,15 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
 
     let without_override = TurnStartParams {
         thread_id: "thread_123".to_string(),
+        disabled_plugin_ids: None,
         client_user_message_id: None,
         input: vec![],
         turn_trigger: None,
+        parent_turn_id: None,
+        root_turn_id: None,
+        tool_output: None,
         responsesapi_client_metadata: None,
+        responsesapi_client_metadata_patch: None,
         additional_context: None,
         environments: None,
         cwd: None,
@@ -3755,6 +3784,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         permissions: None,
         model: None,
         service_tier: None,
+        service_tier_for_turn: None,
         effort: None,
         summary: None,
         output_schema: None,

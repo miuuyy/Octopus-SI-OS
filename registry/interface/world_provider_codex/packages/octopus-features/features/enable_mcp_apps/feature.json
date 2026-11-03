@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "enable_mcp_apps",
-  "stage": {
-    "kind": "under_development"
-  }
-}

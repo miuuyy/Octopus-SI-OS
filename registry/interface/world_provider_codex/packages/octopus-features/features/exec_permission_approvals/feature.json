@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "exec_permission_approvals",
-  "stage": {
-    "kind": "under_development"
-  }
-}

@@ -473,7 +473,13 @@ impl CodexAppServerInterfaceDriver {
                 if turn.thread_id == thread_id && turn.turn.id == turn_id =>
             {
                 flush_pending_delta(sink, pending_delta, delta_seq)?;
-                sink.set_pending(None);
+                if self.has_pending_request(scope).await {
+                    return Err(InterfaceDriverError::FailedClosed(
+                        "Codex completed a native turn while Octopus still awaits one of its call results"
+                            .to_string(),
+                    ));
+                }
+                sink.clear_pending();
                 let completion = serialized_client_output(TURN_COMPLETED_LABEL, &turn)?;
                 if turn.turn.status == TurnStatus::Interrupted && terminal_error.is_none() {
                     sink.send_terminal(completion)?;
@@ -609,6 +615,10 @@ impl CodexAppServerInterfaceDriver {
             .turn_interrupted
             .load(std::sync::atomic::Ordering::Acquire)
         {
+            if self.has_pending_request(scope).await {
+                client.restore_ready_events(vec![AppServerEvent::ServerRequest(request)]);
+                return Ok(DrainStep::Done(TurnDrainOutcome::AwaitingResults));
+            }
             return Err(InterfaceDriverError::FailedClosed(
                 "Codex app-server issued a server request after this turn's interrupt was acknowledged"
                     .to_string(),
@@ -938,7 +948,11 @@ impl CodexAppServerInterfaceDriver {
                     effect_gate: context.effect_gate.clone(),
                     turn_interrupted: context.turn_interrupted.clone(),
                 };
-                sink.set_pending(Some(continuity));
+                if self.has_pending_request(scope).await {
+                    sink.admit_pending(continuity)?;
+                } else {
+                    sink.replace_pending(continuity)?;
+                }
                 if let Some(lifecycle) = context.lifecycle {
                     let held = hold_lifecycle_output(sink, output)?;
                     let subject_artifact = match &held {
@@ -1008,7 +1022,10 @@ impl CodexAppServerInterfaceDriver {
                     thread_id: pending.thread_id.clone(),
                     turn_id: pending.turn_id.clone(),
                 });
-                return Ok(DrainStep::Done(TurnDrainOutcome::Suspended(pending)));
+                if context.lifecycle.is_some() {
+                    return Ok(DrainStep::Done(TurnDrainOutcome::Suspended(pending)));
+                }
+                return Ok(DrainStep::Next);
             }
             other => match classify_operator_request(&other, &self.operator_continuity()?)? {
                 Some(output) => {
@@ -1022,11 +1039,11 @@ impl CodexAppServerInterfaceDriver {
                     let PendingServerRequestKind::Operator { method } = &pending.kind else {
                         unreachable!()
                     };
-                    sink.set_pending(Some(CodexPendingContinuity::Operator {
+                    sink.replace_pending(CodexPendingContinuity::Operator {
                         turn_id: pending.turn_id.clone(),
                         request_key: pending.key.clone(),
                         method: method.clone(),
-                    }));
+                    })?;
                     if let Some(lifecycle) = context.lifecycle {
                         let held = hold_lifecycle_output(sink, output)?;
                         let subject_artifact = match &held {

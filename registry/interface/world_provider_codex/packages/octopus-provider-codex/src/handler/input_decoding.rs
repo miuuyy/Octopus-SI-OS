@@ -114,8 +114,14 @@ pub(crate) fn reconcile_input_session_continuity(
                 }
             }
             let mut settled = bound.clone();
-            settled.pending = None;
-            settled.tool_operator_request = None;
+            let call = if bound.parallel_pending.is_empty() {
+                bound.pending.as_ref().map(pending_request_key)
+            } else {
+                value.get("correlation_id").and_then(serde_json::Value::as_str).map(|call| format!("tool:{call}"))
+            };
+            if let Some(call) = call {
+                settled.settle_outstanding(&call);
+            }
             if !recorded_generation && &settled == current {
                 return Ok(Some(bound.clone()));
             }

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "default_mode_request_user_input",
-  "stage": {
-    "kind": "under_development"
-  }
-}

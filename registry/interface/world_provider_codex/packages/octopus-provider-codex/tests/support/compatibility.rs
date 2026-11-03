@@ -2,21 +2,24 @@ use super::*;
 
 #[test]
 fn declared_compatibility_proves_release_and_feature_state() {
+    let release: serde_json::Value =
+        serde_json::from_str(include_str!("../../managed-cli/release.json")).unwrap();
+    assert_eq!(release["tag"], CODEX_SCHEMA_BASELINE);
     let requirements: CodexCompatibilityRequirements = serde_json::from_value(serde_json::json!({
-        "minimum_version": "0.162.0",
+        "minimum_version": release["version"],
         "required_features": {"code_mode_host": true, "instant_interrupt": true},
     }))
     .unwrap();
     for version in [
         None,
-        Some("0.160.0"),
-        Some("0.162.0-alpha.1"),
-        Some("1.162.0"),
-        Some("00.162.0"),
+        Some("0.165.0"),
+        Some("0.166.0-alpha.1"),
+        Some("1.166.0"),
+        Some("00.166.0"),
     ] {
         assert!(requirements.check_version(version).is_err());
     }
-    let version = requirements.check_version(Some("0.162.0")).unwrap();
+    let version = requirements.check_version(Some("0.166.0")).unwrap();
     let feature = |name: &str, enabled| ExperimentalFeature {
         name: name.into(),
         enabled,
@@ -36,7 +39,7 @@ fn declared_compatibility_proves_release_and_feature_state() {
     let proof = requirements
         .evidence(version.clone(), features.clone())
         .unwrap();
-    assert_eq!(proof.schema_baseline, "rust-v0.162.0");
+    assert_eq!(proof.schema_baseline, "rust-v0.166.0");
     assert_eq!(proof.steering.method, "turn/steer");
     assert!(!proof.steering.consumption_proven_by_acknowledgement);
     assert!(!proof.steering.responses_api_steering);
@@ -58,7 +61,7 @@ fn declared_compatibility_proves_release_and_feature_state() {
 }
 
 #[test]
-fn codex_162_capabilities_and_partial_answers_decode_without_terminal_claims() {
+fn codex_166_capabilities_and_partial_answers_decode_without_terminal_claims() {
     use octopus_appserver_proto::{
         JSONRPCNotification, ModelProviderCapabilitiesReadResponse, ServerNotification, ThreadItem,
     };

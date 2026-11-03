@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "shell_tool",
-  "stage": {
-    "kind": "stable"
-  }
-}

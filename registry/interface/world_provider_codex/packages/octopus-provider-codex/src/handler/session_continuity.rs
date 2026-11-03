@@ -181,21 +181,7 @@ pub(crate) fn recover_codex_continuity_resolved(
                 "Codex current continuity is stale against its embedded history".to_string(),
             ));
         }
-        let pending = outer
-            .state
-            .pending
-            .as_ref()
-            .or(outer.state.interrupted_pending.as_ref());
-        let source_movement_seq = pending.and_then(|pending| {
-            candidates
-                .iter()
-                .filter(|candidate| {
-                    candidate.state.pending.as_ref() == Some(pending)
-                        || candidate.state.interrupted_pending.as_ref() == Some(pending)
-                })
-                .filter_map(|candidate| candidate.source_movement_seq)
-                .min()
-        });
+        let sources = pending_admission_sources(&outer.state, &candidates, None);
         return close_recovered_pending_from_session(
             ContinuityCandidate {
                 current: true,
@@ -203,21 +189,34 @@ pub(crate) fn recover_codex_continuity_resolved(
                 state: outer.state.clone(),
             },
             &session_evidence,
-            source_movement_seq,
+            &sources,
         )
         .map(Some);
     }
     let Some(candidate) = candidates.pop() else {
         return Ok(None);
     };
-    let pending_source = if let Some(pending) = candidate.state.pending.as_ref().or(candidate.state.interrupted_pending.as_ref()) {
-        candidates.iter()
-            .filter(|prior| prior.state.pending.as_ref() == Some(pending) || prior.state.interrupted_pending.as_ref() == Some(pending))
-            .filter_map(|prior| prior.source_movement_seq)
-            .chain(candidate.source_movement_seq)
-            .min()
-    } else { candidate.source_movement_seq };
-    close_recovered_pending_from_session(candidate, &session_evidence, pending_source).map(Some)
+    let sources = pending_admission_sources(&candidate.state, &candidates, candidate.source_movement_seq);
+    close_recovered_pending_from_session(candidate, &session_evidence, &sources).map(Some)
+}
+
+pub(crate) fn pending_admission_sources(
+    state: &CodexContinuityState,
+    prior: &[ContinuityCandidate],
+    own: Option<u64>,
+) -> BTreeMap<String, u64> {
+    state
+        .outstanding()
+        .filter_map(|pending| {
+            prior
+                .iter()
+                .filter(|candidate| candidate.state.outstanding().any(|candidate| candidate == pending))
+                .filter_map(|candidate| candidate.source_movement_seq)
+                .chain(own)
+                .min()
+                .map(|seq| (pending_request_key(pending), seq))
+        })
+        .collect()
 }
 
 pub(crate) fn recover_codex_continuity_from_current_session(
@@ -281,14 +280,8 @@ pub(crate) fn recover_codex_continuity_from_current_session(
     let Some(candidate) = candidates.pop() else {
         return Ok(None);
     };
-    let pending_source = if let Some(pending) = candidate.state.pending.as_ref().or(candidate.state.interrupted_pending.as_ref()) {
-        candidates.iter()
-            .filter(|prior| prior.state.pending.as_ref() == Some(pending) || prior.state.interrupted_pending.as_ref() == Some(pending))
-            .filter_map(|prior| prior.source_movement_seq)
-            .chain(candidate.source_movement_seq)
-            .min()
-    } else { candidate.source_movement_seq };
-    close_recovered_pending_from_session(candidate, &session_evidence, pending_source).map(Some)
+    let sources = pending_admission_sources(&candidate.state, &candidates, candidate.source_movement_seq);
+    close_recovered_pending_from_session(candidate, &session_evidence, &sources).map(Some)
 }
 
 pub(crate) fn reconcile_operator_session_continuity(
@@ -319,7 +312,7 @@ pub(crate) fn recovered_failed_result_source(
     session: &[SessionContextArtifact],
     failed_sources: &[u64],
 ) -> Result<Option<u64>, InterfaceDriverError> {
-    let Some(pending) = bound.pending.as_ref() else { return Ok(None); };
+    if bound.pending.is_none() { return Ok(None); }
     let mut matched = None;
     for entry in session {
         let Some(sequence) = entry.source_movement_seq.filter(|seq| failed_sources.contains(seq)) else { continue; };
@@ -327,13 +320,18 @@ pub(crate) fn recovered_failed_result_source(
             label: entry.label.clone(), payload: entry.payload.clone(),
             source_movement_seq: Some(sequence), source_key: continuity_source_key(&entry.source_artifact),
         };
-        if session_evidence_targets_pending(&evidence, pending)? && matched.replace(sequence).is_some() {
-            return Err(InterfaceDriverError::FailedClosed("failed provider context contains multiple results for one pending request".into()));
+        for pending in bound.outstanding() {
+            if session_evidence_targets_pending(&evidence, pending)? && matched.replace(sequence).is_some() {
+                return Err(InterfaceDriverError::FailedClosed("failed provider context contains multiple results for one pending request".into()));
+            }
         }
     }
     if matched.is_some() {
         let settled = reconcile_operator_session_continuity(descriptor, input, Some(bound.clone()), session)?;
         if !codex_continuity_successor_is_settled(Some(bound), settled.as_ref()).map_err(InterfaceDriverError::FailedClosed)? {
+            if settled.as_ref().is_some_and(|state| state.outstanding_len() < bound.outstanding_len()) {
+                return Ok(None);
+            }
             return Err(InterfaceDriverError::FailedClosed("failed provider source did not settle its exact pending result".into()));
         }
     }
@@ -417,7 +415,7 @@ pub(crate) fn reconcile_delivered_interrupted_continuity(
         return Ok(Some(current));
     }
     if current.pending.is_some()
-        || current.interrupted_pending.as_ref().is_some_and(|pending| Some(pending) != bound.interrupted_pending.as_ref()) {
+        || current.outstanding().any(|pending| !bound.outstanding().any(|prior| prior == pending)) {
         return Err(InterfaceDriverError::FailedClosed("delivered interruption differs from the recovered pending request".into()));
     }
     reconcile_current_session_continuity(Some(current), Some(delivered))
@@ -443,13 +441,11 @@ pub(crate) fn reconcile_current_session_continuity(
         ));
     }
     if current.context_generation == bound.context_generation {
-        let clears_active = bound.pending.is_some()
-            && current.pending.is_none()
-            && bound.interrupted_pending == current.interrupted_pending;
-        let clears_interrupted = bound.interrupted_pending.is_some()
-            && current.interrupted_pending.is_none()
-            && bound.pending == current.pending;
-        if current != bound && !clears_active && !clears_interrupted {
+        let clears_outstanding = current.outstanding_len() < bound.outstanding_len()
+            && current.outstanding().all(|pending| bound.outstanding().any(|prior| prior == pending))
+            && (current.outstanding_len() == 0
+                || current.interrupted_pending.is_some() == bound.interrupted_pending.is_some());
+        if current != bound && !clears_outstanding {
             return Err(InterfaceDriverError::FailedClosed(
                 "Codex current session continuity conflicts at one context generation".to_string(),
             ));
@@ -503,7 +499,7 @@ pub(crate) fn terminal_output_continuity(
     else {
         return Ok(None);
     };
-    if let Some(pending) = continuity.pending.as_ref() {
+    if continuity.pending.is_some() {
         let manifest = input.read_artifact_manifest()?;
         let payload = input.read_artifact_payload()?;
         if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&payload) {
@@ -513,8 +509,15 @@ pub(crate) fn terminal_output_continuity(
                 source_movement_seq: None,
                 source_key: continuity_source_key(&input.artifact),
             };
-            if session_evidence_targets_pending(&evidence, pending)? {
-                continuity.pending = None;
+            let mut targeted = None;
+            for pending in continuity.outstanding() {
+                if session_evidence_targets_pending(&evidence, pending)? {
+                    targeted = Some(pending_request_key(pending));
+                    break;
+                }
+            }
+            if let Some(key) = targeted {
+                continuity.settle_outstanding(&key);
             }
         }
     }
@@ -549,57 +552,58 @@ pub(crate) fn terminal_output_continuity(
 pub(crate) fn close_recovered_pending_from_session(
     candidate: ContinuityCandidate,
     session_evidence: &[SessionContinuityEvidence],
-    pending_source_movement_seq: Option<u64>,
+    pending_sources: &BTreeMap<String, u64>,
 ) -> Result<CodexContinuityState, InterfaceDriverError> {
     let ContinuityCandidate {
         source_movement_seq,
         mut state,
         ..
     } = candidate;
-    let (pending, interrupted) = match (state.pending.as_ref(), state.interrupted_pending.as_ref())
-    {
-        (Some(pending), None) => (pending, false),
-        (None, Some(pending)) => (pending, true),
-        (None, None) => return Ok(state),
-        (Some(_), Some(_)) => {
-            return Err(InterfaceDriverError::FailedClosed(
-                "Codex recovered continuity carries active and interrupted pending requests"
-                    .to_string(),
-            ));
-        }
-    };
-    let Some(pending_seq) = pending_source_movement_seq else {
-        return Ok(state);
-    };
-    let mut closing_source = None;
-    for evidence in session_evidence {
-        match evidence.source_movement_seq {
-            Some(evidence_seq) if evidence_seq <= pending_seq => continue,
-            Some(_) => {}
-            None => {
-                if session_evidence_targets_pending(evidence, pending)? {
-                    return Err(InterfaceDriverError::FailedClosed(format!(
-                        "Codex pending result '{}' has no source movement sequence",
-                        evidence.source_key
-                    )));
+    if state.pending.is_some() && state.interrupted_pending.is_some() {
+        return Err(InterfaceDriverError::FailedClosed(
+            "Codex recovered continuity carries active and interrupted pending requests"
+                .to_string(),
+        ));
+    }
+    let mut closed = Vec::new();
+    for pending in state.outstanding() {
+        let key = pending_request_key(pending);
+        let Some(pending_seq) = pending_sources.get(&key).copied() else {
+            continue;
+        };
+        let mut closing_source = None;
+        for evidence in session_evidence {
+            match evidence.source_movement_seq {
+                Some(evidence_seq) if evidence_seq <= pending_seq => continue,
+                Some(_) => {}
+                None => {
+                    if session_evidence_targets_pending(evidence, pending)? {
+                        return Err(InterfaceDriverError::FailedClosed(format!(
+                            "Codex pending result '{}' has no source movement sequence",
+                            evidence.source_key
+                        )));
+                    }
+                    continue;
                 }
+            }
+            if !session_evidence_targets_pending(evidence, pending)? {
                 continue;
             }
+            if closing_source
+                .replace(evidence.source_movement_seq.expect("validated result movement"))
+                .is_some()
+            {
+                return Err(InterfaceDriverError::FailedClosed(
+                    "Codex session context contains multiple results for one pending request"
+                        .to_string(),
+                ));
+            }
         }
-        if !session_evidence_targets_pending(evidence, pending)? {
-            continue;
-        }
-        if closing_source
-            .replace((evidence.source_key.as_str(), evidence.source_movement_seq.expect("validated result movement")))
-            .is_some()
-        {
-            return Err(InterfaceDriverError::FailedClosed(
-                "Codex session context contains multiple results for one pending request"
-                    .to_string(),
-            ));
+        if let Some(result_seq) = closing_source {
+            closed.push((key, result_seq));
         }
     }
-    if let Some((_, result_seq)) = closing_source {
+    for (key, result_seq) in closed {
         if source_movement_seq.is_some_and(|continuity_seq| result_seq > continuity_seq) {
             state.context_generation = state.context_generation.checked_add(1).ok_or_else(|| {
                 InterfaceDriverError::FailedClosed(
@@ -607,12 +611,7 @@ pub(crate) fn close_recovered_pending_from_session(
                 )
             })?;
         }
-        state.tool_operator_request = None;
-        if interrupted {
-            state.interrupted_pending = None;
-        } else {
-            state.pending = None;
-        }
+        state.settle_outstanding(&key);
     }
     Ok(state)
 }
@@ -780,10 +779,18 @@ pub(crate) fn parse_codex_continuity(
             }
         }
     }
-    if let Some(request) = &state.tool_operator_request {
+    state.validate_parallel_pending()?;
+    let (_, calls) = state.outstanding_calls();
+    for (key, call) in &calls {
+        let Some(request) = &call.tool_operator_request else { continue; };
         octopus_run_authoring::validate_payload_artifact_selection(&request.payload_artifact_bindings).map_err(InterfaceDriverError::FailedClosed)?;
         request.request.validate()?;
-        request.request.validate_pending(&state)?;
+        request.request.validate_pending(&state.focused(key).expect("outstanding call focuses"))?;
+    }
+    if state.tool_operator_request.is_some() && state.pending.is_none() && state.interrupted_pending.is_none() {
+        return Err(InterfaceDriverError::FailedClosed(
+            "Codex operator continuation has no outstanding native call".to_string(),
+        ));
     }
     Ok(state)
 }

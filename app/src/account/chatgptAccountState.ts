@@ -1,18 +1,29 @@
-import type { OctopusChatgptAccount } from "../electron";
+import type { OctopusChatgptAccount, OctopusChatgptAccountSessions } from "../electron";
 
 export type ChatgptAccountBridge = Pick<NonNullable<Window["octopusTransport"]>,
-  "chatgptAccount" | "chatgptSignInStart" | "chatgptSignInStatus" | "chatgptSignInCancel" | "chatgptLogout" | "onChatgptAccountChanged">;
+  "chatgptAccount" | "chatgptAccountSessions" | "chatgptSwitchWorkspace" | "chatgptSignInStart" | "chatgptSignInStatus"
+  | "chatgptSignInCancel" | "chatgptLogout" | "onChatgptAccountChanged">;
 
 export type ChatgptAccountState = {
   account: OctopusChatgptAccount | null;
   loading: boolean;
-  action: "idle" | "starting" | "waiting" | "cancelling" | "signing-out";
+  action: "idle" | "starting" | "waiting" | "cancelling" | "signing-out" | "switching";
   error: string;
   signInStatusError: string;
   signInUrl: string;
+  sessions: OctopusChatgptAccountSessions | null;
+  sessionsLoading: boolean;
+  sessionsError: string;
 };
 
-export const EMPTY_CHATGPT_ACCOUNT_STATE: ChatgptAccountState = { account: null, loading: true, action: "idle", error: "", signInStatusError: "", signInUrl: "" };
+export type ChatgptWorkspaceSwitchOutcome = "switched" | "browser" | "failed";
+
+export const EMPTY_CHATGPT_ACCOUNT_STATE: ChatgptAccountState = { account: null, loading: true, action: "idle", error: "", signInStatusError: "", signInUrl: "",
+  sessions: null, sessionsLoading: false, sessionsError: "" };
+
+export function chatgptAccountIdentity(account: OctopusChatgptAccount | null): string | null {
+  return account?.signedIn ? JSON.stringify([account.credentialHome, account.email, account.workspaceName ?? null]) : null;
+}
 
 export function createChatgptAccountState(bridge: ChatgptAccountBridge, home?: string) {
   let state = EMPTY_CHATGPT_ACCOUNT_STATE;
@@ -22,6 +33,9 @@ export function createChatgptAccountState(bridge: ChatgptAccountBridge, home?: s
   let actionGeneration = 0;
   let loginId = "";
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let observedIdentity: string | null = null;
+  let sessionsGeneration = 0;
+  let pendingSessions: Promise<OctopusChatgptAccountSessions | null> | null = null;
   const listeners = new Set<() => void>();
   const message = (error: unknown) => error instanceof Error ? error.message : String(error);
   function update(patch: Partial<ChatgptAccountState>) {
@@ -33,20 +47,49 @@ export function createChatgptAccountState(bridge: ChatgptAccountBridge, home?: s
     timer = null;
     actionGeneration += 1;
   }
+  function observeAccount(account: OctopusChatgptAccount | null): Partial<ChatgptAccountState> {
+    const identity = chatgptAccountIdentity(account);
+    if (identity === observedIdentity) return {};
+    observedIdentity = identity;
+    sessionsGeneration += 1;
+    pendingSessions = null;
+    return { sessions: null, sessionsLoading: false, sessionsError: "" };
+  }
+  function requireHome(observation: { octopusHome: string | null }) {
+    if (home !== undefined && observation.octopusHome !== home) throw new Error("The provider account observation belongs to another Home.");
+  }
+  function loadSessions(): Promise<OctopusChatgptAccountSessions | null> {
+    if (disposed || !state.account?.signedIn) return Promise.resolve(null);
+    if (pendingSessions) return pendingSessions;
+    const generation = ++sessionsGeneration;
+    update({ sessionsLoading: true, sessionsError: "" });
+    const request: Promise<OctopusChatgptAccountSessions | null> = Promise.resolve().then(() => bridge.chatgptAccountSessions()).then((sessions) => {
+      requireHome(sessions);
+      if (generation !== sessionsGeneration) return state.sessions;
+      update({ sessions, sessionsLoading: false });
+      return sessions;
+    }, (error) => {
+      if (generation !== sessionsGeneration) return state.sessions;
+      update({ sessions: null, sessionsLoading: false, sessionsError: message(error) });
+      return null;
+    }).finally(() => { if (pendingSessions === request) pendingSessions = null; });
+    pendingSessions = request;
+    return request;
+  }
   function refresh(): Promise<OctopusChatgptAccount | null> {
     if (disposed) return Promise.resolve(null);
     const generation = ++readGeneration;
     update({ account: null, loading: true, error: "" });
     const request: Promise<OctopusChatgptAccount | null> = Promise.resolve().then(() => bridge.chatgptAccount()).then((account) => {
-      if (home !== undefined && account.octopusHome !== home) throw new Error("The provider account observation belongs to another Home.");
+      requireHome(account);
       return account;
     }).then((account) => {
       if (generation !== readGeneration) return pendingRead !== request ? pendingRead : state.account;
-      update({ account, loading: false });
+      update({ account, loading: false, ...observeAccount(account) });
       return account;
     }, (error) => {
       if (generation !== readGeneration) return pendingRead !== request ? pendingRead : state.account;
-      update({ account: null, loading: false, error: message(error) });
+      update({ account: null, loading: false, error: message(error), ...observeAccount(null) });
       return null;
     });
     pendingRead = request;
@@ -82,6 +125,7 @@ export function createChatgptAccountState(bridge: ChatgptAccountBridge, home?: s
     getSnapshot: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     refresh,
+    loadSessions,
     dispose() {
       disposed = true;
       readGeneration += 1;
@@ -136,11 +180,41 @@ export function createChatgptAccountState(bridge: ChatgptAccountBridge, home?: s
         if (disposed) return;
         if (account.signedIn) throw new Error("ChatGPT logout was not confirmed.");
         readGeneration += 1;
-        update({ account, loading: false, action: "idle" });
+        update({ account, loading: false, action: "idle", ...observeAccount(account) });
       } catch (error) {
         if (disposed) return;
         await refresh();
         update({ action: "idle", error: message(error) });
+      }
+    },
+    async switchWorkspace(sessionId: string, accountId: string): Promise<ChatgptWorkspaceSwitchOutcome | null> {
+      if (disposed || state.action !== "idle" || !state.account?.signedIn) return null;
+      stopPolling();
+      const generation = actionGeneration;
+      update({ action: "switching", error: "", signInStatusError: "", signInUrl: "" });
+      try {
+        const result = await bridge.chatgptSwitchWorkspace({ sessionId, accountId });
+        if (disposed || generation !== actionGeneration) return null;
+        if (result.state === "browser") {
+          loginId = result.loginId;
+          update({ action: "waiting", signInUrl: result.authUrl });
+          void poll(generation);
+          return "browser";
+        }
+        requireHome(result.account);
+        requireHome(result.sessions);
+        if (!result.account.signedIn) throw new Error("ChatGPT switched workspaces without an authorized account.");
+        readGeneration += 1;
+        const observed = observeAccount(result.account);
+        sessionsGeneration += 1;
+        pendingSessions = null;
+        update({ ...observed, account: result.account, loading: false, sessions: result.sessions, sessionsLoading: false, sessionsError: "", action: "idle" });
+        return "switched";
+      } catch (error) {
+        if (disposed || generation !== actionGeneration) return null;
+        await refresh();
+        update({ action: "idle", error: message(error) });
+        return "failed";
       }
     },
   };

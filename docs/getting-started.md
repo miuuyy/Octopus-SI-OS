@@ -158,7 +158,12 @@ place Codex CLI uses. So:
 
 - If Codex CLI on this Mac is already signed in with ChatGPT, Octopus starts
   signed in.
-- Signing in or out in either one changes it for both.
+- Signing in or out in either one changes it for both. Both take the same
+  write lock, `auth.lock` in that Codex home, so a token refresh in Octopus and
+  one in Codex CLI never overwrite each other.
+- Choosing another ChatGPT workspace or adding an account in
+  **Settings → Account** also changes it for Codex CLI. Codex keeps one ChatGPT
+  sign-in at a time, so adding an account replaces the current one.
 - Octopus needs a ChatGPT sign-in. If `~/.codex` holds an API-key login, setup
   asks you to sign in with ChatGPT, and doing so replaces that login for Codex
   CLI as well.

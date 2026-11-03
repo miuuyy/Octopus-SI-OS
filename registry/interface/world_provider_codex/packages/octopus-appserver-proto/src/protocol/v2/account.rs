@@ -29,18 +29,19 @@ pub enum Account {
     Chatgpt {
         email: Option<String>,
         plan_type: PlanType,
+        workspace_name: Option<String>,
     },
 
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {
-        #[serde(default = "default_bedrock_credential_source")]
-        credential_source: AmazonBedrockCredentialSource,
+        #[serde(default)]
+        uses_codex_managed_credentials: bool,
     },
-}
 
-fn default_bedrock_credential_source() -> AmazonBedrockCredentialSource {
-    AmazonBedrockCredentialSource::AwsManaged
+    #[serde(rename = "gcp", rename_all = "camelCase")]
+    #[ts(rename = "gcp", rename_all = "camelCase")]
+    Gcp {},
 }
 
 impl From<ProviderAccount> for Account {
@@ -50,10 +51,12 @@ impl From<ProviderAccount> for Account {
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt {
                 email: Some(email),
                 plan_type,
+                workspace_name: None,
             },
-            ProviderAccount::AmazonBedrock { credential_source } => {
-                Self::AmazonBedrock { credential_source }
-            }
+            ProviderAccount::AmazonBedrock { credential_source } => Self::AmazonBedrock {
+                uses_codex_managed_credentials: credential_source
+                    == AmazonBedrockCredentialSource::CodexManaged,
+            },
         }
     }
 }
@@ -165,6 +168,20 @@ pub struct AccountSessionsLogoutParams {
 pub struct AccountSessionsSwitchParams {
     pub session_id: String,
     pub account_id: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub allow_browser_login: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+#[ts(untagged, rename_all_fields = "camelCase", export_to = "v2/")]
+pub enum AccountSessionsSwitchResponse {
+    Switched {
+        #[serde(flatten)]
+        sessions: AccountSessionsResponse,
+    },
+    BrowserLogin { login_id: String, auth_url: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -242,9 +259,12 @@ pub struct ChatgptAuthTokensRefreshResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountRateLimitsResponse {
+    pub ordinary_usage_allowed: Option<bool>,
     pub rate_limits: RateLimitSnapshot,
     pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
     pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+    pub account_id: Option<String>,
+    pub rate_limit_upsell: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -328,6 +348,8 @@ pub struct GetAccountTokenUsageParams {
 pub struct GetAccountTokenUsageResponse {
     pub summary: AccountTokenUsageSummary,
     pub daily_usage_buckets: Option<Vec<AccountTokenUsageDailyBucket>>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<Option<ThreadUsage>>")]
     pub thread_usage: Option<ThreadUsage>,
 }
 
@@ -419,12 +441,34 @@ pub struct GetAccountParams {
     pub refresh_token: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Option<Account>,
     pub requires_openai_auth: bool,
+    #[experimental("account/read.workspaceRouting")]
+    pub workspace_routing: Option<WorkspaceRouting>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkspaceRouting {
+    pub chatgpt_account_id: String,
+    pub backend_origin: String,
+    pub account_routing_override: AccountRoutingOverride,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum AccountRoutingOverride {
+    #[serde(rename = "NO_CONSTRAINT")]
+    #[ts(rename = "NO_CONSTRAINT")]
+    NoConstraint,
+    Us,
+    UsCr,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -448,13 +492,14 @@ pub struct AccountRateLimitsUpdatedNotification {
 pub struct RateLimitSnapshot {
     pub limit_id: Option<String>,
     pub limit_name: Option<String>,
+    pub normal_model_slug: Option<String>,
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
     pub individual_limit: Option<SpendControlLimitSnapshot>,
+    pub spend_control_reached: Option<bool>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
-    pub spend_control_reached: Option<bool>,
 }
 
 impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
@@ -462,6 +507,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
         Self {
             limit_id: value.limit_id,
             limit_name: value.limit_name,
+            normal_model_slug: None,
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
@@ -595,4 +641,13 @@ pub struct AccountLoginCompletedNotification {
     pub login_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,
+    pub onboarding_entrypoint: Option<DesktopOnboardingEntrypoint>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum DesktopOnboardingEntrypoint {
+    LifeSciences,
 }

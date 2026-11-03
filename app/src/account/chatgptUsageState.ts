@@ -4,7 +4,7 @@ export type ChatgptUsageState = { identity: string | null; value: OctopusChatgpt
 export const EMPTY_CHATGPT_USAGE_STATE: ChatgptUsageState = { identity: null, value: null, loading: false, error: "" };
 
 export function accountUsageIdentity(account: OctopusChatgptAccount | null): string | null {
-  return account?.signedIn ? JSON.stringify([account.credentialHome, account.email, account.planType]) : null;
+  return account?.signedIn ? JSON.stringify([account.credentialHome, account.email, account.workspaceName ?? null, account.planType]) : null;
 }
 
 export function createChatgptUsageState(bridge: Pick<NonNullable<Window["octopusTransport"]>, "chatgptRateLimits">) {

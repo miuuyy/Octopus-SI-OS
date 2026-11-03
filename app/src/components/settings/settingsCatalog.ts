@@ -73,8 +73,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
 
 export const SETTINGS_DESTINATIONS: readonly SettingsDestination[] = [
   destination("account.identity", "account", "ChatGPT account", "Review the native account email and subscription plan.", "destination", ["identity", "email", "subscription", "plan"], "live"),
+  destination("account.workspace", "account", "ChatGPT workspace", "Choose the ChatGPT workspace that Octopus and your Codex CLI use.", "setting", ["workspace", "switch account", "team", "business", "enterprise"], "live"),
   destination("account.usage", "account", "Usage limits", "Review remaining account limits, credits, and reset times.", "destination", ["rate limits", "weekly", "5-hour", "credits"], "live"),
-  destination("account.logout", "account", "Log out of ChatGPT", "Sign out of the shared native account and require sign-in to continue.", "action", ["sign out", "sign in", "login"], "live"),
+  destination("account.logout", "account", "Log out of ChatGPT", "Sign out of the shared native account and require sign-in to continue.", "action", ["sign out", "sign in", "login", "add account"], "live"),
   destination("general.first-surface", "general", "First surface", "Choose the launch destination in Octopus.", "setting", ["launch", "startup", "open"]),
   destination("general.internal-runs", "general", "Internal runs", "Include read-only runs that have no exact client interface.", "setting", ["show internal runs"]),
   destination("general.task-pane-width", "general", "Task pane width", "Set the default width of the secondary task pane.", "setting", ["split", "resize"]),

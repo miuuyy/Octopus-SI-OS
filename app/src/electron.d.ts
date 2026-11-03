@@ -148,6 +148,8 @@ declare global {
       bootStatus(): Promise<OctopusRuntimeHostState>;
       chatgptAccount(): Promise<OctopusChatgptAccount>;
       chatgptRateLimits(): Promise<OctopusChatgptUsage>;
+      chatgptAccountSessions(): Promise<OctopusChatgptAccountSessions>;
+      chatgptSwitchWorkspace(request: { sessionId: string; accountId: string }): Promise<OctopusChatgptWorkspaceSwitch>;
       chatgptLogout(): Promise<OctopusChatgptAccount>;
       onChatgptAccountChanged(listener: () => void): () => void;
       chatgptSignInStart(): Promise<{ loginId: string; authUrl: string }>;
@@ -1343,12 +1345,39 @@ export type OctopusRuntimeEndpointValidation = {
 
 export type OctopusChatgptAccount = {
   signedIn: boolean;
-  authType: "chatgpt" | "apiKey" | "amazonBedrock" | null;
+  authType: "chatgpt" | "apiKey" | "amazonBedrock" | "gcp" | null;
   email: string | null;
   planType: string | null;
+  workspaceName: string | null;
   credentialHome: string;
   octopusHome: string | null;
 };
+
+export type OctopusChatgptWorkspace = {
+  accountId: string;
+  name: string | null;
+  kind: "personal" | "workspace" | null;
+};
+
+export type OctopusChatgptAccountSession = {
+  sessionId: string;
+  email: string | null;
+  displayName: string | null;
+  active: boolean;
+  selectedWorkspaceId: string | null;
+  workspaces: OctopusChatgptWorkspace[];
+};
+
+export type OctopusChatgptAccountSessions = {
+  activeSessionId: string | null;
+  sessions: OctopusChatgptAccountSession[];
+  credentialHome: string;
+  octopusHome: string | null;
+};
+
+export type OctopusChatgptWorkspaceSwitch =
+  | { state: "switched"; account: OctopusChatgptAccount; sessions: OctopusChatgptAccountSessions }
+  | { state: "browser"; loginId: string; authUrl: string };
 
 export type OctopusChatgptLimit = {
   limitId: string | null;

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "respect_system_proxy",
-  "stage": {
-    "kind": "under_development"
-  }
-}

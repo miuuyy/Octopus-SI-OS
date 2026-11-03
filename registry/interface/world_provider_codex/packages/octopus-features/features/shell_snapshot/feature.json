@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "shell_snapshot",
-  "stage": {
-    "kind": "stable"
-  }
-}

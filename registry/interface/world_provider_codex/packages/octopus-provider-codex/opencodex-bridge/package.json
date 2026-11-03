@@ -4,16 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node ./scripts/run-bun.mjs build --compile ./src/main.ts --outfile ./bin/octopus-opencodex-bridge && node ./scripts/write-build-receipt.mjs",
+    "build": "node ./scripts/run-bun.mjs build --compile ./src/main.ts --outfile ./bin/octopus-opencodex-bridge --metafile=./node_modules/.cache/octopus-opencodex-bridge/metafile.json && node ./scripts/write-build-receipt.mjs",
     "test": "npm run build && node ./scripts/run-bun.mjs test ./tests"
   },
   "dependencies": {
-    "@bitkyc08/opencodex": "2.89.0"
+    "@bitkyc08/opencodex": "2.96.0"
   },
   "devDependencies": {
-    "bun": "1.4.2"
+    "bun": "1.4.4"
   },
   "allowScripts": {
-    "bun@1.4.2": true
+    "bun@1.4.4": true
   }
 }

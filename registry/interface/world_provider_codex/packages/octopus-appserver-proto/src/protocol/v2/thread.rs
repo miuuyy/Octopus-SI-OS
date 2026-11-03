@@ -298,7 +298,6 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
-    #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
     #[experimental("thread/resume.initialTurnsPage")]
@@ -385,6 +384,17 @@ pub struct ThreadForkParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_prediction_mode: bool,
 
+    #[experimental("thread/fork.experimentalDisablePredictionMcp")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub experimental_disable_prediction_mcp: bool,
+
+    #[ts(optional = nullable)]
+    pub last_turn_id: Option<String>,
+
+    #[experimental("thread/fork.beforeTurnId")]
+    #[ts(optional = nullable)]
+    pub before_turn_id: Option<String>,
+
     #[experimental("thread/fork.path")]
     #[serde(
         default,
@@ -428,11 +438,16 @@ pub struct ThreadForkParams {
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+    #[experimental("thread/fork.attachToSource")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub attach_to_source: bool,
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,
-    #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
+    #[experimental("thread/fork.deferGoalContinuation")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub defer_goal_continuation: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -895,6 +910,8 @@ pub struct ThreadListParams {
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
     #[ts(optional = nullable)]
+    pub excluded_thread_ids: Option<Vec<String>>,
+    #[ts(optional = nullable)]
     pub sort_key: Option<ThreadSortKey>,
     #[ts(optional = nullable)]
     pub sort_direction: Option<SortDirection>,
@@ -911,6 +928,12 @@ pub struct ThreadListParams {
     #[experimental("thread/list.parentThreadId")]
     #[ts(optional = nullable)]
     pub parent_thread_id: Option<String>,
+    #[experimental("thread/list.ancestorThreadId")]
+    #[ts(optional = nullable)]
+    pub ancestor_thread_id: Option<String>,
+    #[experimental("thread/list.attachedToThreadId")]
+    #[ts(optional = nullable)]
+    pub attached_to_thread_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -974,11 +997,13 @@ pub enum SortDirection {
     Desc,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
+    #[experimental("thread/list.readStates")]
+    pub read_states: Option<HashMap<String, ThreadReadState>>,
     pub next_cursor: Option<String>,
     pub backwards_cursor: Option<String>,
 }
@@ -1115,6 +1140,10 @@ pub struct ThreadItemsListParams {
 pub struct ThreadItemEntry {
     pub turn_id: String,
     pub item: ThreadItem,
+    #[ts(type = "number | null")]
+    pub started_at_ms: Option<i64>,
+    #[ts(type = "number | null")]
+    pub completed_at_ms: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1129,10 +1158,45 @@ pub struct ThreadItemsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadItemsReadParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadItemsReadResponse {
+    pub data: Vec<ThreadItemEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadTokenUsageUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RawResponseCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub response_id: String,
+    pub usage: Option<TokenUsageBreakdown>,
+    pub usage_metadata: Option<ResponseUsageMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ResponseUsageMetadata {
+    pub amount: Option<String>,
+    pub metadata: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1165,6 +1229,9 @@ pub struct TokenUsageBreakdown {
     pub input_tokens: i64,
     #[ts(type = "number")]
     pub cached_input_tokens: i64,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub cache_write_input_tokens: i64,
     #[ts(type = "number")]
     pub output_tokens: i64,
     #[ts(type = "number")]
@@ -1177,6 +1244,7 @@ impl From<CoreTokenUsage> for TokenUsageBreakdown {
             total_tokens: value.total_tokens,
             input_tokens: value.input_tokens,
             cached_input_tokens: value.cached_input_tokens,
+            cache_write_input_tokens: 0,
             output_tokens: value.output_tokens,
             reasoning_output_tokens: value.reasoning_output_tokens,
         }
@@ -1196,6 +1264,62 @@ pub struct ThreadStartedNotification {
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
     pub status: ThreadStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadState {
+    pub first_unread: Option<ThreadUnreadPosition>,
+    pub revision: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadUnreadPosition {
+    ThreadStart,
+    Turn {
+        #[serde(rename = "turnId")]
+        #[ts(rename = "turnId")]
+        turn_id: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadReadStateOperation {
+    Read,
+    Unread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadStateUpdateParams {
+    pub thread_id: String,
+    pub operation: ThreadReadStateOperation,
+    pub expected_revision: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadStateUpdateResponse {
+    pub read_state: ThreadReadState,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadStateChangedNotification {
+    pub thread_id: String,
+    pub read_state: ThreadReadState,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1223,6 +1347,13 @@ pub struct ThreadUnarchivedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadClosedNotification {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRevertedNotification {
     pub thread_id: String,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

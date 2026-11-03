@@ -124,7 +124,12 @@ pub(crate) fn recover_provider_result_continuity(
     let bound = recover_codex_continuity_resolved(&continuity_payloads, &contexts, &runtime.interface, run.as_str(), &labels, &snapshots, &sources)?;
     let current = recover_codex_continuity_from_current_session(current_session, &sources, &runtime.interface, run.as_str(), &labels)?;
     let Some(source) = reconcile_input_session_continuity(&record, input, bound, current, current_session)? else { return Ok(None); };
-    if source.interrupted_pending.is_some() || source.pending.as_ref().is_none_or(|pending| !interrupted_pending_has_external_result(pending)) {
+    if source.interrupted_pending.is_some() {
+        return Ok(exact_interrupted_result_source(input, &source)
+            .map_err(InterfaceDriverError::FailedClosed)?
+            .then_some(source));
+    }
+    if source.pending.as_ref().is_none_or(|pending| !interrupted_pending_has_external_result(pending)) {
         return Ok(None);
     }
     let mut exact = source.clone();
@@ -187,7 +192,11 @@ pub(crate) fn recovered_tool_handoff_receipt(
     let raw = effect.payload.get(CODEX_CONTINUITY_FIELD)
         .ok_or_else(|| refused("recovered tool handoff has no pending continuity"))?;
     let mut state = parse_codex_continuity(raw, &runtime.interface, runtime.run.as_str())?;
-    let Some(CodexPendingContinuity::DynamicTool { call_id, tool, .. }) = state.pending.as_ref() else {
+    let call = effect.payload.get("correlation_id").and_then(serde_json::Value::as_str)
+        .and_then(|call| state.outstanding_call(&format!("tool:{call}")))
+        .or(state.pending.as_ref())
+        .cloned();
+    let Some(CodexPendingContinuity::DynamicTool { call_id, tool, .. }) = call.as_ref() else {
         return Err(refused("recovered tool handoff has no exact pending tool"));
     };
     if state.interrupted_pending.is_some()
@@ -197,7 +206,7 @@ pub(crate) fn recovered_tool_handoff_receipt(
     {
         return Err(refused("recovered tool handoff differs from its durable pending effect"));
     }
-    if let Some(operation) = native_pending_operation(state.pending.as_ref().expect("checked above"))?
+    if let Some(operation) = native_pending_operation(call.as_ref().expect("checked above"))?
         && effect.payload.get("arguments") != Some(&operation.effect.arguments)
     {
         return Err(refused("recovered native handoff changed its declared effect arguments"));
@@ -272,7 +281,7 @@ pub(crate) fn duplicate_tool_result_receipt(
     let runtime = invocation_runtime_metadata(input)?;
     let state = reconcile_operator_session_continuity(descriptor, input, None, session)?
         .ok_or_else(|| refused("duplicate result has no current checked continuity"))?;
-    if state.pending.iter().chain(state.interrupted_pending.iter()).any(|pending| {
+    if state.outstanding().any(|pending| {
         matches!(pending, CodexPendingContinuity::DynamicTool { call_id, .. }
             if Some(call_id.as_str()) == result.correlation_id.as_deref())
     }) {
@@ -440,5 +449,12 @@ pub(crate) fn configured_provider_operation(
         ),
     ]
     .into_iter()
-    .find_map(|(operation, request_label)| (request_label == label).then_some(operation)))
+    .find_map(|(operation, request_label)| (request_label == label).then_some(operation))
+    .or_else(|| {
+        operations
+            .account_sessions_read
+            .as_ref()
+            .is_some_and(|binding| binding.request_label == label)
+            .then_some(ProviderOperation::AccountSessionsRead)
+    }))
 }

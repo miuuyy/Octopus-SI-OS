@@ -32,7 +32,8 @@
         "HTTPS_PROXY",
         "ALL_PROXY",
         "NO_PROXY",
-        "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+        "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+        "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
       ],
       "authority": {
         "read_root_slots": [
@@ -64,10 +65,12 @@
           "codex"
         ],
         "read_env_paths": [
-          "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+          "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+          "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
         ],
         "write_env_paths": [
-          "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+          "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+          "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
         ],
         "executable_env_paths": [],
         "read_env_subpaths": [],

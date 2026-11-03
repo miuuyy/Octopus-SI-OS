@@ -150,6 +150,7 @@ function createChatgptSignIn(options) {
     });
     server.ready = server.request("initialize", {
       clientInfo: { name: "octopus_desktop", title: "Octopus", version: options.version() },
+      capabilities: { experimentalApi: true },
     }).then(() => {
       child.stdin.write(`${JSON.stringify({ method: "initialized" })}\n`);
       return server;
@@ -186,16 +187,18 @@ function createChatgptSignIn(options) {
     const response = await server.request("account/read", { refreshToken });
     requireCurrentScope(server);
     if (!response || !Object.hasOwn(response, "account") || (response.account !== null
-      && !["chatgpt", "apiKey", "amazonBedrock"].includes(response.account?.type))) {
+      && !["chatgpt", "apiKey", "amazonBedrock", "gcp"].includes(response.account?.type))) {
       throw new Error("ChatGPT returned an invalid account response.");
     }
     const native = response.account;
     if (native?.type === "chatgpt" && ((native.email != null && typeof native.email !== "string")
-      || (native.planType != null && typeof native.planType !== "string"))) throw new Error("ChatGPT returned invalid account identity.");
+      || (native.planType != null && typeof native.planType !== "string")
+      || (native.workspaceName != null && typeof native.workspaceName !== "string"))) throw new Error("ChatGPT returned invalid account identity.");
     const value = {
       signedIn: native?.type === "chatgpt", authType: native?.type ?? null,
       email: native?.type === "chatgpt" ? native.email ?? null : null,
       planType: native?.type === "chatgpt" ? native.planType ?? null : null,
+      workspaceName: native?.type === "chatgpt" ? native.workspaceName ?? null : null,
       credentialHome: server.codexHome, octopusHome: options.octopusHome?.() ?? null,
     };
     if (sequence > (server.accountSnapshot?.sequence ?? 0)
@@ -295,10 +298,34 @@ function createChatgptSignIn(options) {
     return limit.spendControlReached == null || typeof limit.spendControlReached === "boolean";
   }
 
-  async function start() {
+  function requireNoAccountChange() {
     if (authBusy || [...logins.values()].some((login) => login.state === "pending")) {
       throw new Error("A ChatGPT account change is already in progress.");
     }
+  }
+
+  async function beginBrowserLogin(server, loginId, address) {
+    const authUrl = new URL(address);
+    if (authUrl.protocol !== "https:") throw new Error("ChatGPT sign-in returned an unsafe address");
+    const login = { state: "pending", error: "", server, verifying: false, timer: null };
+    logins.set(loginId, login);
+    login.timer = setTimeout(() => {
+      if (login.state !== "pending") return;
+      Object.assign(login, { state: "failed", error: "Sign-in was not finished in the browser in time" });
+      void server.request("account/login/cancel", { loginId }).catch((error) => {
+        login.error += `. Cancellation failed: ${error.message}`;
+      }).finally(() => { publishAccountChange(); scheduleIdleStop(); });
+    }, LOGIN_TIMEOUT_MS).unref();
+    try { await options.openExternal(authUrl.toString()); }
+    catch (error) {
+      await cancel(loginId);
+      throw error;
+    }
+    return { loginId, authUrl: authUrl.toString() };
+  }
+
+  async function start() {
+    requireNoAccountChange();
     authBusy = true;
     authGeneration += 1;
     try {
@@ -309,23 +336,107 @@ function createChatgptSignIn(options) {
       if (response?.type !== "chatgpt" || typeof response.loginId !== "string" || typeof response.authUrl !== "string") {
         throw new Error("ChatGPT sign-in returned an unexpected response");
       }
-      const authUrl = new URL(response.authUrl);
-      if (authUrl.protocol !== "https:") throw new Error("ChatGPT sign-in returned an unsafe address");
-      const login = { state: "pending", error: "", server, verifying: false, timer: null };
-      logins.set(response.loginId, login);
-      login.timer = setTimeout(() => {
-        if (login.state !== "pending") return;
-        Object.assign(login, { state: "failed", error: "Sign-in was not finished in the browser in time" });
-        void server.request("account/login/cancel", { loginId: response.loginId }).catch((error) => {
-          login.error += `. Cancellation failed: ${error.message}`;
-        }).finally(() => { publishAccountChange(); scheduleIdleStop(); });
-      }, LOGIN_TIMEOUT_MS).unref();
-      try { await options.openExternal(authUrl.toString()); }
-      catch (error) {
-        await cancel(response.loginId);
-        throw error;
+      return await beginBrowserLogin(server, response.loginId, response.authUrl);
+    } finally { authBusy = false; scheduleIdleStop(); }
+  }
+
+  function opaqueId(value) {
+    return typeof value === "string" && value.length > 0 && value.trim() === value && !/[\r\n\0]/.test(value);
+  }
+
+  function optionalText(value) {
+    if (value != null && typeof value !== "string") throw new Error("ChatGPT returned an invalid account list.");
+    return value ?? null;
+  }
+
+  function accountSessions(response, server) {
+    if (!response || typeof response !== "object" || !Array.isArray(response.sessions)
+      || (response.activeSessionId !== null && !opaqueId(response.activeSessionId))) {
+      throw new Error("ChatGPT returned an invalid account list.");
+    }
+    const sessionIds = new Set();
+    const sessions = response.sessions.map((session) => {
+      if (!opaqueId(session?.sessionId) || sessionIds.has(session.sessionId) || typeof session.isActive !== "boolean"
+        || !Array.isArray(session.workspaces) || (session.selectedWorkspaceAccountId !== null && !opaqueId(session.selectedWorkspaceAccountId))) {
+        throw new Error("ChatGPT returned an invalid account list.");
       }
-      return { loginId: response.loginId, authUrl: authUrl.toString() };
+      sessionIds.add(session.sessionId);
+      const workspaceIds = new Set();
+      const workspaces = session.workspaces.map((workspace) => {
+        if (!opaqueId(workspace?.accountId) || workspaceIds.has(workspace.accountId)
+          || (workspace.kind != null && !["personal", "workspace"].includes(workspace.kind))) {
+          throw new Error("ChatGPT returned an invalid account list.");
+        }
+        workspaceIds.add(workspace.accountId);
+        return { accountId: workspace.accountId, name: optionalText(workspace.name), kind: workspace.kind ?? null };
+      });
+      if (session.selectedWorkspaceAccountId !== null && !workspaceIds.has(session.selectedWorkspaceAccountId)) {
+        throw new Error("ChatGPT returned an invalid account list.");
+      }
+      return {
+        sessionId: session.sessionId, email: optionalText(session.email), displayName: optionalText(session.displayName),
+        active: session.isActive, selectedWorkspaceId: session.selectedWorkspaceAccountId, workspaces,
+      };
+    });
+    const active = sessions.filter((session) => session.active);
+    if (response.activeSessionId === null ? active.length !== 0
+      : active.length !== 1 || active[0].sessionId !== response.activeSessionId) {
+      throw new Error("ChatGPT returned an invalid account list.");
+    }
+    return { activeSessionId: response.activeSessionId, sessions, credentialHome: server.codexHome, octopusHome: options.octopusHome?.() ?? null };
+  }
+
+  async function sessions() {
+    const server = await ensureAppServer();
+    const generation = authGeneration;
+    const authStamp = nativeAuthStamp(server.codexHome);
+    try {
+      const before = await readAccount(server);
+      if (!before.signedIn) return accountSessions({ activeSessionId: null, sessions: [] }, server);
+      const response = await server.request("accountSession/list", { refreshWorkspaceMetadata: true });
+      requireCurrentScope(server);
+      const listed = accountSessions(response, server);
+      const after = await readAccount(server);
+      if (generation !== authGeneration || authStamp !== nativeAuthStamp(server.codexHome)
+        || JSON.stringify(before) !== JSON.stringify(after)) {
+        throw new Error("ChatGPT account changed while loading accounts. Refresh and try again.");
+      }
+      return listed;
+    } finally { scheduleIdleStop(); }
+  }
+
+  async function switchWorkspace(request) {
+    const sessionId = request?.sessionId, accountId = request?.accountId;
+    if (!opaqueId(sessionId) || !opaqueId(accountId)) throw new Error("Choose a workspace from the account list.");
+    requireNoAccountChange();
+    authBusy = true;
+    authGeneration += 1;
+    let server = null, authStamp;
+    try {
+      server = await ensureAppServer();
+      requireCurrentScope(server);
+      authStamp = nativeAuthStamp(server.codexHome);
+      const response = await server.request("accountSession/switch", { sessionId, accountId, allowBrowserLogin: true });
+      requireCurrentScope(server);
+      if (response && typeof response === "object" && Object.hasOwn(response, "loginId")) {
+        if (!opaqueId(response.loginId) || typeof response.authUrl !== "string") {
+          throw new Error("ChatGPT workspace sign-in returned an unexpected response");
+        }
+        return { state: "browser", ...await beginBrowserLogin(server, response.loginId, response.authUrl) };
+      }
+      const listed = accountSessions(response, server);
+      if (listed.activeSessionId !== sessionId
+        || listed.sessions.find((session) => session.sessionId === sessionId)?.selectedWorkspaceId !== accountId) {
+        throw new Error("ChatGPT did not confirm the workspace switch.");
+      }
+      const account = await readAccount(server);
+      if (!account.signedIn) throw new Error("ChatGPT switched workspaces without an authorized account.");
+      server.authStamp = nativeAuthStamp(server.codexHome);
+      publishAccountChange();
+      return { state: "switched", account, sessions: listed };
+    } catch (error) {
+      if (authStamp !== undefined && nativeAuthStamp(server.codexHome) !== authStamp) publishAccountChange();
+      throw error;
     } finally { authBusy = false; scheduleIdleStop(); }
   }
 
@@ -443,7 +554,7 @@ function createChatgptSignIn(options) {
     }
   }
 
-  return { account, rateLimits, start, status, cancel, logout, dispose, models };
+  return { account, rateLimits, sessions, switchWorkspace, start, status, cancel, logout, dispose, models };
 }
 
 module.exports = { createChatgptSignIn };

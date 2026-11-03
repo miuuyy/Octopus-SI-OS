@@ -23,7 +23,7 @@ async function history(bytes) {
 async function main() {
 for (const source of ["item/started", "item/completed", "thread/resume"]) {
   const input = { ...receipt, source_event: source };
-  if (source === "thread/resume") { delete input.native_event_at_ms; input.item_id = "item-7"; }
+  if (source === "thread/resume") input.item_id = "item-7";
   const bytes = encode([header, input, seal]);
   const parsed = live.parseOperatorTurnStream(bytes, expected);
   const first = live.selectOperatorTurnStreamEvents(parsed, null, 1);
@@ -46,7 +46,7 @@ const mutations = [
   { client_id: " " }, { item_id: "item\nwrong" }, { client_id: " x" }, { item_id: 1 },
   { stage: "accepted" }, { source_event: "turn/steer" }, { native_event_at_ms: undefined },
   { native_event_at_ms: null }, { native_event_at_ms: -1 }, { native_event_at_ms: 2 ** 53 },
-  { source_event: "thread/resume" }, { seq: 2 }, { recorded_at_unix_ms: 9 }, { source_movement_seq: 4 }, { extra: true },
+  { seq: 2 }, { recorded_at_unix_ms: 9 }, { source_movement_seq: 4 }, { extra: true },
 ];
 for (const patch of mutations) {
   const bytes = encode([header, { ...receipt, ...patch }, seal]);

@@ -1,21 +1,18 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use octopus_interfaces::{InterfaceDescriptor, InterfaceDriverConfig};
-use octopus_login::{AuthCredentialsStoreMode, AuthKeyringBackendKind, AuthManager};
+use octopus_login::{AuthCredentialsStoreMode, AuthManager};
 use octopus_util_abspath::AbsolutePathBuf;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use octopus_appserver_proto::{ClientInfo, InitializeCapabilities, InitializeParams};
 
-use crate::auth::{CredentialError, OctopusScopedSecretStore, resolve_credential};
+use crate::auth::OctopusScopedSecretStore;
 use crate::handler::CodexAppServerInterfaceDriver;
 use crate::spawn::{SpawnAppServerClient, SpawnConfig};
-use crate::{
-    AppServerClient, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY, RemoteAppServerClient,
-    RemoteAppServerConnectArgs, RemoteAppServerEndpoint,
-};
+use crate::{AppServerClient, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY};
 
 pub const ENV_APP_SERVER_URL: &str = "CODEX_APP_SERVER_URL";
 pub const ENV_APP_SERVER_SOCKET: &str = "CODEX_APP_SERVER_SOCKET";
@@ -25,16 +22,28 @@ pub const ENV_APP_SERVER_SPAWN: &str = "CODEX_APP_SERVER_SPAWN";
 pub const ENV_APP_SERVER_SPAWN_ARGS: &str = "CODEX_APP_SERVER_SPAWN_ARGS";
 pub const ENV_CODEX_HOME: &str = "CODEX_HOME";
 
+const MANAGED_CLI_RELEASE: &str = include_str!("../managed-cli/release.json");
+
+#[derive(Deserialize)]
+struct ManagedCliRelease {
+    notifications: ManagedCliNotificationPolicy,
+}
+
+#[derive(Deserialize)]
+struct ManagedCliNotificationPolicy {
+    opt_out: Vec<String>,
+}
+
+static NOTIFICATION_OPT_OUT: LazyLock<Vec<String>> = LazyLock::new(|| {
+    serde_json::from_str::<ManagedCliRelease>(MANAGED_CLI_RELEASE)
+        .map(|release| release.notifications.opt_out)
+        .unwrap_or_else(|error| {
+            panic!("managed-cli/release.json must declare its app-server notification policy: {error}")
+        })
+});
+
 pub async fn auth_manager_from_provider_home(provider_home: PathBuf) -> Arc<AuthManager> {
-    AuthManager::shared(
-        provider_home,
-        true,
-        AuthCredentialsStoreMode::File,
-        None,
-        None,
-        AuthKeyringBackendKind::default(),
-    )
-    .await
+    AuthManager::shared(provider_home, true, AuthCredentialsStoreMode::File).await
 }
 
 fn provider_home_from_env() -> PathBuf {
@@ -74,6 +83,7 @@ pub const SPAWN_ISOLATION_CONFIG_OVERRIDES: &[&str] = &[
     "features.computer_use=false",
     "features.remote_plugin=false",
     "features.plugin_sharing=false",
+    "features.plugin_discovery_prefetch=false",
     "features.skill_mcp_dependency_install=false",
     "features.skill_search=false",
     "features.mentions_v2=false",
@@ -82,10 +92,16 @@ pub const SPAWN_ISOLATION_CONFIG_OVERRIDES: &[&str] = &[
     "features.auth_elicitation=false",
     "features.personality=false",
     "features.workspace_dependencies=false",
+    "features.cli_daybreak=false",
     "features.code_mode_host=true",
     "features.instant_interrupt=true",
+    "features.code_mode_interrupt=true",
     "features.unified_image_budget=true",
     "features.image_resize_notice=true",
+    "features.incremental_tools=true",
+    "features.reasoning_effort_override=true",
+    "features.retain_client_tool_outputs=true",
+    "features.mcp_oauth_refresh_coordination=true",
     "personality=none",
     "sandbox_mode=read-only",
     "skills.include_instructions=false",
@@ -303,6 +319,8 @@ impl CodexInstanceConfig {
 }
 
 const CODEX_AUTH_FILE_NAME: &str = "auth.json";
+const CODEX_AUTH_LOCK_FILE_NAME: &str = "auth.lock";
+const CODEX_AUTH_BOUNDARY_FILES: [&str; 2] = [CODEX_AUTH_FILE_NAME, CODEX_AUTH_LOCK_FILE_NAME];
 const CODEX_CONFIG_FILE_NAME: &str = "config.toml";
 const CURATED_CODEX_HOME_DIR: &str = "app-server-home";
 const CURATED_OPENCODEX_HOME_DIR: &str = "opencodex-app-server-home";
@@ -337,6 +355,7 @@ browser_use_external = false
 computer_use = false
 remote_plugin = false
 plugin_sharing = false
+plugin_discovery_prefetch = false
 skill_mcp_dependency_install = false
 skill_search = false
 mentions_v2 = false
@@ -345,10 +364,16 @@ tool_call_mcp_elicitation = false
 auth_elicitation = false
 personality = false
 workspace_dependencies = false
+cli_daybreak = false
 code_mode_host = true
 instant_interrupt = true
+code_mode_interrupt = true
 unified_image_budget = true
 image_resize_notice = true
+incremental_tools = true
+reasoning_effort_override = true
+retain_client_tool_outputs = true
+mcp_oauth_refresh_coordination = true
 goals = false
 image_generation = false
 tool_search = false
@@ -387,7 +412,6 @@ pub enum ConfigError {
     SocketNotAbsolute(String),
     UnisolatedRemoteTransport(&'static str),
     Connect(std::io::Error),
-    NotAuthenticated(CredentialError),
     CuratedHome(CuratedHomeError),
     SpawnArgs(SpawnArgsError),
     IsolatedCwd(IsolatedCwdError),
@@ -411,12 +435,6 @@ impl std::fmt::Display for ConfigError {
                  {ENV_APP_SERVER_SPAWN}=1 so Octopus spawns codex with a curated CODEX_HOME/cwd"
             ),
             Self::Connect(source) => write!(f, "app-server connect failed: {source}"),
-            Self::NotAuthenticated(source) => {
-                write!(
-                    f,
-                    "provider has a transport but no usable credential: {source}"
-                )
-            }
             Self::CuratedHome(source) => {
                 write!(f, "could not build the isolated codex home: {source}")
             }
@@ -433,7 +451,6 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Connect(source) => Some(source),
-            Self::NotAuthenticated(source) => Some(source),
             Self::CuratedHome(source) => Some(source),
             Self::SpawnArgs(source) => Some(source),
             Self::IsolatedCwd(source) => Some(source),
@@ -448,12 +465,6 @@ impl std::error::Error for ConfigError {
 impl ConfigError {
     pub(crate) fn is_retryable_transport_failure(&self) -> bool {
         matches!(self, Self::Connect(_))
-    }
-}
-
-impl From<CredentialError> for ConfigError {
-    fn from(source: CredentialError) -> Self {
-        Self::NotAuthenticated(source)
     }
 }
 
@@ -539,36 +550,12 @@ impl AppServerSource {
         }
     }
 
-    fn into_remote_endpoint(self, bearer: Option<String>) -> Option<RemoteAppServerEndpoint> {
-        match self {
-            Self::WebSocket { url, token } => Some(RemoteAppServerEndpoint::WebSocket {
-                websocket_url: url,
-                auth_token: bearer.or(token),
-            }),
-            Self::UnixSocket { path } => {
-                Some(RemoteAppServerEndpoint::UnixSocket { socket_path: path })
-            }
-            Self::Spawn { .. } => None,
-        }
-    }
-
-    pub fn connect_args_with_optional_bearer(
-        self,
-        bearer: Option<String>,
-    ) -> Option<RemoteAppServerConnectArgs> {
-        self.into_remote_endpoint(bearer)
-            .map(connect_args_for_endpoint)
-    }
-
-    pub fn connect_args(self) -> Option<RemoteAppServerConnectArgs> {
-        self.connect_args_with_optional_bearer(None)
-    }
-
     fn spawn_config(
         self,
         provider_home: &std::path::Path,
         auth_store_home: &std::path::Path,
-    ) -> Result<Option<SpawnConfig>, ConfigError> {
+    ) -> Result<SpawnConfig, ConfigError> {
+        let transport_kind = self.transport_kind();
         match self {
             Self::Spawn {
                 bin,
@@ -590,9 +577,11 @@ impl AppServerSource {
                     )?),
                 );
                 config.compatibility = instance.compatibility.clone();
-                Ok(Some(config))
+                Ok(config)
             }
-            Self::WebSocket { .. } | Self::UnixSocket { .. } => Ok(None),
+            Self::WebSocket { .. } | Self::UnixSocket { .. } => {
+                Err(ConfigError::UnisolatedRemoteTransport(transport_kind))
+            }
         }
     }
 
@@ -627,47 +616,20 @@ impl AppServerSource {
         }
     }
 
-    pub async fn connect(self, bearer: Option<String>) -> Result<AppServerClient, ConfigError> {
+    pub async fn connect(self) -> Result<AppServerClient, ConfigError> {
         let provider_home = provider_home_from_env();
-        self.connect_from_provider_homes(bearer, &provider_home, &provider_home)
+        self.connect_from_provider_homes(&provider_home, &provider_home)
             .await
     }
 
     async fn connect_from_provider_homes(
         self,
-        bearer: Option<String>,
         provider_home: &std::path::Path,
         auth_store_home: &std::path::Path,
     ) -> Result<AppServerClient, ConfigError> {
-        if !self.is_self_authenticating_spawn() {
-            return Err(ConfigError::UnisolatedRemoteTransport(
-                self.transport_kind(),
-            ));
-        }
-        if self.is_self_authenticating_spawn() {
-            let config = self
-                .spawn_config(provider_home, auth_store_home)?
-                .expect("a Spawn source must yield a SpawnConfig");
-            let client = SpawnAppServerClient::connect(config).await?;
-            return Ok(AppServerClient::Spawn(client));
-        }
-        let args = self
-            .connect_args_with_optional_bearer(bearer)
-            .expect("a non-Spawn source must yield Remote connect args");
-        let client = RemoteAppServerClient::connect(args).await?;
-        Ok(AppServerClient::Remote(client))
-    }
-}
-
-fn connect_args_for_endpoint(endpoint: RemoteAppServerEndpoint) -> RemoteAppServerConnectArgs {
-    RemoteAppServerConnectArgs {
-        endpoint,
-        client_name: "octopus".to_string(),
-        client_version: env!("CARGO_PKG_VERSION").to_string(),
-        experimental_api: false,
-        mcp_server_openai_form_elicitation: false,
-        opt_out_notification_methods: Vec::new(),
-        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        let config = self.spawn_config(provider_home, auth_store_home)?;
+        let client = SpawnAppServerClient::connect(config).await?;
+        Ok(AppServerClient::Spawn(client))
     }
 }
 
@@ -698,7 +660,7 @@ fn octopus_initialize_params() -> InitializeParams {
         capabilities: Some(InitializeCapabilities {
             experimental_api: true,
             request_attestation: false,
-            opt_out_notification_methods: None,
+            opt_out_notification_methods: Some(NOTIFICATION_OPT_OUT.clone()),
             mcp_server_openai_form_elicitation: false,
         }),
     }
@@ -706,7 +668,7 @@ fn octopus_initialize_params() -> InitializeParams {
 
 pub async fn connect_from_env() -> Result<AppServerClient, ConfigError> {
     let source = AppServerSource::from_env()?;
-    source.connect(None).await
+    source.connect().await
 }
 
 pub async fn connect_from_env_with_auth(
@@ -789,18 +751,14 @@ pub async fn connect_interface_driver_from_descriptor_with_auth_and_secrets(
 
 async fn connect_with_auth(
     source: AppServerSource,
-    auth_manager: &Arc<AuthManager>,
+    _auth_manager: &Arc<AuthManager>,
 ) -> Result<AppServerClient, ConfigError> {
-    if source.is_self_authenticating_spawn() {
-        return source.connect(None).await;
-    }
     if !source.is_self_authenticating_spawn() {
         return Err(ConfigError::UnisolatedRemoteTransport(
             source.transport_kind(),
         ));
     }
-    let credential = resolve_credential(auth_manager).await?;
-    source.connect(Some(credential.into_bearer())).await
+    source.connect().await
 }
 
 async fn connect_with_auth_from_provider_homes(
@@ -810,7 +768,7 @@ async fn connect_with_auth_from_provider_homes(
 ) -> Result<AppServerClient, ConfigError> {
     if source.is_self_authenticating_spawn() {
         return source
-            .connect_from_provider_homes(None, provider_home, auth_store_home)
+            .connect_from_provider_homes(provider_home, auth_store_home)
             .await;
     }
     Err(ConfigError::UnisolatedRemoteTransport(
@@ -1223,33 +1181,36 @@ fn build_curated_codex_home_with_auth_store(
 ) -> Result<std::path::PathBuf, CuratedHomeError> {
     std::fs::create_dir_all(inherited_home).map_err(CuratedHomeError::Io)?;
     std::fs::create_dir_all(auth_store_home).map_err(CuratedHomeError::Io)?;
-    let real_auth = auth_store_home.join(CODEX_AUTH_FILE_NAME);
 
     let curated = inherited_home.join(CURATED_CODEX_HOME_DIR);
     std::fs::create_dir_all(&curated).map_err(CuratedHomeError::Io)?;
     std::fs::create_dir_all(curated.join(CURATED_CODEX_TMP_DIR)).map_err(CuratedHomeError::Io)?;
 
-    let curated_auth = curated.join(CODEX_AUTH_FILE_NAME);
-    match std::fs::symlink_metadata(&curated_auth) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            let target = std::fs::read_link(&curated_auth).map_err(CuratedHomeError::Io)?;
-            if target != real_auth {
-                replace_auth_boundary(&real_auth, &curated_auth).map_err(CuratedHomeError::Io)?;
+    for name in CODEX_AUTH_BOUNDARY_FILES {
+        let real_auth = auth_store_home.join(name);
+        let curated_auth = curated.join(name);
+        match std::fs::symlink_metadata(&curated_auth) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target = std::fs::read_link(&curated_auth).map_err(CuratedHomeError::Io)?;
+                if target != real_auth {
+                    replace_auth_boundary(&real_auth, &curated_auth)
+                        .map_err(CuratedHomeError::Io)?;
+                }
             }
+            Ok(_) => {
+                return Err(CuratedHomeError::Io(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "curated auth boundary '{}' is not a symlink",
+                        curated_auth.display()
+                    ),
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                link_auth_boundary(&real_auth, &curated_auth).map_err(CuratedHomeError::Io)?;
+            }
+            Err(error) => return Err(CuratedHomeError::Io(error)),
         }
-        Ok(_) => {
-            return Err(CuratedHomeError::Io(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!(
-                    "curated auth boundary '{}' is not a symlink",
-                    curated_auth.display()
-                ),
-            )));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            link_auth_boundary(&real_auth, &curated_auth).map_err(CuratedHomeError::Io)?;
-        }
-        Err(error) => return Err(CuratedHomeError::Io(error)),
     }
 
     let config = format!("model_context_window = 400000\nmodel_auto_compact_token_limit = 350000\n{CURATED_CONFIG_TOML}");
@@ -1299,7 +1260,19 @@ fn replace_auth_boundary(
             ),
         )
     })?;
-    let pending = parent.join(".auth.json.next");
+    let name = curated_auth.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "curated auth boundary '{}' has no file name",
+                curated_auth.display()
+            ),
+        )
+    })?;
+    let mut pending_name = std::ffi::OsString::from(".");
+    pending_name.push(name);
+    pending_name.push(".next");
+    let pending = parent.join(pending_name);
     match std::fs::symlink_metadata(&pending) {
         Ok(metadata) if metadata.file_type().is_symlink() => std::fs::remove_file(&pending)?,
         Ok(_) => {
@@ -1332,25 +1305,7 @@ mod tests {
     fn websocket_source() -> AppServerSource {
         AppServerSource::WebSocket {
             url: "ws://127.0.0.1:1455/rpc".to_string(),
-            token: Some("env-token-should-be-overridden".to_string()),
-        }
-    }
-
-    #[test]
-    fn resolved_bearer_is_threaded_into_the_websocket_endpoint() {
-        let args = websocket_source()
-            .connect_args_with_optional_bearer(Some("store-bearer-xyz".to_string()))
-            .expect("a WebSocket source must yield Remote connect args");
-        match args.endpoint {
-            RemoteAppServerEndpoint::WebSocket { auth_token, .. } => {
-                assert_eq!(
-                    auth_token.as_deref(),
-                    Some("store-bearer-xyz"),
-                    "the auth-store bearer must be threaded as the transport bearer, overriding \
-                     any env token"
-                );
-            }
-            other => panic!("expected a WebSocket endpoint, got {other:?}"),
+            token: Some("remote-token".to_string()),
         }
     }
 
@@ -1363,16 +1318,9 @@ mod tests {
     }
 
     #[test]
-    fn spawn_source_yields_a_spawn_config_not_a_remote_endpoint() {
+    fn spawn_source_yields_a_spawn_config() {
         let source = spawn_source();
         assert!(source.is_self_authenticating_spawn());
-        assert!(
-            source
-                .clone()
-                .connect_args_with_optional_bearer(Some("ignored".to_string()))
-                .is_none(),
-            "a Spawn source must not produce Remote connect args"
-        );
         let AppServerSource::Spawn { bin, args, .. } = source else {
             panic!("spawn_source() must be the Spawn variant");
         };
@@ -1566,6 +1514,19 @@ mod tests {
             build_curated_codex_home_with_auth_store(&first_home, &machine_home).unwrap();
         let second_curated =
             build_curated_codex_home_with_auth_store(&second_home, &machine_home).unwrap();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(first_curated.join(CODEX_AUTH_LOCK_FILE_NAME))
+            .unwrap();
+        assert!(machine_home.join(CODEX_AUTH_LOCK_FILE_NAME).is_file());
+        assert_eq!(
+            std::fs::read_link(second_curated.join(CODEX_AUTH_LOCK_FILE_NAME)).unwrap(),
+            machine_home.join(CODEX_AUTH_LOCK_FILE_NAME),
+            "every local Codex interface must serialize auth writes on the machine lock"
+        );
 
         std::fs::write(
             first_curated.join(CODEX_AUTH_FILE_NAME),
@@ -1596,10 +1557,15 @@ mod tests {
         )
         .unwrap();
         build_curated_codex_home_with_auth_store(&first_home, &replacement_home).unwrap();
-        assert_eq!(
-            std::fs::read_link(first_curated.join(CODEX_AUTH_FILE_NAME)).unwrap(),
-            replacement_home.join(CODEX_AUTH_FILE_NAME)
-        );
+        for name in CODEX_AUTH_BOUNDARY_FILES {
+            assert_eq!(
+                std::fs::read_link(first_curated.join(name)).unwrap(),
+                replacement_home.join(name)
+            );
+        }
+        std::fs::remove_file(second_curated.join(CODEX_AUTH_LOCK_FILE_NAME)).unwrap();
+        std::fs::write(second_curated.join(CODEX_AUTH_LOCK_FILE_NAME), b"").unwrap();
+        assert!(build_curated_codex_home_with_auth_store(&second_home, &machine_home).is_err());
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1656,6 +1622,12 @@ mod tests {
             capabilities.experimental_api,
             "experimental_api must be advertised so the empty-environments tool-suppression lever \
              is accepted, not rejected by the experimental gate"
+        );
+        let declared: serde_json::Value = serde_json::from_str(MANAGED_CLI_RELEASE).unwrap();
+        assert_eq!(
+            serde_json::json!(capabilities.opt_out_notification_methods),
+            declared["notifications"]["opt_out"],
+            "initialize must opt out of exactly the notifications the managed release declares"
         );
     }
 
@@ -1801,8 +1773,8 @@ mod tests {
         match result {
             Err(ConfigError::Connect(_)) => {}
             Err(other) => panic!(
-                "a self-authenticating spawn must fail on the SPAWN (Connect), never \
-                 NotAuthenticated from the empty store, got: {other}"
+                "a self-authenticating spawn must fail on the SPAWN (Connect), never on the \
+                 empty store, got: {other}"
             ),
             Ok(_) => panic!("spawning a nonexistent binary cannot succeed"),
         }
@@ -1858,31 +1830,6 @@ mod tests {
         assert!(is_truthy(" yes "));
         assert!(!is_truthy("codex"));
         assert!(!is_truthy("/usr/local/bin/codex"));
-    }
-
-    #[tokio::test]
-    async fn connect_with_auth_refuses_remote_when_store_is_empty() {
-        let manager = AuthManager::new(
-            std::path::PathBuf::from("/nonexistent-codex-home-for-test-config"),
-            false,
-            octopus_login::AuthCredentialsStoreMode::Ephemeral,
-            None,
-            None,
-            octopus_login::AuthKeyringBackendKind::default(),
-        )
-        .await;
-        let manager = Arc::new(manager);
-
-        match connect_with_auth(websocket_source(), &manager).await {
-            Err(ConfigError::UnisolatedRemoteTransport("websocket")) => {}
-            Err(other) => panic!(
-                "remote websocket must fail closed as UnisolatedRemoteTransport before auth, got: \
-                 {other}"
-            ),
-            Ok(_) => {
-                panic!("a remote websocket must fail closed, never yield a provider transport")
-            }
-        }
     }
 
     #[tokio::test]

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "multi_agent_mode",
-  "stage": {
-    "kind": "under_development"
-  }
-}

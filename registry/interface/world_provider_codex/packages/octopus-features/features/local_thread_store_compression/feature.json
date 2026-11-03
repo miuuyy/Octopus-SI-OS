@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "local_thread_store_compression",
-  "stage": {
-    "kind": "under_development"
-  }
-}

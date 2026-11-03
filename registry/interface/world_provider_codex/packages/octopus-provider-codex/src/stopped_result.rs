@@ -61,26 +61,31 @@ pub(crate) fn prove(
         return Ok(None);
     };
     let state = parse_codex_continuity(raw, &runtime.interface, runtime.run.as_str())?;
-    let Some(wait) = state
+    if state
         .pending
         .as_ref()
-        .filter(|wait| interrupted_pending_has_external_result(wait))
-    else {
+        .is_none_or(|wait| !interrupted_pending_has_external_result(wait))
+    {
         return Ok(None);
-    };
+    }
+    let focused = result_call_key(input)?
+        .and_then(|key| state.focused(&key))
+        .unwrap_or_else(|| state.clone());
+    let wait = focused.pending.as_ref().expect("ordinary continuity keeps its wait");
+    let key = pending_request_key(wait);
     let fail = |message: &str| InterfaceDriverError::FailedClosed(message.into());
     if runtime.interface != descriptor.id
         || record["id"] != runtime.run.as_str()
         || state.context_generation != read_codex_context_generation(&record, &runtime.interface)?
         || state.interrupted_pending.is_some()
         || state.native_terminal.is_some()
-        || state.tool_operator_request.is_some()
+        || focused.tool_operator_request.is_some()
     {
         return Err(fail(
             "stopped result error differs from the current checked pending state",
         ));
     }
-    let mut interrupted = state.clone();
+    let mut interrupted = focused.clone();
     interrupted.interrupted_pending = interrupted.pending.take();
     if !exact_interrupted_result_source(input, &interrupted)
         .map_err(InterfaceDriverError::FailedClosed)?
@@ -103,14 +108,20 @@ pub(crate) fn prove(
         .filter_map(|(entry, raw)| {
             let original =
                 parse_codex_continuity(raw, &runtime.interface, runtime.run.as_str()).ok()?;
-            (original.pending.as_ref() == Some(wait)).then_some((entry, original))
+            (original.outstanding_call(&key) == Some(wait)
+                && entry.payload.get("correlation_id").and_then(serde_json::Value::as_str)
+                    .is_some_and(|call| format!("tool:{call}") == key))
+            .then_some((entry, original))
         })
         .last()
         .ok_or_else(|| fail("stopped result has no retained exact original effect"))?;
     let (effect, original) = original;
-    let mut expected = original.clone();
+    let mut expected = original
+        .focused(&key)
+        .ok_or_else(|| fail("stopped result original effect lost its exact call"))?;
+    expected.parallel_pending = focused.parallel_pending.clone();
     expected.context_generation = state.context_generation;
-    if expected != state {
+    if expected != focused {
         return Err(fail(
             "stopped result error changed its native plan or private thread",
         ));
@@ -190,6 +201,15 @@ pub(crate) fn prove(
             "continuation_dispatched": false,
         }),
     }))
+}
+
+fn result_call_key(input: &InterfaceInvocationEnvelope) -> Result<Option<String>, InterfaceDriverError> {
+    let result: serde_json::Value = serde_json::from_slice(&input.read_artifact_payload()?)
+        .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+    Ok(result
+        .get("correlation_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|call| format!("tool:{call}")))
 }
 
 fn terminal_control_ack(entry: &SessionContextArtifact) -> bool {
@@ -408,12 +428,16 @@ impl CodexAppServerInterfaceDriver {
         let terminal = read_exact_terminal_turn(&self.client.lock().await.request_handle(), &self.next_request_id,
             &proof.source.thread_id, pending_turn_id(pending)).await.map_err(InterfaceDriverError::FailedClosed)?
             .ok_or_else(|| InterfaceDriverError::FailedClosed("stopped result recovery requires exact native terminal evidence; the retained turn is still active".into()))?;
-        let events = take_native_terminal_events(
-            &mut *self.client.lock().await,
-            &terminal,
-            &proof.source.thread_id,
-            pending_turn_id(pending),
-        )?;
+        let events = if proof.source.outstanding_len() > 1 {
+            Vec::new()
+        } else {
+            take_native_terminal_events(
+                &mut *self.client.lock().await,
+                &terminal,
+                &proof.source.thread_id,
+                pending_turn_id(pending),
+            )?
+        };
         materialize(proof, input, terminal, events, output_root, labels)
     }
 }
@@ -436,11 +460,18 @@ fn materialize_closure(
     if source.pending.is_some() && source.interrupted_pending.is_some() {
         return Err(InterfaceDriverError::FailedClosed("stopped result has conflicting pending effects".into()));
     }
-    let pending = source.pending.as_ref().or(source.interrupted_pending.as_ref()).ok_or_else(|| {
+    let key = result_call_key(input)?.ok_or_else(|| {
+        InterfaceDriverError::FailedClosed("stopped result names no correlated call".into())
+    })?;
+    let focused = source.focused(&key).ok_or_else(|| {
         InterfaceDriverError::FailedClosed("stopped result lost its pending effect".into())
     })?;
+    let pending = focused.pending.as_ref().or(focused.interrupted_pending.as_ref()).ok_or_else(|| {
+        InterfaceDriverError::FailedClosed("stopped result lost its pending effect".into())
+    })?;
+    let siblings = source.outstanding_len() > 1;
     let turn = terminal.exact_turn(&source.thread_id, Some(pending_turn_id(pending)))?;
-    let retained = terminal.outputs(&events)?;
+    let retained = if siblings { Vec::new() } else { terminal.outputs(&events)? };
     if turn.status != TurnStatus::Interrupted
         || retained.iter().any(|output| labels.contains(&output.label))
     {
@@ -465,9 +496,10 @@ fn materialize_closure(
         }
     };
     let mut closed = source.clone();
-    closed.pending = None;
-    closed.interrupted_pending = None;
-    closed.native_terminal = Some(terminal.clone());
+    closed.settle_outstanding(&key);
+    if !siblings {
+        closed.native_terminal = Some(terminal.clone());
+    }
     let mut outputs = Vec::new();
     for mut output in retained {
         normalize_output_identity(&mut output, closed.turn_input.as_ref())?;
@@ -499,7 +531,12 @@ fn materialize_closure(
     output.value["result_origin"] = serde_json::json!("native_turn_completion");
     output.value["terminal_evidence_source"] = serde_json::json!("thread/read");
     output.value["native_terminal_input_context"] = serde_json::json!(false);
-    output.value["retained_native_outputs"] = serde_json::json!(outputs);
+    if siblings {
+        output.value["native_terminal"] = serde_json::to_value(&terminal)
+            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+    } else {
+        output.value["retained_native_outputs"] = serde_json::json!(outputs);
+    }
     if let Some(evidence) = evidence { output.value["completed_source_settlement"] = evidence.clone(); }
     let bytes = serde_json::to_vec(&output.value)
         .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;

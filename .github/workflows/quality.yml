@@ -398,7 +398,7 @@ jobs:
 
       - name: Package verifier, Home admission, provider recovery and voice contracts
         run: |
-          cargo nextest run --locked -p octopus-app-server -p octopus-operator-chat-client -p octopus-run-authoring -p octopus-provider-codex -p octopus-realtime-signaling --lib --test worker_interface_cross_run_fan_out --test conditioned_publication --test run_composition --test checked_input_writers -E 'not binary(run_composition) | test(input_revision_cli_preserves_payload_intent_and_requires_checked_writer_results)'
+          cargo nextest run --locked -p octopus-app-server -p octopus-operator-chat-client -p octopus-run-authoring -p octopus-provider-codex -p octopus-realtime-signaling --lib --test worker_interface_cross_run_fan_out --test conditioned_publication --test run_composition --test checked_input_writers --test notification_coverage -E 'not binary(run_composition) | test(input_revision_cli_preserves_payload_intent_and_requires_checked_writer_results)'
 
   tool-continuations:
     runs-on: macos-latest

@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "auth_elicitation",
-  "stage": {
-    "kind": "under_development"
-  }
-}

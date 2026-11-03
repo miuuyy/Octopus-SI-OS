@@ -383,8 +383,8 @@ export function mergeRenderedMessages(
         )) || !/^[a-f0-9]{64}$/.test(eventString(stream.stream_id))
         || !Number.isSafeInteger(data.seq) || eventNumber(data.seq) <= 0 || data.seq !== stream.stream_seq
         || !["item/started", "item/completed", "thread/resume"].includes(eventString(data.source_event))
-        || (data.source_event === "thread/resume" ? Object.hasOwn(data, "native_event_at_ms")
-          : !Number.isSafeInteger(data.native_event_at_ms) || eventNumber(data.native_event_at_ms) < 0)) continue;
+        || ((data.source_event !== "thread/resume" || Object.hasOwn(data, "native_event_at_ms"))
+          && (!Number.isSafeInteger(data.native_event_at_ms) || eventNumber(data.native_event_at_ms) < 0))) continue;
       const key = JSON.stringify([message.runId, data.provider_interface, data.client_id]);
       if (!recordedInputs.has(key)) recordedInputs.set(key, data);
       continue;

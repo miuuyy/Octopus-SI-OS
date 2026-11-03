@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "unavailable_dummy_tools",
-  "stage": {
-    "kind": "removed"
-  }
-}

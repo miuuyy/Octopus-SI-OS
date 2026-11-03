@@ -58,6 +58,25 @@ impl CodexAppServerInterfaceDriver {
             &continuation.item,
             Some(&native_activity),
         )?;
+        if evidence.native_receipt {
+            let field = |name: &str| {
+                native_activity.get(name).and_then(serde_json::Value::as_str).map(str::to_owned).ok_or_else(|| {
+                    InterfaceDriverError::FailedClosed(format!(
+                        "Codex recovered tool activity has no native {name}"
+                    ))
+                })
+            };
+            let handle = self.client.lock().await.request_handle();
+            let entries = native_history::read_native_items(
+                &handle,
+                &self.next_request_id,
+                &field("thread_id")?,
+                &field("turn_id")?,
+                vec![field("call_id")?],
+            )
+            .await?;
+            verify_native_tool_receipt(&entries[0], &continuation.item, &native_activity)?;
+        }
         if let Some(last_artifact_label) = last_artifact_label
             && !evidence.output_persisted
             && last_artifact_label != PROVIDER_TRANSPORT_DISPATCH_LABEL

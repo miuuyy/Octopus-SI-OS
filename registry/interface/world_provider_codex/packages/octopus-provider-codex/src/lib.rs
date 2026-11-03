@@ -39,7 +39,6 @@ use octopus_appserver_proto::ServerRequest;
 use octopus_util_abspath::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
 
-pub use crate::auth::{CredentialError, ProviderCredential, resolve_credential};
 pub use crate::compatibility::{CodexCompatibilityEvidence, CodexCompatibilityRequirements, CODEX_SCHEMA_BASELINE};
 pub use crate::managed_cli::{verify_managed_cli, ManagedCliImport, ManagedCliReceipt, ManagedCliSigning, MANAGED_CLI_RECEIPT};
 pub use crate::config::{

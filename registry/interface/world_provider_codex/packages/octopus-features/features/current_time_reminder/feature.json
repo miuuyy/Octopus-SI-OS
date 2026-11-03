@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "current_time_reminder",
-  "stage": {
-    "kind": "under_development"
-  }
-}

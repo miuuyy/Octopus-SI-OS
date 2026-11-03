@@ -382,7 +382,7 @@ function validateOperatorTurnInputRecorded(row, header) {
     nonNegativeInteger(row.native_event_at_ms, "turn.stream input_recorded native_event_at_ms");
   } else if (row.source_event === "thread/resume") {
     if (Object.hasOwn(row, "native_event_at_ms")) {
-      throw new Error("turn.stream history input_recorded must omit native event timing");
+      nonNegativeInteger(row.native_event_at_ms, "turn.stream history input_recorded native_event_at_ms");
     }
   } else {
     throw new Error("turn.stream input_recorded has an invalid source_event");

@@ -10,7 +10,7 @@ const cli = require("./bootstrap.cjs");
 function fixture(root, version) {
   const source = path.join(root, version); fs.mkdirSync(source);
   const entry = "codex-aarch64-apple-darwin", binary = path.join(source, entry);
-  fs.writeFileSync(binary, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli ${version}'; exit 0; fi\nif [ "$1" = "app-server" ] && [ "$2" = "generate-json-schema" ]; then\nmkdir -p "$5"\nprintf '{}\\n' > "$5/SourceProbe.json"\nexit 0\nfi\nexit 1\n`, { mode: 0o755 });
+  fs.writeFileSync(binary, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli ${version}'; exit 0; fi\nif [ "$1" = "app-server" ] && [ "$2" = "generate-json-schema" ]; then\nmkdir -p "$5"\nprintf '{}\\n' > "$5/SourceProbe.json"\nprintf '{"oneOf":[{"properties":{"method":{"enum":["turn/completed"]}}}]}\\n' > "$5/ServerNotification.json"\nexit 0\nfi\nexit 1\n`, { mode: 0o755 });
   const archive = path.join(source, "official.tar.gz");
   assert.equal(spawnSync("tar", ["-czf", archive, "-C", source, entry]).status, 0);
   const manifest = {
@@ -18,7 +18,7 @@ function fixture(root, version) {
     platforms: { "darwin-arm64": { archive_entry: entry, archive_bytes: fs.statSync(archive).size,
       archive_sha256: cli.digest(archive), url: `https://github.com/openai/codex/releases/download/rust-v${version}/${entry}.tar.gz` } },
     schemas: { "SourceProbe.json": crypto.createHash("sha256").update("{}\n").digest("hex") },
-    legal: {},
+    legal: {}, notifications: { mirrored: ["turn/completed"], opt_out: ["thread/queue/changed"] },
   };
   fs.mkdirSync(path.join(source, "upstream"));
   for (const name of ["LICENSE", "NOTICE"]) {
@@ -41,16 +41,16 @@ function fixture(root, version) {
 test("fresh acquisition, stable update, downgrade refusal and integrity admission", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-codex-installer-test-"));
   try {
-    const destination = path.join(root, "managed-bin"), old = fixture(root, "0.162.0"), next = fixture(root, "0.163.0");
+    const destination = path.join(root, "managed-bin"), old = fixture(root, "0.166.0"), next = fixture(root, "0.167.0");
     const first = await cli.materialize({ destination, platform: "darwin-arm64", ...old });
-    assert.equal(first.version, "0.162.0");
+    assert.equal(first.version, "0.166.0");
     assert.deepEqual(cli.verifyInstallation(destination), first);
     const unchanged = fs.readFileSync(path.join(destination, "codex"));
     const reused = await cli.materialize({ destination, platform: "darwin-arm64", manifestPath: old.manifestPath,
       fetchArchive: async () => { throw new Error("no download for verified installed release"); } });
     assert.deepEqual(reused, first);
     const updated = await cli.materialize({ destination, platform: "darwin-arm64", ...next });
-    assert.equal(updated.version, "0.163.0"); assert.notDeepEqual(fs.readFileSync(path.join(destination, "codex")), unchanged);
+    assert.equal(updated.version, "0.167.0"); assert.notDeepEqual(fs.readFileSync(path.join(destination, "codex")), unchanged);
     await assert.rejects(cli.materialize({ destination, platform: "darwin-arm64", ...old }), /downgrade/);
     assert.deepEqual(cli.verifyInstallation(destination), updated);
     const imported = path.join(root, "registry", "interface", "world_provider_codex", "packages", "bin");
@@ -74,10 +74,15 @@ test("fresh acquisition, stable update, downgrade refusal and integrity admissio
 test("checksum and protocol failures never publish an executable", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-codex-installer-test-"));
   try {
-    const source = fixture(root, "0.162.0"), destination = path.join(root, "bin");
+    const source = fixture(root, "0.166.0"), destination = path.join(root, "bin");
     await assert.rejects(cli.materialize({ destination, platform: "darwin-arm64", manifestPath: source.manifestPath,
       fetchArchive: async (_, target) => { fs.copyFileSync(source.archive, target); fs.appendFileSync(target, "wrong"); } }), /SHA-256/);
     assert.equal(fs.existsSync(path.join(destination, "codex")), false);
+    source.manifest.notifications.mirrored = ["turn/started"];
+    fs.writeFileSync(source.manifestPath, JSON.stringify(source.manifest));
+    await assert.rejects(cli.materialize({ destination, platform: "darwin-arm64", ...source }), /neither mirrors nor opts out of: turn\/completed$/);
+    assert.equal(fs.existsSync(path.join(destination, "codex")), false);
+    source.manifest.notifications.mirrored = ["turn/completed"];
     source.manifest.schemas["SourceProbe.json"] = "f".repeat(64);
     fs.writeFileSync(source.manifestPath, JSON.stringify(source.manifest));
     await assert.rejects(cli.materialize({ destination, platform: "darwin-arm64", ...source }), /validated schema/);
@@ -89,17 +94,17 @@ test("checksum and protocol failures never publish an executable", async () => {
 test("interrupted receipt publication resumes from exact installed bytes without reacquisition", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-codex-installer-test-"));
   try {
-    const source = fixture(root, "0.162.0"), destination = path.join(root, "bin");
+    const source = fixture(root, "0.166.0"), destination = path.join(root, "bin");
     const receipt = await cli.materialize({ destination, platform: "darwin-arm64", ...source });
     fs.unlinkSync(path.join(destination, cli.RECEIPT));
     fs.writeFileSync(path.join(destination, ".codex-cli-pending.json"), JSON.stringify({ candidate: ".codex-stage-exact/codex", receipt }));
     const exited = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
     assert.equal(exited.status, 0);
-    fs.writeFileSync(path.join(destination, ".codex-cli-install.lock"), JSON.stringify({ schema_version: 1, pid: exited.pid, version: "0.162.0" }));
+    fs.writeFileSync(path.join(destination, ".codex-cli-install.lock"), JSON.stringify({ schema_version: 1, pid: exited.pid, version: "0.166.0" }));
     const recovered = await cli.materialize({ destination, platform: "darwin-arm64", manifestPath: source.manifestPath,
       fetchArchive: async () => { throw new Error("no duplicate external acquisition"); } });
     assert.deepEqual(recovered, receipt); assert.deepEqual(cli.verifyInstallation(destination), receipt);
-    fs.writeFileSync(path.join(destination, ".codex-cli-install.lock"), JSON.stringify({ schema_version: 1, pid: process.pid, version: "0.162.0" }));
+    fs.writeFileSync(path.join(destination, ".codex-cli-install.lock"), JSON.stringify({ schema_version: 1, pid: process.pid, version: "0.166.0" }));
     await assert.rejects(cli.materialize({ destination, platform: "darwin-arm64", ...source }), /already in progress/);
     fs.unlinkSync(path.join(destination, ".codex-cli-install.lock"));
     fs.writeFileSync(path.join(destination, ".codex-cli-pending.json"), JSON.stringify({ candidate: "../outside/codex", receipt }));

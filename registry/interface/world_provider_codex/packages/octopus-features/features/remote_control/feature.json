@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "remote_control",
-  "stage": {
-    "kind": "removed"
-  }
-}

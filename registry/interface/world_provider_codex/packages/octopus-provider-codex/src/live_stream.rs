@@ -146,8 +146,7 @@ impl InputRecordedRow {
             }
         }
         match (self.source_event, self.native_event_at_ms) {
-            (InputRecordedSource::ItemStarted | InputRecordedSource::ItemCompleted, Some(ms))
-                if (0..=9_007_199_254_740_991).contains(&ms) => Ok(()),
+            (_, Some(ms)) if (0..=9_007_199_254_740_991).contains(&ms) => Ok(()),
             (InputRecordedSource::ThreadResume, None) => Ok(()),
             _ => Err("Codex input-recorded receipt has invalid native event timing".to_string()),
         }
@@ -1107,11 +1106,6 @@ fn validate_complete_rows(
                 let receipt: InputRecordedRow = serde_json::from_value(row.clone())
                     .map_err(|error| format!("Codex input-recorded receipt is malformed: {error}"))?;
                 receipt.validate(identity)?;
-                if matches!(receipt.source_event, InputRecordedSource::ThreadResume)
-                    && row.get("native_event_at_ms").is_some()
-                {
-                    return Err("Codex history receipt must omit native event timing".to_string());
-                }
                 if recorded_inputs.insert(receipt.client_id, RecordedInputIdentity {
                     item_id: receipt.item_id, source_event: receipt.source_event,
                 }).is_some() {
@@ -1268,7 +1262,7 @@ mod tests {
         let mut stream = LiveTurnStream::open(temp.path(), &rules(), identity(), 9).unwrap();
         assert!(!stream.append_input_recorded(9, InputRecordedObservation {
             item_id: "item-1", source_event: InputRecordedSource::ThreadResume,
-            native_event_at_ms: None, ..input()
+            native_event_at_ms: Some(150), ..input()
         }).unwrap());
         assert_eq!(std::fs::read(&body_path).unwrap(), first);
         let sealed = stream.seal_terminal(9, "interface.artifact.output", &"a".repeat(64)).unwrap();

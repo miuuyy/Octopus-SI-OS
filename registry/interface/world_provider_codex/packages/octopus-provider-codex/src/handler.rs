@@ -78,12 +78,15 @@ use context_refresh::{ContextRefresh, CurrentNativeContext, NativeHistoryProof, 
 
 #[path = "native_history.rs"]
 mod native_history;
-use native_history::{read_native_turn, read_native_turn_items};
+use native_history::read_native_turn;
 
 #[path = "composer_prediction.rs"]
 pub(crate) mod composer_prediction;
 #[path = "client_generation.rs"]
 pub(crate) mod client_generation;
+#[path = "account_sessions.rs"]
+mod account_sessions;
+pub(crate) use account_sessions::*;
 
 pub const CODEX_APP_SERVER_INTERFACE_DRIVER_REF: &str = "codex_app_server";
 

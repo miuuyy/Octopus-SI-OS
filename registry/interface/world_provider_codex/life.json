@@ -14,7 +14,7 @@
       "args": [],
       "read_handles": ["ledger", "ledger_index", "blobs"],
       "coordinate_root_slots": ["run_records_root", "app_server_control_root", "registry_interface_root"],
-      "inherit_env": ["HOME", "PATH", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "OCTOPUS_MACHINE_CODEX_AUTH_FILE"],
+      "inherit_env": ["HOME", "PATH", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "OCTOPUS_MACHINE_CODEX_AUTH_FILE", "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"],
       "authority": {
         "read_root_slots": ["run_records_root", "registry_interface_root"],
         "write_root_slots": ["interface_hand_in_root"],
@@ -30,8 +30,8 @@
           "relative_path": "world_provider_codex/packages/bin/codex-code-mode-host"
         }],
         "executable_commands": ["codex"],
-        "read_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE"],
-        "write_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE"],
+        "read_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE", "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"],
+        "write_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE", "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"],
         "executable_env_paths": [],
         "read_env_subpaths": [],
         "allow_network": true,

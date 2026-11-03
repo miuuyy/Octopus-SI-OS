@@ -4,7 +4,7 @@ async fn pending_operator_history_pages_fail_closed_and_preserve_approval_replay
     use serde_json::{Value, json};
     let turn = |id: &str, status: &str| json!({"id":id,"status":status,"items":[],"itemsView":"notLoaded","error":null});
     let page = |data: Vec<Value>, next: Option<&str>| json!({"data":data,"nextCursor":next,"backwardsCursor":null});
-    let item = |owner: &str, id: &str| json!({"turnId":owner,"item":{"type":"contextCompaction","id":id}});
+    let item = |owner: &str, id: &str| json!({"turnId":owner,"startedAtMs":5,"completedAtMs":null,"item":{"type":"contextCompaction","id":id}});
     let pending = page(vec![turn("pending", "inProgress")], None);
     let cases = vec![
         (vec![page(vec![turn("other", "completed")], Some("older")), pending.clone()],
@@ -65,7 +65,8 @@ async fn pending_operator_history_pages_fail_closed_and_preserve_approval_replay
         if let Some(error) = expected_error {
             assert!(result.unwrap_err().to_string().contains(error));
         } else {
-            assert_eq!(result.unwrap().iter().map(ThreadItem::id).collect::<Vec<_>>(), vec!["first", "last"]);
+            assert_eq!(result.unwrap().iter().map(|entry| (entry.item.id(), entry.started_at_ms, entry.completed_at_ms))
+                .collect::<Vec<_>>(), vec![("first", Some(5), None), ("last", Some(5), None)]);
         }
         assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerRequest(
             ServerRequest::CommandExecutionRequestApproval { request_id: RequestId::String(id), .. }

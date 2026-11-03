@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "plugin_sharing",
-  "stage": {
-    "kind": "stable"
-  }
-}

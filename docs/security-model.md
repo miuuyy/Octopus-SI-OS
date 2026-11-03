@@ -81,7 +81,10 @@ untrusted input unless you mean to.
 ### Credentials
 
 - Provider sign-in is held by Codex's own authentication, normally under
-  `~/.codex`. It is not contained in the Octopus Home.
+  `~/.codex`. It is not contained in the Octopus Home. Octopus's Codex
+  provider, the managed Codex app-server and your own Codex CLI share it, and
+  every token refresh and sign-out takes the store's `auth.lock`, the lock
+  Codex itself uses, so they never rotate the refresh token over each other.
 - An interface's secrets stay in that interface's private state. Descriptors
   carry the *name* of an environment variable or a handle, never a value.
 - Never paste a Home, a ledger, or an interface state directory into an issue.

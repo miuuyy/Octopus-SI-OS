@@ -105,6 +105,9 @@ pub(crate) fn validated_client_projection_output_labels(
         if let Some(binding) = operations.thread_compact_start {
             required.insert(binding.output_label);
         }
+        if let Some(binding) = operations.account_sessions_read {
+            required.insert(binding.output_label);
+        }
     }
     let missing = required.difference(&labels).cloned().collect::<Vec<_>>();
     if !missing.is_empty() {

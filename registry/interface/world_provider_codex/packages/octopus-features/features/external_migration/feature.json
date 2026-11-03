@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "external_migration",
-  "stage": {
-    "kind": "removed"
-  }
-}

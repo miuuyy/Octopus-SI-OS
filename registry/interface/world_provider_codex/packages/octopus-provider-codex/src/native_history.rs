@@ -38,12 +38,12 @@ pub(super) async fn read_native_turn(
     }
 }
 
-pub(super) async fn read_native_turn_items(
+pub(super) async fn read_native_turn_entries(
     handle: &AppServerRequestHandle,
     request_ids: &std::sync::atomic::AtomicI64,
     thread_id: &str,
     turn_id: &str,
-) -> Result<Vec<ThreadItem>, InterfaceDriverError> {
+) -> Result<Vec<octopus_appserver_proto::ThreadItemEntry>, InterfaceDriverError> {
     let mut cursor = None;
     let mut cursors = BTreeSet::new();
     let mut item_ids = BTreeSet::new();
@@ -72,9 +72,49 @@ pub(super) async fn read_native_turn_items(
                     "thread/items/list repeated item '{}'", entry.item.id(),
                 )));
             }
-            items.push(entry.item);
+            items.push(entry);
         }
         cursor = page.next_cursor;
         if cursor.is_none() { return Ok(items); }
     }
+}
+
+pub(super) async fn read_native_items(
+    handle: &AppServerRequestHandle,
+    request_ids: &std::sync::atomic::AtomicI64,
+    thread_id: &str,
+    turn_id: &str,
+    item_ids: Vec<String>,
+) -> Result<Vec<octopus_appserver_proto::ThreadItemEntry>, InterfaceDriverError> {
+    let requested = item_ids.iter().cloned().collect::<BTreeSet<_>>();
+    if !(1..=100).contains(&item_ids.len()) || requested.len() != item_ids.len() {
+        return Err(InterfaceDriverError::FailedClosed(
+            "thread/items/read requires 1 to 100 distinct item ids".into(),
+        ));
+    }
+    let response = handle.request_typed::<octopus_appserver_proto::ThreadItemsReadResponse>(ClientRequest::ThreadItemsRead {
+        request_id: RequestId::Integer(request_ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst)),
+        params: octopus_appserver_proto::ThreadItemsReadParams {
+            thread_id: thread_id.to_string(), turn_id: turn_id.to_string(), item_ids,
+        },
+    }).await.map_err(typed_error)?;
+    let mut returned = BTreeSet::new();
+    for entry in &response.data {
+        if entry.turn_id != turn_id {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "thread/items/read returned item for turn '{}', expected '{turn_id}'", entry.turn_id,
+            )));
+        }
+        if !returned.insert(entry.item.id().to_string()) {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "thread/items/read repeated item '{}'", entry.item.id(),
+            )));
+        }
+    }
+    if returned != requested {
+        return Err(InterfaceDriverError::FailedClosed(format!(
+            "thread/items/read did not return exactly the requested items of turn '{turn_id}'",
+        )));
+    }
+    Ok(response.data)
 }

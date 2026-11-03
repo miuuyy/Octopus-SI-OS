@@ -1,7 +1,0 @@
-{
-  "default_enabled": true,
-  "id": "skill_mcp_dependency_install",
-  "stage": {
-    "kind": "stable"
-  }
-}

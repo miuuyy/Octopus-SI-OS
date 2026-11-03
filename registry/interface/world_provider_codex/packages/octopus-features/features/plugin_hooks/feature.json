@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "plugin_hooks",
-  "stage": {
-    "kind": "removed"
-  }
-}

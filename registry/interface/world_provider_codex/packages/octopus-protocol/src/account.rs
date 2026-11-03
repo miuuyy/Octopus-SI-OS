@@ -16,16 +16,34 @@ pub enum PlanType {
     Plus,
     Pro,
     ProLite,
+    ProMax,
     Team,
+    #[serde(rename = "self_serve_business_prolite")]
+    #[ts(rename = "self_serve_business_prolite")]
+    SelfServeBusinessProLite,
     #[serde(rename = "self_serve_business_usage_based")]
     #[ts(rename = "self_serve_business_usage_based")]
     SelfServeBusinessUsageBased,
     Business,
+    Ent26,
+    #[serde(rename = "enterprise_cbp_automation")]
+    #[ts(rename = "enterprise_cbp_automation")]
+    EnterpriseCbpAutomation,
     #[serde(rename = "enterprise_cbp_usage_based")]
     #[ts(rename = "enterprise_cbp_usage_based")]
     EnterpriseCbpUsageBased,
     Enterprise,
     Edu,
+    #[serde(rename = "edu_plus")]
+    #[ts(rename = "edu_plus")]
+    EduPlus,
+    #[serde(rename = "edu_pro")]
+    #[ts(rename = "edu_pro")]
+    EduPro,
+    Sci,
+    #[serde(rename = "sci_plus")]
+    #[ts(rename = "sci_plus")]
+    SciPlus,
     #[serde(other)]
     Unknown,
 }
@@ -52,23 +70,31 @@ pub enum AmazonBedrockCredentialSource {
 
 impl PlanType {
     pub fn is_team_like(self) -> bool {
-        matches!(self, Self::Team | Self::SelfServeBusinessUsageBased)
+        matches!(
+            self,
+            Self::Team | Self::SelfServeBusinessProLite | Self::SelfServeBusinessUsageBased
+        )
     }
 
     pub fn is_business_like(self) -> bool {
-        matches!(self, Self::Business | Self::EnterpriseCbpUsageBased)
+        matches!(
+            self,
+            Self::Business
+                | Self::Ent26
+                | Self::EnterpriseCbpAutomation
+                | Self::EnterpriseCbpUsageBased
+        )
+    }
+
+    pub fn is_education_like(self) -> bool {
+        matches!(self, Self::Edu | Self::EduPlus | Self::EduPro)
     }
 
     pub fn is_workspace_account(self) -> bool {
-        matches!(
-            self,
-            Self::Team
-                | Self::SelfServeBusinessUsageBased
-                | Self::Business
-                | Self::EnterpriseCbpUsageBased
-                | Self::Enterprise
-                | Self::Edu
-        )
+        self.is_team_like()
+            || self.is_business_like()
+            || self.is_education_like()
+            || matches!(self, Self::Enterprise | Self::Sci | Self::SciPlus)
     }
 }
 
@@ -89,12 +115,20 @@ impl From<KnownPlan> for PlanType {
             KnownPlan::Plus => Self::Plus,
             KnownPlan::Pro => Self::Pro,
             KnownPlan::ProLite => Self::ProLite,
+            KnownPlan::ProMax => Self::ProMax,
             KnownPlan::Team => Self::Team,
+            KnownPlan::SelfServeBusinessProLite => Self::SelfServeBusinessProLite,
             KnownPlan::SelfServeBusinessUsageBased => Self::SelfServeBusinessUsageBased,
             KnownPlan::Business => Self::Business,
+            KnownPlan::Ent26 => Self::Ent26,
+            KnownPlan::EnterpriseCbpAutomation => Self::EnterpriseCbpAutomation,
             KnownPlan::EnterpriseCbpUsageBased => Self::EnterpriseCbpUsageBased,
             KnownPlan::Enterprise => Self::Enterprise,
             KnownPlan::Edu => Self::Edu,
+            KnownPlan::EduPlus => Self::EduPlus,
+            KnownPlan::EduPro => Self::EduPro,
+            KnownPlan::Sci => Self::Sci,
+            KnownPlan::SciPlus => Self::SciPlus,
         }
     }
 }

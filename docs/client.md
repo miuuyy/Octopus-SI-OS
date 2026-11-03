@@ -32,6 +32,17 @@ Screenshots show a development installation, including its incomplete setups.
 
 The avatar menu offers **Settings** and **Lock Octopus**. For a connected ChatGPT
 account, **Usage** shows remaining limits and reset times when available.
+When the account belongs to more than one workspace, the avatar menu lists them
+with the current one checked; choosing another switches the workspace Octopus
+uses for new requests, and the model list reloads. **Settings → Account** shows
+the account, plan and workspace, lists the workspaces with **Switch**, and offers
+**Add account** and **Log out**. Adding an account signs in another ChatGPT
+account in the browser and replaces the current sign-in; a workspace that
+requires SSO opens browser sign-in, and cancelling it keeps the current one.
+Switching requires an unlocked session; if the workspace list cannot be loaded,
+the menu says so and tries again the next time it opens. The
+sign-in is shared with Codex on this computer (see
+[Codex CLI](getting-started.md#codex-cli)).
 **Lock Octopus** locks local access and returns to the
 [password screen](getting-started.md#first-setup). The model provider stays signed
 in. Unlock with your password, or

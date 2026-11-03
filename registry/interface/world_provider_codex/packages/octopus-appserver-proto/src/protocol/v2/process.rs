@@ -120,6 +120,8 @@ pub struct ProcessOutputDeltaNotification {
 pub struct ProcessExitedNotification {
     pub process_handle: String,
     pub exit_code: i32,
+    #[ts(optional, as = "Option<Option<bool>>")]
+    pub output_drain_timed_out: Option<bool>,
     pub stdout: String,
     pub stdout_cap_reached: bool,
     pub stderr: String,

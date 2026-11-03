@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::SpawnAppServerClient;
 
-pub const CODEX_SCHEMA_BASELINE: &str = "rust-v0.162.0";
+pub const CODEX_SCHEMA_BASELINE: &str = "rust-v0.166.0";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

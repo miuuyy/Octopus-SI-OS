@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "enable_fanout",
-  "stage": {
-    "kind": "under_development"
-  }
-}

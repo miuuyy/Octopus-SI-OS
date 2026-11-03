@@ -77,6 +77,7 @@ function resolveEnvironment(options = {}) {
     OCTOPUS_INSTALLATION_ROOT: installationRoot,
     OCTOPUS_RUNTIME_BIN: runtimeBinary,
     OCTOPUS_MACHINE_CODEX_AUTH_FILE: path.join(codexHome, "auth.json"),
+    OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE: path.join(codexHome, "auth.lock"),
     PATH: [path.dirname(runtimeBinary), path.join(installationRoot, "bin"), merged.PATH ?? ""].join(path.delimiter),
   };
   const endpoint = normalizedEndpoint(options.endpoint ?? merged.OCTOPUS_APP_LISTEN ?? "", home, "world_operator_chat");

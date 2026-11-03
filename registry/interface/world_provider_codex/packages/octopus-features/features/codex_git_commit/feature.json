@@ -1,7 +1,0 @@
-{
-  "default_enabled": false,
-  "id": "codex_git_commit",
-  "stage": {
-    "kind": "removed"
-  }
-}
