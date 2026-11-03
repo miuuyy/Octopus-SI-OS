@@ -1382,6 +1382,80 @@ async fn completed_source_settlement_requires_exact_predecessor_and_replays_once
     }
 }
 
+#[tokio::test]
+async fn a_completed_source_continues_only_through_its_declared_continuation() {
+    fn late_call(fixture: &mut CompletedInputReplayFixture, declared: bool) -> Result<AuthoredRun, String> {
+        let before = std::fs::read(&fixture.handoff.run_path).unwrap();
+        let record = RunRecord::from_bytes(&before).unwrap();
+        let file = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("late"), "tool.call", &serde_json::to_vec(&serde_json::json!({
+            "label":"tool.call","tool":"read","arguments":{},"correlation_id":format!("late-{}", fixture.rows.len())})).unwrap()).unwrap();
+        let identity = artifact_identity(&file, &fixture.handoff.var_dir).unwrap();
+        let mut context = current_context_artifacts(&record, &fixture.handoff.config).unwrap();
+        append_artifact(&mut context, identity.artifact.id.clone());
+        let prepared = [PreparedHandoff { identity, verified_inputs: Vec::new(),
+            output_checkpoint: fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderToolOutput).unwrap().clone() }];
+        let authored = if declared {
+            fixture.handoff.author_completed_source_continuation(&before, &context, &prepared)?
+        } else {
+            fixture.handoff.author_run_with_bindings(&before, &context, &prepared, true, None, false, true, &[])?
+        };
+        fixture.install(&authored);
+        fixture.edge(authored.content.as_bytes(), &authored.pending_handoff.items[0].checkpoint.id, &file, "worker".into(), MovementKind::InterfaceArrival);
+        fixture.mark(&authored);
+        if authored.pending_handoff.context_publication.is_some() { fixture.publish(&authored); }
+        Ok(authored)
+    }
+    for declared in [true, false] {
+        let mut fixture = CompletedInputReplayFixture::new();
+        let first = fixture.output(true, true, true);
+        assert!(first.pending_handoff.publication_unfinished());
+        assert!(late_call(&mut fixture, true).unwrap_err().contains("does not own a completed ordinary terminal handoff"));
+        fixture.publish(&first);
+        fixture.handoff.source_movement_seq = 1;
+        assert!(late_call(&mut fixture, true).unwrap_err().contains("does not own a completed ordinary terminal handoff"));
+        fixture.handoff.source_movement_seq = 0;
+        let mut predecessor = first.pending_handoff.clone();
+        for step in 1..=2 {
+            let next = late_call(&mut fixture, declared).unwrap();
+            let persisted = persisted_pending_handoff(&RunRecord::from_bytes(&std::fs::read(&fixture.handoff.run_path).unwrap()).unwrap(),
+                &fixture.handoff.config.provider_interface).unwrap().unwrap();
+            assert_eq!(persisted.items, next.pending_handoff.items);
+            assert_eq!(persisted.continuation_of, declared.then(|| source_continuation::last_output(&predecessor).unwrap()));
+            assert!(persisted.terminal && persisted.context_publication.is_none());
+            let generation = |authored: &AuthoredRun| optional_u64(&RunRecord::from_bytes(authored.content.as_bytes()).unwrap()
+                .interface_state[&fixture.handoff.config.provider_interface], "context_generation").unwrap();
+            if declared { assert_eq!(generation(&next), generation(&first) + step); }
+            predecessor = persisted;
+        }
+        fixture.handoff.source_movement_seq = 1;
+        fixture.handoff.state.lock().await.run_record_bytes = std::fs::read(&fixture.handoff.run_path).unwrap();
+        fixture.handoff.session = ProviderHandoffSession::new(&fixture.handoff.ctx).unwrap();
+        let replay = fixture.handoff.completed_input_artifact_source(&fixture.input).await;
+        if declared { assert_eq!(replay.unwrap(), Some(0)); }
+        else { assert!(replay.unwrap_err().contains("repeats a terminal source")); }
+
+        let mut fixture = CompletedInputReplayFixture::new();
+        fixture.rows.pop(); fixture.save();
+        let initial = std::fs::read(&fixture.handoff.run_path).unwrap();
+        let control = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("independent"), "arbitrary.independent.input", br#"{"value":1}"#).unwrap();
+        fixture.edge(&initial, &CheckpointId::new("control"), &control, "provider".into(), MovementKind::InterfaceOutbound);
+        fixture.handoff.source_movement_seq = 1;
+        let independent = fixture.output(true, true, true); fixture.publish(&independent);
+        late_call(&mut fixture, declared).unwrap();
+        fixture.handoff.source_movement_seq = 0;
+        let last = fixture.output(true, true, true); fixture.publish(&last);
+        let h = &fixture.handoff;
+        let writer = CheckedRunWriter {owner:h.config.provider_interface.clone(),source:h.config.authoring_source_interface.clone(),
+            door:h.config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult).unwrap().interface().clone(),
+            tool:h.config.file_write_tool.clone(),call_label:h.config.file_write_label.clone(),result_label:h.config.file_write_result_label.clone()};
+        let evidence = CheckedRunEvidence {movements_path:&h.ctx.movements_path,ledger_index_path:&h.ctx.ledger_index_path,
+            blobs_dir:&h.ctx.blobs_dir,max_control_frame_bytes:1_048_576,max_manifest_bytes:1_048_576,max_payload_bytes:16_777_216};
+        let ready = provider_input_payloads_ready(&evidence, &h.run_path, &std::fs::read(&h.run_path).unwrap(), &writer, &InterfaceId::new("room"));
+        if declared { assert!(ready.unwrap()); }
+        else { assert!(ready.unwrap_err().contains("repeats a completed input")); }
+    }
+}
+
 #[test]
 fn payload_readiness_proves_completed_newer_inputs() {
     for checkpoint in ["control", "alternate"] {

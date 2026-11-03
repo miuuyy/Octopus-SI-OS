@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn shutdown_keeps_the_event_consumer_until_the_transport_has_closed() {
     let (command_tx, mut command_rx) = mpsc::channel(1);
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = crate::app_server_event_channel();
     let joined = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let finished = joined.clone();
     let worker_handle = tokio::spawn(async move {

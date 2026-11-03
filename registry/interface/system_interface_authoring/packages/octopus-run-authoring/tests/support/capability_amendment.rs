@@ -67,7 +67,7 @@ fn ordinary_effect(config: &RunAuthoringConfig, before: &Value, var_dir: &Path, 
     let identity = artifact_identity(&artifact,var_dir).unwrap();
     let effect = pending_output_checkpoint(&config.checkpoints[1], &format!("accepted_bridge_{generation}"), "tool.call", &["role".into()], &["role".into()]);
     let mut context=current_context_artifacts(&old,config).unwrap();append_artifact(&mut context,"dynamic_call".into());
-    let pending = PendingHandoff {source_movement_seq:19,terminal,context_publication:Some(context.clone()),deferred_publication:false,source_without_context:false,settlement_of:None,dispatch_fenced:true,withdrawal:None,replacement:None,standing:Vec::new(),
+    let pending = PendingHandoff {source_movement_seq:19,terminal,context_publication:Some(context.clone()),deferred_publication:false,source_without_context:false,settlement_of:None,continuation_of:None,dispatch_fenced:true,withdrawal:None,replacement:None,standing:Vec::new(),
         items:vec![PendingHandoffItem {artifact_id:identity.artifact.id.clone(),artifact_content_hash:identity.artifact.content.to_hex(),
             artifact_label:identity.label,manifest_relative_path:identity.manifest_relative_path,checkpoint:effect.clone()}]};
     let mut value = before.clone();

@@ -229,6 +229,7 @@ impl CodexAppServerInterfaceDriver {
             scope: context.scope.clone(), output: Arc::downgrade(context.sink.emit), continuity: context.sink.continuity_snapshot(),
             handoff_barrier: context.handoff_barrier.clone(), effect_gate: pending.effect_gate.clone(),
             turn_interrupted: pending.turn_interrupted.clone(), thread_id: pending.thread_id.clone(), turn_id: pending.turn_id.clone(),
+            late_calls: None,
         });
         Ok(())
     }

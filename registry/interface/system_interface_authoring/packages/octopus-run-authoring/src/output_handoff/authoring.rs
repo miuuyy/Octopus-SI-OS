@@ -28,7 +28,7 @@ impl ProviderOutputHandoff {
         bindings: &[ProviderOutgoingBinding],
     ) -> Result<AuthoredRun, String> {
         self.author_run_with_generations(current, context_artifacts, outputs, refresh_context, u64::from(refresh_context),
-            consumed_context_free_independent_input, consumed_verified_input, terminal, bindings, Vec::new())
+            consumed_context_free_independent_input, consumed_verified_input, terminal, bindings, Vec::new(), None)
     }
 
     pub(crate) fn author_run_with_generations(
@@ -43,6 +43,7 @@ impl ProviderOutputHandoff {
         terminal: bool,
         bindings: &[ProviderOutgoingBinding],
         standing: Vec<PendingHandoffItem>,
+        continuation: Option<&PendingHandoff>,
     ) -> Result<AuthoredRun, String> {
         let first_output = outputs
             .first()
@@ -63,6 +64,10 @@ impl ProviderOutputHandoff {
                 self.config.worker.as_str()
             ));
         }
+        let continued_context = continuation
+            .map(|prior| source_continuation::continued_context(&record, &self.config, prior, context_artifacts, outputs))
+            .transpose()?;
+        let context_artifacts = continued_context.as_deref().unwrap_or(context_artifacts);
         let verified_input_carriers = outputs
             .iter()
             .filter(|output| !output.verified_inputs.is_empty())
@@ -130,12 +135,15 @@ impl ProviderOutputHandoff {
                 .checkpoints
                 .extend(carrier.verified_inputs.iter().cloned());
         }
-        let deferred_publication = terminal && outputs.iter().any(|output| {
+        let deferred_publication = terminal && (outputs.iter().any(|output| {
             !output.output_checkpoint.result_receiving.is_empty() && context_artifacts.contains(&output.identity.artifact.id)
-        });
+        }) || continuation.is_some_and(|prior| prior.deferred_publication));
         let consumed_result_input = result_inputs::prepare(
             self, &record, outputs, terminal.then_some(context_artifacts), &mut next_topology,
         )?;
+        if continuation.is_some() && consumed_result_input.is_some() {
+            return Err("a source continuation cannot consume its source input again".into());
+        }
         let mut next_config = self.config.clone();
         next_config.checkpoints = next_topology.checkpoints.clone();
         next_config.validate(&self.config.provider_interface, &self.config.run)?;
@@ -182,7 +190,10 @@ impl ProviderOutputHandoff {
         let mut target_context = mandatory_role_artifacts.clone();
         for artifact in context_artifacts { append_artifact(&mut target_context, artifact.clone()); }
         let mut live_context = target_context.clone();
-        if target_context.iter().any(|id| outputs.iter().any(|output| &output.identity.artifact.id == id)) {
+        if continuation.is_some() {
+            live_context = mandatory_role_artifacts.clone();
+            for artifact in current_context_artifacts(&record, &self.config)? { append_artifact(&mut live_context, artifact); }
+        } else if target_context.iter().any(|id| outputs.iter().any(|output| &output.identity.artifact.id == id)) {
             live_context = mandatory_role_artifacts.clone();
             for artifact in current_context_artifacts(&record, &self.config)? { append_artifact(&mut live_context, artifact); }
             for artifact in context_artifacts.iter().filter(|id| !outputs.iter().any(|output| &output.identity.artifact.id == *id)) {
@@ -335,7 +346,7 @@ impl ProviderOutputHandoff {
                     self.config.provider_interface.as_str()
                 )
             })?;
-        let context_generation = if refresh_context && !self.failed_source {
+        let context_generation = if (refresh_context || continuation.is_some()) && !self.failed_source {
             previous_context_generation.checked_add(context_generations).ok_or_else(|| {
                 format!(
                     "provider run '{}' context generation overflowed",
@@ -370,6 +381,7 @@ impl ProviderOutputHandoff {
             deferred_publication,
             source_without_context: self.failed_source,
             settlement_of: None,
+            continuation_of: continuation.map(source_continuation::last_output).transpose()?,
             dispatch_fenced: true,
             withdrawal: None,
             replacement: None,

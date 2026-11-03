@@ -573,6 +573,9 @@ pub(crate) async fn handle_control_source(
     if !handoff? {
         return Ok(ControlSourceDisposition::Handled);
     }
+    broker
+        .release_late_calls_after_control(&control_id, source_movement_seq, envelope, result.continuity.as_ref())
+        .await;
     persist_control_journal(
         ctx,
         source_movement_seq,

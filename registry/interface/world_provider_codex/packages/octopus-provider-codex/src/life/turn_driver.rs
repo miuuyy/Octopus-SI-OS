@@ -106,7 +106,12 @@ pub(crate) async fn drive_turn_with_retries_inner(
             &ctx.interface_var_dir().join("emitted"),
         ).map_err(|error| error.to_string())?;
         match handoff.hand_observation(receipt, true).await? {
-            ProviderHandoffOutcome::Admitted { .. } => return Ok(()),
+            ProviderHandoffOutcome::Admitted { .. } => {
+                if let Some(wake) = control.late_call_wake() {
+                    wake.record_arrival(turn.seq, &turn.envelope);
+                }
+                return Ok(());
+            }
             ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. } => {
                 return Err(format!("duplicate tool result receipt failed: {failure_class} at {failure_seq}"));
             }

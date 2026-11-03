@@ -6358,7 +6358,7 @@ while IFS= read -r _; do :; done
                 handle: driver.client.lock().await.request_handle(), request_ids: driver.next_request_id.clone(),
                 pending_requests: driver.pending_server_requests.clone(), scope: scope.clone(), output: Arc::downgrade(&emit),
                 continuity: Some(original.clone()), handoff_barrier: barrier.clone(), effect_gate: gate.clone(), turn_interrupted: interrupted.clone(),
-                thread_id: "thread-a".into(), turn_id: "turn-a".into(),
+                thread_id: "thread-a".into(), turn_id: "turn-a".into(), late_calls: None,
             });
             if cold && with_stop { driver.restore_pending_control(&control, original.clone()).await; }
             let mut applied = if with_stop { Some(tokio::time::timeout(std::time::Duration::from_secs(3), control.apply(
@@ -6636,7 +6636,7 @@ while IFS= read -r _; do :; done
             broker.publish(CodexTurnControlTarget::Suspended { handle:AppServerRequestHandle::Remote(client.request_handle()),
                 request_ids:Arc::new(std::sync::atomic::AtomicI64::new(10)), pending_requests:requests.clone(),scope:scope.clone(),
                 output:Default::default(),continuity:Some(state.clone()),handoff_barrier:barrier.clone(),effect_gate:gate.clone(),
-                turn_interrupted:interrupted.clone(),thread_id:"thread-1".into(),turn_id:"turn-2".into() });
+                turn_interrupted:interrupted.clone(),thread_id:"thread-1".into(),turn_id:"turn-2".into(),late_calls:None });
             let mut intents=Vec::new();
             let applied=broker.apply(steer(),|intent|{intents.push(intent);Ok(())}).await.unwrap();
             assert_eq!(intents.len(),usize::from(bad.is_none()));

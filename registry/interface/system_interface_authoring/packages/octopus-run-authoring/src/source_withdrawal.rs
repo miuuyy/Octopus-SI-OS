@@ -448,7 +448,7 @@ impl ProviderOutputHandoff {
         if emission.route != ProviderEmissionRoute::ClientProjection || !self.session_snapshot_labels.contains(&label) || !self.context_output_labels.contains(&label) {
             return Err("withdrawal requires one declared client context snapshot".into());
         }
-        self.hand_rearm_batch_with_bindings(vec![emission.into()], true, &[], false, None, None, None, Some(&withdrawal), false).await?
+        self.hand_rearm_batch_with_bindings(vec![emission.into()], true, &[], false, None, None, None, Some(&withdrawal), false, false).await?
             .into_iter().next().ok_or("withdrawal returned no closure".into())
     }
 

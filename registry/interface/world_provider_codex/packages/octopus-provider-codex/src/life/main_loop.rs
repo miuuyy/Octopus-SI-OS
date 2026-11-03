@@ -135,6 +135,7 @@ pub(crate) async fn codex_life(
                 .await
                 .insert(run.as_str().to_string(), broker.clone());
             publish_main_reader_progress(&main_reader_progress, reader.next_seq());
+            let arrival = turn.clone();
             let driven = tokio::select! {
                 result = &mut control_task => {
                     broker.finish();
@@ -180,6 +181,7 @@ pub(crate) async fn codex_life(
             if broker.is_starting() {
                 broker.finish();
             }
+            record_latest_arrival(&broker, &arrival);
             if broker.is_finished() || broker.is_recovered_pending() {
                 if let Err(error) =
                     fence_control_reader(&control_fence_tx, &run, broker.source_movement_seq())
@@ -209,6 +211,35 @@ pub(crate) async fn codex_life(
         let batch = reader.read_new()?;
         publish_main_reader_progress(&main_reader_progress, reader.next_seq());
         if batch.is_empty() {
+            let mut late_arrivals = late_call_arrivals(&driver, &active_controls).await;
+            if let Some(ready) = ready_late_call(&driver, &active_controls).await {
+                let woken = tokio::select! {
+                    result = &mut control_task => {
+                        let result = flatten_control_task(result);
+                        finish_active_controls(&active_controls).await;
+                        shutdown_driver(&ctx, &mut driver).await?;
+                        return result;
+                    }
+                    _ = ctx.cancel.cancelled() => {
+                        finish_active_controls(&active_controls).await;
+                        control_task.abort();
+                        let _ = control_task.await;
+                        shutdown_driver(&ctx, &mut driver).await?;
+                        return Ok(());
+                    }
+                    result = wake_late_calls(&ctx, &descriptor, &handoff_session, &control_gates, &driver, &ready) => result,
+                };
+                if let Err(error) = woken {
+                    ready.broker.finish();
+                    remove_control_if_same(&active_controls, &ready.run, &ready.broker).await;
+                    finish_active_controls(&active_controls).await;
+                    control_task.abort();
+                    let _ = control_task.await;
+                    shutdown_driver(&ctx, &mut driver).await?;
+                    return Err(error);
+                }
+                continue;
+            }
             if let Some(deadline) = driver_idle_deadline {
                 tokio::select! {
                     result = &mut control_task => {
@@ -224,6 +255,7 @@ pub(crate) async fn codex_life(
                         shutdown_driver(&ctx, &mut driver).await?;
                         return Ok(());
                     }
+                    _ = late_call_arrival(&mut late_arrivals) => {}
                     _ = tokio::time::sleep_until(deadline) => {
                         if release_driver_if_quiescent(&ctx, &active_controls, &mut driver).await? {
                             driver_idle_deadline = None;
@@ -249,6 +281,7 @@ pub(crate) async fn codex_life(
                         shutdown_driver(&ctx, &mut driver).await?;
                         return Ok(());
                     }
+                    _ = late_call_arrival(&mut late_arrivals) => {}
                     result = reader.wait_for_change(&ctx.cancel) => result?,
                 }
             }
@@ -624,6 +657,7 @@ pub(crate) async fn codex_life(
                     (broker, true)
                 }
             };
+            let arrival = turn.clone();
             let driven = tokio::select! {
                 result = &mut control_task => {
                     broker.finish();
@@ -669,6 +703,7 @@ pub(crate) async fn codex_life(
             if created_broker && broker.is_starting() {
                 broker.finish();
             }
+            record_latest_arrival(&broker, &arrival);
             if broker.is_finished() || broker.is_recovered_pending() {
                 if let Err(error) =
                     fence_control_reader(&control_fence_tx, &run, broker.source_movement_seq())

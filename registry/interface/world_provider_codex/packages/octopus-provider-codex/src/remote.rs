@@ -135,7 +135,7 @@ enum RemoteClientCommand {
 
 pub struct RemoteAppServerClient {
     command_tx: mpsc::Sender<RemoteClientCommand>,
-    event_rx: mpsc::UnboundedReceiver<AppServerEvent>,
+    event_rx: crate::AppServerEventReceiver,
     pending_events: VecDeque<AppServerEvent>,
     server_version: Option<String>,
     codex_home: Option<String>,
@@ -196,7 +196,7 @@ impl RemoteAppServerClient {
         .await?;
 
         let (command_tx, mut command_rx) = mpsc::channel::<RemoteClientCommand>(channel_capacity);
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (event_tx, event_rx) = crate::app_server_event_channel();
         let worker_handle = tokio::spawn(async move {
             let mut pending_requests =
                 HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
@@ -594,6 +594,10 @@ impl RemoteAppServerClient {
         }
     }
 
+    pub(crate) fn event_arrivals(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.event_rx.arrivals()
+    }
+
     pub async fn shutdown(self) -> IoResult<()> {
         let Self {
             command_tx,
@@ -958,7 +962,7 @@ where
 }
 
 fn deliver_event(
-    event_tx: &mpsc::UnboundedSender<AppServerEvent>,
+    event_tx: &crate::AppServerEventSender,
     event: AppServerEvent,
 ) -> IoResult<()> {
     event_tx.send(event).map_err(|_| {
@@ -1029,7 +1033,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_tolerates_worker_exit_after_command_is_queued() {
         let (command_tx, mut command_rx) = mpsc::channel(1);
-        let (_event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (_event_tx, event_rx) = crate::app_server_event_channel();
         let worker_handle = tokio::spawn(async move {
             let _ = command_rx.recv().await;
         });
@@ -1052,7 +1056,7 @@ mod tests {
     async fn shutdown_reports_failures_after_joining_worker() {
         for failure in ["close", "panic", "response_timeout", "worker_timeout"] {
             let (command_tx, mut command_rx) = mpsc::channel(1);
-            let (_event_tx, event_rx) = mpsc::unbounded_channel();
+            let (_event_tx, event_rx) = crate::app_server_event_channel();
             let (finished_tx, mut finished_rx) = oneshot::channel::<()>();
             let worker_handle = tokio::spawn(async move {
                 let _finished = finished_tx;

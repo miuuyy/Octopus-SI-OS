@@ -773,6 +773,7 @@ fn completed_inputs<R: CheckedRunEvidenceReader + ?Sized>(
         if candidates.contains_key(&next.source_movement_seq) {
             if transition.writer != *writer { return Err("payload readiness completion changed its provider writer".into()); }
             if completed.get(&next.source_movement_seq).is_some_and(|prior|prior.terminal && !publication
+                && !(previous.as_ref() == Some(prior) && source_continuation::follows(prior, &next))
                 && !source_settlement::follows_completed_source(prior, &next) && !source_withdrawal::follows(prior, &next) && !rejected_final::follows(prior, &next)) {
                 return Err("payload readiness history repeats a completed input".into());
             }

@@ -55,6 +55,7 @@ pub(crate) enum CodexTurnControlTarget {
         turn_interrupted: Arc<std::sync::atomic::AtomicBool>,
         thread_id: String,
         turn_id: String,
+        late_calls: Option<Arc<LateCallWake>>,
     },
     InterruptedPending {
         output: std::sync::Weak<ProviderOutputStream>,
@@ -175,6 +176,15 @@ impl CodexTurnControlBroker {
 
     pub(crate) fn is_starting(&self) -> bool {
         matches!(*self.state.borrow(), CodexTurnControlTarget::Starting)
+    }
+
+    pub(crate) fn late_call_wake(&self) -> Option<Arc<LateCallWake>> {
+        match &*self.state.borrow() {
+            CodexTurnControlTarget::Suspended { late_calls, .. } => {
+                late_calls.clone().filter(|wake| wake.armed())
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn is_recovered_pending(&self) -> bool {
@@ -515,12 +525,16 @@ impl CodexTurnControlBroker {
                     turn_interrupted,
                     thread_id,
                     turn_id,
+                    late_calls,
                 } => {
                     let output = output.upgrade();
                     let effect_guard = effect_gate.lock_owned().await;
                     if state.has_changed().unwrap_or(true) {
                         drop(effect_guard);
                         continue;
+                    }
+                    if let Some(wake) = &late_calls {
+                        wake.hold_for_control(control.control_id());
                     }
                     let continuity = match output.as_ref() {
                         Some(output) => output.continuity_snapshot(),

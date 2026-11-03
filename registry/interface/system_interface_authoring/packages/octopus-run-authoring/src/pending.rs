@@ -36,6 +36,15 @@ pub(crate) fn persisted_pending_handoff(
                     record.id.as_str()
                 ));
             }
+            if pending.continuation_of.is_some()
+                && (!pending.terminal || pending.source_without_context || pending.settlement_of.is_some()
+                    || pending.withdrawal.is_some() || pending.replacement.is_some() || !pending.standing.is_empty())
+            {
+                return Err(format!(
+                    "provider run '{}' pending_handoff continues a source outside an ordinary terminal batch",
+                    record.id.as_str()
+                ));
+            }
             let mut artifacts = BTreeSet::new();
             let mut checkpoints = BTreeSet::new();
             for (index, item) in pending.items.iter().enumerate() {

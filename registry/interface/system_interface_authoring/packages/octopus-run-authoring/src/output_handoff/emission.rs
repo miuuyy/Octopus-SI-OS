@@ -272,7 +272,7 @@ impl ProviderOutputHandoff {
         let batch_count = batches.len();
         let mut outcomes = Vec::new();
         for (index, batch) in batches.into_iter().enumerate() {
-            let delivered = self.hand_rearm_batch_with_bindings(batch, terminal && index + 1 == batch_count, bindings, consume_input, independent_source.filter(|_| index == 0), amendment, None, None, !terminal)
+            let delivered = self.hand_rearm_batch_with_bindings(batch, terminal && index + 1 == batch_count, bindings, consume_input, independent_source.filter(|_| index == 0), amendment, None, None, !terminal, false)
                 .await?;
             let failed = delivered.iter().any(|outcome| matches!(outcome, ProviderHandoffOutcome::TerminalFailure { .. }));
             outcomes.extend(delivered);
@@ -294,10 +294,21 @@ impl ProviderOutputHandoff {
         settlement_of: Option<(&ArtifactRef, u64)>,
         withdrawal: Option<&source_withdrawal::Withdrawal>,
         standing: bool,
+        continuation: bool,
     ) -> Result<Vec<ProviderHandoffOutcome>, String> {
+        if continuation && (!terminal || !bindings.is_empty() || consume_input || independent_source.is_some()
+            || amendment.is_some() || settlement_of.is_some() || withdrawal.is_some() || standing)
+        {
+            return Err("a source continuation hands only one terminal batch of ordinary calls".into());
+        }
         let mut state = self.state.lock().await;
         let withdrawal_guard = if withdrawal.is_some() { Some(self.dispatch_ownership().await?) } else { None };
         self.reconcile_checked_run_state(&mut state).await?;
+        if continuation && (state.consumed_input || state.consumed_verified_input || state.deferred_context_generations > 0
+            || state.consumed_context_free_independent_input.is_some())
+        {
+            return Err("a source continuation requires its recovered completed source handoff".into());
+        }
         let mut active = self.clone();
         let record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
         if let Some((predecessor, _)) = settlement_of {
@@ -408,7 +419,7 @@ impl ProviderOutputHandoff {
         }
         let independent_input = additional_input.as_ref().or(state.consumed_context_free_independent_input.as_ref());
         let context_changed = next_context != state.context_artifacts;
-        let own_refresh = (consume_input && state.consumed_input) || context_changed || amendment.is_some();
+        let own_refresh = !continuation && ((consume_input && state.consumed_input) || context_changed || amendment.is_some());
         let standing_checkpoints = if standing
             && !terminal
             && bindings.is_empty()
@@ -465,19 +476,24 @@ impl ProviderOutputHandoff {
             return Ok(outcomes);
         }
         let refresh_context = own_refresh || state.deferred_context_generations > 0;
-        let standing_since_write = active.standing_items_since_write(&record)?;
-        let mut authored = active.author_run_with_generations(
-            &state.run_record_bytes,
-            &next_context,
-            &prepared,
-            refresh_context,
-            u64::from(own_refresh) + state.deferred_context_generations,
-            independent_input,
-            consume_input && state.consumed_verified_input,
-            terminal,
-            bindings,
-            standing_since_write,
-        )?;
+        let mut authored = if continuation {
+            active.author_completed_source_continuation(&state.run_record_bytes, &next_context, &prepared)?
+        } else {
+            let standing_since_write = active.standing_items_since_write(&record)?;
+            active.author_run_with_generations(
+                &state.run_record_bytes,
+                &next_context,
+                &prepared,
+                refresh_context,
+                u64::from(own_refresh) + state.deferred_context_generations,
+                independent_input,
+                consume_input && state.consumed_verified_input,
+                terminal,
+                bindings,
+                standing_since_write,
+                None,
+            )?
+        };
         if let Some(amendment) = amendment {
             let topology = capability_amendment::apply_to_authored_run(
                 &state.run_record_bytes, &mut authored, amendment, &active.config, &active.var_dir,
@@ -525,7 +541,7 @@ impl ProviderOutputHandoff {
         state.session_context = next_session_context;
         state.session_snapshot_head = next_session_snapshot_head;
         active.publish_admitted_context(&mut state).await?;
-        if refresh_context {
+        if refresh_context || continuation {
             state.context_artifacts = active.published_context_artifacts(
                 &RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?, &active.config,
             )?;

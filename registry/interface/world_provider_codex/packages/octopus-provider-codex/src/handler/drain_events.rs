@@ -1021,6 +1021,7 @@ impl CodexAppServerInterfaceDriver {
                     turn_interrupted: pending.turn_interrupted.clone(),
                     thread_id: pending.thread_id.clone(),
                     turn_id: pending.turn_id.clone(),
+                    late_calls: None,
                 });
                 if context.lifecycle.is_some() {
                     return Ok(DrainStep::Done(TurnDrainOutcome::Suspended(pending)));
@@ -1097,6 +1098,7 @@ impl CodexAppServerInterfaceDriver {
                         turn_interrupted: pending.turn_interrupted.clone(),
                         thread_id: pending.thread_id.clone(),
                         turn_id: pending.turn_id.clone(),
+                        late_calls: None,
                     });
                     return Ok(DrainStep::Done(TurnDrainOutcome::Suspended(pending)));
                 }

@@ -574,6 +574,19 @@ admission does not end the native turn. Cancellation, an expired timeout, a
 changed scope or a definitive refusal remains an explicit failure; completed
 edges are never executed again.
 
+A completed source continues only explicitly. When a provider owes further
+outputs to an arrival whose terminal batch is already handed and fully admitted,
+it reopens that source and hands another terminal batch that declares
+`continuation_of`, the last output of the batch it continues; continuations
+chain, and no new arrival or input consumption is recorded. The batch carries
+only declared calls and client projections of the same contract — no session
+snapshot, operator request, outgoing binding or capability amendment — and adds
+only the result waits of its own calls; its context outputs join the
+predecessor's publication and advance the context generation once, exactly as an
+ordinary batch of the same outputs would, while the live context stays
+untouched. A second terminal batch for a completed source without this declaration
+is still refused by checked replay and input revision.
+
 A terminal pending provider handoff with exact refusal evidence for every
 artifact is a failed source, not an unresolved native effect. Recovery uses the
 same refusal proof as failed-source settlement; an admitted edge, an unconfirmed
@@ -626,25 +639,36 @@ call. That projection cannot clear the new call's wait: its exact call evidence
 prevails until an equally new recorded continuity carrier proves a successor.
 
 A native turn may wait on several external calls at once. The provider admits
-every ordinary dynamic tool or interface-operation request that has already
-arrived while earlier calls wait, emits each as its own call artifact and
-records the whole set in its continuity, so every snapshot names exactly the
-calls still outstanding. Results settle their own call in any order. When the
-native turn has already ended while several of its calls are outstanding,
-whether the app-server completed or aborted it or the provider process died,
-each late result except the last settles only its own call: its closure carries
-the exact terminal proof, records that the result never returned to the model,
-and leaves the remaining calls outstanding. The last result settles exactly as a
-single call does: a completed or failed turn closes with its retained native
-outputs, and a turn cut by process death continues in a new turn whose context
-carries every late result. A native turn still running on a restarted provider
-with several lost requests fails closed. Native run operations, operator
-requests and lifecycle-held calls are admitted one at a time, and an operator
-hold belongs to one outstanding call. After a Stop each outstanding call closes
-with its own interrupted result and only the last observes the native terminal;
-a request issued before the interrupt was acknowledged stays buffered and is
-quarantined by that last drain. Changed tools or instructions refresh a native
-turn only once a single call remains outstanding.
+every ordinary dynamic tool or interface-operation request that arrives while
+earlier calls wait, emits each as its own call artifact and records the whole
+set in its continuity, so every snapshot names exactly the calls still
+outstanding. A request that arrives after the turn's drain suspended wakes the
+provider: it is drained through the same path, after that turn's notifications
+buffered before it, and what the drain emits continues the completed handoff of
+the turn's latest arrival in terminal batches of that source movement; no new
+arrival is recorded. The latest arrival is the input or result whose drain
+suspended, or a later steer, queued message or duplicate result whose receipt
+completed that source. The request instead waits for the next arrival while a
+control applied to the waiting turn has no handed receipt, while a movement the
+turn never saw owns the run frontier, or when a provider error notification
+precedes it. A continuation that run authoring refuses fails closed.
+Results settle their own call in any order. When the native turn has already
+ended while several of its calls are outstanding, whether the app-server
+completed or aborted it or the provider process died, each late result except
+the last settles only its own call: its closure carries the exact terminal
+proof, records that the result never returned to the model, and leaves the
+remaining calls outstanding. The last result settles exactly as a single call
+does: a completed or failed turn closes with its retained native outputs, and a
+turn cut by process death continues in a new turn whose context carries every
+late result. A native turn still running on a restarted provider with several
+lost requests fails closed. Native run operations, operator requests and
+lifecycle-held calls are admitted one at a time and wait for the next arrival,
+and an operator hold belongs to one outstanding call. After a Stop each
+outstanding call closes with its own interrupted result and only the last
+observes the native terminal; a request issued before the interrupt was
+acknowledged stays buffered and is quarantined by that last drain. Changed tools
+or instructions refresh a native turn only once a single call remains
+outstanding.
 
 The provider's explicit `reseed_from_session_context` cold-start policy rebuilds
 its private transport from the admitted session snapshot. It requires that

@@ -503,6 +503,7 @@ impl ProviderOutputHandoff {
             deferred_publication: false,
             source_without_context: self.failed_source,
             settlement_of: None,
+            continuation_of: None,
             dispatch_fenced: true,
             withdrawal: None,
             replacement: None,

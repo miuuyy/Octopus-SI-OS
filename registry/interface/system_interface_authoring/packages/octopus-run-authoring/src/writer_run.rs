@@ -1599,6 +1599,7 @@ impl ProviderOutputHandoff {
             let original_config = attempt_config(&original, &self.config)?;
             if !result_inputs::saved_definition_transition(&original, &record, &original_config)? {
                 source_settlement::validate_transition(&original, &record, &original_config)?;
+                source_continuation::validate_transition(&original, &record, &original_config)?;
                 source_withdrawal::validate_saved_attempt(&self.ctx, &before, prospective.as_bytes(), &original_config)?;
                 rejected_final::validate_saved_attempt(&self.ctx, &before, prospective.as_bytes(), &original_config)?;
             }

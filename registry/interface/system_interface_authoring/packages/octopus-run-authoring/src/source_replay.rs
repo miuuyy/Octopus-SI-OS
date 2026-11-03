@@ -97,7 +97,8 @@ impl ProviderOutputHandoff {
                     self.admitted_replay_handoff_before(prior, transition.call.seq.0)?;
                 }
                 if let Some(prior) = sources.get(&next.source_movement_seq) {
-                    if prior.terminal && !publication && !source_settlement::follows_completed_source(prior, &next) && !source_withdrawal::follows(prior, &next) && !rejected_final::follows(prior, &next) {
+                    let continued = previous.as_ref() == Some(prior) && source_continuation::follows(prior, &next);
+                    if prior.terminal && !publication && !continued && !source_settlement::follows_completed_source(prior, &next) && !source_withdrawal::follows(prior, &next) && !rejected_final::follows(prior, &next) {
                         return Err("completed input chain repeats a terminal source".into());
                     }
                     if prior.items == next.items && !publication {

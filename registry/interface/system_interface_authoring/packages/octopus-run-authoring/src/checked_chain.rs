@@ -1118,6 +1118,7 @@ pub fn validate_checked_provider_transition(transition: &CheckedRunTransition) -
     let provider = &transition.writer.owner;
     if result_inputs::definition_transition(transition)? { return Ok(()); }
     source_settlement::validate_checked_transition(&before, &after, &transition.writer)?;
+    source_continuation::validate_checked_transition(&before, &after, &transition.writer)?;
     source_withdrawal::validate_checked_transition(&before, &after, &transition.writer)?;
     let replacement_config = config_from_persisted_profile(&before, provider, &RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),

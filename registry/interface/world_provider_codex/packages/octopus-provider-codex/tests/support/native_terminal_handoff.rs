@@ -25,7 +25,16 @@ fn registry_unstable_pending_keeps_native_turn_and_delivers_exact_tool_output() 
     }).unwrap().join().unwrap();
 }
 
+#[test]
+fn late_parallel_call_continues_its_completed_source_through_run_authoring() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+            .block_on(native_terminal_handoff_cases(Some(27)));
+    }).unwrap().join().unwrap();
+}
+
 include!("retained_native_delivery.rs");
+include!("late_call_continuation.rs");
 
 async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     use octopus_interfaces::DeliveryVerdict;
@@ -193,7 +202,16 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                             continue;
                         }
                     }
+                    let marked=(phase==27).then(||row.clone());
                     let seq=append(&gate_ctx,row);
+                    for (requirement,mut mark_row) in marked.into_iter().flat_map(|row|cp.required_verified_artifacts.iter().map(move |requirement|(requirement,row.clone()))) {
+                        let mark=octopus_interfaces::Mark::passed(requirement.mark.clone(),cp.id.clone(),current_record.id.clone(),cp.epoch.0,
+                            mark_row.artifact.clone().unwrap(),requirement.verifier.clone(),octopus_ledger::VerifierPackagePin {
+                                descriptor_content:ContentHash::of_bytes(b"descriptor"),script_content:ContentHash::of_bytes(b"script"),
+                            },json!({}));
+                        mark_row.kind=MovementKind::MarkOutcomeAdmitted(requirement.mark.clone());mark_row.invocation_metadata=Some(mark.into());
+                        append(&gate_ctx,mark_row);
+                    }
                     let payload:serde_json::Value=serde_json::from_slice(&incoming.artifact.read_payload_bytes().unwrap()).unwrap_or(json!({}));
                     if let Some(continuity)=payload.get("codex_continuity") {
                         let persisted=&current_record.interface_state[&gate_ctx.interface]["context_generation"];
@@ -308,6 +326,95 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         assert_eq!(std::fs::read(&run_path).unwrap(),selected);assert_eq!(std::fs::read(&ctx.movements_path).unwrap(),ledger);assert!(receiver.try_recv().is_err());
     }
     std::fs::rename(hidden,path).unwrap();
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn late_call_case(
+        ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,run:&RunId,
+        record:&RunRecord,initial:&[u8],worker:&str,authoring_id:&InterfaceId,listener:&tokio::net::UnixListener,
+        receiver:&mut tokio::sync::mpsc::Receiver<octopus_interface_transport::InterfaceActivationArrival>,
+    ) {
+    let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id)
+        && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.message")).unwrap();
+    let file=artifact(&root.join("late-input"),"operator.message",json!({"text":"look up a and b","message_id":"late-input"}));
+    let row=edge(ctx,initial,cp,&file,MovementKind::InterfaceOutbound,descriptor.id.clone());
+    let input=source_envelope(ctx,root,&row,file);let source_seq=append(ctx,row);
+    let template=record.interface_state[&descriptor.id]["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter()
+        .find(|template|template["role"]=="provider_tool_output").unwrap();
+    let tool=template["required_verified_artifacts"][0]["params"]["tools"][0].as_str().unwrap().to_string();
+    let native=late_call_native_turn(root,descriptor).await;
+    let session=ProviderHandoffSession::new(ctx).unwrap();
+    let handoff=session.from_invocation(ctx,descriptor,run,&input,source_seq,initial).unwrap();
+    let broker=CodexTurnControlBroker::new(Some(source_seq));
+    let (stream,emissions)=ProviderOutputStream::channel();
+    let (terminal_tx,terminal_rx)=tokio::sync::oneshot::channel();
+    let forward=forward_provider_emissions(EmissionForwarding {
+        ctx,descriptor,control:&broker,handoff,interrupted_effects:InterruptedEffectArbiter::new(ctx.clone()),
+        durable_interrupted_continuity:None,native_terminal_source:None,source_envelope:input.clone(),run:run.clone(),
+        source_artifact:input.artifact.clone(),result_source_movement_seq:source_seq,resolving_interrupted_result:false,
+    },emissions,terminal_rx);
+    let drain=late_call_first_drain(root,descriptor,record,&input,source_seq,&broker,&native.driver,&tool,stream,terminal_tx);
+    let gate=pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,1,true,27,true);
+    let forwarded=tokio::time::timeout(std::time::Duration::from_secs(10),async {
+        tokio::select! {
+            (_,forwarded)=async{tokio::join!(drain,forward)} => forwarded,
+            _=gate => panic!("authoring gate ended before the suspending arrival was handed"),
+        }
+    }).await.unwrap();
+    assert_eq!(forwarded.unwrap().outputs,1);
+    let completed:serde_json::Value=serde_json::from_slice(&std::fs::read(run_path).unwrap()).unwrap();
+    let completed=completed["interface_state"][descriptor.id.as_str()]["pending_handoff"].clone();
+    assert_eq!((completed["source_movement_seq"].clone(),completed["terminal"].clone()),(json!(source_seq),json!(true)));
+    assert_eq!(completed["items"].as_array().unwrap().iter().map(|item|item["artifact_label"].as_str().unwrap()).collect::<Vec<_>>(),["tool.call"]);
+    use octopus_run_authoring::{RunAuthoringProfile,declared_provider_run_writer};
+    let profile:RunAuthoringProfile=serde_json::from_value(descriptor.interface_driver_config.as_ref().unwrap().private_config["run_authoring_profile"].clone()).unwrap();
+    let writer=declared_provider_run_writer(record,&descriptor.id,&profile).unwrap();
+    let arrivals_to_provider=|| std::fs::read_to_string(&ctx.movements_path).unwrap().lines()
+        .map(|line|serde_json::from_str::<Movement>(line).unwrap())
+        .filter(|row|row.kind==MovementKind::InterfaceOutbound && row.to==Endpoint::Interface(descriptor.id.clone())
+            && row.from!=Endpoint::Interface(writer.door.clone())).count();
+    let arrivals_before=arrivals_to_provider();
+    let wake=broker.late_call_wake().expect("an ordinary outstanding call leaves a wakeable suspension");
+    record_latest_arrival(&broker,&QueuedTurn{envelope:input.clone(),seq:source_seq});
+    let mut events=native.driver.event_arrivals().await;
+    native.late.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5),async {
+        while !native.driver.late_call_ready(&wake).await { events.changed().await.unwrap(); }
+    }).await.unwrap();
+    let ready=ReadyLateCall{run:run.clone(),broker:broker.clone(),wake};
+    let gates=Default::default();
+    let driver=Some(native.driver.clone());
+    let woken=wake_late_calls(ctx,descriptor,&session,&gates,&driver,&ready);
+    let gate=pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,1,true,27,true);
+    tokio::time::timeout(std::time::Duration::from_secs(10),async {
+        tokio::select! {
+            woken=woken => woken.unwrap(),
+            _=gate => panic!("authoring gate ended before the late call was handed"),
+        }
+    }).await.unwrap();
+    assert_eq!(arrivals_to_provider(),arrivals_before,"the late call is emitted without a new provider arrival");
+    let after=std::fs::read(run_path).unwrap();let current=RunRecord::from_bytes(&after).unwrap();
+    let pending=&current.interface_state[&descriptor.id]["pending_handoff"];
+    assert_eq!((pending["source_movement_seq"].clone(),pending["terminal"].clone()),(json!(source_seq),json!(true)));
+    assert_eq!(pending["continuation_of"]["id"],completed["items"][0]["artifact_id"]);
+    assert_eq!(pending["items"].as_array().unwrap().iter().map(|item|item["artifact_label"].as_str().unwrap()).collect::<Vec<_>>(),["tool.call"]);
+    let call=InterfaceArtifactFile::new(ctx.interface_var_dir().join(pending["items"][0]["manifest_relative_path"].as_str().unwrap())).unwrap();
+    let call:serde_json::Value=serde_json::from_slice(&call.read_payload_bytes().unwrap()).unwrap();
+    let outstanding=serde_json::from_value::<crate::handler::CodexContinuityState>(call["codex_continuity"].clone()).unwrap()
+        .outstanding().map(|pending|serde_json::to_value(pending).unwrap()["call_id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(outstanding,["call-a","call-b"]);
+    let cp=current.checkpoints.iter().find(|cp|current.active_checkpoints.contains(&cp.id)
+        && cp.inbound_interface()==Some(&InterfaceId::new(worker)) && cp.outbound_interfaces().any(|id|id==&descriptor.id)).unwrap();
+    let label=format!("{tool}.result");
+    let result=artifact(&root.join("late-result"),&label,json!({"label":label,"tool":tool,"correlation_id":"call-a","ok":true,"body":{}}));
+    let row=edge(ctx,&after,cp,&result,MovementKind::InterfaceOutbound,descriptor.id.clone());
+    let result_input=source_envelope(ctx,root,&row,result);let result_seq=append(ctx,row);
+    let next=ProviderHandoffSession::new(ctx).unwrap().from_invocation(ctx,descriptor,run,&result_input,result_seq,&after).unwrap();
+    assert_eq!(next.completed_input_artifact_source(&result_input.artifact).await.unwrap(),None);
+    assert_eq!(next.recover_source().await.unwrap(),ProviderSourceRecovery::Process);
+    drop((driver,ready,next));
+    let live=native.driver;
+    std::sync::Arc::try_unwrap(live).ok().expect("the woken driver is no longer shared").shutdown().await.unwrap();
+    native.server.await.unwrap();
     }
     async fn source_with_snapshot(
         ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,run:&RunId,
@@ -932,7 +1039,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         std::fs::create_dir_all(plan.run_write.path.parent().unwrap()).unwrap(); std::fs::write(&plan.run_write.path,&initial).unwrap();
         let mut descriptor:InterfaceDescriptor=serde_json::from_slice(&std::fs::read(root.join("registry/interface").join(&plan.provider_interface_id).join("interface.json")).unwrap()).unwrap();
         let canonical=super::tests::descriptor();
-        if settlement_phase == Some(26) {
+        if matches!(settlement_phase, Some(26 | 27)) {
             descriptor.interface_driver_ref = canonical.interface_driver_ref.clone();
             for (key, value) in &canonical.interface_driver_config.as_ref().unwrap().private_config {
                 descriptor.interface_driver_config.as_mut().unwrap().private_config.entry(key.clone()).or_insert_with(|| value.clone());
@@ -1084,6 +1191,10 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             let recovered=recover_provider_result_continuity(&descriptor,&input,next.invocation_session_snapshot().as_ref(),&next.current_session_context_artifacts().await,&run,&after).unwrap().unwrap();
             assert_eq!(serde_json::to_value(recovered).unwrap(),state);
             assert!(receiver.try_recv().is_err());return;
+        }
+        if settlement_phase==Some(27) {
+            late_call_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&plan.worker_interface_id,&authoring_id,&listener,&mut receiver).await;
+            return;
         }
         if let Some(phase)=settlement_phase {
             settlement_case(&ctx,root,&plan.run_write.path,&plan.worker_interface_id,&descriptor,&run,&record,

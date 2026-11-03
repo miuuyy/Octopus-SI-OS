@@ -413,6 +413,8 @@ struct PendingHandoff {
     source_without_context: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settlement_of: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    continuation_of: Option<ArtifactRef>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     dispatch_fenced: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -455,6 +457,7 @@ pub use writer_run::{separate_writer_run, separate_owner_writer_run, owner_write
 mod source_replay;
 mod source_settlement;
 pub use source_settlement::PendingSourceSettlement;
+mod source_continuation;
 mod source_withdrawal;
 pub use source_withdrawal::{PendingSourceIntent, PendingSourceWithdrawal};
 mod settled_definition;

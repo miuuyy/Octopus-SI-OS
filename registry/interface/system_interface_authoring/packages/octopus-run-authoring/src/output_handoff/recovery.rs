@@ -236,6 +236,7 @@ impl ProviderOutputHandoff {
                     || (prior.source_movement_seq == self.source_movement_seq && prior.terminal
                         && !context_publication::is_publication_completion(&prior, &attempt.authored.pending_handoff)
                         && !source_settlement::follows_completed_source(&prior, &attempt.authored.pending_handoff)
+                        && !source_continuation::follows(&prior, &attempt.authored.pending_handoff)
                         && !source_withdrawal::follows(&prior, &attempt.authored.pending_handoff))
                 {
                     return Err(format!(

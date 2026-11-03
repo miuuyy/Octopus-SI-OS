@@ -75,7 +75,7 @@ enum SpawnClientCommand {
 
 pub struct SpawnAppServerClient {
     command_tx: mpsc::Sender<SpawnClientCommand>,
-    event_rx: mpsc::UnboundedReceiver<AppServerEvent>,
+    event_rx: crate::AppServerEventReceiver,
     pending_events: VecDeque<AppServerEvent>,
     server_version: Option<String>,
     compatibility: Option<crate::CodexCompatibilityEvidence>,
@@ -148,7 +148,7 @@ impl SpawnAppServerClient {
         .await?;
 
         let (command_tx, mut command_rx) = mpsc::channel::<SpawnClientCommand>(channel_capacity);
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (event_tx, event_rx) = crate::app_server_event_channel();
         let worker_handle = tokio::spawn(async move {
             let mut child = child;
             let mut pending_requests =
@@ -487,6 +487,10 @@ impl SpawnAppServerClient {
         }
     }
 
+    pub(crate) fn event_arrivals(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.event_rx.arrivals()
+    }
+
     pub async fn shutdown(self) -> IoResult<()> {
         let Self {
             command_tx,
@@ -770,7 +774,7 @@ async fn write_jsonrpc_line(
 }
 
 fn deliver_event(
-    event_tx: &mpsc::UnboundedSender<AppServerEvent>,
+    event_tx: &crate::AppServerEventSender,
     event: AppServerEvent,
 ) -> IoResult<()> {
     event_tx.send(event).map_err(|_| {

@@ -89,6 +89,52 @@ impl AppServerEvent {
     }
 }
 
+pub(crate) struct AppServerEventSender {
+    events: tokio::sync::mpsc::UnboundedSender<AppServerEvent>,
+    arrivals: std::sync::Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+pub(crate) struct AppServerEventReceiver {
+    events: tokio::sync::mpsc::UnboundedReceiver<AppServerEvent>,
+    arrivals: std::sync::Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+pub(crate) fn app_server_event_channel() -> (AppServerEventSender, AppServerEventReceiver) {
+    let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let arrivals = std::sync::Arc::new(tokio::sync::watch::Sender::new(0));
+    (
+        AppServerEventSender { events, arrivals: arrivals.clone() },
+        AppServerEventReceiver { events: receiver, arrivals },
+    )
+}
+
+impl AppServerEventSender {
+    pub(crate) fn send(
+        &self,
+        event: AppServerEvent,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<AppServerEvent>> {
+        self.events.send(event)?;
+        self.arrivals.send_modify(|count| *count = count.wrapping_add(1));
+        Ok(())
+    }
+}
+
+impl AppServerEventReceiver {
+    pub(crate) async fn recv(&mut self) -> Option<AppServerEvent> {
+        self.events.recv().await
+    }
+
+    pub(crate) fn try_recv(
+        &mut self,
+    ) -> Result<AppServerEvent, tokio::sync::mpsc::error::TryRecvError> {
+        self.events.try_recv()
+    }
+
+    pub(crate) fn arrivals(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.arrivals.subscribe()
+    }
+}
+
 #[derive(Debug)]
 pub enum TypedRequestError {
     Transport {
@@ -288,6 +334,13 @@ impl AppServerClient {
         match self {
             Self::Remote(client) => client.restore_ready_events(events),
             Self::Spawn(client) => client.restore_ready_events(events),
+        }
+    }
+
+    pub(crate) fn event_arrivals(&self) -> tokio::sync::watch::Receiver<u64> {
+        match self {
+            Self::Remote(client) => client.event_arrivals(),
+            Self::Spawn(client) => client.event_arrivals(),
         }
     }
 
