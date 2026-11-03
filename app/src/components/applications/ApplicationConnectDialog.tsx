@@ -277,7 +277,7 @@ function ConnectDialogContent({
       />
       {header}
       <div className="relative grid min-h-0 flex-1 overflow-hidden">
-        <div className="min-h-0 overflow-y-auto">
+        <div className="vertical-scroll-fade-mask min-h-0 overflow-y-auto [--edge-fade-distance:1rem]">
           {phase === "success" ? (
             <div className="flex flex-col gap-2">
               <div className="text-sm font-medium text-default select-none">Use {name} in</div>

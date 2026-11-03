@@ -10,6 +10,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type {
   OctopusApplicationConnectionState,
   OctopusApplicationLifecycleProgress,
@@ -36,16 +37,19 @@ import {
 } from "../projectionClient";
 import { useProjectionStructureGeneration } from "../projectionLive";
 import {
+  OcAnimatedActionSlot,
   OcButton,
   OcEmptyState,
   OcIconButton,
   OcInlineProgress,
+  OcMenuItem,
   OcSearchField,
   OcSegmented,
   OcStatus,
   OcSwitch,
   cx,
 } from "../design-system/components";
+import { OcDropdown } from "../design-system/OcDropdown";
 import { ApplicationAvailabilityList, type ApplicationAvailabilityChange } from "./applications/ApplicationAvailability";
 import { ApplicationConnectDialog, type ApplicationConnectMode } from "./applications/ApplicationConnectDialog";
 import { ApplicationConnectionControl } from "./applications/ApplicationConnectionControl";
@@ -138,17 +142,22 @@ type ApplicationLifecycleOperation = {
   percent: number;
   error: string;
   settlesAfterRead: number | null;
+  presentation: ApplicationRecord;
 };
 
-type ApplicationPackLifecycleOperation = Omit<ApplicationLifecycleOperation, "operation" | "settlesAfterRead"> & {
+type ApplicationPackLifecycleOperation = Omit<ApplicationLifecycleOperation, "operation" | "settlesAfterRead" | "presentation"> & {
   operation: "install";
   packageIds: string[];
   settlesAfterRead: { applications: number; packs: number } | null;
+  presentation: { pack: ApplicationPackRecord; applications: ApplicationRecord[] };
 };
 
 type ApplicationCatalogView = "browse" | "manage";
 
 const CATEGORY_ORDER: ApplicationCategory[] = ["provider", "connector", "plugin", "artifact"];
+const INSTALL_LOCKED = "Another installation is in progress.";
+const PAGE_LAYOUT_TRANSITION = { type: "spring", duration: 0.5, bounce: 0.1 } as const;
+const INSTALLED_SECTIONS_TRANSITION = { duration: 0.24, ease: [0.2, 0, 0, 1] } as const;
 const SHA256_DIGEST = /^[a-f0-9]{64}$/;
 const CATEGORY_COPY: Record<ApplicationCategory, { title: string; description: string }> = {
   provider: { title: "AI Providers", description: "Models for Home and tasks. Each provider connects through its own sign-in, API key, or local service." },
@@ -165,6 +174,7 @@ export function ApplicationsView({
   searchFocusTick: number;
 }) {
   const generation = useProjectionStructureGeneration();
+  const reducedMotion = useReducedMotion();
   const extensionRegistry = useClientExtensions(accessProfile);
   const extensionIncidents = useSyncExternalStore(
     subscribeClientExtensionIncidents,
@@ -178,8 +188,8 @@ export function ApplicationsView({
   const browsePackRefs = useRef(new Map<string, HTMLElement>());
   const manageCardRefs = useRef(new Map<string, HTMLElement>());
   const detailOriginRef = useRef<HTMLElement | null>(null);
-  const [applications, setApplications] = useState<ApplicationRecord[]>([]);
-  const [applicationPacks, setApplicationPacks] = useState<ApplicationPackRecord[]>([]);
+  const [projectedApplications, setApplications] = useState<ApplicationRecord[]>([]);
+  const [projectedPacks, setApplicationPacks] = useState<ApplicationPackRecord[]>([]);
   const [projects, setProjects] = useState<ApplicationProject[]>([]);
   const [rootEeId, setRootEeId] = useState("");
   const [loadedProfile, setLoadedProfile] = useState<OctopusClientAccessProfile | null>(null);
@@ -210,13 +220,27 @@ export function ApplicationsView({
   const [installReviewId, setInstallReviewId] = useState("");
   const [lifecycleOperations, setLifecycleOperations] = useState<Record<string, ApplicationLifecycleOperation>>({});
   const [packLifecycleOperations, setPackLifecycleOperations] = useState<Record<string, ApplicationPackLifecycleOperation>>({});
+  const applications = useMemo(
+    () => presentApplications(projectedApplications, lifecycleOperations, packLifecycleOperations),
+    [lifecycleOperations, packLifecycleOperations, projectedApplications],
+  );
+  const applicationPacks = useMemo(() => projectedPacks.map((pack) => {
+    const operation = packLifecycleOperations[pack.id];
+    return operation && lifecycleBusy(operation) ? operation.presentation.pack : pack;
+  }), [packLifecycleOperations, projectedPacks]);
+  const installLocked = Object.values(lifecycleOperations).some((operation) => operation.operation !== "remove" && lifecycleBusy(operation))
+    || Object.values(packLifecycleOperations).some(lifecycleBusy);
+  const operationActive = installLocked || Object.values(lifecycleOperations).some(lifecycleBusy);
+  const [heldErrors, setHeldErrors] = useState({ application: "", pack: "" });
+  const shownError = operationActive ? heldErrors.application : error;
+  const shownPackError = operationActive ? heldErrors.pack : packError;
+  useAppErrorToast(shownError || shownPackError || clientSetupError);
   const applicationsReadSequence = useRef(0);
   const applicationsReadLanded = useRef(0);
   const packsReadSequence = useRef(0);
   const packsReadLanded = useRef(0);
   const loaded = loadedProfile === accessProfile;
   const packsLoaded = packsLoadedProfile === accessProfile;
-  useAppErrorToast(error || packError || clientSetupError);
 
   useEffect(() => {
     if (!hasProjectionBridge()) {
@@ -453,7 +477,7 @@ export function ApplicationsView({
       lifecycleBusy(operation) && operation.packageIds.includes(application.package_id)
     ));
     return pack
-      ? { operationId: pack.operationId, operation: pack.operation, phase: pack.phase, percent: pack.percent, error: "", settlesAfterRead: null }
+      ? { operationId: pack.operationId, operation: pack.operation, phase: pack.phase, percent: pack.percent, error: "", settlesAfterRead: null, presentation: application }
       : own;
   }
 
@@ -660,11 +684,12 @@ export function ApplicationsView({
   }
 
   async function installApplication(application: ApplicationRecord) {
-    if (accessProfile !== "live" || application.installed || !application.source_digest || application.install_block_reason || lifecycleBusy(lifecycleOf(application))) return;
+    if (accessProfile !== "live" || installLocked || application.installed || !application.source_digest || application.install_block_reason || lifecycleBusy(lifecycleOf(application))) return;
     const operationId = crypto.randomUUID();
+    if (!operationActive) setHeldErrors({ application: error, pack: packError });
     setLifecycleOperations((current) => ({
       ...current,
-      [application.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
+      [application.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", settlesAfterRead: null, presentation: application },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -675,7 +700,7 @@ export function ApplicationsView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [application.id]: { operationId, operation: "install", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current },
+        [application.id]: { operationId, operation: "install", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current, presentation: application },
       }));
       setReloadTick((current) => current + 1);
     } catch (failure) {
@@ -688,6 +713,7 @@ export function ApplicationsView({
           percent: current[application.id]?.percent ?? 0,
           error: formatProjectionError(failure),
           settlesAfterRead: null,
+          presentation: application,
         },
       }));
     }
@@ -695,11 +721,12 @@ export function ApplicationsView({
 
   async function repairApplication(application: ApplicationRecord) {
     const expectation = applicationRepairExpectation(application);
-    if (accessProfile !== "live" || !expectation || lifecycleBusy(lifecycleOf(application))) return;
+    if (accessProfile !== "live" || installLocked || !expectation || lifecycleBusy(lifecycleOf(application))) return;
     const operationId = crypto.randomUUID();
+    if (!operationActive) setHeldErrors({ application: error, pack: packError });
     setLifecycleOperations((current) => ({
       ...current,
-      [application.id]: { operationId, operation: "repair", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
+      [application.id]: { operationId, operation: "repair", phase: "preflight", percent: 0, error: "", settlesAfterRead: null, presentation: application },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -710,7 +737,7 @@ export function ApplicationsView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [application.id]: { operationId, operation: "repair", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current },
+        [application.id]: { operationId, operation: "repair", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current, presentation: application },
       }));
       setReloadTick((current) => current + 1);
     } catch (failure) {
@@ -723,6 +750,7 @@ export function ApplicationsView({
           percent: current[application.id]?.percent ?? 0,
           error: formatProjectionError(failure),
           settlesAfterRead: null,
+          presentation: application,
         },
       }));
     }
@@ -738,10 +766,11 @@ export function ApplicationsView({
   async function removeInstalledApplication(application: ApplicationRecord) {
     if (accessProfile !== "live" || !application.installed || !application.installed_digest || !application.removal_allowed || lifecycleBusy(lifecycleOf(application))) return;
     const operationId = crypto.randomUUID();
+    if (!operationActive) setHeldErrors({ application: error, pack: packError });
     setRemoveId("");
     setLifecycleOperations((current) => ({
       ...current,
-      [application.id]: { operationId, operation: "remove", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
+      [application.id]: { operationId, operation: "remove", phase: "preflight", percent: 0, error: "", settlesAfterRead: null, presentation: application },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -752,7 +781,7 @@ export function ApplicationsView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [application.id]: { operationId, operation: "remove", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current },
+        [application.id]: { operationId, operation: "remove", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current, presentation: application },
       }));
       if (selectedId === application.id) closeApplication();
       setReloadTick((current) => current + 1);
@@ -766,6 +795,7 @@ export function ApplicationsView({
           percent: current[application.id]?.percent ?? 0,
           error: formatProjectionError(failure),
           settlesAfterRead: null,
+          presentation: application,
         },
       }));
     }
@@ -773,8 +803,9 @@ export function ApplicationsView({
 
   async function applyApplicationPack(pack: ApplicationPackRecord) {
     const selectedRecommended = selectedPackRecommendations(pack, packRecommendedSelections[pack.id]);
-    if (accessProfile !== "live" || applicationPackInstallBlockReason(pack, selectedRecommended) || lifecycleBusy(packLifecycleOperations[pack.id])) return;
+    if (accessProfile !== "live" || installLocked || applicationPackInstallBlockReason(pack, selectedRecommended) || lifecycleBusy(packLifecycleOperations[pack.id])) return;
     const operationId = crypto.randomUUID();
+    if (!operationActive) setHeldErrors({ application: error, pack: packError });
     const packageIds = pack.components.flatMap((component) => (
       component.selection === "included" || selectedRecommended.includes(component.package_id)
         ? [component.package_id]
@@ -785,9 +816,10 @@ export function ApplicationsView({
       if (!component?.source_digest) throw new Error(`${pack.name} has an unavailable component.`);
       return [packageId, component.source_digest];
     }));
+    const presentation = { pack, applications: applications.filter((application) => packageIds.includes(application.package_id)) };
     setPackLifecycleOperations((current) => ({
       ...current,
-      [pack.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", packageIds, settlesAfterRead: null },
+      [pack.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", packageIds, settlesAfterRead: null, presentation },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -807,6 +839,7 @@ export function ApplicationsView({
           error: "",
           packageIds,
           settlesAfterRead: { applications: applicationsReadSequence.current, packs: packsReadSequence.current },
+          presentation,
         },
       }));
       setReloadTick((current) => current + 1);
@@ -821,6 +854,7 @@ export function ApplicationsView({
           error: formatProjectionError(failure),
           packageIds,
           settlesAfterRead: null,
+          presentation,
         },
       }));
     }
@@ -874,7 +908,7 @@ export function ApplicationsView({
                       </div>
                     </>
                   ) : null}
-                  <div className={cx("mx-auto flex min-h-0 w-full max-w-[var(--thread-content-max-width)] flex-1 flex-col px-panel pb-panel", catalogView === "manage" ? "gap-3 pt-panel" : "gap-8 pt-5")}>
+                  <motion.div className={cx("mx-auto flex min-h-0 w-full max-w-[var(--thread-content-max-width)] flex-1 flex-col px-panel pb-panel", catalogView === "manage" ? "gap-3 pt-panel" : "gap-8 pt-5")} layout="position" transition={reducedMotion ? { duration: 0 } : PAGE_LAYOUT_TRANSITION}>
                     {catalogView === "manage" ? (
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <OcSegmented label="Manage applications" onChange={(category) => {
@@ -892,10 +926,10 @@ export function ApplicationsView({
                         </div>
                       </div>
                     ) : null}
-                    {loaded && error && applications.length ? <ApplicationProjectionIssue detail={error} /> : null}
-                    {packsLoaded && packError && applicationPacks.length ? <ApplicationProjectionIssue detail={packError} /> : null}
-                    {error && applications.length === 0 && (catalogView === "manage" || packError && applicationPacks.length === 0) ? (
-                      <SurfaceState compact title="Applications could not be projected" detail={[error, packError].filter(Boolean).join("\n")} actionLabel="Retry" onAction={() => setReloadTick((current) => current + 1)} />
+                    {loaded && shownError && applications.length ? <ApplicationProjectionIssue detail={shownError} /> : null}
+                    {packsLoaded && shownPackError && applicationPacks.length ? <ApplicationProjectionIssue detail={shownPackError} /> : null}
+                    {shownError && applications.length === 0 && (catalogView === "manage" || shownPackError && applicationPacks.length === 0) ? (
+                      <SurfaceState compact title="Applications could not be projected" detail={[shownError, shownPackError].filter(Boolean).join("\n")} actionLabel="Retry" onAction={() => setReloadTick((current) => current + 1)} />
                     ) : applications.length === 0 && (catalogView === "manage" || applicationPacks.length === 0) ? (
                       <SurfaceState compact title="No application packages found" detail="No verified source or installed interface package is available." actionLabel="Refresh catalog" onAction={() => setReloadTick((current) => current + 1)} />
                     ) : (catalogView === "browse" && visible.length === 0 && visiblePacks.length === 0) || (catalogView === "manage" && manageApplications.length === 0 && manageNeedle) ? (
@@ -903,7 +937,7 @@ export function ApplicationsView({
                     ) : catalogView === "manage" ? (
                       <>
                         {manageApplications.length ? (
-                          <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} connectionFor={connectionActions} highlightedId={highlightedId} lifecycleFor={lifecycleOf} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} setupStatusByInterface={setupStatusByInterface} />
+                          <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} connectionFor={connectionActions} highlightedId={highlightedId} installLocked={installLocked} lifecycleFor={lifecycleOf} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} setupStatusByInterface={setupStatusByInterface} />
                         ) : <SurfaceState compact title={`No ${CATEGORY_COPY[manageCategory].title.toLowerCase()} found`} />}
                       </>
                     ) : (
@@ -920,6 +954,7 @@ export function ApplicationsView({
                                 clientSetup={clientSetup}
                                 clientSetupError={clientSetupError}
                                 highlighted={highlightedId === applicationPackKey(pack.id)}
+                                installLocked={installLocked}
                                 lifecycle={packLifecycleOperations[pack.id]}
                                 onApply={() => void applyApplicationPack(pack)}
                                 onOpen={() => openApplicationPack(pack.id)}
@@ -956,7 +991,7 @@ export function ApplicationsView({
                             items={rows}
                             key={category}
                             renderCard={(application) => (
-                              <ApplicationCard accessProfile={accessProfile} application={application} connection={connectionActions(application)} highlighted={highlightedId === application.id} lifecycle={lifecycleOf(application)} onInstall={() => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "browse")} onRemove={() => setRemoveId(application.id)} setRef={(node) => {
+                              <ApplicationCard accessProfile={accessProfile} application={application} connection={connectionActions(application)} highlighted={highlightedId === application.id} installLocked={installLocked} lifecycle={lifecycleOf(application)} onInstall={() => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "browse")} onRemove={() => setRemoveId(application.id)} setRef={(node) => {
                                 if (node) browseCardRefs.current.set(application.id, node);
                                 else browseCardRefs.current.delete(application.id);
                               }} setupStatus={applicationSetupStatus(application, setupStatusByInterface)} />
@@ -969,7 +1004,7 @@ export function ApplicationsView({
                         ))}
                       </>
                     )}
-                  </div>
+                  </motion.div>
                 </div>
               </div>
             </section>}
@@ -983,6 +1018,7 @@ export function ApplicationsView({
                 extensionById={extensionById}
                 clientSetup={clientSetup}
                 clientSetupError={clientSetupError}
+                installLocked={installLocked}
                 lifecycle={packLifecycleOperations[selectedPack.id]}
                 onApply={() => void applyApplicationPack(selectedPack)}
                 onBack={closeApplicationPack}
@@ -1001,6 +1037,7 @@ export function ApplicationsView({
                 availabilitySavingEeId={availabilitySaving?.applicationId === selected.id ? availabilitySaving.eeId : ""}
                 configurationSaving={configurationSaving === selected.id}
                 connection={connectionActions(selected)}
+                installLocked={installLocked}
                 lifecycle={lifecycleOf(selected)}
                 onAvailabilityChange={(state, next) => void changeAvailability(selected, state, next)}
                 onBack={closeApplication}
@@ -1048,11 +1085,12 @@ export function ApplicationsView({
   );
 }
 
-function ApplicationPackCard({ accessProfile, clientSetup, clientSetupError, highlighted, lifecycle, onApply, onOpen, pack, setRef, setupStatus }: {
+function ApplicationPackCard({ accessProfile, clientSetup, clientSetupError, highlighted, installLocked, lifecycle, onApply, onOpen, pack, setRef, setupStatus }: {
   accessProfile: OctopusClientAccessProfile;
   clientSetup: OctopusClientSetupState | null;
   clientSetupError: string;
   highlighted: boolean;
+  installLocked: boolean;
   lifecycle?: ApplicationPackLifecycleOperation;
   onApply: () => void;
   onOpen: () => void;
@@ -1092,19 +1130,19 @@ function ApplicationPackCard({ accessProfile, clientSetup, clientSetupError, hig
           <ApplicationPackFactBadges clientSetup={clientSetup} clientSetupError={clientSetupError} compact pack={pack} setupStatus={setupStatus} />
         </span>
       </button>
-      {needsApply ? (
+      {busy && lifecycle ? <ApplicationLifecycleButton operation={lifecycle} variant="ghost" /> : needsApply ? (
         <div className="flex shrink-0 flex-col items-end gap-1">
           <OcButton
-            disabled={Boolean(busy) || accessProfile !== "live" || Boolean(blockReason)}
+            disabled={accessProfile !== "live" || installLocked || Boolean(blockReason)}
             onClick={(event) => {
               event.stopPropagation();
               onApply();
             }}
-            size="xs"
-            title={accessProfile !== "live" ? "Apply packs from the Administrator profile." : blockReason || `Apply ${pack.name}`}
-            variant="secondary"
+            size="sm"
+            title={accessProfile !== "live" ? "Apply packs from the Administrator profile." : blockReason || (installLocked ? INSTALL_LOCKED : `Apply ${pack.name}`)}
+            variant="outline"
           >
-            {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : actionLabel}
+            {actionLabel}
           </OcButton>
           {lifecycle?.phase === "failed" ? <span className="max-w-48 truncate text-xs text-token-error-foreground">Install failed</span> : null}
         </div>
@@ -1113,11 +1151,12 @@ function ApplicationPackCard({ accessProfile, clientSetup, clientSetupError, hig
   );
 }
 
-function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, extensionById, lifecycle, onApply, onBack, onRecommendedChange, pack, selectedRecommended, setupStatus }: {
+function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, extensionById, installLocked, lifecycle, onApply, onBack, onRecommendedChange, pack, selectedRecommended, setupStatus }: {
   accessProfile: OctopusClientAccessProfile;
   clientSetup: OctopusClientSetupState | null;
   clientSetupError: string;
   extensionById: Map<string, ClientExtensionRecord>;
+  installLocked: boolean;
   lifecycle?: ApplicationPackLifecycleOperation;
   onApply: () => void;
   onBack: () => void;
@@ -1157,8 +1196,8 @@ function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, e
           <span className="truncate text-token-foreground">{pack.name}</span>
         </button>
       </header>
-      <div className="plugins-surface-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="flex min-h-full flex-col px-toolbar pt-panel pb-panel">
+      <div className="plugins-surface-scroll vertical-scroll-fade-mask relative min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto [--edge-fade-distance:1rem] [scrollbar-gutter:stable]">
+        <div className="mx-auto flex min-h-full w-full max-w-[var(--thread-content-max-width)] flex-col px-toolbar pt-panel pb-panel">
           <div className="@container mx-auto flex w-full max-w-[var(--thread-content-max-width)] flex-col gap-[var(--detail-page-section-gap)] [--detail-page-inline-inset:var(--padding-row-x)] [--detail-page-section-gap:calc(var(--spacing)*6)]">
             <header className="flex flex-col gap-4 px-[var(--detail-page-inline-inset,0px)]">
               <ApplicationPackLogo large />
@@ -1172,17 +1211,20 @@ function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, e
                 </div>
                 <div className="flex max-w-full shrink-0 items-center gap-2">
                   <ApplicationPackFactBadges clientSetup={clientSetup} clientSetupError={clientSetupError} pack={pack} setupStatus={setupStatus} />
-                  {needsApply ? (
-                    <OcButton
-                      disabled={Boolean(busy) || accessProfile !== "live" || Boolean(blockReason)}
-                      onClick={onApply}
-                      size="sm"
-                      title={accessProfile !== "live" ? "Apply packs from the Administrator profile." : blockReason || `Apply ${pack.name}`}
-                      variant="primary"
-                    >
-                      {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : actionLabel}
-                    </OcButton>
-                  ) : null}
+                  <OcAnimatedActionSlot>
+                    {busy && lifecycle ? <ApplicationLifecycleButton operation={lifecycle} variant="primary" /> : needsApply ? (
+                      <OcButton
+                        disabled={accessProfile !== "live" || installLocked || Boolean(blockReason)}
+                        leadingIcon="download"
+                        onClick={onApply}
+                        size="sm"
+                        title={accessProfile !== "live" ? "Apply packs from the Administrator profile." : blockReason || (installLocked ? INSTALL_LOCKED : `Apply ${pack.name}`)}
+                        variant="primary"
+                      >
+                        {actionLabel}
+                      </OcButton>
+                    ) : null}
+                  </OcAnimatedActionSlot>
                 </div>
               </div>
             </header>
@@ -1317,12 +1359,13 @@ type ApplicationConnectionActions = {
   onCheck: () => void;
 };
 
-function ManageApplicationsList({ accessProfile, applicationRefs, applications, connectionFor, highlightedId, lifecycleFor, onInstall, onOpen, onRemove, setupStatusByInterface }: {
+function ManageApplicationsList({ accessProfile, applicationRefs, applications, connectionFor, highlightedId, installLocked, lifecycleFor, onInstall, onOpen, onRemove, setupStatusByInterface }: {
   accessProfile: OctopusClientAccessProfile;
   applicationRefs: RefObject<Map<string, HTMLElement>>;
   applications: ApplicationRecord[];
   connectionFor: (application: ApplicationRecord) => ApplicationConnectionActions;
   highlightedId: string;
+  installLocked: boolean;
   lifecycleFor: (application: ApplicationRecord) => ApplicationLifecycleOperation | undefined;
   onInstall: (application: ApplicationRecord) => void;
   onOpen: (id: string) => void;
@@ -1337,6 +1380,7 @@ function ManageApplicationsList({ accessProfile, applicationRefs, applications, 
           application={application}
           connection={connectionFor(application)}
           highlighted={highlightedId === application.id}
+          installLocked={installLocked}
           key={application.id}
           lifecycle={lifecycleFor(application)}
           onInstall={() => onInstall(application)}
@@ -1359,6 +1403,7 @@ function ApplicationCard({
   application,
   connection,
   highlighted,
+  installLocked,
   lifecycle,
   onInstall,
   onOpen,
@@ -1371,6 +1416,7 @@ function ApplicationCard({
   application: ApplicationRecord;
   connection: ApplicationConnectionActions;
   highlighted: boolean;
+  installLocked: boolean;
   lifecycle?: ApplicationLifecycleOperation;
   onInstall: () => void;
   onOpen: (id: string) => void;
@@ -1396,15 +1442,16 @@ function ApplicationCard({
           <ApplicationCardMeta application={application} setupStatus={setupStatus} summary={connection.summary} />
         </span>
       </button>
-      <ApplicationCardActions accessProfile={accessProfile} application={application} connection={connection} lifecycle={lifecycle} onInstall={onInstall} onOpen={() => onOpen(application.id)} onRemove={onRemove} view={view} />
+      <ApplicationCardActions accessProfile={accessProfile} application={application} connection={connection} installLocked={installLocked} lifecycle={lifecycle} onInstall={onInstall} onOpen={() => onOpen(application.id)} onRemove={onRemove} view={view} />
     </div>
   );
 }
 
-function ApplicationCardActions({ accessProfile, application, connection, lifecycle, onInstall, onOpen, onRemove, view }: {
+function ApplicationCardActions({ accessProfile, application, connection, installLocked, lifecycle, onInstall, onOpen, onRemove, view }: {
   accessProfile: OctopusClientAccessProfile;
   application: ApplicationRecord;
   connection: ApplicationConnectionActions;
+  installLocked: boolean;
   lifecycle?: ApplicationLifecycleOperation;
   onInstall: () => void;
   onOpen: () => void;
@@ -1412,12 +1459,12 @@ function ApplicationCardActions({ accessProfile, application, connection, lifecy
   view: ApplicationCatalogView;
 }) {
   const available = application.project_states.some((state) => state.policy_allowed);
-  const busy = lifecycle && lifecycle.phase !== "failed";
   const repairable = Boolean(applicationRepairExpectation(application));
+  if (lifecycle && lifecycleBusy(lifecycle)) return <ApplicationLifecycleButton operation={lifecycle} variant="ghost" />;
   if (!application.installed) return (
     <div className="flex shrink-0 flex-col items-end gap-1">
       <OcButton
-        disabled={Boolean(busy) || accessProfile !== "live" || !repairable && Boolean(application.install_block_reason)}
+        disabled={accessProfile !== "live" || installLocked || !repairable && Boolean(application.install_block_reason)}
         onClick={(event) => {
           event.stopPropagation();
           onInstall();
@@ -1425,12 +1472,10 @@ function ApplicationCardActions({ accessProfile, application, connection, lifecy
         size="sm"
         title={accessProfile !== "live"
           ? `${repairable ? "Repair" : "Install"} applications from the Administrator profile.`
-          : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
+          : installLocked ? INSTALL_LOCKED : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
         variant="outline"
       >
-        {busy
-          ? <ApplicationLifecycleProgress operation={lifecycle} />
-          : lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
+        {lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
       </OcButton>
       {lifecycle?.phase === "failed" ? <span className="max-w-48 truncate text-xs text-token-error-foreground" title={lifecycle.error}>{lifecycle.operation === "repair" ? "Repair failed" : "Install failed"}</span> : null}
     </div>
@@ -1438,11 +1483,9 @@ function ApplicationCardActions({ accessProfile, application, connection, lifecy
   return (
     <div className="flex shrink-0 flex-col items-end gap-1">
       <div className="flex items-center gap-1">
-        {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : null}
         {!application.valid || connection.summary.status === "none" ? (
           <OcButton
             className="shrink-0"
-            disabled={Boolean(busy)}
             onClick={(event) => {
               event.stopPropagation();
               onOpen();
@@ -1452,7 +1495,7 @@ function ApplicationCardActions({ accessProfile, application, connection, lifecy
           >
             {!application.valid ? "View issue" : available ? "Manage" : "Set up"}
           </OcButton>
-        ) : busy ? null : (
+        ) : (
           <ApplicationConnectionControl
             connectAvailable={connection.connectAvailable}
             disconnecting={connection.disconnecting}
@@ -1464,13 +1507,50 @@ function ApplicationCardActions({ accessProfile, application, connection, lifecy
             summary={connection.summary}
           />
         )}
-        {view === "manage" && !application.managed ? <OcIconButton disabled={Boolean(busy) || accessProfile !== "live" || !application.removal_allowed} glyph="trash" label={`Remove ${application.name}`} onClick={(event) => {
-          event.stopPropagation();
-          onRemove();
-        }} size="xs" title={accessProfile !== "live" ? "Remove applications from the Administrator profile." : application.removal_block_reason || `Remove ${application.name}`} variant="ghost" /> : null}
+        {view === "manage" ? <ApplicationMoreActions accessProfile={accessProfile} application={application} onRemove={onRemove} /> : null}
       </div>
       {lifecycle?.phase === "failed" && lifecycle.operation === "remove" ? <span className="max-w-48 truncate text-xs text-token-error-foreground" title={lifecycle.error}>Remove failed</span> : null}
     </div>
+  );
+}
+
+function ApplicationMoreActions({ accessProfile, application, onRemove }: {
+  accessProfile: OctopusClientAccessProfile;
+  application: ApplicationRecord;
+  onRemove: () => void;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const blocked = accessProfile !== "live" ? "Remove applications from the Administrator profile." : application.removal_block_reason;
+  return (
+    <>
+      <OcIconButton
+        buttonRef={triggerRef}
+        glyph="more"
+        label="More actions"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen(true);
+        }}
+        size="sm"
+        variant="ghost"
+      />
+      <OcDropdown align="end" anchorRef={triggerRef} contentWidth="menu" onOpenChange={setOpen} open={open}>
+        <OcMenuItem
+          description={blocked || undefined}
+          descriptionAllowWrap
+          disabled={Boolean(blocked) || !application.removal_allowed}
+          label={`Remove ${application.name}`}
+          leadingIcon="trash"
+          onClick={() => {
+            setOpen(false);
+            onRemove();
+          }}
+          role="menuitem"
+          tone="danger"
+        />
+      </OcDropdown>
+    </>
   );
 }
 
@@ -1480,6 +1560,7 @@ function ApplicationDetail({
   availabilitySavingEeId,
   configurationSaving,
   connection,
+  installLocked,
   lifecycle,
   onAvailabilityChange,
   onBack,
@@ -1495,6 +1576,7 @@ function ApplicationDetail({
   availabilitySavingEeId: string;
   configurationSaving: boolean;
   connection: ApplicationConnectionActions;
+  installLocked: boolean;
   lifecycle?: ApplicationLifecycleOperation;
   onAvailabilityChange: (state: ApplicationProjectState, next: ApplicationAvailabilityChange) => void;
   onBack: () => void;
@@ -1512,6 +1594,7 @@ function ApplicationDetail({
   const usable = application.installed && application.valid;
   const environmentFields = (application.configuration?.fields ?? []).filter((field) => field.authored === false);
   const help = application.connection?.help ?? null;
+  const reducedMotion = useReducedMotion();
   return (
     <section className="flex h-full min-h-0 flex-col text-base select-none">
       <header className="surface-titlebar-spacer flex h-toolbar shrink-0 items-center px-panel">
@@ -1521,8 +1604,8 @@ function ApplicationDetail({
           <span className="truncate text-default">{application.name}</span>
         </button>
       </header>
-      <div className="plugins-surface-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
-        <div className="flex min-h-full flex-col px-toolbar pt-panel pb-panel">
+      <div className="plugins-surface-scroll vertical-scroll-fade-mask relative min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto [--edge-fade-distance:1rem] [scrollbar-gutter:stable]">
+        <div className="mx-auto flex min-h-full w-full max-w-[var(--thread-content-max-width)] flex-col px-toolbar pt-panel pb-panel">
           <div className="@container mx-auto flex w-full max-w-[var(--thread-content-max-width)] flex-col gap-[var(--detail-page-section-gap)] [--detail-page-inline-inset:var(--padding-row-x)] [--detail-page-section-gap:calc(var(--spacing)*6)]">
             <header className="flex flex-col gap-4 px-[var(--detail-page-inline-inset,0px)]">
               <ApplicationLogo application={application} className="size-[60px] overflow-hidden rounded-2xl border border-default bg-transparent" logoSize={28} />
@@ -1533,10 +1616,10 @@ function ApplicationDetail({
                 </div>
                 <div className="flex max-w-full shrink-0 items-center gap-2">
                   <ApplicationFactBadges application={application} setupStatus={setupStatus} summary={summary} />
-                  {application.installed ? (
-                    <>
-                      <OcButton disabled={Boolean(busy) || accessProfile !== "live" || !application.removal_allowed} onClick={onRemove} size="sm" title={accessProfile !== "live" ? "Remove applications from the Administrator profile." : application.removal_block_reason || `Remove ${application.name}`} tone="danger" variant="ghost">Remove</OcButton>
-                      {busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : usable ? (
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {application.installed && !busy ? <ApplicationMoreActions accessProfile={accessProfile} application={application} onRemove={onRemove} /> : null}
+                    <OcAnimatedActionSlot>
+                      {busy && lifecycle ? <ApplicationLifecycleButton operation={lifecycle} variant="primary" /> : application.installed ? usable ? (
                         <ApplicationConnectionControl
                           connectAvailable={connection.connectAvailable}
                           disconnecting={connection.disconnecting}
@@ -1547,24 +1630,22 @@ function ApplicationDetail({
                           placement="detail"
                           summary={summary}
                         />
-                      ) : null}
-                    </>
-                  ) : (
-                    <OcButton
-                      disabled={Boolean(busy) || accessProfile !== "live" || !repairable && Boolean(application.install_block_reason)}
-                      leadingIcon={busy ? undefined : "download"}
-                      onClick={onInstall}
-                      size="sm"
-                      title={accessProfile !== "live"
-                        ? `${repairable ? "Repair" : "Install"} applications from the Administrator profile.`
-                        : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
-                      variant="primary"
-                    >
-                      {busy && lifecycle
-                        ? <ApplicationLifecycleProgress operation={lifecycle} />
-                        : lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
-                    </OcButton>
-                  )}
+                      ) : null : (
+                        <OcButton
+                          disabled={accessProfile !== "live" || installLocked || !repairable && Boolean(application.install_block_reason)}
+                          leadingIcon="download"
+                          onClick={onInstall}
+                          size="sm"
+                          title={accessProfile !== "live"
+                            ? `${repairable ? "Repair" : "Install"} applications from the Administrator profile.`
+                            : installLocked ? INSTALL_LOCKED : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
+                          variant="primary"
+                        >
+                          {lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
+                        </OcButton>
+                      )}
+                    </OcAnimatedActionSlot>
+                  </div>
                 </div>
               </div>
             </header>
@@ -1574,58 +1655,71 @@ function ApplicationDetail({
                 <div className="mt-1 whitespace-pre-wrap text-xs opacity-90">{lifecycle.error}</div>
               </div>
             ) : null}
-            {usable && summary.status !== "none" ? (
-              <DetailSection title="Connection">
-                <DetailRow label="Status" value={<ConnectionStatusValue summary={summary} />} />
-                {summary.account ? (
-                  <DetailRow label="Account" value={(
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span>{summary.account.label}</span>
-                      {summary.account.detail ? <span className="text-xs text-secondary">{summary.account.detail}</span> : null}
-                    </span>
-                  )} />
-                ) : null}
-                {summary.fields.map((field) => (
-                  <DetailRow
-                    action={field.private_saved && summary.fieldInterfaces.includes(field.interface_id) ? (
-                      <OcButton disabled={configurationSaving || connection.disconnecting} onClick={() => onSaveConfiguration(field.interface_id, {}, [field.name])} size="xs" variant="ghost">Clear</OcButton>
+            <AnimatePresence initial={false}>
+              {usable ? (
+                <motion.div
+                  animate={{ height: "auto", opacity: 1 }}
+                  className="-mt-[var(--detail-page-section-gap)] overflow-hidden"
+                  exit={{ height: 0, opacity: 0 }}
+                  initial={{ height: 0, opacity: 0 }}
+                  key="installed-sections"
+                  transition={reducedMotion ? { duration: 0 } : INSTALLED_SECTIONS_TRANSITION}
+                >
+                  <div className="flex flex-col gap-[var(--detail-page-section-gap)] pt-[var(--detail-page-section-gap)]">
+                    {summary.status !== "none" ? (
+                      <DetailSection title="Connection">
+                        <DetailRow label="Status" value={<ConnectionStatusValue summary={summary} />} />
+                        {summary.account ? (
+                          <DetailRow label="Account" value={(
+                            <span className="flex min-w-0 flex-col gap-0.5">
+                              <span>{summary.account.label}</span>
+                              {summary.account.detail ? <span className="text-xs text-secondary">{summary.account.detail}</span> : null}
+                            </span>
+                          )} />
+                        ) : null}
+                        {summary.fields.map((field) => (
+                          <DetailRow
+                            action={field.private_saved && summary.fieldInterfaces.includes(field.interface_id) ? (
+                              <OcButton disabled={configurationSaving || connection.disconnecting} onClick={() => onSaveConfiguration(field.interface_id, {}, [field.name])} size="xs" variant="ghost">Clear</OcButton>
+                            ) : null}
+                            key={configurationFieldKey(field)}
+                            label={field.label}
+                            value={configurationFieldStatus(field)}
+                          />
+                        ))}
+                        {help ? (
+                          <DetailRow label="Help" value={<a className="cursor-interaction text-default underline underline-offset-2" href={help.url} rel="noreferrer" target="_blank">{help.label}</a>} />
+                        ) : null}
+                      </DetailSection>
                     ) : null}
-                    key={configurationFieldKey(field)}
-                    label={field.label}
-                    value={configurationFieldStatus(field)}
-                  />
-                ))}
-                {help ? (
-                  <DetailRow label="Help" value={<a className="cursor-interaction text-default underline underline-offset-2" href={help.url} rel="noreferrer" target="_blank">{help.label}</a>} />
-                ) : null}
-              </DetailSection>
-            ) : null}
-            {usable ? (
-              <DetailSection title="Available in">
-                <ApplicationAvailabilityList
-                  application={application}
-                  onChange={onAvailabilityChange}
-                  projects={projects}
-                  rootEeId={rootEeId}
-                  savingEeId={availabilitySavingEeId}
-                  variant="page"
-                />
-                <div className="px-2 pt-1 text-xs text-secondary">Existing tasks don't change. New tasks started where New tasks is on include {application.name}.</div>
-              </DetailSection>
-            ) : null}
-            {usable && environmentFields.length ? (
-              <DetailSection title="Environment">
-                <div className="px-2 pb-1 text-xs text-secondary">Private values for this application's processes. A value you don't set here comes from the environment Octopus starts with.</div>
-                {environmentFields.map((field) => (
-                  <EnvironmentFieldRow
-                    field={field}
-                    key={configurationFieldKey(field)}
-                    onSave={(updates, clears) => onSaveConfiguration(field.interface_id, updates, clears)}
-                    saving={configurationSaving}
-                  />
-                ))}
-              </DetailSection>
-            ) : null}
+                    <DetailSection title="Available in">
+                      <ApplicationAvailabilityList
+                        application={application}
+                        onChange={onAvailabilityChange}
+                        projects={projects}
+                        rootEeId={rootEeId}
+                        savingEeId={availabilitySavingEeId}
+                        variant="page"
+                      />
+                      <div className="px-2 pt-1 text-xs text-secondary">Existing tasks don't change. New tasks started where New tasks is on include {application.name}.</div>
+                    </DetailSection>
+                    {environmentFields.length ? (
+                      <DetailSection title="Environment">
+                        <div className="px-2 pb-1 text-xs text-secondary">Private values for this application's processes. A value you don't set here comes from the environment Octopus starts with.</div>
+                        {environmentFields.map((field) => (
+                          <EnvironmentFieldRow
+                            field={field}
+                            key={configurationFieldKey(field)}
+                            onSave={(updates, clears) => onSaveConfiguration(field.interface_id, updates, clears)}
+                            saving={configurationSaving}
+                          />
+                        ))}
+                      </DetailSection>
+                    ) : null}
+                  </div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
             <DetailSection title="Included">
               {application.interfaces.map((interfaceId) => <DetailRow key={interfaceId} label="Interface" value={interfaceId} />)}
               {application.artifact_bindings.map((binding) => <DetailRow key={binding.artifact_id} label="Guide for the model" value={binding.label?.trim() || binding.artifact_id} />)}
@@ -1757,7 +1851,7 @@ function ApplicationRemovalDialog({ application, lifecycle, onCancel, onConfirm 
           </div>
           <footer className="flex min-h-[76px] shrink-0 items-center justify-end gap-2 border-t border-token-border/40 px-6 py-4">
             <OcButton disabled={Boolean(busy)} onClick={onCancel} variant="ghost">Cancel</OcButton>
-            <OcButton disabled={Boolean(busy) || !application.removal_allowed} onClick={onConfirm} tone="danger" variant="secondary">{busy && lifecycle ? <ApplicationLifecycleProgress operation={lifecycle} /> : "Remove"}</OcButton>
+            <OcButton busy={Boolean(busy)} disabled={!application.removal_allowed} onClick={onConfirm} tone="danger" variant="secondary">{busy ? "Removing" : "Remove"}</OcButton>
           </footer>
         </>
       ) : null}
@@ -1765,34 +1859,37 @@ function ApplicationRemovalDialog({ application, lifecycle, onCancel, onConfirm 
   );
 }
 
-function ApplicationLifecycleProgress({ operation }: { operation: Pick<ApplicationLifecycleOperation, "operation" | "percent" | "phase"> }) {
+function ApplicationLifecycleButton({ operation, variant }: {
+  operation: Pick<ApplicationLifecycleOperation, "operation" | "percent">;
+  variant: "ghost" | "primary";
+}) {
+  const label = operation.operation === "install" ? "Installing" : operation.operation === "repair" ? "Repairing" : "Removing";
   const progress = Math.max(0, Math.min(100, operation.percent));
-  const label = operation.operation === "repair"
-    ? operation.phase === "preflight" || operation.phase === "verifying"
-      ? "Checking"
-      : operation.phase === "copying"
-        ? "Copying"
-        : operation.phase === "finalizing" || operation.phase === "receipting" || operation.phase === "complete"
-          ? "Finishing"
-          : "Repairing"
-    : operation.operation === "install"
-    ? operation.phase === "preflight" || operation.phase === "verifying"
-      ? "Checking"
-      : operation.phase === "copying"
-        ? "Copying"
-        : operation.phase === "finalizing" || operation.phase === "complete"
-          ? "Finishing"
-          : "Installing"
-    : operation.phase === "preflight" || operation.phase === "verifying"
-      ? "Checking"
-      : operation.phase === "finalizing" || operation.phase === "complete"
-        ? "Finishing"
-        : "Removing";
-  return <OcInlineProgress label={label} progressLabel={`${label} ${progress}%`} showValue value={progress} />;
+  return (
+    <OcButton busy className="shrink-0" size="sm" variant={variant}>
+      {operation.operation === "remove" ? label : <OcInlineProgress label={label} progressLabel={`${label} ${Math.round(progress)}%`} value={progress} />}
+    </OcButton>
+  );
 }
 
 function lifecycleBusy(operation: { phase: ApplicationLifecycleOperation["phase"] } | undefined): boolean {
   return Boolean(operation && operation.phase !== "failed");
+}
+
+function presentApplications(
+  applications: ApplicationRecord[],
+  operations: Record<string, ApplicationLifecycleOperation>,
+  packOperations: Record<string, ApplicationPackLifecycleOperation>,
+): ApplicationRecord[] {
+  const presented = new Map<string, ApplicationRecord>();
+  for (const operation of Object.values(packOperations)) {
+    if (!lifecycleBusy(operation)) continue;
+    for (const application of operation.presentation.applications) presented.set(application.id, application);
+  }
+  for (const [applicationId, operation] of Object.entries(operations)) {
+    if (lifecycleBusy(operation)) presented.set(applicationId, operation.presentation);
+  }
+  return presented.size ? applications.map((application) => presented.get(application.id) ?? application) : applications;
 }
 
 function withoutSettledOperations<T extends { phase: ApplicationLifecycleOperation["phase"] }>(
