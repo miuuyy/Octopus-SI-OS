@@ -416,9 +416,15 @@ export function ApplicationsView({
     ...groups.map(({ category }) => ({ id: category, title: CATEGORY_COPY[category].title })),
   ];
   const shownBrowseSection = browseSection && browseSections.some((section) => section.id === browseSection) ? browseSection : null;
+  const manageCategories = CATEGORY_ORDER
+    .map((category) => ({ category, count: applications.filter((application) => application.category === category).length }))
+    .filter(({ count }) => count > 0);
+  const shownManageCategory = manageCategories.some(({ category }) => category === manageCategory)
+    ? manageCategory
+    : manageCategories[0]?.category ?? manageCategory;
   const manageNeedle = manageQuery.trim().toLowerCase();
   const manageApplications = applications.filter((application) => (
-    application.category === manageCategory
+    application.category === shownManageCategory
     && (!manageNeedle || applicationSearchText(application).includes(manageNeedle))
   ));
   const setupStatusByInterface = useMemo(() => {
@@ -923,10 +929,10 @@ export function ApplicationsView({
                         <OcSegmented label="Manage applications" onChange={(category) => {
                           setManageCategory(category);
                           setHighlightedId("");
-                        }} options={CATEGORY_ORDER.map((category) => ({
+                        }} options={manageCategories.map(({ category, count }) => ({
                           value: category,
-                          label: <>{CATEGORY_COPY[category].title}<span className="ms-0.5 text-tertiary">{applications.filter((application) => application.category === category).length}</span></>,
-                        }))} size="sm" value={manageCategory} />
+                          label: <>{CATEGORY_COPY[category].title}<span className="ms-0.5 text-tertiary">{count}</span></>,
+                        }))} size="sm" value={shownManageCategory} />
                         <div className="w-56 min-w-0 max-w-full">
                           <OcSearchField className="shadow-none" id="applications-page-manage-search" inputRef={manageSearchRef} label="Search applications" onChange={(value) => {
                             setManageQuery(value);
@@ -947,7 +953,7 @@ export function ApplicationsView({
                       <>
                         {manageApplications.length ? (
                           <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} connectionFor={connectionActions} highlightedId={highlightedId} installLocked={installLocked} lifecycleFor={lifecycleOf} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} setupStatusByInterface={setupStatusByInterface} />
-                        ) : <SurfaceState compact title={`No ${CATEGORY_COPY[manageCategory].title.toLowerCase()} found`} />}
+                        ) : <SurfaceState compact title={`No ${CATEGORY_COPY[shownManageCategory].title.toLowerCase()} found`} />}
                       </>
                     ) : (
                       <>
