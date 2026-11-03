@@ -181,6 +181,7 @@ function packagedEngineChecks() {
 
 async function startupChecks() {
   packagedEngineChecks();
+  const clientRuntime = require("../native/runtime.cjs").clientRuntime();
   const ts = require("typescript");
   const main = ts.createSourceFile("main.cjs", fs.readFileSync(path.join(__dirname, "../electron/main.cjs"), "utf8"), ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
   const names = new Set(["guardNativeBrowserPackage", "requireNativeBrowserPackageOwner", "startNativeBrowserEngine", "planBrowserNativeHost", "requireNativeBrowserHost", "nativeBrowserTargetsForProjection"]);
@@ -193,7 +194,7 @@ async function startupChecks() {
   const installation = { available: true, installed: true, receipt_state: "valid", receipt_digest: "a".repeat(64), member_states: [{ registry_kind: "worker_environment_kind", owner: "browser_session", materialized: true, source_digest: "b".repeat(64), installed_digest: "b".repeat(64) }] };
   let guard, engineAvailable = false;
   const engineProof = Object.freeze({ receipt: "packaged-source-proof" });
-  const context = vm.createContext({ path, console, process: { resourcesPath: "/client/Octopus.app/Contents/Resources", execPath: "/client/Octopus.app/Contents/MacOS/Octopus", arch: "arm64", versions: { node: "24.15.0", electron: "41.7.1" } }, resolveOctopusHome: () => "/test/home", initializeRuntimeHost: async () => {}, app: { whenReady: async () => {}, isPackaged: true }, clientSetupPackageRoots: () => ({ activeRegistryRoot: "/test/home/registry", stateRoot: "/test/home/client/package-state" }),
+  const context = vm.createContext({ path, console, process: { resourcesPath: "/client/Octopus.app/Contents/Resources", execPath: "/client/Octopus.app/Contents/MacOS/Octopus", arch: "arm64", versions: { node: clientRuntime.node, electron: clientRuntime.electron } }, resolveOctopusHome: () => "/test/home", initializeRuntimeHost: async () => {}, app: { whenReady: async () => {}, isPackaged: true }, clientSetupPackageRoots: () => ({ activeRegistryRoot: "/test/home/registry", stateRoot: "/test/home/client/package-state" }),
     registerLocalPackageMutationGuard({ guard: callback }) { calls.push("guard"); guard = callback; return () => {}; },
     async withLocalPackageInstallation(_options, callback) { return callback(installation); },
     fs: { promises: { async lstat() { return { isFile: () => true, isSymbolicLink: () => false, size: 256 }; }, async readFile(file) { return JSON.stringify(file.endsWith("host.json") ? machine : door); }, async realpath(file) { return file; } } },

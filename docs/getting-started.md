@@ -87,24 +87,22 @@ cd Octopus-SI-OS
 npm ci --prefix app
 ```
 
-The native presentation build requires headers for Node **24.15.0**, independently
-of the Node version running npm. Fetch the pinned headers from Node.js:
+The native presentation build requires the headers of the Node inside the
+pinned Electron, independently of the Node version running npm.
+`app/native/runtime.json` pins Electron 45.2.1, its Node 24.22.1, the sha256 of
+the headers archive (from the [Node.js release manifest](https://nodejs.org/download/release/v24.22.1/SHASUMS256.txt))
+and the sha256 of the Electron archives. Fetch and verify the headers:
 
 ```sh
-mkdir -p app/build
-curl -fL https://nodejs.org/download/release/v24.15.0/node-v24.15.0-headers.tar.gz \
-  -o app/build/node-v24.15.0-headers.tar.gz
-printf '%s  %s\n' \
-  9a9250039fef572d0bcc110ac5e78055faf5604421211d2d5f578ebc5a34e703 \
-  app/build/node-v24.15.0-headers.tar.gz | shasum -a 256 -c -
-tar -xzf app/build/node-v24.15.0-headers.tar.gz -C app/build
+node app/native/runtime.cjs headers
 ```
 
-The checksum is from the [Node.js release manifest](https://nodejs.org/download/release/v24.15.0/SHASUMS256.txt).
-Then package and open the app:
+Electron no longer downloads its binary on install; packaging fetches the
+checksum-pinned Electron archive itself (`node app/native/runtime.cjs electron`
+does the same by hand). Then package and open the app:
 
 ```sh
-OCTOPUS_NATIVE_NODE_HEADERS="$PWD/app/build/node-v24.15.0/include/node" \
+OCTOPUS_NATIVE_NODE_HEADERS="$PWD/app/build/node-v24.22.1/include/node" \
   npm --prefix app run package:mac
 open -n ./app/build/Octopus.app
 ```

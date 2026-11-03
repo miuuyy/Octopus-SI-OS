@@ -9,8 +9,6 @@
   "runtime_activation": "held",
   "auth_bootstrap": "source_implemented",
   "node_api_version": 8,
-  "header_version": "24.15.0",
-  "electron_version": "41.7.1",
   "files": [
     {
       "path": "receiver.h",
@@ -38,7 +36,7 @@
     },
     {
       "path": "build.cjs",
-      "sha256": "3e6016cfc1fedd76d4b4b9081fc48457edec4ef23a3c258976627e9d383c8b8f"
+      "sha256": "02ba4f1b5397448a6715e5b71d134351203708c42c2417d7b23f53cdb8b57c7f"
     },
     {
       "path": "receiver-spec.mm",

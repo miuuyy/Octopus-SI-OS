@@ -34,7 +34,8 @@ function canonical(file, directory = false) {
   if (directory ? !fs.lstatSync(file).isDirectory() : !fs.lstatSync(file).isFile()) throw new Error('Build input has the wrong type');
   return file;
 }
-function planBuild({ compiler, swiftCompiler, sdk, headers, outputRoot, architecture, target, deploymentTarget }) {
+function runtimeVersion(value) { return typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value); }
+function planBuild({ compiler, swiftCompiler, sdk, headers, outputRoot, architecture, target, deploymentTarget, electronVersion, nodeVersion }) {
   const manifest = verifySources();
   canonical(compiler); canonical(swiftCompiler); canonical(sdk, true); canonical(headers, true); canonical(outputRoot, true);
   if (path.basename(swiftCompiler) !== 'swift-frontend') throw new Error('The explicit Swift compiler must be the canonical swift-frontend executable');
@@ -44,9 +45,11 @@ function planBuild({ compiler, swiftCompiler, sdk, headers, outputRoot, architec
     throw new Error('Receiver build output must be separate from source and application bundles');
   }
   if (Number(deploymentTarget.split('.')[0]) < 13) throw new Error('Native SwiftUI presentation requires macOS 13 or later');
-  const nodeVersion = regular(path.join(headers, 'node_version.h')).toString('utf8');
-  for (const [field, value] of [['MAJOR', 24], ['MINOR', 15], ['PATCH', 0]]) {
-    if (!new RegExp(`^#define NODE_${field}_VERSION\\s+${value}\\s*$`, 'm').test(nodeVersion)) throw new Error('Node headers must be exactly 24.15.0');
+  if (!runtimeVersion(electronVersion) || !runtimeVersion(nodeVersion)) throw new Error('Native build requires the exact Electron and Node versions of the client runtime it targets');
+  const nodeHeader = regular(path.join(headers, 'node_version.h')).toString('utf8');
+  const [major, minor, patch] = nodeVersion.split('.');
+  for (const [field, value] of [['MAJOR', major], ['MINOR', minor], ['PATCH', patch]]) {
+    if (!new RegExp(`^#define NODE_${field}_VERSION\\s+${value}\\s*$`, 'm').test(nodeHeader)) throw new Error(`Node headers must be exactly ${nodeVersion}`);
   }
   const headerNames = ['node_api.h', 'node_api_types.h', 'js_native_api.h', 'js_native_api_types.h', 'node_version.h'];
   const stackInputs = ['stack.h', 'stack.mm', 'assets/pop-out-window-egg@3x.png', 'assets/SettingsAccessory.bundle/Contents/Info.plist', 'assets/SettingsAccessory.bundle/Contents/Resources/Assets.car'];
@@ -75,7 +78,7 @@ function planBuild({ compiler, swiftCompiler, sdk, headers, outputRoot, architec
     '-framework', 'CoreVideo', '-framework', 'CoreImage', '-framework', 'Security', '-framework', 'CoreServices',
     ...(target === 'addon' ? ['-bundle', '-undefined', 'dynamic_lookup'] : []),
     ...sources.map(file => path.join(__dirname, file)), swiftObject, '-o', output];
-  return { schema_version: 2, electron_version: manifest.electron_version, header_version: manifest.header_version, source_sha256: Object.fromEntries(manifest.files.map(entry => [entry.path, entry.sha256])), compiler, compiler_sha256: sha(regular(compiler)), sdk,
+  return { schema_version: 2, electron_version: electronVersion, header_version: nodeVersion, source_sha256: Object.fromEntries(manifest.files.map(entry => [entry.path, entry.sha256])), compiler, compiler_sha256: sha(regular(compiler)), sdk,
     sdk_settings_sha256: sha(regular(path.join(sdk, 'SDKSettings.json'))), headers,
     header_sha256: Object.fromEntries(headerNames.map(name => [name, sha(regular(path.join(headers, name)))])),
     swift: { compiler: swiftCompiler, compiler_sha256: sha(regular(swiftCompiler)), args: swiftArgs,
@@ -114,7 +117,7 @@ function artifactDirectory(architecture) {
 function verifyReceipt(receipt, architecture) {
   const manifest = verifySources();
   if (receipt?.schema_version !== 2 || receipt.target !== 'addon' || receipt.architecture !== architecture || receipt.compiled !== true || receipt.nativeExecution !== false
-      || receipt.electron_version !== manifest.electron_version || receipt.header_version !== manifest.header_version || receipt.manifest_sha256 !== sha(regular(path.join(__dirname, 'manifest.json')))) {
+      || !runtimeVersion(receipt.electron_version) || !runtimeVersion(receipt.header_version) || receipt.manifest_sha256 !== sha(regular(path.join(__dirname, 'manifest.json')))) {
     throw new Error('PiP native artifact receipt differs from its exact build/source contract');
   }
   const expected = Object.fromEntries(manifest.files.map(entry => [entry.path, entry.sha256]));
@@ -152,7 +155,7 @@ function verifyArtifact({ architecture, nodeVersion, electronVersion }) {
   const directory = canonical(artifactDirectory(architecture), true);
   const receipt = JSON.parse(regular(path.join(directory, 'receipt.json')));
   const manifest = verifyReceipt(receipt, architecture);
-  if (nodeVersion !== manifest.header_version || electronVersion !== manifest.electron_version || receipt.output !== manifest.module
+  if (nodeVersion !== receipt.header_version || electronVersion !== receipt.electron_version || receipt.output !== manifest.module
     || receipt.signing?.scheme !== 'ad-hoc' || receipt.signing.owner !== 'package-macos.cjs' || !/^[a-f0-9]{64}$/.test(receipt.compiled_output_sha256 || '')) throw new Error('PiP native artifact runtime or package signing identity differs');
   const modulePath = canonical(path.join(directory, receipt.output));
   if (sha(regular(modulePath)) !== receipt.output_sha256) throw new Error('PiP native artifact bytes differ from their package receipt');

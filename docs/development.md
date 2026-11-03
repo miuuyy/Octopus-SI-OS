@@ -261,7 +261,7 @@ npm --prefix app run dev:onboarding -- --help
 After preparing the build prerequisites, run both modes from the repository root:
 
 ```sh
-OCTOPUS_NATIVE_NODE_HEADERS="$PWD/app/build/node-v24.15.0/include/node" \
+OCTOPUS_NATIVE_NODE_HEADERS="$PWD/app/build/node-v24.22.1/include/node" \
   npm --prefix app run dev:onboarding -- --mode unauthenticated
 
 npm --prefix app run dev:onboarding -- --mode reused-auth \

@@ -443,30 +443,52 @@ function readTouchIdEnrollmentRecord() {
   }
 }
 
-function verifyTouchIdEnrollment(record) {
-  if (!record || !safeStorage.isEncryptionAvailable()) {
+async function verifyTouchIdEnrollment(record) {
+  if (!record || !await safeStorage.isAsyncEncryptionAvailable()) {
     throw new Error("Touch ID secure storage is unavailable on this device.");
   }
-  let verifier;
+  let opened;
   try {
-    verifier = safeStorage.decryptString(Buffer.from(record.sealedVerifier, "base64"));
+    opened = await safeStorage.decryptStringAsync(Buffer.from(record.sealedVerifier, "base64"));
   } catch {
     throw new Error("Touch ID enrollment could not be verified.");
   }
-  if (!/^[a-f0-9]{64}$/.test(verifier)) {
+  const verifier = opened?.result;
+  if (typeof verifier !== "string" || !/^[a-f0-9]{64}$/.test(verifier)) {
     throw new Error("Touch ID enrollment could not be verified.");
+  }
+  requireUnchangedTouchIdEnrollment(record);
+  if (opened.shouldReEncrypt !== true) return;
+  const sealedVerifier = (await safeStorage.encryptStringAsync(verifier)).toString("base64");
+  requireUnchangedTouchIdEnrollment(record);
+  sealTouchIdEnrollment(record.credentialFingerprint, sealedVerifier);
+}
+
+function requireUnchangedTouchIdEnrollment(record) {
+  const current = readTouchIdEnrollmentRecord();
+  const fingerprint = getClientAccessController().credentialFingerprint();
+  if (!current || !fingerprint || current.credentialFingerprint !== fingerprint
+    || current.credentialFingerprint !== record.credentialFingerprint || current.sealedVerifier !== record.sealedVerifier) {
+    throw new Error("Touch ID enrollment changed before unlock completed.");
   }
 }
 
-function writeTouchIdEnrollment() {
-  if (process.platform !== "darwin" || !safeStorage.isEncryptionAvailable()) {
+async function writeTouchIdEnrollment() {
+  if (process.platform !== "darwin" || !await safeStorage.isAsyncEncryptionAvailable()) {
     throw new Error("Touch ID is unavailable on this device.");
   }
   const fingerprint = getClientAccessController().credentialFingerprint();
   if (!fingerprint) throw new Error("Configure the Administrator password before enabling Touch ID.");
-  const sealedVerifier = safeStorage.encryptString(randomBytes(32).toString("hex")).toString("base64");
+  const sealedVerifier = (await safeStorage.encryptStringAsync(randomBytes(32).toString("hex"))).toString("base64");
+  if (getClientAccessController().credentialFingerprint() !== fingerprint) {
+    throw new Error("The Administrator password changed before Touch ID was enabled.");
+  }
+  sealTouchIdEnrollment(fingerprint, sealedVerifier);
+}
+
+function sealTouchIdEnrollment(credentialFingerprint, sealedVerifier) {
   const temporary = `${touchIdEnrollmentPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, credentialFingerprint: fingerprint, sealedVerifier })}\n`, { mode: 0o600, flag: "wx" });
+  fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, credentialFingerprint, sealedVerifier })}\n`, { mode: 0o600, flag: "wx" });
   fs.renameSync(temporary, touchIdEnrollmentPath);
   fs.chmodSync(touchIdEnrollmentPath, 0o600);
 }
@@ -3020,7 +3042,7 @@ ipcMain.handle("octopus:chatgpt-sign-in-cancel", async (event, token, loginId) =
 ipcMain.handle("octopus:clipboard-write", async (_event, token, value) => {
   getClientAccessController().requireSession(token);
   if (typeof value !== "string") throw new Error("clipboard value must be a string");
-  clipboard.writeText(value);
+  await clipboard.writeText(value);
   return { copied: true };
 });
 
@@ -3264,7 +3286,7 @@ ipcMain.handle("octopus:touch-id-set-enabled", async (_event, token, enabled) =>
     return touchIdStatus();
   }
   await promptTouchId("Enable Touch ID to unlock Octopus");
-  writeTouchIdEnrollment();
+  await writeTouchIdEnrollment();
   return touchIdStatus();
 });
 ipcMain.handle("octopus:touch-id-unlock", async (event) => {
@@ -3274,18 +3296,8 @@ ipcMain.handle("octopus:touch-id-unlock", async (event) => {
     throw new Error("Touch ID is not enabled for the current Administrator password.");
   }
   await promptTouchId("Unlock Octopus");
-  const currentEnrollment = readTouchIdEnrollmentRecord();
-  const currentFingerprint = getClientAccessController().credentialFingerprint();
-  if (
-    !currentEnrollment
-    || !currentFingerprint
-    || currentEnrollment.credentialFingerprint !== currentFingerprint
-    || currentEnrollment.credentialFingerprint !== enrollment.credentialFingerprint
-    || currentEnrollment.sealedVerifier !== enrollment.sealedVerifier
-  ) {
-    throw new Error("Touch ID enrollment changed before unlock completed.");
-  }
-  verifyTouchIdEnrollment(currentEnrollment);
+  requireUnchangedTouchIdEnrollment(enrollment);
+  await verifyTouchIdEnrollment(enrollment);
   const result = getClientAccessController().unlockWithTouchId();
   bindClientWindowAccessToken(event, result.token);
   return result;
@@ -3592,7 +3604,7 @@ ipcMain.handle("octopus:login-item-settings", async (_event, token, request) => 
   const supported = app.isPackaged;
   if (request && Object.prototype.hasOwnProperty.call(request, "enabled")) {
     if (!supported) throw new Error("Open at login is available only in a packaged Octopus application.");
-    app.setLoginItemSettings({ openAtLogin: request.enabled === true, openAsHidden: false });
+    app.setLoginItemSettings({ openAtLogin: request.enabled === true });
   }
   const settings = app.getLoginItemSettings();
   return { supported, enabled: supported && settings.openAtLogin === true };

@@ -5,6 +5,7 @@ const { pathToFileURL } = require("node:url");
 const { spawn, spawnSync } = require("node:child_process");
 const WebSocket = require("ws");
 const { readGeneratedSourcePaths, isGeneratedSourcePath } = require("./generated-source-boundary.cjs");
+const { verifyNodeHeaders } = require("../native/runtime.cjs");
 
 const EXIT = Object.freeze({ passed: 0, arguments: 10, build: 11, package: 12, launch: 20, welcome: 21, signIn: 22, boot: 23, password: 24, setup: 25, home: 26, homeReply: 27, task: 28, interrupted: 130 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -190,7 +191,7 @@ async function runFreshOnboarding(args) {
     const buildProofFile = path.join(privateRoot, "build.json");
     if (!options.noBuild) {
       if (Number(process.versions.node.split(".")[0]) < 22) throw failure("Use an installed Node 22 or newer runtime for the package build.", EXIT.build);
-      if (!process.env.OCTOPUS_NATIVE_NODE_HEADERS) throw failure("The package builder requires explicit OCTOPUS_NATIVE_NODE_HEADERS (Node 24.15.0).", EXIT.build);
+      try { verifyNodeHeaders(process.env.OCTOPUS_NATIVE_NODE_HEADERS); } catch (error) { throw failure(`The package builder requires explicit OCTOPUS_NATIVE_NODE_HEADERS: ${error.message}`, EXIT.build); }
       const npmCli = process.env.npm_execpath;
       report.buildAttempt = { source: fingerprint, command: ["npm", "run", "package:mac"], stdout: path.join(reportRoot, "build.stdout.log"), stderr: path.join(reportRoot, "build.stderr.log") };
       writeJson(reportFile, report, redact);

@@ -5,6 +5,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 const hash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+const runtimeVersion = value => typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value);
 const assetName = "assets/pop-out-window-egg@3x.png";
 const assetDigest = "8979fa7ce7b7dabf97ab3e73c5e7652cbf5564a94ed7cd213fa070eebc2519ea";
 const settingsAssets = {"assets/SettingsAccessory.bundle/Contents/Info.plist": "9fc985fd70f134c1eb5971e4b93ad52aef8ba6df2157ab8ae532eb4684a1bbfe", "assets/SettingsAccessory.bundle/Contents/Resources/Assets.car": "f20daabb37db9e1a92f1af8d108c55683603b2c13633b3bc9d1d88524b41ccbb"};
@@ -19,9 +20,9 @@ function sourceContract(manifest, receipt, manifestDigest, architecture) {
   if (receipt?.schema_version !== 1 || receipt.id !== "octopus.client.presentation" || receipt.module !== "octopus-pip-receiver.node"
     || !["arm64", "x64"].includes(architecture) || receipt.architecture !== architecture
     || manifest?.schema_version !== 1 || manifest.platform !== "darwin" || manifest.module !== receipt.module || manifest.node_api_version !== 8
-    || !manifest.architectures?.includes(architecture) || manifest.header_version !== "24.15.0" || manifest.electron_version !== "41.7.1"
+    || !manifest.architectures?.includes(architecture)
     || build?.schema_version !== 2 || build.target !== "addon" || build.architecture !== architecture || build.compiled !== true || build.nativeExecution !== false
-    || build.header_version !== manifest.header_version || build.electron_version !== manifest.electron_version || build.manifest_sha256 !== manifestDigest
+    || !runtimeVersion(build.header_version) || !runtimeVersion(build.electron_version) || build.manifest_sha256 !== manifestDigest
     || !hash(receipt.compiled_output_sha256) || build.output_sha256 !== receipt.compiled_output_sha256 || !hash(receipt.output_sha256)) {
     throw new Error("Client presentation artifact receipt differs from its exact native build contract");
   }
@@ -42,8 +43,8 @@ function verifyClientPresentationArtifact({ resourcesRoot, appRoot, isPackaged, 
   if (!path.isAbsolute(resourcesRoot) || fs.realpathSync(resourcesRoot) !== resourcesRoot || appRoot !== path.join(resourcesRoot, "app") || fs.realpathSync(appRoot) !== appRoot) throw new Error("Client presentation must come from this client's canonical resources");
   const root = path.join(resourcesRoot, "native-presentation"), manifestBytes = regular(path.join(root, "manifest.json"), 1024 * 1024);
   const manifest = JSON.parse(manifestBytes), receipt = JSON.parse(regular(path.join(root, "receipt.json"), 1024 * 1024));
-  sourceContract(manifest, receipt, digest(manifestBytes), architecture);
-  if (nodeVersion !== manifest.header_version || electronVersion !== manifest.electron_version || receipt.signing?.scheme !== "ad-hoc" || receipt.signing.owner !== "package-macos.cjs") throw new Error("Client presentation runtime or packaged signing receipt differs");
+  const build = sourceContract(manifest, receipt, digest(manifestBytes), architecture);
+  if (nodeVersion !== build.header_version || electronVersion !== build.electron_version || receipt.signing?.scheme !== "ad-hoc" || receipt.signing.owner !== "package-macos.cjs") throw new Error("Client presentation runtime or packaged signing receipt differs");
   const modulePath = path.join(root, receipt.module), placementAssetPath = path.join(root, assetName);
   if (digest(regular(modulePath, 64 * 1024 * 1024)) !== receipt.output_sha256 || digest(regular(placementAssetPath, 3767)) !== assetDigest) throw new Error("Client presentation bytes differ from the packaged receipt");
   for (const [name, expected] of Object.entries(settingsAssets)) if (digest(regular(path.join(root, name), 28632)) !== expected) throw new Error("Client Settings image resource differs from its receipt");

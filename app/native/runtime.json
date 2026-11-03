@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "electron": "45.2.1",
+  "node": "24.22.1",
+  "electron_archive_sha256": {
+    "darwin-arm64": "a9a1a0a5b64df714957f83467c84823cb34792205922c6f136550b2403605922",
+    "darwin-x64": "308578d938129666a165f2a3b5c9e0fc866d553e6d53a38ca114bc5209b765f0"
+  },
+  "node_headers_sha256": "322e0a27db9088093ab8347bdc8c7e0aaa21dc9ed548390bf06b394494c09267"
+}

@@ -19,15 +19,25 @@ const baselineManifestPath = path.join(distributionRoot, "system-baseline.json")
 const buildRoot = path.join(appRoot, "build");
 const bundleRoot = path.join(buildRoot, "Octopus.app");
 const minimumSystemVersion = "14.0";
+const nativeRuntime = require("../native/runtime.cjs");
+const clientRuntime = nativeRuntime.clientRuntime();
 const ownedEngineVerifier = require(path.join(registryRoot, "worker_environment_kind", "browser_session", "packages", "octopus-browser-session-env", "native", "macos", "engine-artifact.cjs"));
 const browserEnginePackage = require(path.join(registryRoot, "worker_environment_kind", "browser_session", "packages", "octopus-browser-session-env", "native", "engine-mode.cjs"));
 const browserEngineMode = browserEnginePackage.packagingMode(process.argv.slice(2), process.env);
 const ownedEngineReceiptPath = process.env.OCTOPUS_OWNED_ELECTRON_RECEIPT;
+if (browserEngineMode === "owned") {
+  const { foundation } = ownedEngineVerifier.sourceContract();
+  if (foundation.electron.version !== clientRuntime.electron || foundation.node_version !== clientRuntime.node) {
+    throw new Error(`The owned browser engine is built from Electron ${foundation.electron.version} (Node ${foundation.node_version}), but the client runtime is Electron ${clientRuntime.electron} (Node ${clientRuntime.node}) in app/native/runtime.json; rebase the owned engine onto Electron ${clientRuntime.electron} before packaging --browser-engine=owned.`);
+  }
+}
 const ownedEngine = browserEngineMode === "owned"
   ? ownedEngineVerifier.verifyEngineArtifact(ownedEngineReceiptPath, process.arch)
   : null;
-const electronBundle = ownedEngine ? ownedEngine.bundlePath : path.join(appRoot, "node_modules", "electron", "dist", "Electron.app");
-const browserElectronVersion = ownedEngine ? ownedEngine.source.electron_version : JSON.parse(fs.readFileSync(path.join(appRoot, "node_modules", "electron", "package.json"), "utf8")).version;
+const nativeHeaders = nativeRuntime.verifyNodeHeaders(process.env.OCTOPUS_NATIVE_NODE_HEADERS);
+const electronBundle = ownedEngine ? ownedEngine.bundlePath : nativeRuntime.fetchElectron(process.arch);
+const browserElectronVersion = clientRuntime.electron;
+requireRebuiltTerminal();
 console.log(`Packaging browser engine: ${browserEngineMode} (${browserEnginePackage.engineInfo(browserEngineMode).presentationProtocol}).`);
 const resourcesRoot = path.join(bundleRoot, "Contents", "Resources");
 const bundledAppRoot = path.join(resourcesRoot, "app");
@@ -66,16 +76,15 @@ const desktopNativeExecutable = path.join(desktopNativeRoot, "bin", "octopus-des
 assertDeclaredGeneratedOutput(desktopNativeExecutable, repoRoot, generatedOutputs);
 require(path.join(desktopNativeRoot, "build.cjs")).buildDesktopNative(desktopNativeExecutable);
 const pipBuilder = require(path.join(desktopNativeRoot, "pip", "build.cjs"));
-const pipHeaders = process.env.OCTOPUS_NATIVE_NODE_HEADERS;
-if (!pipHeaders) throw new Error("Packaging native PiP requires explicit OCTOPUS_NATIVE_NODE_HEADERS for Node24.15.0.");
-const clientFilesystem = require("../native/build.cjs").buildClientFilesystem({ headers: pipHeaders });
+const clientFilesystem = require("../native/build.cjs").buildClientFilesystem({ headers: nativeHeaders });
 const pipCompiler = fs.realpathSync(capture("xcrun", ["--find", "clang++"]));
 const pipSwiftCompiler = fs.realpathSync(capture("xcrun", ["--find", "swiftc"]));
 const pipSdk = fs.realpathSync(capture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]));
 const pipOutput = fs.realpathSync(fs.mkdtempSync(path.join(require("node:os").tmpdir(), "octopus-package-pip-")));
 process.once("exit", () => fs.rmSync(pipOutput, { recursive: true, force: true }));
-const pipReceipt = pipBuilder.build({ compiler: pipCompiler, swiftCompiler: pipSwiftCompiler, sdk: pipSdk, headers: fs.realpathSync(pipHeaders),
-  outputRoot: pipOutput, architecture: process.arch, target: "addon", deploymentTarget: minimumSystemVersion });
+const pipReceipt = pipBuilder.build({ compiler: pipCompiler, swiftCompiler: pipSwiftCompiler, sdk: pipSdk, headers: nativeHeaders,
+  outputRoot: pipOutput, architecture: process.arch, target: "addon", deploymentTarget: minimumSystemVersion,
+  electronVersion: clientRuntime.electron, nodeVersion: clientRuntime.node });
 const bundledBinaries = collectBundledBinaries(registryRoot);
 buildBundledBinaries([...bundledBinaries, openCodexLifeBinary, inputIntakeLifeBinary]);
 materializeProviderLife(openCodexOwnerRoot, openCodexLifeBinary);
@@ -138,7 +147,7 @@ for (const dependency of [
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   copyTree(path.join(appRoot, "node_modules", dependency), destination, {
     recursive: true,
-    filter: (candidate) => !candidate.split(path.sep).some((part) => part === "obj.target" || part === ".deps"),
+    filter: (candidate) => !candidate.split(path.sep).some((part) => part === "obj.target" || part === ".deps" || part === "prebuilds"),
   });
 }
 copyFile(icnsPath, path.join(resourcesRoot, "octopus.icns"));
@@ -175,6 +184,15 @@ if (ownedEngineCopy) ownedEngineVerifier.verifyPackagedEngineAfterSigning(ownedE
 run("codesign", ["--verify", "--deep", "--strict", bundleRoot], appRoot);
 
 console.log(`Packaged ${bundleRoot}`);
+
+function requireRebuiltTerminal() {
+  const release = path.join(appRoot, "node_modules", "node-pty", "build", "Release");
+  const binding = fs.statSync(path.join(release, "pty.node"), { throwIfNoEntry: false });
+  const helper = fs.statSync(path.join(release, "spawn-helper"), { throwIfNoEntry: false });
+  if (!binding?.isFile() || !helper?.isFile() || (helper.mode & 0o111) === 0) {
+    throw new Error("node-pty has no executable build for the client runtime; run npm run rebuild:native in app before packaging.");
+  }
+}
 
 function buildOpenCodexBridge() {
   run("npm", ["ci"], openCodexBridgeRoot);

@@ -353,8 +353,8 @@ function createHumanDownloads({ hostRoot, electron, emit, historyBackend = null 
       if (action === "open") { check(record.status === "complete", "Download is not complete"); const error = await electron.shell.openPath(record.path); check(!error, error); }
       else electron.shell.showItemInFolder(record.path);
       record.unacknowledged = false; publish(owner, null, null);
-    } else if (action === "copy-address") electron.clipboard.writeText(record.url);
-    else if (action === "copy-path") { check(!!record.path, "The native download destination is not available yet"); electron.clipboard.writeText(record.path); }
+    } else if (action === "copy-address") await electron.clipboard.writeText(record.url);
+    else if (action === "copy-path") { check(!!record.path, "The native download destination is not available yet"); await electron.clipboard.writeText(record.path); }
     else if (action === "pause") { check(item && !item.isPaused(), "Download cannot be paused"); item.pause(); const previous = record.status; record.status = "paused"; publish(owner, record, previous); }
     else if (action === "resume") { check(item?.isPaused() && item.canResume(), "Download cannot resume"); item.resume(); const previous = record.status; record.status = "in_progress"; publish(owner, record, previous); }
     else if (action === "cancel") { check(item, "Download is no longer active"); item.cancel(); }

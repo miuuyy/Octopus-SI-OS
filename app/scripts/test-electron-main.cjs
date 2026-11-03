@@ -115,13 +115,13 @@ function fakeElectron(world) {
     },
   });
   const safeStorage = {
-    isEncryptionAvailable: () => { world.events.push(["safe-storage"]); return true; },
-    encryptString: (value) => { world.events.push(["safe-storage"]); return Buffer.from(`sealed:${value}`); },
-    decryptString: (value) => {
+    isAsyncEncryptionAvailable: async () => { world.events.push(["safe-storage"]); return true; },
+    encryptStringAsync: async (value) => { world.events.push(["safe-storage"]); return Buffer.from(`sealed:${world.sealKey ?? 1}:${value}`); },
+    decryptStringAsync: async (value) => {
       world.events.push(["safe-storage"]);
-      const text = value.toString();
-      if (!text.startsWith("sealed:")) throw new Error("not sealed here");
-      return text.slice("sealed:".length);
+      const sealed = /^sealed:(\d+):(.*)$/s.exec(value.toString());
+      if (!sealed) throw new Error("not sealed here");
+      return { result: sealed[2], shouldReEncrypt: Number(sealed[1]) !== (world.sealKey ?? 1) };
     },
   };
   return {
@@ -811,6 +811,12 @@ test("Touch ID status reads only the private preference and enrollment, and enab
   writeFixture(enrollmentFile, { ...enrollment, sealedVerifier: Buffer.from("tampered").toString("base64") });
   await assert.rejects(main.invoke("octopus:touch-id-unlock", primary), /could not be verified/);
   writeFixture(enrollmentFile, enrollment);
+  main.world.sealKey = 2;
+  const rotated = await main.invoke("octopus:touch-id-unlock", primary);
+  const resealed = JSON.parse(fs.readFileSync(enrollmentFile, "utf8"));
+  assert.equal(resealed.credentialFingerprint, enrollment.credentialFingerprint);
+  assert.match(Buffer.from(resealed.sealedVerifier, "base64").toString(), /^sealed:2:[a-f0-9]{64}$/, "a verifier the OS asks to re-encrypt is sealed again under the current key");
+  await main.invoke("octopus:access-lock", primary, rotated.token);
   main.world.touchIdRefused = true;
   await assert.rejects(main.invoke("octopus:touch-id-unlock", primary), /cancelled/);
   const again = await main.unlock(primary);

@@ -98,8 +98,8 @@ function createClientContextMenuHost({ Menu, resolveOwner, reportError }) {
       const convert = (items, enabled = true) => items.map((item) => {
         if (item.type === "separator") return item;
         const selectable = enabled && item.enabled;
-        // Electron 41.7.1's Cocoa NSMenu path also calls FixUpWindowsStyleLabel:
-        // Chromium 146.0.7680.216 decodes && to & before constructing NSMenuItem.
+        // Electron 45.2.1's Cocoa NSMenu path also calls FixUpWindowsStyleLabel:
+        // Chromium 156.0.8078.75 decodes && to & before constructing NSMenuItem.
         return { ...item, label: item.label.replaceAll("&", "&&"), registerAccelerator: false,
           ...(item.submenu ? { type: "submenu", submenu: convert(item.submenu, selectable) } : {
             click: () => { if (selectable) finish(isCurrent() ? item.id : null); },

@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { verifyNodeHeaders } = require("./runtime.cjs");
 
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8" });
@@ -11,12 +12,7 @@ function run(command, args) {
 
 function buildClientFilesystem({ headers = process.env.OCTOPUS_NATIVE_NODE_HEADERS } = {}) {
   if (process.platform !== "darwin") throw new Error("Client package cloning requires macOS");
-  if (typeof headers !== "string" || !path.isAbsolute(headers)) throw new Error("Set OCTOPUS_NATIVE_NODE_HEADERS to the pinned Node 24.15.0 include/node directory");
-  headers = fs.realpathSync(headers);
-  const version = fs.readFileSync(path.join(headers, "node_version.h"), "utf8");
-  for (const [field, value] of [["MAJOR", 24], ["MINOR", 15], ["PATCH", 0]]) {
-    if (!new RegExp(`^#define NODE_${field}_VERSION\\s+${value}\\s*$`, "m").test(version)) throw new Error("Client filesystem headers must be exactly Node 24.15.0");
-  }
+  headers = verifyNodeHeaders(headers);
   if (!["arm64", "x64"].includes(process.arch)) throw new Error(`Unsupported client filesystem architecture: ${process.arch}`);
   const compiler = run("/usr/bin/xcrun", ["--find", "clang"]);
   const sdk = run("/usr/bin/xcrun", ["--sdk", "macosx", "--show-sdk-path"]);

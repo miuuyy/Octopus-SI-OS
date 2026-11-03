@@ -31,8 +31,8 @@ function createClientSupportHost({ app, BrowserWindow, ipcMain, dialog, clipboar
     value.report = report;
     return report;
   });
-  ipcMain.handle("octopus:support-copy", (event, request) => {
-    clipboard.writeText(snapshot(entry(event), request));
+  ipcMain.handle("octopus:support-copy", async (event, request) => {
+    await clipboard.writeText(snapshot(entry(event), request));
     return { copied: true };
   });
   ipcMain.handle("octopus:support-save", async (event, request) => {

@@ -58,10 +58,10 @@
     "@xterm/xterm": "^6.0.0",
     "ajv": "^8.17.1",
     "highlight.js": "^11.11.1",
-    "katex": "0.18.0",
-    "mermaid": "11.16.0",
+    "katex": "0.18.10",
+    "mermaid": "11.17.2",
     "motion": "^12.42.2",
-    "node-pty": "^1.0.0",
+    "node-pty": "^1.1.0",
     "prosemirror-commands": "^1.7.2",
     "prosemirror-history": "^1.5.0",
     "prosemirror-inputrules": "^1.5.1",
@@ -70,7 +70,7 @@
     "prosemirror-model": "^1.25.11",
     "prosemirror-schema-list": "^1.5.1",
     "prosemirror-state": "^1.4.4",
-    "prosemirror-view": "^1.42.2",
+    "prosemirror-view": "^1.42.9",
     "react": "^19.0.0",
     "react-colorful": "^5.7.0",
     "react-dom": "^19.0.0",
@@ -87,7 +87,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^41.7.1",
+    "electron": "45.2.1",
     "jsdom": "26.1.0",
     "json-schema-to-typescript": "^15.0.4",
     "tailwindcss": "^4.3.3",
@@ -95,6 +95,7 @@
     "vite": "^6.0.0"
   },
   "overrides": {
+    "katex": "$katex",
     "@pierre/diffs@1.2.12": {
       "shiki": "4.3.1"
     },

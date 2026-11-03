@@ -147,8 +147,10 @@ command. Install them with `xcode-select --install` and retry.
 ## The build fails
 
 - **`Packaging native PiP requires explicit OCTOPUS_NATIVE_NODE_HEADERS`**  - 
-  fetch the pinned Node 24.15.0 headers and set the variable, as shown in
-  [Getting started](docs/getting-started.md#build).
+  run `node app/native/runtime.cjs headers` and set the variable to the
+  directory it prints, as shown in [Getting started](docs/getting-started.md#build).
+  `Native headers must be exactly Node 24.22.1` means the variable points at
+  headers of another Node.
 - **Native rebuild or SQLite check errors** - you are on Node 20 or 22. Use
   Node 24.
 - **Rust errors about the edition or a locked dependency** - update to current

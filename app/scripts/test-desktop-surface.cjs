@@ -355,15 +355,16 @@ test('browser-only Home uses one receipted client presentation factory without i
  try {
   const source=path.resolve(__dirname,'../../registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/pip');
   const manifestBytes=await fs.readFile(path.join(source,'manifest.json')),manifest=JSON.parse(manifestBytes),sha=b=>createHash('sha256').update(b).digest('hex');
+  const clientRuntime=require('../native/runtime.cjs').clientRuntime();
   const resources=path.join(root,'resources'),home=path.join(root,'browser-only-home');
   await fs.mkdir(path.join(resources,'app'),{recursive:true});await fs.mkdir(path.join(home,'registry/worker_environment_kind/browser_session'),{recursive:true});
   const output=path.join(root,'injected-addon-bytes');await fs.writeFile(output,'fixture bytes: never loaded');
-  const compiled={schema_version:2,target:'addon',architecture:'arm64',compiled:true,nativeExecution:false,header_version:manifest.header_version,electron_version:manifest.electron_version,
+  const compiled={schema_version:2,target:'addon',architecture:'arm64',compiled:true,nativeExecution:false,header_version:clientRuntime.node,electron_version:clientRuntime.electron,
    manifest_sha256:sha(manifestBytes),source_sha256:Object.fromEntries(manifest.files.map(v=>[v.path,v.sha256])),output,output_sha256:sha(await fs.readFile(output)),
    stack_sha256:Object.fromEntries(await Promise.all(['stack.h','stack.mm','assets/pop-out-window-egg@3x.png',...Object.keys(manifest.settings_resources)].map(async name=>[name,sha(await fs.readFile(path.join(source,name)))])))};
   compiled.swift={source:'settings-visuals.swift',source_sha256:compiled.source_sha256['settings-visuals.swift'],compiler_sha256:sha(Buffer.from('injected compiler')),object_sha256:sha(Buffer.from('injected object')),header_sha256:sha(Buffer.from('injected generated header'))};
   const directory=path.join(resources,'native-presentation');publishClientPresentation({sourceRoot:source,buildReceipt:compiled,destination:directory});
-  const artifact={resourcesRoot:resources,appRoot:path.join(resources,'app'),isPackaged:true,architecture:'arm64',nodeVersion:'24.15.0',electronVersion:'41.7.1'};
+  const artifact={resourcesRoot:resources,appRoot:path.join(resources,'app'),isPackaged:true,architecture:'arm64',nodeVersion:clientRuntime.node,electronVersion:clientRuntime.electron};
   assert.throws(()=>verifyClientPresentationArtifact(artifact),/signing/);sealClientPresentation(directory);
   assert.equal(verifyClientPresentationArtifact(artifact).modulePath,path.join(directory,manifest.module));
   assert.throws(()=>verifyClientPresentationArtifact({...artifact,isPackaged:false}),/packaged/);
@@ -373,7 +374,7 @@ test('browser-only Home uses one receipted client presentation factory without i
   const main=ts.createSourceFile('main.cjs',await fs.readFile(path.join(__dirname,'../electron/main.cjs'),'utf8'),ts.ScriptTarget.ES2022,true,ts.ScriptKind.JS);
   const names=new Set(['getNativeClientPresentations','getNativeBrowserPresentations','getNativeDesktopPresentations']);
   const functions=main.statements.filter(node=>ts.isFunctionDeclaration(node)&&names.has(node.name?.text)).map(node=>node.getText(main));assert.equal(functions.length,3);
-  const context=vm.createContext({path,process:{resourcesPath:resources,arch:'arm64',versions:{node:'24.15.0',electron:'41.7.1'}},
+  const context=vm.createContext({path,process:{resourcesPath:resources,arch:'arm64',versions:{node:clientRuntime.node,electron:clientRuntime.electron}},
    app:{isPackaged:true,getAppPath:()=>path.join(resources,'app')},nativeClientPresentations:null,nativeBrowserPresentations:null,nativeDesktopPresentations:null,nativeDesktopPermissions:null,
    resolveOctopusHome:()=>currentHome,requireNativeDesktopAccess:()=>{},syncNativeDesktopHosts:()=>calls.push(['sync-hosts']),
    createClientPresentationHost:options=>createClientPresentationHost({...options,loadAddon:file=>{calls.push(['load',file]);return{createPiPHost:config=>{event=config.onEvent;calls.push(['factory']);return native;}};}}),

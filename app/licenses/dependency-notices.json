@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "retrieved_at_utc": "2026-10-07T06:00:15.842734+00:00",
-  "scope": "Exact-version supplemental original notice evidence for six npm dependencies and one existing model asset; parent owns generator integration.",
+  "scope": "Exact-version supplemental original notice evidence for eight npm dependencies and one existing model asset; parent owns generator integration.",
   "limitations": "Recovered evidence is not legal clearance. Dependency declarations are preserved verbatim, including absent khroma declaration. SHA256 covers saved original bytes; tarballs were verified against package-lock SHA512 and not retained.",
   "entries": [
     {
@@ -414,6 +414,126 @@
       "limitations": [
         "Published and upstream package.json omit the license field. Original license text is retained without assigning an SPDX declaration."
       ]
+    },
+    {
+      "name": "fastdom",
+      "version": "1.0.12",
+      "package": "fastdom@1.0.12",
+      "declared_license": "MIT",
+      "status": "notice-recovered",
+      "npm_release": {
+        "upstream_url": "https://registry.npmjs.org/fastdom/1.0.12",
+        "tarball_url": "https://registry.npmjs.org/fastdom/-/fastdom-1.0.12.tgz",
+        "tarball_sha256": "15e452be64ae3661c3cc9d736524ebb689c23f162765d60741dcc518ec182265",
+        "integrity": "sha512-LB+xjSTEbjHE1cWsxu+tN2Xqr1kpi+V9aADI7sVM5ZMaXyYGPHULQMzpJMYqOTULK/73pUkWVzzObFRBkPr+hg==",
+        "git_head": "a7b9044d58952b970c8b918dcf0e7c8824ba0ff5",
+        "package_manifest_matches_installed": true
+      },
+      "upstream": {
+        "repository_url": "https://github.com/wilsonpage/fastdom",
+        "revision": "a7b9044d58952b970c8b918dcf0e7c8824ba0ff5",
+        "tag": null
+      },
+      "notices": [
+        {
+          "path": "app/licenses/dependencies/fastdom-1.0.12/LICENSE",
+          "sha256": "df2ae14f12f31864acef768195afe4584b08a257f25925f49884619279f02f37",
+          "bytes": 1106,
+          "upstream_url": "https://registry.npmjs.org/fastdom/-/fastdom-1.0.12.tgz",
+          "upstream_revision": "npm:fastdom@1.0.12",
+          "source_path": "package/README.md",
+          "derivation": "Exact byte suffix beginning at authored ## License heading of the published README.md; no license text synthesized."
+        }
+      ],
+      "evidence": [
+        {
+          "path": "app/licenses/dependencies/fastdom-1.0.12/npm-release.json",
+          "sha256": "5a2cee4f117bc194bb923afd460dec3e86967c38cc65f939efc8c9c966d215a1",
+          "bytes": 2235,
+          "upstream_url": "https://registry.npmjs.org/fastdom/1.0.12",
+          "upstream_revision": "npm:fastdom@1.0.12",
+          "source_path": null
+        },
+        {
+          "path": "app/licenses/dependencies/fastdom-1.0.12/package.json",
+          "sha256": "59d7cb811e170491bac1d4bc3c881a2fa3f23f50691ed60e6bd9bb9a1e197858",
+          "bytes": 1534,
+          "upstream_url": "https://registry.npmjs.org/fastdom/-/fastdom-1.0.12.tgz",
+          "upstream_revision": "npm:fastdom@1.0.12",
+          "source_path": "package/package.json"
+        },
+        {
+          "path": "app/licenses/dependencies/fastdom-1.0.12/README.md",
+          "sha256": "cc5669ab6f7741bb061c8a7244addc8e3af1f84ec7d2445744b59d0169a87d11",
+          "bytes": 7525,
+          "upstream_url": "https://registry.npmjs.org/fastdom/-/fastdom-1.0.12.tgz",
+          "upstream_revision": "npm:fastdom@1.0.12",
+          "source_path": "package/README.md"
+        }
+      ],
+      "limitations": [
+        "The published package contains no license file; its MIT notice is the License section of the published README.md."
+      ]
+    },
+    {
+      "name": "strictdom",
+      "version": "1.0.1",
+      "package": "strictdom@1.0.1",
+      "declared_license": "MIT",
+      "status": "notice-recovered",
+      "npm_release": {
+        "upstream_url": "https://registry.npmjs.org/strictdom/1.0.1",
+        "tarball_url": "https://registry.npmjs.org/strictdom/-/strictdom-1.0.1.tgz",
+        "tarball_sha256": "824b654d671c79365e96c87687dba8ce7bf36c45f2214365313c0a2d3e3ffbbb",
+        "integrity": "sha512-cEmp9QeXXRmjj/rVp9oyiqcvyocWab/HaoN4+bwFeZ7QzykJD6L3yD4v12K1x0tHpqRqVpJevN3gW7kyM39Bqg==",
+        "git_head": "a3bbf19013ecc9c9d165dd4ed89e94757161443e",
+        "package_manifest_matches_installed": true
+      },
+      "upstream": {
+        "repository_url": "https://github.com/wilsonpage/strictdom",
+        "revision": "a3bbf19013ecc9c9d165dd4ed89e94757161443e",
+        "tag": null
+      },
+      "notices": [
+        {
+          "path": "app/licenses/dependencies/strictdom-1.0.1/LICENSE",
+          "sha256": "eec385fa29ca410bf6bdbb5ddd5939af2067f474d3cd6d3fd46a4488656d8cbf",
+          "bytes": 1106,
+          "upstream_url": "https://registry.npmjs.org/strictdom/-/strictdom-1.0.1.tgz",
+          "upstream_revision": "npm:strictdom@1.0.1",
+          "source_path": "package/README.md",
+          "derivation": "Exact byte suffix beginning at authored ## License heading of the published README.md; no license text synthesized."
+        }
+      ],
+      "evidence": [
+        {
+          "path": "app/licenses/dependencies/strictdom-1.0.1/npm-release.json",
+          "sha256": "9b8386e4e6f5d8b1accd028fa75f4812cdbd16d82d842f08203f62cc0f5bf4b7",
+          "bytes": 1763,
+          "upstream_url": "https://registry.npmjs.org/strictdom/1.0.1",
+          "upstream_revision": "npm:strictdom@1.0.1",
+          "source_path": null
+        },
+        {
+          "path": "app/licenses/dependencies/strictdom-1.0.1/package.json",
+          "sha256": "41768059f064f33500a89c2777f6231bf69a8d32664d09ba675006ae0ed8f282",
+          "bytes": 989,
+          "upstream_url": "https://registry.npmjs.org/strictdom/-/strictdom-1.0.1.tgz",
+          "upstream_revision": "npm:strictdom@1.0.1",
+          "source_path": "package/package.json"
+        },
+        {
+          "path": "app/licenses/dependencies/strictdom-1.0.1/README.md",
+          "sha256": "9280accadb9c4d0aa2de2b304da7f477eacb0823504964b71370eb7ab99c202d",
+          "bytes": 4146,
+          "upstream_url": "https://registry.npmjs.org/strictdom/-/strictdom-1.0.1.tgz",
+          "upstream_revision": "npm:strictdom@1.0.1",
+          "source_path": "package/README.md"
+        }
+      ],
+      "limitations": [
+        "The published package contains no license file; its MIT notice is the License section of the published README.md."
+      ]
     }
   ],
   "assets": [
@@ -462,5 +582,5 @@
     }
   ],
   "blockers": [],
-  "updated_at_utc": "2026-10-30T02:42:51.376676+00:00"
+  "updated_at_utc": "2026-11-03T04:17:34.668276+00:00"
 }
