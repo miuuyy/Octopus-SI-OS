@@ -1,7 +1,9 @@
 import { OcSkeleton } from "../../design-system/LoadingSkeleton";
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { OcExpandableList, OcIconButton, cx } from "../../design-system/components";
+import { OcButton, OcExpandableList, OcIconButton, OcMenuItem, cx } from "../../design-system/components";
+import { OcDropdown } from "../../design-system/OcDropdown";
+import { Glyph } from "../IconGlyphs";
 import "./catalog.css";
 
 export type CatalogInstalledRailProps<T> = {
@@ -56,7 +58,7 @@ export function CatalogInstalledRail<T>({
         >
           <div className="flex items-center justify-between gap-3 border-b border-border/40 px-2 pb-2">
             <h2 className="text-lg leading-6 font-medium text-default">{title}</h2>
-            <OcIconButton glyph="settings" label={manageLabel} onClick={onManage} size="xs" variant="ghost" />
+            <OcIconButton glyph="settings" label={manageLabel} onClick={onManage} size="sm" variant="ghost" />
           </div>
           <div className="px-2">
             <div className="group/catalog-installed-row flex h-11 w-full justify-between overflow-visible" ref={containerRef}>
@@ -110,7 +112,6 @@ export function CatalogInstalledRail<T>({
 
 export type CatalogSectionProps<T> = {
   batchSize?: number;
-  description?: ReactNode;
   getItemKey: (item: T) => string;
   getItemLabel: (item: T) => string;
   items: readonly T[];
@@ -124,7 +125,6 @@ export type CatalogSectionProps<T> = {
 
 export function CatalogSection<T>({
   batchSize = 12,
-  description,
   getItemKey,
   getItemLabel,
   items,
@@ -137,33 +137,98 @@ export function CatalogSection<T>({
 }: CatalogSectionProps<T>) {
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3 border-b border-subtle pe-0.5 pb-2 text-default [padding-inline-start:var(--padding-row-x)]">
-        <div className="min-w-0">
-          <h2 className="flex min-h-7 items-center gap-1.5 text-lg leading-6 font-medium">
-            {title}
-            {showCount ? <span className="text-tertiary">{items.length}</span> : null}
-          </h2>
-          {description ? <p className="text-sm leading-5 text-secondary">{description}</p> : null}
-        </div>
+      <div className="flex items-center justify-between gap-3 border-b border-subtle pe-0.5 pb-2 text-default [padding-inline-start:var(--sectioned-page-leading-inset,0.5rem)]" data-slot="section-header">
+        <h2 className="flex min-h-7 items-center gap-1.5 text-lg leading-6 font-medium">
+          {title}
+          {showCount ? <span className="text-tertiary">{items.length}</span> : null}
+        </h2>
       </div>
-      <OcExpandableList
-        batchSize={batchSize}
-        getItemKey={getItemKey}
-        getItemLabel={getItemLabel}
-        items={items}
-        renderItemPreview={renderItemPreview}
-        resetKey={resetKey}
-        visibleItemLimit={visibleItemLimit}
-      >
-        {(visibleItems) => (
-          <div className="oc-catalog-grid-container">
-            <div className="oc-catalog-grid grid gap-x-6 gap-y-2">
-              {visibleItems.map((item) => <Fragment key={getItemKey(item)}>{renderCard(item)}</Fragment>)}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <OcExpandableList
+          batchSize={batchSize}
+          disclosureClassName="mt-4 gap-3 px-2.5"
+          getItemKey={getItemKey}
+          getItemLabel={getItemLabel}
+          items={items}
+          renderPreviews={renderItemPreview ? (hiddenItems) => (
+            <CatalogLogoStack>{hiddenItems.slice(0, 3).map((item) => <Fragment key={getItemKey(item)}>{renderItemPreview(item)}</Fragment>)}</CatalogLogoStack>
+          ) : undefined}
+          resetKey={resetKey}
+          visibleItemLimit={visibleItemLimit}
+        >
+          {(visibleItems) => (
+            <div className="oc-catalog-grid-container">
+              <div className="oc-catalog-grid grid gap-x-6 gap-y-2">
+                {visibleItems.map((item) => <Fragment key={getItemKey(item)}>{renderCard(item)}</Fragment>)}
+              </div>
             </div>
-          </div>
-        )}
-      </OcExpandableList>
+          )}
+        </OcExpandableList>
+      </div>
     </section>
+  );
+}
+
+export function CatalogLogoStack({ children }: { children: ReactNode }) {
+  const items = Children.toArray(children);
+  if (!items.length) return null;
+  return (
+    <span aria-hidden="true" className="flex shrink-0 items-center">
+      {items.map((item, index) => (
+        <span className="-ms-1.5 flex size-6 items-center justify-center overflow-hidden rounded-md bg-surface text-black ring-1 ring-border ring-inset first:ms-0 dark:text-gray-200" key={index}>
+          {item}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export type CatalogBreadcrumbAncestor = { id: string; label: string; onClick: () => void };
+
+export function CatalogToolbarBreadcrumb({ ancestors = [], current }: { ancestors?: CatalogBreadcrumbAncestor[]; current: ReactNode }) {
+  return (
+    <nav aria-label="Breadcrumb" className="no-drag flex min-w-0 items-center gap-1 text-base text-text-description">
+      {ancestors.map((ancestor, index) => (
+        <Fragment key={ancestor.id}>
+          {index > 0 ? <CatalogBreadcrumbChevron /> : null}
+          <OcButton className="min-w-0" onClick={ancestor.onClick} size="sm" variant="ghost">
+            <span className="min-w-0 truncate">{ancestor.label}</span>
+          </OcButton>
+        </Fragment>
+      ))}
+      {ancestors.length ? <CatalogBreadcrumbChevron /> : null}
+      <span aria-current="page" className="flex h-token-button-composer min-w-0 flex-auto items-center truncate px-2 text-default">{current}</span>
+    </nav>
+  );
+}
+
+function CatalogBreadcrumbChevron() {
+  return <Glyph className="shrink-0 -rotate-90" name="chevronDown" size={16} />;
+}
+
+export type CatalogFilterSection = { id: string; title: string };
+
+export function CatalogSectionFilter({ onSelect, sections, selectedId }: {
+  onSelect: (id: string | null) => void;
+  sections: readonly CatalogFilterSection[];
+  selectedId: string | null;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const select = (id: string | null) => {
+    setOpen(false);
+    onSelect(id);
+  };
+  return (
+    <>
+      <OcIconButton buttonRef={triggerRef} className="shrink-0" glyph="filter" label="Filter sections" onClick={() => setOpen(true)} size="sm" variant="ghost" />
+      <OcDropdown align="end" anchorRef={triggerRef} contentWidth="menu" onOpenChange={setOpen} open={open}>
+        <OcMenuItem label="All" onClick={() => select(null)} role="menuitem" trailing={selectedId === null ? <Glyph name="check" size={14} /> : null} />
+        {sections.map((section) => (
+          <OcMenuItem key={section.id} label={section.title} onClick={() => select(section.id)} role="menuitem" trailing={section.id === selectedId ? <Glyph name="check" size={14} /> : null} />
+        ))}
+      </OcDropdown>
+    </>
   );
 }
 

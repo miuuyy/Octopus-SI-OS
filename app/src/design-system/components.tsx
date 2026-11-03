@@ -1148,6 +1148,7 @@ export type OcExpandableListProps<T> = {
   getItemLabel: (item: T) => string;
   items: readonly T[];
   renderItemPreview?: (item: T) => ReactNode;
+  renderPreviews?: (hiddenItems: readonly T[]) => ReactNode;
   resetKey: string | number;
   visibleItemLimit: number;
 };
@@ -1160,6 +1161,7 @@ export function OcExpandableList<T>({
   getItemLabel,
   items,
   renderItemPreview,
+  renderPreviews,
   resetKey,
   visibleItemLimit,
 }: OcExpandableListProps<T>) {
@@ -1202,7 +1204,7 @@ export function OcExpandableList<T>({
           onClick={() => setExpansion({ key: resetKey, page: isExpanded ? 0 : page + 1 })}
           type="button"
         >
-          {previewItems.length ? (
+          {renderPreviews ? (isExpanded ? null : renderPreviews(hiddenItems)) : previewItems.length ? (
             <span aria-hidden="true" className="flex h-10 w-8 shrink-0 items-center">
               {previewItems.map(({ key, content }) => (
                 <span className="-ml-2 flex size-4 items-center justify-center overflow-hidden rounded-sm border border-token-border-default bg-token-main-surface-primary first:ml-0" key={key}>

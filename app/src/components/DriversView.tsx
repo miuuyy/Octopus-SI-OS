@@ -864,7 +864,6 @@ function DriverBrowseView({
                 ) : null}
                 <CatalogSection
                   batchSize={12}
-                  description="Install a local package, then choose the projects where it may be used."
                   getItemKey={driverKey}
                   getItemLabel={driverName}
                   items={visible}
@@ -972,7 +971,6 @@ function DriverManageView({
               <div className="[&_.oc-catalog-grid]:!grid-cols-1">
                 <CatalogSection
                   batchSize={12}
-                  description="Open a driver to review project access, current activity, or removal requirements."
                   getItemKey={driverKey}
                   getItemLabel={driverName}
                   items={visible}

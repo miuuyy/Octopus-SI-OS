@@ -143,7 +143,7 @@ test("page loaders show only the centered logo until the catalog settles", async
       "../extensions/useClientExtensions": { useClientExtensions: () => ({ extensions: [], actionStatuses: [] }) },
       "../extensions/incidents": { subscribeClientExtensionIncidents: () => noop, clientExtensionIncidentSnapshot: () => incidents },
       "../toasts": { useAppErrorToast: noop },
-      "./catalog": { CatalogRouteTransition: ({ children }) => children, CatalogSection: () => null },
+      "./catalog": { CatalogInstalledRail: () => null, CatalogRouteTransition: ({ children }) => children, CatalogSection: () => null, CatalogSectionFilter: () => null, CatalogToolbarBreadcrumb: () => null },
       "./SetupDialogShell": { SetupDialogShell: () => null },
       "./applications/ApplicationConnectDialog": { ApplicationConnectDialog: () => null },
       "./applications/PackageInstallReviewDialog": { PackageInstallReviewDialog: () => null },

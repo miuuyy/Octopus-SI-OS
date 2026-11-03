@@ -47,22 +47,18 @@ import { OctopusLoadingState } from "../navigation/OctopusLoadingState";
 import { OctopusSpinner } from "../navigation/OctopusSpinner";
 import { SettingsHeading } from "./SettingsHeading";
 
-const CATEGORY_COPY: Record<ClientExtensionCategory, { title: string; description: string }> = {
+const CATEGORY_COPY: Record<ClientExtensionCategory, { title: string }> = {
   widget: {
     title: "Widgets",
-    description: "Useful at-a-glance information on Home.",
   },
   tab: {
     title: "Tabs & panels",
-    description: "Dedicated spaces for tools and information.",
   },
   repair: {
     title: "Repairs",
-    description: "Guided fixes offered when Octopus recognizes a problem.",
   },
   input: {
     title: "Input",
-    description: "New ways to control the client with your hands or voice.",
   },
 };
 
@@ -481,7 +477,6 @@ function ExtensionBrowseView({
               return (
                 <CatalogSection
                   batchSize={12}
-                  description={copy.description}
                   getItemKey={extensionKey}
                   getItemLabel={extensionName}
                   items={rows}
@@ -589,7 +584,6 @@ function ExtensionManageView({
             <div className="[&_.oc-catalog-grid]:!grid-cols-1">
               <CatalogSection
                 batchSize={12}
-                description="Open an extension to review its setup, sources, or removal options."
                 getItemKey={extensionKey}
                 getItemLabel={extensionName}
                 items={extensions}

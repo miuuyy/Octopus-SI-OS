@@ -1,6 +1,7 @@
 import "./icon-glyphs/chat";
 import "./catalog/application-artwork.css";
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -69,8 +70,9 @@ import {
 } from "./applications/applicationModel";
 import {
   CatalogInstalledRail,
-  CatalogRouteTransition,
   CatalogSection,
+  CatalogSectionFilter,
+  CatalogToolbarBreadcrumb,
 } from "./catalog";
 import { Glyph, type GlyphName } from "./IconGlyphs";
 import { OctopusLoadingState } from "./OctopusLoadingLogo";
@@ -157,15 +159,16 @@ type ApplicationPackLifecycleOperation = Omit<ApplicationLifecycleOperation, "op
 type ApplicationCatalogView = "browse" | "manage";
 
 const CATEGORY_ORDER: ApplicationCategory[] = ["provider", "connector", "plugin", "artifact"];
+const PACKS_SECTION_ID = "packs";
 const INSTALL_LOCKED = "Another installation is in progress.";
 const PAGE_LAYOUT_TRANSITION = { type: "spring", duration: 0.5, bounce: 0.1 } as const;
 const INSTALLED_SECTIONS_TRANSITION = { duration: 0.24, ease: [0.2, 0, 0, 1] } as const;
 const SHA256_DIGEST = /^[a-f0-9]{64}$/;
-const CATEGORY_COPY: Record<ApplicationCategory, { title: string; description: string }> = {
-  provider: { title: "AI Providers", description: "Models for Home and tasks. Each provider connects through its own sign-in, API key, or local service." },
-  connector: { title: "Connectors", description: "Services and triggers that bring messages into a task and carry its replies back out." },
-  plugin: { title: "Plugins", description: "Tools and guides a task picks up when it needs them, such as MCP servers, memory and image generation." },
-  artifact: { title: "Context", description: "Knowledge packages you can attach to new tasks." },
+const CATEGORY_COPY: Record<ApplicationCategory, { title: string }> = {
+  provider: { title: "AI Providers" },
+  connector: { title: "Connectors" },
+  plugin: { title: "Plugins" },
+  artifact: { title: "Context" },
 };
 
 export function ApplicationsView({
@@ -201,10 +204,10 @@ export function ApplicationsView({
   const [clientSetup, setClientSetup] = useState<OctopusClientSetupState | null>(null);
   const [clientSetupError, setClientSetupError] = useState("");
   const [browseQuery, setBrowseQuery] = useState("");
+  const [browseSection, setBrowseSection] = useState<string | null>(null);
   const [manageQuery, setManageQuery] = useState("");
   const [catalogView, setCatalogView] = useState<ApplicationCatalogView>("browse");
   const [detailReturnView, setDetailReturnView] = useState<ApplicationCatalogView>("browse");
-  const [routeDirection, setRouteDirection] = useState<"back" | "forward">("forward");
   const [manageCategory, setManageCategory] = useState<ApplicationCategory>("connector");
   const [selectedId, setSelectedId] = useState("");
   const [selectedPackId, setSelectedPackId] = useState("");
@@ -360,7 +363,6 @@ export function ApplicationsView({
     if (searchFocusTick <= 0) return;
     setSelectedId("");
     setSelectedPackId("");
-    setRouteDirection("back");
     setCatalogView("browse");
     window.requestAnimationFrame(() => browseSearchRef.current?.focus());
   }, [searchFocusTick]);
@@ -409,6 +411,11 @@ export function ApplicationsView({
     const rows = visible.filter((application) => application.category === category);
     return rows.length ? [{ category, rows }] : [];
   });
+  const browseSections = [
+    ...(visiblePacks.length ? [{ id: PACKS_SECTION_ID, title: "Application Packs" }] : []),
+    ...groups.map(({ category }) => ({ id: category, title: CATEGORY_COPY[category].title })),
+  ];
+  const shownBrowseSection = browseSection && browseSections.some((section) => section.id === browseSection) ? browseSection : null;
   const manageNeedle = manageQuery.trim().toLowerCase();
   const manageApplications = applications.filter((application) => (
     application.category === manageCategory
@@ -532,7 +539,6 @@ export function ApplicationsView({
     scrollOffsetRef.current = scrollRef.current?.scrollTop ?? 0;
     detailOriginRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setDetailReturnView(returnView);
-    setRouteDirection("forward");
     setSelectedPackId("");
     setSelectedId(id);
     const application = applications.find((candidate) => candidate.id === id);
@@ -543,13 +549,11 @@ export function ApplicationsView({
     scrollOffsetRef.current = scrollRef.current?.scrollTop ?? 0;
     detailOriginRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setDetailReturnView("browse");
-    setRouteDirection("forward");
     setSelectedId("");
     setSelectedPackId(id);
   }
 
   function closeApplication() {
-    setRouteDirection("back");
     setSelectedId("");
     window.requestAnimationFrame(() => {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollOffsetRef.current;
@@ -569,7 +573,6 @@ export function ApplicationsView({
 
   function closeApplicationPack() {
     const closingPackId = selectedPackId;
-    setRouteDirection("back");
     setSelectedPackId("");
     window.requestAnimationFrame(() => {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollOffsetRef.current;
@@ -585,14 +588,12 @@ export function ApplicationsView({
 
   function openManage() {
     setHighlightedId("");
-    setRouteDirection("forward");
     setCatalogView("manage");
     window.requestAnimationFrame(() => manageSearchRef.current?.focus());
   }
 
   function closeManage() {
     setHighlightedId("");
-    setRouteDirection("back");
     setCatalogView("browse");
     window.requestAnimationFrame(() => document.getElementById("applications-browse-manage")?.focus());
   }
@@ -868,19 +869,15 @@ export function ApplicationsView({
     <>
       <div className="relative h-full min-h-0">
         <div aria-hidden={detailOpen || undefined} className={cx("h-full min-h-0", detailOpen && "pointer-events-none invisible absolute inset-0")}>
-          <CatalogRouteTransition className="h-full min-h-0" direction={routeDirection} viewKey={`applications-${catalogView}`}>
+          <div className="h-full min-h-0" key={`applications-${catalogView}`}>
             {!loaded || catalogView === "browse" && !packsLoaded ? (
               <OctopusLoadingState className="surface-content-loading-state" label="Loading applications" />
             ) : <section className="flex h-full min-h-0 flex-col text-base select-none">
               <header className="surface-titlebar-spacer draggable flex h-toolbar shrink-0 items-center justify-between gap-2 px-panel">
                 {catalogView === "manage" ? (
-                  <button className="no-drag cursor-interaction flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-token-text-secondary hover:bg-token-list-hover-background hover:text-token-foreground focus:outline-none" onClick={closeManage} type="button">
-                    <span>Applications</span>
-                    <span className="text-token-input-placeholder-foreground">/</span>
-                    <span className="text-token-foreground">Manage</span>
-                  </button>
+                  <CatalogToolbarBreadcrumb ancestors={[{ id: "applications", label: "Applications", onClick: closeManage }]} current="Manage" />
                 ) : (
-                  <span className="no-drag flex min-w-0 items-center rounded-lg px-2 py-1 text-sm text-token-foreground">Applications</span>
+                  <CatalogToolbarBreadcrumb current="Applications" />
                 )}
                 <div className="no-drag flex min-w-0 items-center justify-end gap-2">
                   {catalogView === "browse" ? (
@@ -892,14 +889,24 @@ export function ApplicationsView({
                 <div className="flex min-h-full w-full flex-col">
                   {catalogView === "browse" ? (
                     <>
-                      <div className="mx-auto w-full max-w-[var(--thread-content-max-width)] px-panel pt-panel">
-                        <div className="flex items-start justify-between gap-4 px-2">
-                          <div className="flex min-w-0 flex-col gap-2">
-                            <h1 className="heading-xl font-normal text-default">Applications</h1>
-                            <div className="text-lg leading-6 text-secondary">Connect Octopus to the tools and context you use</div>
+                      <AnimatePresence initial={false} mode="popLayout">
+                        <motion.div
+                          animate={{ opacity: 1, transform: "translateY(0)" }}
+                          exit={{ opacity: 0, transform: "translateY(-4px)" }}
+                          initial={{ opacity: 0, transform: "translateY(-4px)" }}
+                          key="page-heading"
+                          transition={reducedMotion ? { duration: 0 } : PAGE_LAYOUT_TRANSITION}
+                        >
+                          <div className="mx-auto w-full max-w-[var(--thread-content-max-width)] px-panel pt-panel">
+                            <div className="flex items-start justify-between gap-4 px-2">
+                              <div className="flex min-w-0 flex-col gap-2">
+                                <h1 className="heading-xl font-normal text-default">Applications</h1>
+                                <div className="text-lg leading-6 text-secondary">Connect Octopus to the tools and context you use</div>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
+                        </motion.div>
+                      </AnimatePresence>
                       <div className="sticky top-0 z-30 bg-surface after:pointer-events-none after:absolute after:top-full after:right-0 after:left-0 after:h-8 after:bg-linear-to-b after:from-surface after:to-transparent after:content-['']">
                         <div className="mx-auto flex w-full max-w-[var(--thread-content-max-width)] items-center gap-2 px-panel pt-panel pb-2">
                           <OcSearchField autoFocus className="min-w-0 flex-1" id="applications-page-search" inputRef={browseSearchRef} label="Search applications" onChange={(value) => {
@@ -944,9 +951,21 @@ export function ApplicationsView({
                       </>
                     ) : (
                       <>
-                        {visiblePacks.length ? (
+                        <CatalogInstalledRail
+                          getItemKey={(application) => application.id}
+                          getItemLabel={(application) => application.name}
+                          items={applications.filter((application) => application.installed)}
+                          manageLabel="Manage applications"
+                          onManage={openManage}
+                          onOpen={(application) => openApplication(application.id, "browse")}
+                          renderIcon={(application, size) => <ApplicationLogo application={application} className="size-full" logoSize={size === "mini" ? 8 : 18} />}
+                        />
+                        <div className="flex min-w-0 items-center justify-between gap-2 px-2">
+                          <span />
+                          <CatalogSectionFilter onSelect={setBrowseSection} sections={browseSections} selectedId={shownBrowseSection} />
+                        </div>
+                        {visiblePacks.length && (!shownBrowseSection || shownBrowseSection === PACKS_SECTION_ID) ? (
                           <CatalogSection
-                            description="Install a reviewed set of applications, local capabilities, and context"
                             getItemKey={(pack) => pack.id}
                             getItemLabel={(pack) => pack.name}
                             items={visiblePacks}
@@ -969,24 +988,15 @@ export function ApplicationsView({
                                 setupStatus={applicationPackSetupStatus(pack, setupStatusByInterface)}
                               />
                             )}
-                            resetKey={`packs:${browseQuery}`}
+                            renderItemPreview={() => <Glyph className="text-secondary" name="layers" size={14} />}
+                            resetKey={`packs:${browseQuery}:${shownBrowseSection}`}
                             showCount={Boolean(browseQuery.trim())}
                             title="Application Packs"
-                            visibleItemLimit={3}
+                            visibleItemLimit={shownBrowseSection ? visiblePacks.length : 6}
                           />
                         ) : null}
-                        <CatalogInstalledRail
-                          getItemKey={(application) => application.id}
-                          getItemLabel={(application) => application.name}
-                          items={applications.filter((application) => application.installed)}
-                          manageLabel="Manage applications"
-                          onManage={openManage}
-                          onOpen={(application) => openApplication(application.id, "browse")}
-                          renderIcon={(application, size) => <ApplicationLogo application={application} className="size-full" logoSize={size === "mini" ? 8 : 18} />}
-                        />
-                        {groups.map(({ category, rows }) => (
+                        {groups.filter(({ category }) => !shownBrowseSection || shownBrowseSection === category).map(({ category, rows }) => (
                           <CatalogSection
-                            description={CATEGORY_COPY[category].description}
                             getItemKey={(application) => application.id}
                             getItemLabel={(application) => application.name}
                             items={rows}
@@ -997,10 +1007,11 @@ export function ApplicationsView({
                                 else browseCardRefs.current.delete(application.id);
                               }} setupStatus={applicationSetupStatus(application, setupStatusByInterface)} />
                             )}
-                            renderItemPreview={(application) => <ApplicationMiniLogo application={application} />}
-                            resetKey={`${category}:${browseQuery}`}
+                            renderItemPreview={(application) => <ApplicationLogo application={application} className="size-full" logoSize={14} />}
+                            resetKey={`${category}:${browseQuery}:${shownBrowseSection}`}
                             showCount={Boolean(browseQuery.trim())}
                             title={CATEGORY_COPY[category].title}
+                            visibleItemLimit={shownBrowseSection ? rows.length : 6}
                           />
                         ))}
                       </>
@@ -1009,10 +1020,10 @@ export function ApplicationsView({
                 </div>
               </div>
             </section>}
-          </CatalogRouteTransition>
+          </div>
         </div>
         <div aria-hidden={!detailOpen || undefined} className={cx("h-full min-h-0", !detailOpen && "pointer-events-none invisible absolute inset-0")}>
-          <CatalogRouteTransition className="h-full min-h-0" direction={routeDirection} viewKey={selectedPack ? `application-pack-detail:${selectedPack.id}` : selected ? `application-detail:${selected.id}` : "application-detail-empty"}>
+          <div className="h-full min-h-0" key={selectedPack ? `application-pack-detail:${selectedPack.id}` : selected ? `application-detail:${selected.id}` : "application-detail-empty"}>
             {selectedPack ? (
               <ApplicationPackDetail
                 accessProfile={accessProfile}
@@ -1050,7 +1061,7 @@ export function ApplicationsView({
                 setupStatus={applicationSetupStatus(selected, setupStatusByInterface)}
               />
             ) : <div className="h-full min-h-0" />}
-          </CatalogRouteTransition>
+          </div>
         </div>
       </div>
       <ApplicationConnectDialog
@@ -1110,44 +1121,60 @@ function ApplicationPackCard({ accessProfile, clientSetup, clientSetupError, hig
       : inventory.ready
         ? "Add recommended"
         : "Apply pack";
+  const facts = applicationPackFacts(pack, setupStatus, clientSetup, clientSetupError);
   return (
     <div
       className={cx(
-        "group/card flex items-center justify-center gap-3 rounded-2xl border-none p-2 text-start text-base select-none outline-none hover:bg-text/5",
+        "group flex cursor-interaction! flex-col justify-center gap-2.5 rounded-2xl border border-none border-border/40 p-2 outline-none select-none hover:bg-text/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0",
         highlighted && "bg-text/5",
       )}
+      data-application-pack-open
       data-search-result-active={highlighted || undefined}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onOpen();
+      }}
       ref={setRef}
-      style={{ gridColumn: "1 / -1" }}
+      role="button"
+      tabIndex={0}
     >
-      <button className="flex min-w-0 flex-1 cursor-interaction items-center gap-3 rounded-xl p-0 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0" data-application-pack-open onClick={onOpen} type="button">
-        <ApplicationPackLogo />
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-medium text-token-foreground">{pack.name}</span>
-            <OcStatus label="Pack" tone="neutral" />
-          </span>
-          <span className="mt-0.5 block line-clamp-2 text-sm leading-relaxed text-text-description">{pack.description}</span>
-          <ApplicationPackFactBadges clientSetup={clientSetup} clientSetupError={clientSetupError} compact pack={pack} setupStatus={setupStatus} />
-        </span>
-      </button>
-      {busy && lifecycle ? <ApplicationLifecycleButton operation={lifecycle} variant="ghost" /> : needsApply ? (
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <OcButton
-            disabled={accessProfile !== "live" || installLocked || Boolean(blockReason)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onApply();
-            }}
-            size="sm"
-            title={accessProfile !== "live" ? "Apply packs from the Administrator profile." : blockReason || (installLocked ? INSTALL_LOCKED : `Apply ${pack.name}`)}
-            variant="outline"
-          >
-            {actionLabel}
-          </OcButton>
-          {lifecycle?.phase === "failed" ? <span className="max-w-48 truncate text-xs text-token-error-foreground">Install failed</span> : null}
+      <div className="flex items-center gap-3">
+        <span className="shrink-0"><ApplicationPackLogo /></span>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="truncate font-medium text-default">
+                  <span className="inline-flex max-w-full flex-wrap items-center gap-2"><span className="truncate">{pack.name}</span></span>
+                </div>
+                {facts.length ? (
+                  <div className="flex shrink-0 items-center gap-1">
+                    {facts.map((fact) => <span className="text-text-description" key={fact.label}>{fact.label}</span>)}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex flex-col gap-0.5 text-sm leading-relaxed text-text-description">
+              <div className="line-clamp-1">{pack.description}</div>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} role="presentation">
+            {busy && lifecycle ? <ApplicationLifecycleButton operation={lifecycle} variant="ghost" /> : needsApply ? (
+              <OcButton
+                disabled={accessProfile !== "live" || installLocked || Boolean(blockReason)}
+                onClick={onApply}
+                size="sm"
+                title={accessProfile !== "live" ? "Apply packs from the Administrator profile." : blockReason || (installLocked ? INSTALL_LOCKED : lifecycle?.phase === "failed" ? lifecycle.error : `Apply ${pack.name}`)}
+                variant="outline"
+              >
+                {actionLabel}
+              </OcButton>
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -1190,12 +1217,8 @@ function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, e
   ))?.name;
   return (
     <section className="flex h-full min-h-0 flex-col text-base select-none">
-      <header className="surface-titlebar-spacer flex h-toolbar shrink-0 items-center px-panel">
-        <button className="no-drag cursor-interaction flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-token-text-secondary hover:bg-token-list-hover-background hover:text-token-foreground focus:outline-none" onClick={onBack} type="button">
-          <span>Applications</span>
-          <span className="text-token-input-placeholder-foreground">/</span>
-          <span className="truncate text-token-foreground">{pack.name}</span>
-        </button>
+      <header className="surface-titlebar-spacer draggable flex h-toolbar shrink-0 items-center justify-between gap-2 px-panel">
+        <CatalogToolbarBreadcrumb ancestors={[{ id: "applications", label: "Applications", onClick: onBack }]} current={pack.name} />
       </header>
       <div className="plugins-surface-scroll vertical-scroll-fade-mask relative min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto [--edge-fade-distance:1rem] [scrollbar-gutter:stable]">
         <div className="mx-auto flex min-h-full w-full max-w-[var(--thread-content-max-width)] flex-col px-toolbar pt-panel pb-panel">
@@ -1374,26 +1397,28 @@ function ManageApplicationsList({ accessProfile, applicationRefs, applications, 
   setupStatusByInterface: Map<string, ClientExtensionActionStatus>;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-2">
-      {applications.map((application) => (
-        <ApplicationCard
-          accessProfile={accessProfile}
-          application={application}
-          connection={connectionFor(application)}
-          highlighted={highlightedId === application.id}
-          installLocked={installLocked}
-          key={application.id}
-          lifecycle={lifecycleFor(application)}
-          onInstall={() => onInstall(application)}
-          onOpen={onOpen}
-          onRemove={() => onRemove(application)}
-          setupStatus={applicationSetupStatus(application, setupStatusByInterface)}
-          view="manage"
-          setRef={(node) => {
-            if (node) applicationRefs.current?.set(application.id, node);
-            else applicationRefs.current?.delete(application.id);
-          }}
-        />
+    <div className="flex flex-col overflow-hidden rounded-lg border border-default">
+      {applications.map((application, index) => (
+        <Fragment key={application.id}>
+          <ApplicationCard
+            accessProfile={accessProfile}
+            application={application}
+            connection={connectionFor(application)}
+            highlighted={highlightedId === application.id}
+            installLocked={installLocked}
+            lifecycle={lifecycleFor(application)}
+            onInstall={() => onInstall(application)}
+            onOpen={onOpen}
+            onRemove={() => onRemove(application)}
+            setupStatus={applicationSetupStatus(application, setupStatusByInterface)}
+            view="manage"
+            setRef={(node) => {
+              if (node) applicationRefs.current?.set(application.id, node);
+              else applicationRefs.current?.delete(application.id);
+            }}
+          />
+          {index < applications.length - 1 ? <div className="mx-2.5 h-px bg-border" /> : null}
+        </Fragment>
       ))}
     </div>
   );
@@ -1426,32 +1451,58 @@ function ApplicationCard({
   setRef?: (node: HTMLDivElement | null) => void;
   view?: ApplicationCatalogView;
 }) {
+  const attention = applicationAttention(application, connection.summary, setupStatus);
   return (
     <div
       className={cx(
-        "group/card flex items-center justify-center gap-3 rounded-2xl border-none p-2 text-start text-base select-none outline-none hover:bg-text/5",
+        "group flex cursor-interaction! flex-col justify-center gap-2.5 rounded-2xl border border-none border-border/40 p-2 outline-none select-none hover:bg-text/5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0",
+        view === "manage" && "rounded-none! border-0!",
         highlighted && "bg-text/5",
       )}
+      data-application-open
       data-search-result-active={highlighted || undefined}
+      onClick={() => onOpen(application.id)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onOpen(application.id);
+      }}
       ref={setRef}
+      role="button"
+      tabIndex={0}
     >
-      <button className="flex min-w-0 flex-1 cursor-interaction items-center gap-3 rounded-xl p-0 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0" data-application-open onClick={() => onOpen(application.id)} type="button">
-        <ApplicationLogo application={application} className="size-10 overflow-hidden rounded-lg border border-default bg-transparent" logoSize={24} />
-        <span className={cx("flex min-w-0 flex-1 flex-col justify-center", view === "browse" ? "gap-px" : "gap-0.5")}>
-          <span className="block truncate font-medium text-default">{application.name}</span>
-          <span className="block line-clamp-1 text-sm leading-relaxed text-text-description">{application.description}</span>
-          <ApplicationCardMeta application={application} setupStatus={setupStatus} summary={connection.summary} />
+      <div className="flex items-center gap-3">
+        <span className="shrink-0">
+          <span className="flex h-10 w-10 shrink-0 cursor-interaction! items-center justify-center overflow-hidden rounded-lg border border-default bg-transparent">
+            <ApplicationLogo application={application} className="size-full" logoSize={24} />
+          </span>
         </span>
-      </button>
-      <ApplicationCardActions accessProfile={accessProfile} application={application} connection={connection} installLocked={installLocked} lifecycle={lifecycle} onInstall={onInstall} onOpen={() => onOpen(application.id)} onRemove={onRemove} view={view} />
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="truncate font-medium text-default">
+                  <span className="inline-flex max-w-full flex-wrap items-center gap-2"><span className="truncate">{application.name}</span></span>
+                </div>
+                {attention ? <div className="flex shrink-0 items-center gap-1"><span className="text-text-description">{attention.label}</span></div> : null}
+              </div>
+            </div>
+            <div className="flex flex-col gap-0.5 text-sm leading-relaxed text-text-description">
+              <div className="line-clamp-1">{application.description}</div>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center">
+            <ApplicationCardActions accessProfile={accessProfile} application={application} installLocked={installLocked} lifecycle={lifecycle} onInstall={onInstall} onOpen={() => onOpen(application.id)} onRemove={onRemove} view={view} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function ApplicationCardActions({ accessProfile, application, connection, installLocked, lifecycle, onInstall, onOpen, onRemove, view }: {
+function ApplicationCardActions({ accessProfile, application, installLocked, lifecycle, onInstall, onOpen, onRemove, view }: {
   accessProfile: OctopusClientAccessProfile;
   application: ApplicationRecord;
-  connection: ApplicationConnectionActions;
   installLocked: boolean;
   lifecycle?: ApplicationLifecycleOperation;
   onInstall: () => void;
@@ -1459,65 +1510,48 @@ function ApplicationCardActions({ accessProfile, application, connection, instal
   onRemove: () => void;
   view: ApplicationCatalogView;
 }) {
-  const available = application.project_states.some((state) => state.policy_allowed);
   const repairable = Boolean(applicationRepairExpectation(application));
   if (lifecycle && lifecycleBusy(lifecycle)) return <ApplicationLifecycleButton operation={lifecycle} variant="ghost" />;
   if (!application.installed) return (
-    <div className="flex shrink-0 flex-col items-end gap-1">
-      <OcButton
-        disabled={accessProfile !== "live" || installLocked || !repairable && Boolean(application.install_block_reason)}
-        onClick={(event) => {
-          event.stopPropagation();
-          onInstall();
-        }}
-        size="sm"
-        title={accessProfile !== "live"
-          ? `${repairable ? "Repair" : "Install"} applications from the Administrator profile.`
-          : installLocked ? INSTALL_LOCKED : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
-        variant="outline"
-      >
-        {lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
-      </OcButton>
-      {lifecycle?.phase === "failed" ? <span className="max-w-48 truncate text-xs text-token-error-foreground" title={lifecycle.error}>{lifecycle.operation === "repair" ? "Repair failed" : "Install failed"}</span> : null}
+    <OcButton
+      disabled={accessProfile !== "live" || installLocked || !repairable && Boolean(application.install_block_reason)}
+      onClick={(event) => {
+        event.stopPropagation();
+        onInstall();
+      }}
+      size="sm"
+      title={accessProfile !== "live"
+        ? `${repairable ? "Repair" : "Install"} applications from the Administrator profile.`
+        : installLocked
+          ? INSTALL_LOCKED
+          : lifecycle?.phase === "failed"
+            ? lifecycle.error
+            : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
+      variant="outline"
+    >
+      {lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
+    </OcButton>
+  );
+  const menu = <ApplicationMoreActions accessProfile={accessProfile} application={application} onManage={onOpen} onRemove={onRemove} />;
+  if (view === "manage") return (
+    <div className="flex items-center gap-2">
+      {application.developer ? <div className="w-28 truncate pe-3 text-end text-sm text-secondary">{application.developer}</div> : null}
+      <div className="invisible opacity-0 group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} role="presentation">
+        {menu}
+      </div>
     </div>
   );
   return (
-    <div className="flex shrink-0 flex-col items-end gap-1">
-      <div className="flex items-center gap-1">
-        {!application.valid || connection.summary.status === "none" ? (
-          <OcButton
-            className="shrink-0"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpen();
-            }}
-            size="xs"
-            variant="ghost"
-          >
-            {!application.valid ? "View issue" : available ? "Manage" : "Set up"}
-          </OcButton>
-        ) : (
-          <ApplicationConnectionControl
-            connectAvailable={connection.connectAvailable}
-            disconnecting={connection.disconnecting}
-            name={application.name}
-            onCheck={connection.onCheck}
-            onConnect={connection.onConnect}
-            onDisconnect={connection.onDisconnect}
-            placement="card"
-            summary={connection.summary}
-          />
-        )}
-        {view === "manage" ? <ApplicationMoreActions accessProfile={accessProfile} application={application} onRemove={onRemove} /> : null}
-      </div>
-      {lifecycle?.phase === "failed" && lifecycle.operation === "remove" ? <span className="max-w-48 truncate text-xs text-token-error-foreground" title={lifecycle.error}>Remove failed</span> : null}
+    <div className="flex h-7 shrink-0 items-center justify-end gap-2" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} role="presentation">
+      {menu}
     </div>
   );
 }
 
-function ApplicationMoreActions({ accessProfile, application, onRemove }: {
+function ApplicationMoreActions({ accessProfile, application, onManage, onRemove }: {
   accessProfile: OctopusClientAccessProfile;
   application: ApplicationRecord;
+  onManage?: () => void;
   onRemove: () => void;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -1537,6 +1571,20 @@ function ApplicationMoreActions({ accessProfile, application, onRemove }: {
         variant="ghost"
       />
       <OcDropdown align="end" anchorRef={triggerRef} contentWidth="menu" onOpenChange={setOpen} open={open}>
+        {onManage ? (
+          <>
+            <OcMenuItem
+              label="Manage"
+              leadingIcon="settings"
+              onClick={() => {
+                setOpen(false);
+                onManage();
+              }}
+              role="menuitem"
+            />
+            <div aria-orientation="horizontal" className="mx-1 my-1 h-px bg-token-border" role="separator" />
+          </>
+        ) : null}
         <OcMenuItem
           description={blocked || undefined}
           descriptionAllowWrap
@@ -1598,12 +1646,8 @@ function ApplicationDetail({
   const reducedMotion = useReducedMotion();
   return (
     <section className="flex h-full min-h-0 flex-col text-base select-none">
-      <header className="surface-titlebar-spacer flex h-toolbar shrink-0 items-center px-panel">
-        <button className="no-drag cursor-interaction flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-secondary hover:bg-primary-ghost-hover hover:text-default focus:outline-none" onClick={onBack} type="button">
-          <span>Applications</span>
-          <span className="text-tertiary">/</span>
-          <span className="truncate text-default">{application.name}</span>
-        </button>
+      <header className="surface-titlebar-spacer draggable flex h-toolbar shrink-0 items-center justify-between gap-2 px-panel">
+        <CatalogToolbarBreadcrumb ancestors={[{ id: "applications", label: "Applications", onClick: onBack }]} current={application.name} />
       </header>
       <div className="plugins-surface-scroll vertical-scroll-fade-mask relative min-h-0 w-full flex-1 overflow-x-hidden overflow-y-auto [--edge-fade-distance:1rem] [scrollbar-gutter:stable]">
         <div className="mx-auto flex min-h-full w-full max-w-[var(--thread-content-max-width)] flex-col px-toolbar pt-panel pb-panel">
@@ -1612,11 +1656,12 @@ function ApplicationDetail({
               <ApplicationLogo application={application} className="size-[60px] overflow-hidden rounded-2xl border border-default bg-transparent" logoSize={28} />
               <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
                 <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1.5">
-                  <h1 className="heading-base min-w-0 break-words text-default electron:heading-lg">{application.name}</h1>
-                  <div className="text-base text-secondary">{application.description}</div>
+                  <h1 className="heading-base min-w-0 break-words text-default electron:heading-lg">
+                    <span className="flex min-w-0 items-center gap-2">{application.name}<ApplicationFactBadges application={application} setupStatus={setupStatus} summary={summary} /></span>
+                  </h1>
+                  <div className="text-base text-secondary"><span id="application-description">{application.description}</span></div>
                 </div>
                 <div className="flex max-w-full shrink-0 items-center gap-2">
-                  <ApplicationFactBadges application={application} setupStatus={setupStatus} summary={summary} />
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {application.installed && !busy ? <ApplicationMoreActions accessProfile={accessProfile} application={application} onRemove={onRemove} /> : null}
                     <OcAnimatedActionSlot>
@@ -1634,7 +1679,7 @@ function ApplicationDetail({
                       ) : null : (
                         <OcButton
                           disabled={accessProfile !== "live" || installLocked || !repairable && Boolean(application.install_block_reason)}
-                          leadingIcon="download"
+                          leadingIcon={repairable ? "refresh" : "plus"}
                           onClick={onInstall}
                           size="sm"
                           title={accessProfile !== "live"
@@ -1642,7 +1687,7 @@ function ApplicationDetail({
                             : installLocked ? INSTALL_LOCKED : repairable ? "Repair application package" : application.install_block_reason || "Install application"}
                           variant="primary"
                         >
-                          {lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair" : "Install"}
+                          {lifecycle?.phase === "failed" ? `Retry ${repairable ? "repair" : "install"}` : repairable ? "Repair application" : "Install application"}
                         </OcButton>
                       )}
                     </OcAnimatedActionSlot>
@@ -1984,16 +2029,6 @@ function IncludedItem({ description, glyph, title }: { description: string; glyp
 function ApplicationFactBadges({ application, setupStatus, summary }: { application: ApplicationRecord; setupStatus?: ClientExtensionActionStatus; summary: ApplicationConnectionSummary }) {
   const attention = applicationAttention(application, summary, setupStatus);
   return attention ? <OcStatus label={attention.label} tone={attention.tone} /> : null;
-}
-
-function ApplicationCardMeta({ application, setupStatus, summary }: { application: ApplicationRecord; setupStatus?: ClientExtensionActionStatus; summary: ApplicationConnectionSummary }) {
-  const attention = applicationAttention(application, summary, setupStatus);
-  if (!attention) return null;
-  return (
-    <span className="mt-1 flex min-w-0">
-      <OcStatus label={attention.label} tone={attention.tone} />
-    </span>
-  );
 }
 
 function applicationAttention(
