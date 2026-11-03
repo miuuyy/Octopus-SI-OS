@@ -1659,10 +1659,10 @@ function ApplicationDetail({
             <AnimatePresence initial={false}>
               {usable ? (
                 <motion.div
-                  animate={{ height: "auto", opacity: 1 }}
-                  className="-mt-[var(--detail-page-section-gap)] overflow-hidden"
-                  exit={{ height: 0, opacity: 0 }}
-                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+                  className="-mt-[var(--detail-page-section-gap)]"
+                  exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+                  initial={{ height: 0, opacity: 0, overflow: "hidden" }}
                   key="installed-sections"
                   transition={reducedMotion ? { duration: 0 } : INSTALLED_SECTIONS_TRANSITION}
                 >
