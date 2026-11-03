@@ -1,7 +1,7 @@
 diff --git a/electron/BUILD.gn b/electron/BUILD.gn
 --- a/electron/BUILD.gn
 +++ b/electron/BUILD.gn
-@@ -570,7 +570,11 @@
+@@ -640,7 +640,11 @@ source_set("electron_lib") {
  
    deps += [ "//electron/build/config:generate_mas_config" ]
  
@@ -17,7 +17,7 @@ diff --git a/electron/BUILD.gn b/electron/BUILD.gn
 diff --git a/electron/lib/browser/api/web-contents.ts b/electron/lib/browser/api/web-contents.ts
 --- a/electron/lib/browser/api/web-contents.ts
 +++ b/electron/lib/browser/api/web-contents.ts
-@@ -972,6 +972,10 @@
+@@ -439,6 +439,10 @@ WebContents.prototype._init = function () {
  };
  
  // Public APIs.
@@ -31,7 +31,7 @@ diff --git a/electron/lib/browser/api/web-contents.ts b/electron/lib/browser/api
 diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/guest-view-manager.ts
 --- a/electron/lib/browser/guest-view-manager.ts
 +++ b/electron/lib/browser/guest-view-manager.ts
-@@ -11,9 +11,14 @@
+@@ -11,9 +11,14 @@ import {
  } from '@electron/internal/common/web-view-methods';
  
  import { webContents } from 'electron/main';
@@ -43,10 +43,10 @@ diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/g
 +  bindingId?: string;
 +  generation?: number;
 +  viewInstanceId?: number;
-   visibilityState?: DocumentVisibilityState;
    embedder: Electron.WebContents;
-   guest: Electron.WebContents;
-@@ -89,6 +94,9 @@
+   // The frame in |embedder| that created the <webview>; only it may drive the
+   // guest through the guest-view IPCs.
+@@ -93,6 +98,9 @@ const createGuest = function (
    elementInstanceId: number,
    params: Record<string, any>
  ) {
@@ -56,7 +56,7 @@ diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/g
    const webPreferences = makeWebPreferences(embedder, params);
    const event = {
      sender: embedder,
-@@ -217,6 +225,8 @@
+@@ -213,6 +221,8 @@ const detachGuest = function (embedder: Electron.WebContents, guestInstanceId: n
  
    if (!guestInstance) return;
  
@@ -65,16 +65,7 @@ diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/g
    if (embedder !== guestInstance.embedder) {
      return;
    }
-@@ -240,6 +250,8 @@
-   // Forward embedder window visibility change events to guest
-   const onVisibilityChange = function (visibilityState: DocumentVisibilityState) {
-     for (const guestInstance of guestInstances.values()) {
-+      // Owned presentation visibility is native and generation-bound.
-+      if (guestInstance.bindingId) continue;
-       guestInstance.visibilityState = visibilityState;
-       if (guestInstance.embedder === embedder) {
-         guestInstance.guest._sendInternal(IPC_MESSAGES.GUEST_INSTANCE_VISIBILITY_CHANGE, visibilityState);
-@@ -254,7 +266,11 @@
+@@ -239,7 +249,11 @@ const watchEmbedder = function (embedder: Electron.WebContents) {
      // and the embedder will be invalid in the usual code path.
      for (const [guestInstanceId, guestInstance] of guestInstances) {
        if (guestInstance.embedder === embedder) {
@@ -86,16 +77,27 @@ diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/g
 +        }
        }
      }
-     // Clear the listeners.
-@@ -382,8 +398,138 @@
+     watchedEmbedders.delete(embedder);
+@@ -296,7 +310,7 @@ handleMessageSync(IPC_MESSAGES.GUEST_VIEW_MANAGER_DETACH_GUEST, function (event,
+   // Removing a <webview> from the DOM tears down its internal iframe, which
+   // destroys the guest and drops it from |guestInstances|, before the element's
+   // disconnectedCallback sends this IPC. There is nothing left to detach then.
+-  if (!guestInstances.has(guestInstanceId)) return;
++  if (!guestInstances.has(guestInstanceId) || guestInstances.get(guestInstanceId)!.bindingId) return;
+   getGuestForFrame(guestInstanceId, event);
+   return detachGuest(event.sender, guestInstanceId);
+ });
+@@ -367,6 +381,9 @@ const getGuestForFrame = function (
    if (!guestInstance) {
      throw new Error(`Invalid guestInstanceId: ${guestInstanceId}`);
    }
 +  if (guestInstance.bindingId) {
 +    throw new Error('Owned guest methods are main-process operations');
 +  }
-   if (guestInstance.guest.hostWebContents !== contents) {
-     throw new Error(`Access denied to guestInstanceId: ${guestInstanceId}`);
+   if (
+     guestInstance.guest.hostWebContents !== event.sender ||
+     (guestInstance.embedderFrame && event.senderFrame !== guestInstance.embedderFrame)
+@@ -375,3 +392,130 @@ const getGuestForFrame = function (
    }
    return guestInstance.guest;
  };
@@ -184,7 +186,7 @@ diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/g
 +    }
 +    const binding: GuestInstance = {
 +      elementInstanceId: elementId, viewInstanceId: viewId, generation,
-+      bindingId: randomUUID(), guest, embedder
++      bindingId: randomUUID(), guest, embedder, embedderFrame: event.senderFrame ?? null
 +    };
 +    pendingOwnedElements.set(key, binding);
 +    const session = guest.session;
@@ -229,7 +231,7 @@ diff --git a/electron/lib/browser/guest-view-manager.ts b/electron/lib/browser/g
 diff --git a/electron/lib/common/ipc-messages.ts b/electron/lib/common/ipc-messages.ts
 --- a/electron/lib/common/ipc-messages.ts
 +++ b/electron/lib/common/ipc-messages.ts
-@@ -13,6 +13,8 @@
+@@ -4,6 +4,8 @@ export const enum IPC_MESSAGES {
  
    GUEST_VIEW_INTERNAL_DISPATCH_EVENT = 'GUEST_VIEW_INTERNAL_DISPATCH_EVENT',
  
@@ -237,11 +239,11 @@ diff --git a/electron/lib/common/ipc-messages.ts b/electron/lib/common/ipc-messa
 +  GUEST_VIEW_MANAGER_RELEASE_OWNED_GUEST = 'GUEST_VIEW_MANAGER_RELEASE_OWNED_GUEST',
    GUEST_VIEW_MANAGER_CREATE_AND_ATTACH_GUEST = 'GUEST_VIEW_MANAGER_CREATE_AND_ATTACH_GUEST',
    GUEST_VIEW_MANAGER_DETACH_GUEST = 'GUEST_VIEW_MANAGER_DETACH_GUEST',
-   GUEST_VIEW_MANAGER_FOCUS_CHANGE = 'GUEST_VIEW_MANAGER_FOCUS_CHANGE',
+   GUEST_VIEW_MANAGER_CALL = 'GUEST_VIEW_MANAGER_CALL',
 diff --git a/electron/lib/renderer/web-view/guest-view-internal.ts b/electron/lib/renderer/web-view/guest-view-internal.ts
 --- a/electron/lib/renderer/web-view/guest-view-internal.ts
 +++ b/electron/lib/renderer/web-view/guest-view-internal.ts
-@@ -63,3 +63,19 @@
+@@ -63,3 +63,19 @@ export function propertyGet(guestInstanceId: number, name: string) {
  export function propertySet(guestInstanceId: number, name: string, value: any) {
    return ipcRendererUtils.invokeSync(IPC_MESSAGES.GUEST_VIEW_MANAGER_PROPERTY_SET, guestInstanceId, name, value);
  }
@@ -264,7 +266,7 @@ diff --git a/electron/lib/renderer/web-view/guest-view-internal.ts b/electron/li
 diff --git a/electron/lib/renderer/web-view/web-view-element.ts b/electron/lib/renderer/web-view/web-view-element.ts
 --- a/electron/lib/renderer/web-view/web-view-element.ts
 +++ b/electron/lib/renderer/web-view/web-view-element.ts
-@@ -40,6 +40,50 @@
+@@ -40,6 +40,50 @@ const defineWebViewElement = (hooks: WebViewImplHooks) => {
        internals.set(this, new WebViewImpl(this, hooks));
      }
  
@@ -315,7 +317,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-element.ts b/electron/lib/r
      getWebContentsId() {
        const internal = internals.get(this);
        if (!internal || !internal.guestInstanceId) {
-@@ -76,7 +120,11 @@
+@@ -76,7 +120,11 @@ const defineWebViewElement = (hooks: WebViewImplHooks) => {
        }
        hooks.guestViewInternal.deregisterEvents(internal.viewInstanceId);
        if (internal.guestInstanceId) {
@@ -331,7 +333,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-element.ts b/electron/lib/r
 diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/renderer/web-view/web-view-impl.ts
 --- a/electron/lib/renderer/web-view/web-view-impl.ts
 +++ b/electron/lib/renderer/web-view/web-view-impl.ts
-@@ -23,12 +23,16 @@
+@@ -23,12 +23,16 @@ export class WebViewImpl {
    public elementAttached = false;
    public guestInstanceId?: number;
    public hasFocus = false;
@@ -349,7 +351,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/rend
  
    public attributes: Map<string, WebViewAttribute>;
  
-@@ -44,6 +48,7 @@
+@@ -44,6 +48,7 @@ export class WebViewImpl {
      shadowRoot.appendChild(style);
      this.attributes = setupWebViewAttributes(this);
      this.viewInstanceId = getNextId();
@@ -357,7 +359,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/rend
      shadowRoot.appendChild(this.internalElement);
  
      // Provide access to contentWindow.
-@@ -67,6 +72,9 @@
+@@ -67,6 +72,9 @@ export class WebViewImpl {
  
    // Resets some state upon reattaching <webview> element to the DOM.
    reset() {
@@ -367,7 +369,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/rend
      // If guestInstanceId is defined then the <webview> has navigated and has
      // already picked up a partition ID. Thus, we need to reset the initialization
      // state. However, it may be the case that beforeFirstNavigation is false BUT
-@@ -106,6 +114,7 @@
+@@ -106,6 +114,7 @@ export class WebViewImpl {
    }
  
    createGuest() {
@@ -375,7 +377,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/rend
      this.internalInstanceId = getNextId();
      this.hooks.guestViewInternal
        .createGuest(this.internalElement, this.internalInstanceId, this.buildParams())
-@@ -115,6 +124,14 @@
+@@ -115,6 +124,14 @@ export class WebViewImpl {
    }
  
    dispatchEvent(eventName: string, props: Record<string, any> = {}) {
@@ -390,7 +392,7 @@ diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/rend
      const event = new Event(eventName);
      Object.assign(event, props);
      this.webviewNode.dispatchEvent(event);
-@@ -149,6 +166,7 @@
+@@ -149,6 +166,7 @@ export class WebViewImpl {
  
    // Updates state upon loadcommit.
    onLoadCommit(props: Record<string, any>) {
@@ -401,18 +403,15 @@ diff --git a/electron/lib/renderer/web-view/web-view-impl.ts b/electron/lib/rend
 diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/shell/browser/api/electron_api_web_contents.cc
 --- a/electron/shell/browser/api/electron_api_web_contents.cc
 +++ b/electron/shell/browser/api/electron_api_web_contents.cc
-@@ -3,7 +3,9 @@
+@@ -3,6 +3,7 @@
  // found in the LICENSE file.
  
  #include "shell/browser/api/electron_api_web_contents.h"
--
 +#include "shell/browser/api/owned_guest_presentation.h"
-+
-+#include <cmath>
- #include <limits>
- #include <list>
- #include <memory>
-@@ -836,9 +838,12 @@
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -1004,9 +1005,12 @@ WebContents::WebContents(v8::Isolate* isolate,
  
  WebContents::WebContents(v8::Isolate* isolate,
                           std::unique_ptr<content::WebContents> web_contents,
@@ -427,7 +426,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
        id_(GetAllWebContents().Add(this))
  #if BUILDFLAG(ENABLE_PRINTING)
        ,
-@@ -851,11 +856,17 @@
+@@ -1019,11 +1023,17 @@ WebContents::WebContents(v8::Isolate* isolate,
    InitWithSessionAndOptions(isolate, std::move(web_contents),
                              session_->browser_context(),
                              gin::Dictionary::CreateEmpty(isolate));
@@ -447,8 +446,8 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
  #if BUILDFLAG(ENABLE_PRINTING)
        ,
        print_task_runner_(CreatePrinterHandlerTaskRunner())
-@@ -913,7 +924,13 @@
-   session_ = session;
+@@ -1087,7 +1097,13 @@ WebContents::WebContents(v8::Isolate* isolate,
+   DCHECK(browser_context != nullptr);
  
    std::unique_ptr<content::WebContents> web_contents;
 -  if (is_guest()) {
@@ -460,27 +459,27 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
 +    web_contents = content::WebContents::Create(params);
 +  } else if (is_guest()) {
      scoped_refptr<content::SiteInstance> site_instance =
-         content::SiteInstance::CreateForURL(session->browser_context(),
+         content::SiteInstance::CreateForURL(browser_context,
                                              GURL("chrome-guest://fake-host"));
-@@ -964,6 +981,9 @@
+@@ -1143,6 +1159,9 @@ WebContents::WebContents(v8::Isolate* isolate,
  
-   InitWithSessionAndOptions(isolate, std::move(web_contents),
-                             session->browser_context(), options);
+   InitWithSessionAndOptions(isolate, std::move(web_contents), browser_context,
+                             options);
 +  if (owned_guest_)
 +    owned_guest_presentation_ = std::make_unique<OwnedGuestPresentation>(
 +        this, initial_surface_size_, false);
  }
  
- void WebContents::InitZoomController(content::WebContents* web_contents,
-@@ -1115,6 +1135,7 @@
+ namespace {
+@@ -1341,6 +1360,7 @@ void WebContents::InitWithWebContents(
  }
  
  WebContents::~WebContents() {
 +  owned_guest_presentation_.reset();
-   // DevTools frontend messages use base::Unretained delegate callbacks.
-   // Clear the delegate before other teardown work can trigger callbacks
-   // into this partially destroyed WebContents.
-@@ -1148,7 +1169,7 @@
+   // Release this instance's contribution to the process-wide caret browsing
+   // refcount. Runs before any of the early returns below so a WebContents
+   // destroyed with caret browsing on cannot leak a count and pin the platform
+@@ -1388,7 +1408,7 @@ WebContents::~WebContents() {
  
    // For guest view based on OOPIF, the WebContents is released by the embedder
    // frame, and we need to clear the reference to the memory.
@@ -489,7 +488,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
  #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
    // And background pages are owned by extensions::ExtensionHost.
    if (type_ == Type::kBackgroundPage)
-@@ -1176,6 +1197,8 @@
+@@ -1416,6 +1436,8 @@ void WebContents::DeleteThisIfAlive() {
  }
  
  void WebContents::Destroy() {
@@ -498,7 +497,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
    // The content::WebContents should be destroyed asynchronously when possible
    // as user may choose to destroy WebContents during an event of it.
    if (Browser::Get()->is_shutting_down()) {
-@@ -1353,7 +1376,16 @@
+@@ -1632,7 +1654,16 @@ content::WebContents* WebContents::AddNewContents(
      type = Type::kOffScreen;
  
    v8::HandleScope handle_scope(isolate);
@@ -516,16 +515,16 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
  
    // Rebind the paint callback to the child WebContents. The
    // OffScreenWebContentsView was initially created with the parent's OnPaint
-@@ -2379,6 +2411,8 @@
+@@ -3095,6 +3126,8 @@ content::WebContents* WebContents::GetOpenDevToolsWebContents() const {
  }
  
  void WebContents::WebContentsDestroyed() {
 +  if (owned_guest_presentation_)
 +    owned_guest_presentation_->Shutdown();
-   // Clear the pointer stored in wrapper.
-   if (GetAllWebContents().Lookup(id_))
-     GetAllWebContents().Remove(id_);
-@@ -2471,6 +2505,8 @@
+   // Drop this instance's contribution to the process-wide caret browsing count.
+   ReconcileCaretBrowsingCount(false);
+ 
+@@ -3283,6 +3316,8 @@ v8::Local<v8::Promise> WebContents::LoadURL(gin::Arguments* args,
    }
  
    content::NavigationController::LoadURLParams params(url);
@@ -534,7 +533,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
  
    if (!options.Get("httpReferrer", &params.referrer)) {
      GURL http_referrer;
-@@ -3780,6 +3816,11 @@
+@@ -4676,6 +4711,11 @@ void WebContents::OnCursorChanged(const ui::Cursor& cursor) {
  
  void WebContents::AttachToIframe(content::WebContents* embedder_web_contents,
                                   std::string embedder_frame_token) {
@@ -546,24 +545,63 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
    auto token = base::Token::FromString(embedder_frame_token);
    if (!token)
      return;
-@@ -4664,6 +4705,13 @@
-       .SetMethod("beginFrameSubscription", &WebContents::BeginFrameSubscription)
-       .SetMethod("endFrameSubscription", &WebContents::EndFrameSubscription)
-       .SetMethod("startDrag", &WebContents::StartDrag)
-+      .SetMethod("isOwnedGuest", &WebContents::IsOwnedGuest)
-+      .SetMethod("createOwnedGuestLease", &WebContents::CreateOwnedGuestLease)
-+      .SetMethod("attachOwnedGuest", &WebContents::AttachOwnedGuest)
-+      .SetMethod("cancelOwnedGuestLease", &WebContents::CancelOwnedGuestLease)
-+      .SetMethod("releaseOwnedGuest", &WebContents::ReleaseOwnedGuest)
-+      .SetMethod("setOwnedGuestVisibility", &WebContents::SetOwnedGuestVisibility)
-+      .SetMethod("setOwnedGuestPaintLease", &WebContents::SetOwnedGuestPaintLease)
-       .SetMethod("attachToIframe", &WebContents::AttachToIframe)
-       .SetMethod("detachFromOuterFrame", &WebContents::DetachFromOuterFrame)
-       .SetMethod("isOffscreen", &WebContents::IsOffScreen)
-@@ -4753,17 +4801,111 @@
+@@ -5856,6 +5896,15 @@ void WebContents::FillObjectTemplate(v8::Isolate* isolate,
+       .SetMethod<&WebContents::BeginFrameSubscription>("beginFrameSubscription")
+       .SetMethod<&WebContents::EndFrameSubscription>("endFrameSubscription")
+       .SetMethod<&WebContents::StartDrag>("startDrag")
++      .SetMethod<&WebContents::IsOwnedGuest>("isOwnedGuest")
++      .SetMethod<&WebContents::CreateOwnedGuestLease>("createOwnedGuestLease")
++      .SetMethod<&WebContents::AttachOwnedGuest>("attachOwnedGuest")
++      .SetMethod<&WebContents::CancelOwnedGuestLease>("cancelOwnedGuestLease")
++      .SetMethod<&WebContents::ReleaseOwnedGuest>("releaseOwnedGuest")
++      .SetMethod<&WebContents::SetOwnedGuestVisibility>(
++          "setOwnedGuestVisibility")
++      .SetMethod<&WebContents::SetOwnedGuestPaintLease>(
++          "setOwnedGuestPaintLease")
+       .SetMethod<&WebContents::AttachToIframe>("attachToIframe")
+       .SetMethod<&WebContents::DetachFromOuterFrame>("detachFromOuterFrame")
+       .SetMethod<&WebContents::IsOffScreen>("isOffscreen")
+@@ -5960,12 +6009,12 @@ gin_helper::Handle<WebContents> WebContents::New(
    return handle;
  }
  
+-void WebContents::InitializeJS(v8::Isolate* const isolate) {
++bool WebContents::InitializeJS(v8::Isolate* const isolate) {
+   base::WeakPtr<WebContents> weak_this = GetWeakPtr();
+   v8::HandleScope handle_scope(isolate);
+   v8::Local<v8::Object> wrapper;
+   if (!GetWrapper(isolate).ToLocal(&wrapper))
+-    return;
++    return false;
+   // An own data property, so it stays readable after the WebContents is
+   // destroyed.
+   wrapper
+@@ -5981,27 +6030,130 @@ void WebContents::InitializeJS(v8::Isolate* const isolate) {
+   {
+     v8::TryCatch try_catch(isolate);
+     gin_helper::CallMethod(isolate, this, "_init");
+-    if (try_catch.HasCaught())
++    if (try_catch.HasCaught()) {
+       node::errors::TriggerUncaughtException(isolate, try_catch);
++      if (!weak_this || owned_guest_)
++        return false;
++    }
+   }
+   v8::Local<v8::Object> app;
+-  if (!weak_this || !App::Get()->GetWrapper(isolate).ToLocal(&app))
+-    return;
++  if (!weak_this)
++    return false;
++  if (!App::Get()->GetWrapper(isolate).ToLocal(&app))
++    return true;
+   v8::Local<v8::Object> event = gin_helper::internal::Event::New(isolate)
+                                     ->GetWrapper(isolate)
+                                     .ToLocalChecked();
+   gin::Dictionary(isolate, event).Set("sender", wrapper);
+   gin_helper::EmitEvent(isolate, app, "web-contents-created", event, wrapper);
++  return true;
++}
++
 +gin_helper::Handle<WebContents> WebContents::NewOwnedGuest(
 +    v8::Isolate* isolate, const gin_helper::Dictionary& options) {
 +  if (options.Has("type") || options.Has("embedder") || options.Has("offscreen")) {
@@ -598,11 +636,10 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
 +  auto handle = gin_helper::CreateHandle(isolate, new WebContents(
 +      isolate, options, true, gfx::Size(static_cast<int>(width), static_cast<int>(height))));
 +  handle->Pin(isolate);
-+  v8::TryCatch try_catch(isolate);
-+  gin_helper::CallMethod(isolate, handle.get(), "_init");
-+  if (try_catch.HasCaught()) {
-+    handle->Destroy();
-+    node::errors::TriggerUncaughtException(isolate, try_catch);
++  base::WeakPtr<WebContents> weak = handle->GetWeakPtr();
++  if (!handle->InitializeJS(isolate)) {
++    if (weak)
++      weak->Destroy();
 +    return {};
 +  }
 +  return handle;
@@ -645,8 +682,8 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
 +void WebContents::SetOwnedGuestPaintLease(bool enabled) {
 +  if (owned_guest_presentation_)
 +    owned_guest_presentation_->SetPaintLease(enabled);
-+}
-+
+ }
+ 
  // static
  gin_helper::Handle<WebContents> WebContents::CreateAndTake(
      v8::Isolate* isolate,
@@ -659,54 +696,56 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.cc b/electron/
 +  }
    gin_helper::Handle<WebContents> handle = gin_helper::CreateHandle(
 -      isolate, new WebContents(isolate, std::move(web_contents), type));
+-  handle->InitializeJS(isolate);
 +      isolate, new WebContents(isolate, std::move(web_contents), type,
 +                               owned_guest, initial_surface_size));
-+  if (owned_guest)
-+    handle->Pin(isolate);
-   v8::TryCatch try_catch(isolate);
-   gin_helper::CallMethod(isolate, handle.get(), "_init");
-   if (try_catch.HasCaught()) {
-+    if (owned_guest)
-+      handle->Destroy();
-     node::errors::TriggerUncaughtException(isolate, try_catch);
-+    if (owned_guest)
-+      return {};
-   }
++  if (!owned_guest) {
++    handle->InitializeJS(isolate);
++    return handle;
++  }
++  handle->Pin(isolate);
++  base::WeakPtr<WebContents> weak = handle->GetWeakPtr();
++  if (!handle->InitializeJS(isolate)) {
++    if (weak)
++      weak->Destroy();
++    return {};
++  }
    return handle;
  }
-@@ -4909,6 +5051,12 @@
+ 
+@@ -6173,6 +6325,12 @@ void Initialize(v8::Local<v8::Object> exports,
    v8::Isolate* const isolate = electron::JavascriptEnvironment::GetIsolate();
    gin_helper::Dictionary dict{isolate, exports};
    dict.Set("WebContents", WebContents::GetConstructor(isolate, context));
-+  dict.SetMethod("createOwnedGuest", &WebContents::NewOwnedGuest);
++  dict.SetMethod<&WebContents::NewOwnedGuest>("createOwnedGuest");
 +  dict.SetMethod("findOwnedGuestLease", [](v8::Isolate* isolate,
 +      const std::string& token, WebContents* embedder, const std::string& frame_token, double generation) {
 +    auto* guest = electron::api::OwnedGuestPresentation::FindLease(token, embedder, frame_token, generation);
 +    return guest ? gin_helper::CreateHandle(isolate, guest) : gin_helper::Handle<WebContents>();
 +  });
-   dict.SetMethod("fromId", &WebContentsFromID);
-   dict.SetMethod("fromFrame", &WebContentsFromFrame);
-   dict.SetMethod("fromDevToolsTargetId", &WebContentsFromDevToolsTargetID);
+   dict.SetMethod<&WebContentsFromID>("fromId");
+   dict.SetMethod<&WebContentsFromFrame>("fromFrame");
+   dict.SetMethod<&WebContentsFromDevToolsTargetID>("fromDevToolsTargetId");
 diff --git a/electron/shell/browser/api/electron_api_web_contents.h b/electron/shell/browser/api/electron_api_web_contents.h
 --- a/electron/shell/browser/api/electron_api_web_contents.h
 +++ b/electron/shell/browser/api/electron_api_web_contents.h
-@@ -51,6 +51,7 @@
+@@ -48,6 +48,7 @@
+ #include "shell/common/gin_helper/pinnable.h"
  #include "shell/common/gin_helper/wrappable.h"
- #include "shell/common/web_contents_utility.mojom.h"
- #include "ui/base/models/image_model.h"
+ #include "third_party/skia/include/core/SkRegion.h"
 +#include "ui/gfx/geometry/size.h"
  #include "v8/include/cppgc/persistent.h"
  
- #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
-@@ -112,6 +113,7 @@
- 
- class BaseWindow;
+ #if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_MAC)
+@@ -124,6 +125,7 @@ class BaseWindow;
+ class Debugger;
  class FrameSubscriber;
+ class Session;
 +class OwnedGuestPresentation;
  
  // Wrapper around the content::WebContents.
  class WebContents final : public ExclusiveAccessContext,
-@@ -144,13 +146,28 @@
+@@ -156,13 +158,28 @@ class WebContents final : public ExclusiveAccessContext,
        v8::Isolate* isolate,
        const gin_helper::Dictionary& options);
  
@@ -736,7 +775,16 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.h b/electron/s
  
    // Get the api::WebContents associated with |web_contents|. Returns nullptr
    // if there is no associated wrapper.
-@@ -464,6 +481,7 @@
+@@ -279,7 +296,7 @@ class WebContents final : public ExclusiveAccessContext,
+   void HandleNewRenderFrame(content::RenderFrameHost* render_frame_host);
+   // Runs the wrapper's JS _init and announces it as app
+   // 'web-contents-created'.
+-  void InitializeJS(v8::Isolate* isolate);
++  bool InitializeJS(v8::Isolate* isolate);
+ 
+   void Print(gin::Arguments* args);
+   // Print current page as PDF. Static (with the WebContents as holder) so
+@@ -543,6 +560,7 @@ class WebContents final : public ExclusiveAccessContext,
    WebContents& operator=(const WebContents&) = delete;
  
   private:
@@ -744,7 +792,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.h b/electron/s
    // Store last emitted favicon URLs to avoid duplicate page-favicon-updated
    // events
    base::flat_set<GURL> last_favicon_urls_;
-@@ -472,9 +490,12 @@
+@@ -551,9 +569,12 @@ class WebContents final : public ExclusiveAccessContext,
    // Takes over ownership of |web_contents|.
    WebContents(v8::Isolate* isolate,
                std::unique_ptr<content::WebContents> web_contents,
@@ -759,7 +807,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents.h b/electron/s
    ~WebContents() override;
  
    // Delete this if garbage collection has not started.
-@@ -783,6 +804,9 @@
+@@ -895,6 +916,9 @@ class WebContents final : public ExclusiveAccessContext,
    cppgc::Persistent<api::Debugger> debugger_;
  
    std::unique_ptr<WebViewGuestDelegate> guest_delegate_;
@@ -784,7 +832,7 @@ diff --git a/electron/shell/browser/api/electron_api_web_contents_impl.cc b/elec
 diff --git a/electron/shell/browser/api/electron_api_web_contents_view.cc b/electron/shell/browser/api/electron_api_web_contents_view.cc
 --- a/electron/shell/browser/api/electron_api_web_contents_view.cc
 +++ b/electron/shell/browser/api/electron_api_web_contents_view.cc
-@@ -196,6 +196,10 @@
+@@ -283,6 +283,10 @@ gin_helper::WrappableBase* WebContentsView::New(gin::Arguments* const args) {
            return nullptr;
          }
  
@@ -1566,7 +1614,7 @@ new file mode 100644
 diff --git a/electron/typings/internal-electron.d.ts b/electron/typings/internal-electron.d.ts
 --- a/electron/typings/internal-electron.d.ts
 +++ b/electron/typings/internal-electron.d.ts
-@@ -353,6 +353,9 @@
+@@ -372,6 +372,9 @@ declare namespace ElectronInternal {
      public disconnectedCallback?(): void;
  
      // Created in web-view-impl

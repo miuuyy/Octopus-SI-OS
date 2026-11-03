@@ -6,29 +6,29 @@
   "runtime_activation": "held",
   "native_compiled": false,
   "native_accepted": false,
-  "foundation_patch_sha256": "f8f6715e491fc78fe1226fb483a6fc227cdb3eb4ef7df04ba5809c3eb1e97613",
-  "production_patch_sha256": "c0557cf1c680b1df7142951ca932f5df00bdc88edd143edcfe0f3ed31ad935b4",
-  "download_history_patch_sha256": "36898f5f6b7ff4e20f2737ca55befbe838fe8a9241338d6266fb6f72c0fa6c8e",
-  "download_history_manifest_sha256": "3f18b7bfdf74aa1902c22574bcb33db937560c4307d4bbcc048afa3580f44797",
+  "foundation_patch_sha256": "09c3d3b1b38b71b3af132acb64456a4e6a1a3cda2571940eec8c14170070ef2c",
+  "production_patch_sha256": "6a410a8023470626446620eaf9420e0a833cf82cc6f693b8bc0f99ce4eeeccbd",
+  "download_history_patch_sha256": "7d7892ab1c3cf15af42f0d33f8672ebc982507446dd6688257c012db684975b4",
+  "download_history_manifest_sha256": "44ea5a7e5b7fedcf1bbdbe08d8ea5deac3b1c6fd4bf38dbeb679d9a162e75425",
   "patch": {
-    "path": "patches/electron-41.7.1-owned-navigation-history.patch",
-    "sha256": "71b06584577b6acc5e973328352f7681abac8bffee9b736faeab800af6f4f64c"
+    "path": "patches/electron-45.2.1-owned-navigation-history.patch",
+    "sha256": "d71abb60f52e3ef22d2f899316bd00f4478f0bb90abc69eabc31fceb0b3fda80"
   },
   "files": [
     {
       "path": "electron/BUILD.gn",
-      "before_sha256": "2041a84c7e8e251bd16cc8125b0ab48c6f1dd5947b1c0c07daf5513fac18c376",
-      "after_sha256": "6fbe82a40139959b8bd574b60448f4ad36d683fe867fc8971d12b812b36e5c36"
+      "before_sha256": "599e97c4a5696e56b16c0d363426a0a5efbc008301722cd010d8798aa2a909e4",
+      "after_sha256": "0ec7d82a5a9c682d839c85d62c4042599c2938f6e9fdee3099ae6bf1babf8c74"
     },
     {
       "path": "electron/lib/browser/api/session.ts",
-      "before_sha256": "0952b677f20c0efbc1ba269ee3def18d57fe1387b6fc928900971a0c7e0ad5c6",
-      "after_sha256": "53790cc28e81026157d3b1dbe7f28252040900dda7c0efba79511a046f4efd37"
+      "before_sha256": "052c39451240d89bb11c171614b6c30e3f67cb150ca14f2770674f566e7878ff",
+      "after_sha256": "8f1820cbacb9f6a05adee218d4743d9d8bfa5f9070cd344564178229accd775f"
     },
     {
       "path": "electron/shell/browser/api/electron_api_session.cc",
-      "before_sha256": "4b460b29fb277b09c4a62b5d5e78e8713c583c75b93606c8c09b45022c5c5c9e",
-      "after_sha256": "d045e20593d78e0a6312ceaa6aecf0776c9cd27a687fa448f068a0d130557cd8"
+      "before_sha256": "1a65465186cd59ff316f6147ae654a5d137801d63e9126eafaecc79a12bc72b7",
+      "after_sha256": "829623c7704a3d1e8e5f1d512ab6c26ce6e974e5620c045b147a01b476b8199c"
     },
     {
       "path": "electron/shell/browser/api/owned_navigation_history.cc",
@@ -57,41 +57,41 @@
     },
     {
       "path": "electron/typings/internal-electron.d.ts",
-      "before_sha256": "f3492d5de54b176d124f84774dce260ffd7eb58d9fbc8b9f780a531c0456d78c",
-      "after_sha256": "093cbe279afdfd2089d1dacdcd35ec88587f09c479ce0ed272c9386fe056c256"
+      "before_sha256": "6e195d8f8141b5d7310209b97ef215c2227885049d1d132a565a6d075bbe6e0f",
+      "after_sha256": "48be47bd75f31e73573a1156608158901b9623363842e5a7d84e19168e7db3d0"
     }
   ],
   "upstream": {
     "electron": {
-      "version": "41.7.1",
-      "commit": "fda774933622cbc110f34a43015cc1fe6f4f56b3"
+      "version": "45.2.1",
+      "commit": "f81ca3d4f09f57667238120adacb01239d5ecd89"
     },
     "chromium": {
-      "version": "146.0.7680.216",
-      "commit": "ff9214069a282850ff7ebbef6615bb009cf45c57"
+      "version": "156.0.8078.75",
+      "commit": "861389936bf33ea77529ee5dcc0605e68f6bb620"
     },
     "proof_files": {
-      "base/files/file_util.h": "71d2a4d750b7c4c6dec371db4a39f3db1c22532194895e73971e7486ba6d5a46",
-      "base/task/thread_pool.h": "c043af5f3be5c7d7116d9cd40728aed544a11ceb8c84c35daedcfc9b9aa937b3",
-      "chrome/browser/history/history_tab_helper.cc": "8700e1d37dda047c35829c2c503d21a06e5b51b0ad1581f0d2af4b292518eb14",
-      "chrome/browser/history/history_tab_helper.h": "b884b7d34cc9c666f223557dfdb5c0aafc522493675f47cfe1daa7ab36750061",
+      "base/files/file_util.h": "1b5736e2823e614a589f9bb30a6333cf36beba7cafd643bad08c5dcccf98d719",
+      "base/task/thread_pool.h": "57beb9ad92ca929d309fa5d0f8d4294fbbb47ea06b662dfe00ce3d7e996ea268",
+      "chrome/browser/history/history_tab_helper.cc": "00bb6d7a0c9b6d7b6ed867e1a2dcb09d0ad6391838e88bb304f53a618667f6ea",
+      "chrome/browser/history/history_tab_helper.h": "3756fe18c54ea2f40d8313d17a373eb6d78165f90790b72e5a6d10f138c7dc10",
       "components/history/content/browser/history_context_helper.cc": "cf48552e7969de07645c37f44033e13806e1584b1e7af511edf9e083291236c5",
       "components/history/content/browser/history_context_helper.h": "d8e2d52f6d6fd860e3600d21839f1a98ed8f6b95a88056add52b7ca5567a2626",
       "components/history/core/browser/history_backend_client.h": "5a2884fbb0fb1439a1c55d19f02a796d6f3eb2104fe39c7b8cc091331bc23b93",
       "components/history/core/browser/history_client.h": "e5542c6decae63488a5b9baa5c6931fc5b1f34bc3ae76cc2157d14954f2d7882",
       "components/history/core/browser/history_constants.h": "74721e2189a0c8d07325a292640bb4778c18a6b8081253daa27e34c70075cff6",
       "components/history/core/browser/history_database_params.h": "e67190888a69bc76c052e853c0f2892aa13cf7fb7977effa268d6ad87bd4b07f",
-      "components/history/core/browser/history_service.cc": "4b8474bd8363235a9c5c0917a2a9126ae114c9c6c171413e1453bee9b2790e4d",
+      "components/history/core/browser/history_service.cc": "3bc0ef0bb654a268d92a791db3000643ca7d25190752a9a47b4c817ddf750ab0",
       "components/history/core/browser/history_service_observer.h": "9a195179b3eb577a93cb281eb4ee96c8057fb4076846d835786c07fea6744e23",
-      "components/history/core/browser/history_types.h": "73d170d3dec6315e736de69f56ad99f559acd2e0076ac51441c693743021b55b",
-      "components/history/core/browser/url_row.h": "3c64bd27fd512e00bd1876ddb84ff9754cbd01fc5d14d752acdbc28400f02fc7",
+      "components/history/core/browser/history_types.h": "a22f448f9032810b7fd7de699b85e8094ddbe49e34940638dfb4f12c969736f1",
+      "components/history/core/browser/url_row.h": "ffd08a8785671be7f2aee497bc82b8ed612c5e781fbc9738435a7dab4a4cb376",
       "components/history/core/browser/visit_delegate.h": "634dc0640bb7ce5a8324da30e9ed995dabcce96264eacefe6a692cb880ed391e",
       "components/query_parser/query_parser.h": "4d617b7614280050a1a423922e36c7b5bd11259b842597d9a326812c7d829a82"
     }
   },
   "source_contract": {
     "selection": "Optional exact artifact-selected collector. Factory called only by browser-kind main wrapper after trusted descriptor collection selection and source identity/implementation receipt verification. Read admission cannot enroll contexts. No Session/profile adoption or default collection.",
-    "database": "Real HistoryService(new HistoryClient, no unsupported VisitDelegate/bookmark/sync owner), disk Init. HistoryService::Init1464\u20131484 uses CreateSequencedTaskRunnerForResource(history_dir/History); thread_pool.h225\u2013233 explicitly sequences same path across contexts. Closing and a subsequent same-source reopen share this resource sequence. No testing-only lifecycle method.",
+    "database": "Real HistoryService(new HistoryClient, no unsupported VisitDelegate/bookmark/sync owner), disk Init. HistoryService::Init1464–1484 uses CreateSequencedTaskRunnerForResource(history_dir/History); thread_pool.h225–233 explicitly sequences same path across contexts. Closing and a subsequent same-source reopen share this resource sequence. No testing-only lifecycle method.",
     "factory": "session.createOwnedNavigationHistory({directory,sourceId,sourceRefDigest}) synchronously returns cancellable main-only native reader. UUID sourceId and SHA256 ref digest; canonical directory; live source cannot change identity. ready() resolves only actual HistoryServiceLoaded/error, carries fresh source epoch.",
     "observation": "reader.observe/unobserve only actual owned WebContents. Each reader owns its successful registrations, closing one reader removes only its registrations and queries. Final source owner shutdown removes all registrations, ends current visits and clears actual ContextIDs, cancels pending trackers, detaches service observer, invalidates weak callbacks and shuts down backend. DOM detach never closes page or observer.",
     "visit_evidence": "Native committed primary-page NavigationHandle/NavigationEntry URL, redirects, timestamp, context/nav IDs, response/transition/replace; same-document/reload title, bounded native TitleWasSet. HTTP(S) only; no JS timestamp insertion, DownloadDatabase visit invention, synthetic actor/bundle/tab IDs or off-the-record override.",

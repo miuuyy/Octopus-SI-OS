@@ -10,38 +10,38 @@
   "runtime_activation": "held",
   "native_compile_validated": false,
   "electron": {
-    "version": "41.7.1",
-    "commit": "fda774933622cbc110f34a43015cc1fe6f4f56b3"
+    "version": "45.2.1",
+    "commit": "f81ca3d4f09f57667238120adacb01239d5ecd89"
   },
   "chromium": {
-    "version": "146.0.7680.216",
-    "commit": "ff9214069a282850ff7ebbef6615bb009cf45c57"
+    "version": "156.0.8078.75",
+    "commit": "861389936bf33ea77529ee5dcc0605e68f6bb620"
   },
-  "node_version": "24.15.0",
+  "node_version": "24.22.1",
   "patch": {
-    "path": "patches/electron-41.7.1-owned-guest.patch",
-    "sha256": "f8f6715e491fc78fe1226fb483a6fc227cdb3eb4ef7df04ba5809c3eb1e97613"
+    "path": "patches/electron-45.2.1-owned-guest.patch",
+    "sha256": "09c3d3b1b38b71b3af132acb64456a4e6a1a3cda2571940eec8c14170070ef2c"
   },
   "files": [
     {
       "path": "electron/BUILD.gn",
-      "before_sha256": "9a2bc8fd423eeac72f1a16af759794655b253530a92273f8803d16daa496838c",
-      "after_sha256": "e1388f2d5fdecd9dccff96e68635bf12f776bed36ada0a7e3048c750f8f40b85"
+      "before_sha256": "c6cc36f64bc87319014da7b0eecbd16ad70967e0d034e2d7e3686aa616bb3f4d",
+      "after_sha256": "cba41e0a0766e9dced6c8be052bd5b3ffba3cbdc3b516dbbc69468143a4bc99a"
     },
     {
       "path": "electron/lib/browser/api/web-contents.ts",
-      "before_sha256": "cdafa91f461e48be6ca3f6adfc4f7ef64247c24f1cb6f5d02b230149bc01dae2",
-      "after_sha256": "dbf0af9bea24c657965a7ec26facbd8e2ae1c5602f0bccc1d2dd341af92c8316"
+      "before_sha256": "b158e3f6b4d11f7fc321552b798ca675c266f953e5d7b887faa5c46c8baca697",
+      "after_sha256": "5d6db35bcc2e952e9b66dba152c064f2d59edfd181097aba13e28a1158cda21c"
     },
     {
       "path": "electron/lib/browser/guest-view-manager.ts",
-      "before_sha256": "38cefde158af48058de09ed0e2dbf4e0d1c85b0165558b59d60336bb093faff2",
-      "after_sha256": "26455b9bb3bb591a20835e42293586f8ca697219ee40d0f1a043bfcbeb07667b"
+      "before_sha256": "95b0a67fe73d5dd29f5f6f7530d28005de752c44026e6044f5be55a14d89a08d",
+      "after_sha256": "13b19a20acad43c6aff2947865d6b31e4b4347d2841ab642f4557faa9bd060f3"
     },
     {
       "path": "electron/lib/common/ipc-messages.ts",
-      "before_sha256": "25e22fd628ef2149e5725335ea580c35345438a91e5260d0fe08552f4f21eb54",
-      "after_sha256": "3aaed03949e64200f40e8a4767e01ba1be4e70b058c7f60c2d29a2ccd207a569"
+      "before_sha256": "6352d9b48b42181fba4fbddc9aa5fcc1413da350b2e74b344695b69791a9031d",
+      "after_sha256": "ca8434b20d28fb41e04512d371b214dae317e2d7b8ec44d87197757e1abedd13"
     },
     {
       "path": "electron/lib/renderer/web-view/guest-view-internal.ts",
@@ -60,13 +60,13 @@
     },
     {
       "path": "electron/shell/browser/api/electron_api_web_contents.cc",
-      "before_sha256": "2a4fb5ca9028041fd4dd1f50cb6dbfc2bfd6dc0a053c483698ae36327c6aa0f3",
-      "after_sha256": "6d780cc7df4252462e8f012c6d852646ef2de99a5f974b52e26e1755d48a06dd"
+      "before_sha256": "f3dfc1059ed20c5dfb83fabad484505a6601be6c2b64a26cac5b1f7eb140decf",
+      "after_sha256": "e4d14cc210a813a7f71f0ccb410536cac1da642d18b72649d8207c2b52903a68"
     },
     {
       "path": "electron/shell/browser/api/electron_api_web_contents.h",
-      "before_sha256": "34b4a0fb511123ddc6d39f292dc4d547e37b6927a9761bbf9e6a58fdebb217e9",
-      "after_sha256": "9480c78a90eb65037a62dc61ca9aca2913efe428446b568ff8cd6071cda99fd6"
+      "before_sha256": "31a6389da0678dffb2c372f0d1ed98f0e7bc8c9e2099df97bfcf2ace6db5186d",
+      "after_sha256": "76b636154ee6b34646ec7abac134df01316ec8f2121bc6dbd07dea522fc08346"
     },
     {
       "path": "electron/shell/browser/api/electron_api_web_contents_impl.cc",
@@ -75,8 +75,8 @@
     },
     {
       "path": "electron/shell/browser/api/electron_api_web_contents_view.cc",
-      "before_sha256": "f458c964829e5b8b6e48b34b278b5a27c5c6e4c24cdcbde339f4095f1c109448",
-      "after_sha256": "3577352206b40a76cc3c03f88eda359b969c84bb6dcb9fc19beb44bf06c9b98c"
+      "before_sha256": "55082ef26044d288e2a145ec3eaa3ada9df2c5ab9d80d56daab3953e0b6e69ec",
+      "after_sha256": "13b72f698ad1bfd5e75ac7579a51914b692383e3cbe61bdf45546d7d02eaa595"
     },
     {
       "path": "electron/shell/browser/api/owned_guest_presentation.cc",
@@ -95,8 +95,8 @@
     },
     {
       "path": "electron/typings/internal-electron.d.ts",
-      "before_sha256": "9ed196c6f6ceb6d41b35eccd8eb14aa82aaef30fb20bc1f1dcde5ff752614df0",
-      "after_sha256": "abea2ab14db052e44cf95b7c43cd21418a356b7de1e751c0cc04a3f3e8142765"
+      "before_sha256": "9c78351e4329716f86919859868872263b25c341e3762b13272dfdabc8af55dc",
+      "after_sha256": "865e93f47256a50475e2d89391186ccc5b70d549110966bb0ecb082c0d46aeb6"
     }
   ],
   "native_dependency": {
@@ -148,20 +148,20 @@
     "availability_blocker": "Foundation alone preserves disabled upstream feature. Production variant source replaces global activation with the exact owned-wrapper native callback; complete release-series source composition and native compilation/acceptance remain unproved. Package selector requires their actual receipts."
   },
   "reference_source_hashes": {
-    "base/functional/callback_helpers.h": "36f9e3bf84b9ecfe6a8c647e8353e5bd31419f0d08a64b7184fa2e1ffddd6bfa",
-    "components/guest_contents/browser/BUILD.gn": "b5cde7f8e7ff2e2b89e15e177f278fd219a518808863ccfe2dab62211950bbeb",
+    "base/functional/callback_helpers.h": "c491f8b42568a01e8f48c654b553ccf146981755d28ab67f9fdbbc6daebe4130",
+    "components/guest_contents/browser/BUILD.gn": "345916f556d41942b29bbd98d748c6329a41bb5faf7177817c3b1c6f8b64e2ef",
     "components/guest_contents/common/buildflags.gni": "0ea54a55e5fba04954ba2e9183f2d054f5596f4bac41528009a0d9f647622888",
-    "content/public/browser/render_frame_host.h": "2793a44581fe7cc95ad0a2003044d28e39fa7755b9adee98455c97d70ccd34d2",
-    "content/public/browser/web_contents_observer.h": "055a0e72d86d433fbe4d192814979918eeaef8dac01c401fe4b409ec0056124b",
-    "content/public/browser/web_contents.h": "f77c7a1b331b3687f4849d56b3b9d3be1f398c23970e47cf9a861bc571fad55e",
+    "content/public/browser/render_frame_host.h": "ab2bedd9488d2c88d82d44b5ed09a3e34ab4a3d82c3c51573be800e19feeb780",
+    "content/public/browser/web_contents_observer.h": "bbb2264ec451a7efddd8961074fecd25a5c695b48513f144761d6d2c3d866119",
+    "content/public/browser/web_contents.h": "da515b8bc2254be8c7211e8cb975c4c4e7588507a47ed0ce092e88303a142eca",
     "components/guest_contents/browser/guest_contents_handle.cc": "7258bbba52df83b770eb992c6c5720e4b37491e000e65c992378d4b396aa6ff0",
     "components/guest_contents/browser/guest_contents_handle.h": "c6e091065a67505c043c4b9f018391053a3da814c1ed792643b6f9cabd5c6443",
-    "electron/build/args/release.gn": "bc458e0c299426a75536695aa25d6c1a0c65bc4fe756146b4f6e9e472d71e028",
-    "content/browser/web_contents/web_contents_impl.cc": "59f21250c5d87e944e58f0bb49f678144ec905fb1ae74c61534010868782741e",
-    "content/browser/web_contents/web_contents_impl.h": "bfc97d3bb20367a2263328c9d944a99286988573bc2faea30f6109ee5bc06d7f",
-    "content/browser/web_contents/web_contents_view_mac.mm": "9ea953546814565ee8dce95871a076da7e46f51bb8c48f60a5905175f7d991a3",
-    "content/browser/renderer_host/render_widget_host_view_child_frame.cc": "2752b2104f9773a3d4714ba1a09920f8ca33525b94e3a1c42b5dfec81192b09e",
-    "content/browser/renderer_host/render_widget_host_view_mac.cc": "e566804970e02c304ac695414edd2dcd46a87f0aff37c80ff5249b2414a53843"
+    "electron/build/args/release.gn": "b4490cee911e0ed136a6d095c69a7914cb3f4aa2d5517e3f987a2b5f45d3cd56",
+    "content/browser/web_contents/web_contents_impl.cc": "e551b400ae68665f06ce6f00807728763192866024be92e1507370d0db0a4199",
+    "content/browser/web_contents/web_contents_impl.h": "3e72392bb48eefc9433b931f038994ac46b5f979608e1f0bb58db8c729190240",
+    "content/browser/web_contents/web_contents_view_mac.mm": "068b7938942a1e5feb54917b31fc4827d2a1de749a811219f5b0bcfda851d329",
+    "content/browser/renderer_host/render_widget_host_view_child_frame.cc": "c63bdf80c77eb28a12b64ab7db1a52abfd03011064311251155c24b6e5b3e0e0",
+    "content/browser/renderer_host/render_widget_host_view_mac.mm": "17b9ac1271936dc3dcc2840544c556edf680cd5c54642115c5c8c24fd6b650df"
   },
   "initial_surface": {
     "required": true,
@@ -184,7 +184,7 @@
   },
   "production_variant": {
     "manifest": "production.json",
-    "patch": "patches/electron-41.7.1-owned-guest-production.patch",
+    "patch": "patches/electron-45.2.1-owned-guest-production.patch",
     "artifact_verifier": "engine-artifact.cjs",
     "status": "source_implemented_native_uncompiled_unaccepted",
     "activation": "explicit GN enable_owned_guest_embedder=true; Chromium default feature unchanged; exact owned native wrapper callback only",

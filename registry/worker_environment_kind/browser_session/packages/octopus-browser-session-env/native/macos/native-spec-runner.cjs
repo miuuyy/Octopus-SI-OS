@@ -9,7 +9,7 @@ const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).d
 if (extra.length || !path.isAbsolute(sourceRoot || '') || fs.realpathSync(sourceRoot) !== sourceRoot
   || !path.isAbsolute(resultPath || '') || !/^[a-f0-9]{64}$/.test(expectedSpec || '') || !/^[a-f0-9]{64}$/.test(inventorySha || '')) throw new Error('Owned native spec runner requires exact source and evidence paths');
 const spec = path.join(sourceRoot, 'electron/spec/api-owned-guest-spec.ts');
-if (hash(spec) !== expectedSpec || process.versions.electron !== '41.7.1') throw new Error('Owned native spec source or Electron version differs');
+if (hash(spec) !== expectedSpec || process.versions.electron !== '45.2.1') throw new Error('Owned native spec source or Electron version differs');
 for (const name of ['enable-features', 'disable-features', 'no-sandbox', 'disable-gpu']) if (app.commandLine.hasSwitch(name)) throw new Error('Owned native specs cannot use runtime feature or sandbox switches');
 const profile = path.join(path.dirname(resultPath), 'native-spec-profile');
 fs.mkdirSync(profile, { mode: 0o700 }); app.setPath('userData', profile);

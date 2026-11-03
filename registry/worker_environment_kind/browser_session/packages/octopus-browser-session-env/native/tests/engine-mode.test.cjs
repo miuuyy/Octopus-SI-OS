@@ -33,7 +33,7 @@ test('standard receipt pins the selected engine bytes and rejects mode or binary
   const framework = path.join(bundleRoot, 'Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework');
   for (const directory of [resourcesRoot, path.dirname(executablePath), path.dirname(framework)]) fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(executablePath, 'test fixture; never executed'); fs.writeFileSync(framework, 'test engine bytes; never loaded');
-  const options = { resourcesRoot, executablePath, isPackaged: true, architecture: 'arm64', electronVersion: '41.7.1' };
+  const options = { resourcesRoot, executablePath, isPackaged: true, architecture: 'arm64', electronVersion: '45.2.1' };
   assert.throws(() => verifyBrowserEngine(options), /ENOENT/);
   const receipt = sealBrowserEngine({ mode: 'standard', bundleRoot, architecture: options.architecture, electronVersion: options.electronVersion });
   assert.equal(verifyBrowserEngine(options).mode, 'standard'); assert.equal(verifyBrowserEngine(options).engineProof, null);

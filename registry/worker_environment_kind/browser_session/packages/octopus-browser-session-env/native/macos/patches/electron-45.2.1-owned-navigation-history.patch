@@ -1,17 +1,16 @@
 diff --git a/electron/BUILD.gn b/electron/BUILD.gn
 --- a/electron/BUILD.gn
 +++ b/electron/BUILD.gn
-@@ -584,8 +584,12 @@
+@@ -654,8 +654,12 @@ source_set("electron_lib") {
        "shell/browser/api/owned_download_history.h",
        "shell/browser/api/owned_download_history_binding.cc",
        "shell/browser/api/owned_download_history_binding.h",
--    ]
--    deps += [ "//components/history/core/browser", "//components/history/content/browser", "//components/url_formatter", "//sql" ]
 +      "shell/browser/api/owned_navigation_history.cc",
 +      "shell/browser/api/owned_navigation_history.h",
 +      "shell/browser/api/owned_navigation_history_binding.cc",
 +      "shell/browser/api/owned_navigation_history_binding.h",
-+    ]
+     ]
+-    deps += [ "//components/history/core/browser", "//components/history/content/browser", "//components/url_formatter", "//sql" ]
 +    deps += [ "//components/history/core/browser", "//components/history/content/browser", "//components/url_formatter", "//components/query_parser", "//sql" ]
    }
    if (is_posix) {
@@ -19,16 +18,16 @@ diff --git a/electron/BUILD.gn b/electron/BUILD.gn
 diff --git a/electron/lib/browser/api/session.ts b/electron/lib/browser/api/session.ts
 --- a/electron/lib/browser/api/session.ts
 +++ b/electron/lib/browser/api/session.ts
-@@ -4,7 +4,7 @@
+@@ -3,7 +3,7 @@ import * as deprecate from '@electron/internal/common/deprecate';
  
- import { net } from 'electron/main';
+ import { net, type UtilityProcess } from 'electron/main';
  
 -const { fromPartition, fromPath, openOwnedDownloadHistory, Session } = process._linkedBinding('electron_browser_session');
 +const { fromPartition, fromPath, openOwnedDownloadHistory, createOwnedNavigationHistory, Session } = process._linkedBinding('electron_browser_session');
  const { isDisplayMediaSystemPickerAvailable } = process._linkedBinding('electron_browser_desktop_capturer');
  
  // Fake video window that activates the native system picker
-@@ -118,6 +118,7 @@
+@@ -121,6 +121,7 @@ Session.prototype.registerLocalAIHandler = function (handler: UtilityProcess | n
  
  export default {
    openOwnedDownloadHistory,
@@ -47,11 +46,12 @@ diff --git a/electron/shell/browser/api/electron_api_session.cc b/electron/shell
  #endif
  
  #include <algorithm>
-@@ -1973,6 +1974,7 @@
-   dict.SetMethod("fromPath", &FromPath);
+@@ -2013,6 +2014,8 @@ void Initialize(v8::Local<v8::Object> exports,
  #if BUILDFLAG(IS_MAC)
-   dict.SetMethod("openOwnedDownloadHistory", &electron::api::OpenOwnedDownloadHistory);
-+  dict.SetMethod("createOwnedNavigationHistory", &electron::api::CreateOwnedNavigationHistory);
+   dict.SetMethod<&electron::api::OpenOwnedDownloadHistory>(
+       "openOwnedDownloadHistory");
++  dict.SetMethod<&electron::api::CreateOwnedNavigationHistory>(
++      "createOwnedNavigationHistory");
  #endif
  }
  
@@ -579,7 +579,7 @@ new file mode 100644
 diff --git a/electron/spec/api-owned-guest-spec.ts b/electron/spec/api-owned-guest-spec.ts
 --- a/electron/spec/api-owned-guest-spec.ts
 +++ b/electron/spec/api-owned-guest-spec.ts
-@@ -367,4 +367,116 @@
+@@ -367,4 +367,116 @@ app.whenReady().then(async () => {
      }
    });
  
@@ -699,7 +699,7 @@ diff --git a/electron/spec/api-owned-guest-spec.ts b/electron/spec/api-owned-gue
 diff --git a/electron/typings/internal-electron.d.ts b/electron/typings/internal-electron.d.ts
 --- a/electron/typings/internal-electron.d.ts
 +++ b/electron/typings/internal-electron.d.ts
-@@ -86,7 +86,32 @@
+@@ -86,7 +86,32 @@ declare namespace Electron {
      flush(): Promise<{ok: boolean}>;
      close(): void;
    }

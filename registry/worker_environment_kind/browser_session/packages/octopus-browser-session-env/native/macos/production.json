@@ -5,10 +5,10 @@
   "source_only": true,
   "native_compiled": false,
   "native_accepted": false,
-  "foundation_patch_sha256": "f8f6715e491fc78fe1226fb483a6fc227cdb3eb4ef7df04ba5809c3eb1e97613",
+  "foundation_patch_sha256": "09c3d3b1b38b71b3af132acb64456a4e6a1a3cda2571940eec8c14170070ef2c",
   "patch": {
-    "path": "patches/electron-41.7.1-owned-guest-production.patch",
-    "sha256": "c0557cf1c680b1df7142951ca932f5df00bdc88edd143edcfe0f3ed31ad935b4"
+    "path": "patches/electron-45.2.1-owned-guest-production.patch",
+    "sha256": "6a410a8023470626446620eaf9420e0a833cf82cc6f693b8bc0f99ce4eeeccbd"
   },
   "build_arguments": {
     "enable_owned_guest_embedder": true,
@@ -32,33 +32,33 @@
   "files": [
     {
       "path": "content/browser/web_contents/web_contents_impl.cc",
-      "before_sha256": "59f21250c5d87e944e58f0bb49f678144ec905fb1ae74c61534010868782741e",
-      "after_sha256": "b2a0025669d3770fef6b49fb56e3b60351a77dc0ff0e0db59b98dcd5b3252036"
+      "before_sha256": "e551b400ae68665f06ce6f00807728763192866024be92e1507370d0db0a4199",
+      "after_sha256": "b549d440eed6f734b24d9ba15818289999053e5c9c853902f43cc9b1b3e6a83b"
     },
     {
       "path": "content/browser/web_contents/web_contents_impl.h",
-      "before_sha256": "bfc97d3bb20367a2263328c9d944a99286988573bc2faea30f6109ee5bc06d7f",
-      "after_sha256": "481f4386e6780e6c7e3d85d13ff4225b8ece9e7f2a69c50fdc4c0b862347aab9"
+      "before_sha256": "3e72392bb48eefc9433b931f038994ac46b5f979608e1f0bb58db8c729190240",
+      "after_sha256": "caad85bb2a08df1b814c9ce99241dc12464b44b88120161fae6e66f59d99d8ed"
     },
     {
       "path": "content/public/browser/content_browser_client.cc",
-      "before_sha256": "f16c7bbffa0e722a4250cda15655d06fb3acaa6bafd617b4b6135d073c79630b",
-      "after_sha256": "0ace476de2d4f5d8b4956978d5ed763f416003c0d19e4bea7ce11a4743103e99"
+      "before_sha256": "831a8f847353333323614b093b0916b515f3ecf7c578aace373b13a44342f09b",
+      "after_sha256": "fd8071d6516bfd4d8c68701a70ed25ed4d6910432b9a48b959051c0cc48b1839"
     },
     {
       "path": "content/public/browser/content_browser_client.h",
-      "before_sha256": "12cebafa28f15c87ae219f3962086426924455c0016d7b8c5689ce5b61a1197f",
-      "after_sha256": "bff27b94dff1a07b9641af8ef2759440db9f9fc35ccd0d7253ad9f0f7500ffab"
+      "before_sha256": "a12deaac4d3029c91350485327a4512e5d78edaf199c55b96e667da990aa7bac",
+      "after_sha256": "2e9c966e55823d72fa111ad59f6b39c92e10db4f99f4af27cfb8ce1267588591"
     },
     {
       "path": "electron/buildflags/BUILD.gn",
-      "before_sha256": "300f303fac75e663e8c7928bd29068c51d8e94d7504052b6e960c69d1cc4e23b",
-      "after_sha256": "88def7249699d4306d5ca7b085bd8aa248828402fe1a424f999a7fc9c0ae3f2c"
+      "before_sha256": "89e318662fb56b4706d8eddafb3d616333e4cf735df68b6a744f0f356e9918f8",
+      "after_sha256": "94bc0b31412502141ab55f66403758a358fbffa0a507d41dbc7c87a51e043b22"
     },
     {
       "path": "electron/buildflags/buildflags.gni",
-      "before_sha256": "231a2b95514447434cda4de9bcd4ccd17161b5c6363adabccb7b202573ae68bc",
-      "after_sha256": "1fb2b9ee773f9af8275364d3a222ecb32170b52c53e3a8865845b673feaa2628"
+      "before_sha256": "559f244e94446a351a696767525e72ae05f5728ff9fef306642fac9bb6fcc8b0",
+      "after_sha256": "ad1668a6d7345fa188a5bf31b76ce7c62e46337db544c8490c91e145a1013a13"
     },
     {
       "path": "electron/shell/browser/api/owned_guest_presentation.cc",
@@ -67,13 +67,13 @@
     },
     {
       "path": "electron/shell/browser/electron_browser_client.cc",
-      "before_sha256": "bbbb422fa0d67994fbe61134ef552915b7661f76fa94a866e6285867eddb3dff",
-      "after_sha256": "564c0a595bdc2bb76739a07ac693bb194410dc1c16296d3640991c75a425f6a6"
+      "before_sha256": "4ccc0bc71772483c19560b3b5fb486f70fea2e92a9a33a2c79c7211537e63480",
+      "after_sha256": "85677379adec3f5bcea510bc85b7acd986003cee7a99be824043510dcb21a14d"
     },
     {
       "path": "electron/shell/browser/electron_browser_client.h",
-      "before_sha256": "3b958800448e2c52826844e58b10335c2c98606d6b2e765ac40ef7e6ae61daf1",
-      "after_sha256": "adfcb8c54bc9445873fac4ce236c43ff4119dc86eb11d7dbcf3535c78e43c298"
+      "before_sha256": "ac38b479e20df9805d9598f7a3e5d6c0735e82449ec3d696029886fea89098fe",
+      "after_sha256": "82056c9cb73a1ebb4eeefc44fe49405cd4adf52661e90ffb22ea69d681b7fdc1"
     },
     {
       "path": "electron/spec/api-owned-guest-spec.ts",
@@ -87,7 +87,7 @@
     "native_history": "Third required held source patch. Native SQLite/GUID reader and Session writer are consumed by the package observer in source. Native core/spec and current consumer tests remain unexecuted; existing bundles and Home are untouched.",
     "navigation_history": "Fourth required held source patch: optional explicit source collector, actual native commit/title evidence, isolated room Sessions, independent admitted reads. No native build/spec/activation performed."
   },
-  "canonical_release_patch_list_sha256": "b354ed680ce6f5e5ace579f2329d5dc3b93d01ccd41cb6441d9e277a649b7670",
+  "canonical_release_patch_list_sha256": "a863f0ce4e5ae23d49957a0223c127dd1eb746d3e1705d38fbd9c43f77de1ca5",
   "source_prepare": "verifySourceCheckout replays the pinned canonical Electron Chromium patch series plus foundation+production+download-history+navigation-history in private temporary Git indexes AND object stores, using actual base objects read-only as alternates. It compares tracked source composition without changing real indexes/objects. Full checkout dependency preparation/native compilation is still unperformed.",
   "recipe": {
     "module": "engine-artifact.cjs",
@@ -110,15 +110,15 @@
       "accept validates actual native spec result and separately owner-accepted physical input evidence, then publishes owned-engine.json",
       "package-macos.cjs requires OCTOPUS_OWNED_ELECTRON_RECEIPT; stock engine is not selected"
     ],
-    "native_spec_runner_sha256": "611af7a1448f37783f6531855934d7c2d82ed8943bc8d15678d5453966001044",
+    "native_spec_runner_sha256": "58dc0b4ee3bd9ae7545889dc69136473674b844c64a0d70bd778fbd2e3588301",
     "status": "source implemented; no full checkout composition/build/spec/acceptance performed"
   },
   "download_history": {
     "path": "download-history.json",
-    "sha256": "3f18b7bfdf74aa1902c22574bcb33db937560c4307d4bbcc048afa3580f44797"
+    "sha256": "44ea5a7e5b7fedcf1bbdbe08d8ea5deac3b1c6fd4bf38dbeb679d9a162e75425"
   },
   "navigation_history": {
     "path": "navigation-history.json",
-    "sha256": "55c41f3f238a105cce089f923269beabf145068cd9d5093946c66e48270950d3"
+    "sha256": "4e5029e1011bfe94fede28a24279921a06c94f1e0372385d1b2a3c8f0e525040"
   }
 }

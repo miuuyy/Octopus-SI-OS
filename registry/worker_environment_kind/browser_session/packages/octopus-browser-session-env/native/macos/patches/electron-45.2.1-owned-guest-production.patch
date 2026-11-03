@@ -1,6 +1,7 @@
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
 --- a/content/browser/web_contents/web_contents_impl.cc
 +++ b/content/browser/web_contents/web_contents_impl.cc
-@@ -1954,6 +1954,7 @@
+@@ -2105,6 +2105,7 @@ std::vector<RenderFrameHostImpl*> WebContentsImpl::GetOutermostMainFrames() {
    // activate or discard it does not run before this point.
    DCHECK(
        !GetOuterWebContents() || (result.size() == 1) ||
@@ -8,7 +9,7 @@
        base::FeatureList::IsEnabled(features::kAttachUnownedInnerWebContents));
  
    return result;
-@@ -3245,6 +3246,11 @@
+@@ -3430,6 +3431,11 @@ void WebContentsImpl::AttachUnownedInnerWebContents(
      base::PassKey<UnownedInnerWebContentsClient>,
      WebContents* inner_web_contents,
      RenderFrameHost* render_frame_host) {
@@ -20,7 +21,7 @@
    AttachInnerWebContentsImpl(inner_web_contents, render_frame_host,
                               /*is_full_page=*/false,
                               /*should_take_ownership=*/false);
-@@ -3383,7 +3389,9 @@
+@@ -3576,7 +3582,9 @@ void WebContentsImpl::DetachUnownedInnerWebContents(
  
  void WebContentsImpl::DetachUnownedInnerWebContents(
      WebContents* inner_web_contents) {
@@ -31,9 +32,10 @@
    CHECK(node_.IsUnownedInnerWebContents(inner_web_contents));
  
    WebContentsImpl* inner_web_contents_impl =
+diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
 --- a/content/browser/web_contents/web_contents_impl.h
 +++ b/content/browser/web_contents/web_contents_impl.h
-@@ -1956,6 +1956,7 @@
+@@ -2070,6 +2070,7 @@ class CONTENT_EXPORT WebContentsImpl
    // Internal implementation of DetachUnownedInnerWebContents() that does not
    // require a pass key. Called by ~WebContentsImpl.
    void DetachUnownedInnerWebContents(WebContents* inner_web_contents);
@@ -41,9 +43,10 @@
  
    // Called just after an inner web contents is attached.
    void InnerWebContentsAttached(WebContents* inner_web_contents);
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -1706,6 +1706,10 @@
+@@ -1699,6 +1699,10 @@ bool ContentBrowserClient::IsFindInPageDisabledForOrigin(
  
  void ContentBrowserClient::OnWebContentsCreated(WebContents* web_contents) {}
  
@@ -54,9 +57,10 @@
  bool ContentBrowserClient::ShouldDisableOriginAgentClusterDefault(
      BrowserContext* browser_context) {
    return false;
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
 --- a/content/public/browser/content_browser_client.h
 +++ b/content/public/browser/content_browser_client.h
-@@ -2950,6 +2950,7 @@
+@@ -2845,6 +2845,7 @@ class CONTENT_EXPORT ContentBrowserClient {
  
    // Called on every WebContents creation.
    virtual void OnWebContentsCreated(WebContents* web_contents);
@@ -64,6 +68,7 @@
  
    // Allows overriding the policy of whether to assign documents to origin-keyed
    // agent clusters by default. That is, it controls the behaviour when the
+diff --git a/electron/buildflags/BUILD.gn b/electron/buildflags/BUILD.gn
 --- a/electron/buildflags/BUILD.gn
 +++ b/electron/buildflags/BUILD.gn
 @@ -5,10 +5,13 @@
@@ -80,6 +85,7 @@
      "ENABLE_PDF_VIEWER=$enable_pdf_viewer",
      "ENABLE_ELECTRON_EXTENSIONS=$enable_electron_extensions",
      "ENABLE_BUILTIN_SPELLCHECKER=$enable_builtin_spellchecker",
+diff --git a/electron/buildflags/buildflags.gni b/electron/buildflags/buildflags.gni
 --- a/electron/buildflags/buildflags.gni
 +++ b/electron/buildflags/buildflags.gni
 @@ -3,6 +3,8 @@
@@ -90,7 +96,8 @@
 +
    enable_pdf_viewer = true
  
-   # Provide a fake location provider for mocking
+   # Enable Chrome extensions support.
+diff --git a/electron/shell/browser/api/owned_guest_presentation.cc b/electron/shell/browser/api/owned_guest_presentation.cc
 --- a/electron/shell/browser/api/owned_guest_presentation.cc
 +++ b/electron/shell/browser/api/owned_guest_presentation.cc
 @@ -5,7 +5,7 @@
@@ -110,7 +117,7 @@
  #include "shell/browser/api/electron_api_web_contents.h"
  #include "shell/browser/native_window.h"
  #include "ui/gfx/geometry/size.h"
-@@ -98,7 +97,7 @@
+@@ -98,7 +97,7 @@ struct OwnedGuestPresentation::Lease {
  };
  
  bool OwnedGuestPresentation::IsAvailable() {
@@ -119,10 +126,11 @@
  }
  
  bool OwnedGuestPresentation::IsValidGeneration(double generation) {
+diff --git a/electron/shell/browser/electron_browser_client.cc b/electron/shell/browser/electron_browser_client.cc
 --- a/electron/shell/browser/electron_browser_client.cc
 +++ b/electron/shell/browser/electron_browser_client.cc
-@@ -1619,6 +1619,12 @@
-              : *g_application_locale;
+@@ -1997,6 +1997,12 @@ bool ElectronBrowserClient::ShouldUseSpareRenderProcessHost(
+   return false;
  }
  
 +bool ElectronBrowserClient::IsUnownedInnerWebContentsAllowed(
@@ -134,16 +142,18 @@
  bool ElectronBrowserClient::ShouldEnableStrictSiteIsolation() {
    // Enable site isolation. It is off by default in Chromium <= 69.
    return true;
+diff --git a/electron/shell/browser/electron_browser_client.h b/electron/shell/browser/electron_browser_client.h
 --- a/electron/shell/browser/electron_browser_client.h
 +++ b/electron/shell/browser/electron_browser_client.h
-@@ -83,6 +83,7 @@
-   // content::ContentBrowserClient:
-   std::string GetApplicationLocale() override;
-   bool ShouldEnableStrictSiteIsolation() override;
+@@ -95,6 +95,7 @@ class ElectronBrowserClient : public content::ContentBrowserClient,
+       std::optional<
+           content::ContentBrowserClient::SpareProcessRefusedByEmbedderReason>&
+           refused_reason) override;
 +  bool IsUnownedInnerWebContentsAllowed(content::WebContents* contents) override;
    bool ShouldEnableSubframeZoom() override;
  #if BUILDFLAG(ENABLE_PDF_VIEWER)
    std::optional<network::CrossOriginEmbedderPolicy>
+diff --git a/electron/spec/api-owned-guest-spec.ts b/electron/spec/api-owned-guest-spec.ts
 --- a/electron/spec/api-owned-guest-spec.ts
 +++ b/electron/spec/api-owned-guest-spec.ts
 @@ -1,5 +1,7 @@
@@ -154,7 +164,7 @@
  import { BrowserWindow, nativeImage, session, webContents } from 'electron';
  
  type Guest = Electron.WebContents & {
-@@ -229,4 +231,37 @@
+@@ -229,4 +231,37 @@ describe('owned guest presentation', function () {
      assert.equal(guest.id, id);
    });
  

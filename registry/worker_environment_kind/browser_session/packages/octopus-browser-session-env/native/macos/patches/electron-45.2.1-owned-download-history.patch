@@ -1,7 +1,7 @@
 diff --git a/electron/BUILD.gn b/electron/BUILD.gn
 --- a/electron/BUILD.gn
 +++ b/electron/BUILD.gn
-@@ -579,7 +579,13 @@
+@@ -649,7 +649,13 @@ source_set("electron_lib") {
      sources += filenames.lib_sources_win
    }
    if (is_mac) {
@@ -19,17 +19,17 @@ diff --git a/electron/BUILD.gn b/electron/BUILD.gn
 diff --git a/electron/lib/browser/api/session.ts b/electron/lib/browser/api/session.ts
 --- a/electron/lib/browser/api/session.ts
 +++ b/electron/lib/browser/api/session.ts
-@@ -4,7 +4,7 @@
+@@ -3,7 +3,7 @@ import * as deprecate from '@electron/internal/common/deprecate';
  
- import { net } from 'electron/main';
+ import { net, type UtilityProcess } from 'electron/main';
  
 -const { fromPartition, fromPath, Session } = process._linkedBinding('electron_browser_session');
 +const { fromPartition, fromPath, openOwnedDownloadHistory, Session } = process._linkedBinding('electron_browser_session');
  const { isDisplayMediaSystemPickerAvailable } = process._linkedBinding('electron_browser_desktop_capturer');
  
  // Fake video window that activates the native system picker
-@@ -117,6 +117,7 @@
- );
+@@ -120,6 +120,7 @@ Session.prototype.registerLocalAIHandler = function (handler: UtilityProcess | n
+ };
  
  export default {
 +  openOwnedDownloadHistory,
@@ -39,19 +39,19 @@ diff --git a/electron/lib/browser/api/session.ts b/electron/lib/browser/api/sess
 diff --git a/electron/shell/browser/api/electron_api_download_item.cc b/electron/shell/browser/api/electron_api_download_item.cc
 --- a/electron/shell/browser/api/electron_api_download_item.cc
 +++ b/electron/shell/browser/api/electron_api_download_item.cc
-@@ -184,6 +184,11 @@
-   if (!CheckAlive())
-     return false;
+@@ -191,6 +191,11 @@ bool DownloadItem::HasUserGesture() const {
    return download_item_->HasUserGesture();
-+}
-+
+ }
+ 
 +std::string DownloadItem::GetGUID() const {
 +  if (!CheckAlive()) return "";
 +  return download_item_->GetGuid();
- }
- 
++}
++
  std::string DownloadItem::GetFilename() const {
-@@ -284,6 +289,7 @@
+   if (!CheckAlive())
+     return "";
+@@ -291,6 +296,7 @@ gin::ObjectTemplateBuilder DownloadItem::GetObjectTemplateBuilder(
        .SetMethod("getPercentComplete", &DownloadItem::GetPercentComplete)
        .SetMethod("getMimeType", &DownloadItem::GetMimeType)
        .SetMethod("hasUserGesture", &DownloadItem::HasUserGesture)
@@ -62,7 +62,7 @@ diff --git a/electron/shell/browser/api/electron_api_download_item.cc b/electron
 diff --git a/electron/shell/browser/api/electron_api_download_item.h b/electron/shell/browser/api/electron_api_download_item.h
 --- a/electron/shell/browser/api/electron_api_download_item.h
 +++ b/electron/shell/browser/api/electron_api_download_item.h
-@@ -73,6 +73,7 @@
+@@ -67,6 +67,7 @@ class DownloadItem final : public gin::Wrappable<DownloadItem>,
    int GetPercentComplete() const;
    std::string GetMimeType() const;
    bool HasUserGesture() const;
@@ -73,32 +73,31 @@ diff --git a/electron/shell/browser/api/electron_api_download_item.h b/electron/
 diff --git a/electron/shell/browser/api/electron_api_session.cc b/electron/shell/browser/api/electron_api_session.cc
 --- a/electron/shell/browser/api/electron_api_session.cc
 +++ b/electron/shell/browser/api/electron_api_session.cc
-@@ -3,6 +3,10 @@
- // found in the LICENSE file.
+@@ -4,6 +4,10 @@
  
  #include "shell/browser/api/electron_api_session.h"
-+
+ 
 +#if BUILDFLAG(IS_MAC)
 +#include "shell/browser/api/owned_download_history_binding.h"
 +#endif
- 
++
  #include <algorithm>
  #include <memory>
-@@ -597,6 +601,9 @@
+ #include <set>
+@@ -590,6 +594,9 @@ Session::~Session() {
  }
  
  void Session::Dispose() {
 +#if BUILDFLAG(IS_MAC)
 +  owned_download_history_.reset();
 +#endif
-   if (keep_alive_) {
-     browser_context()->GetDownloadManager()->RemoveObserver(this);
+   if (!keep_alive_)
+     return;
  
-@@ -608,6 +615,37 @@
+@@ -607,6 +614,37 @@ void Session::Dispose() {
  #endif
-   }
  }
-+
+ 
 +#if BUILDFLAG(IS_MAC)
 +v8::Local<v8::Promise> Session::ConfigureOwnedDownloadHistory(
 +    const base::FilePath& directory) {
@@ -129,10 +128,11 @@ diff --git a/electron/shell/browser/api/electron_api_session.cc b/electron/shell
 +  return handle;
 +}
 +#endif
- 
++
  void Session::OnDownloadCreated(content::DownloadManager* manager,
                                  download::DownloadItem* item) {
-@@ -1786,6 +1824,10 @@
+   if (item->IsSavePackageDownload())
+@@ -1822,6 +1860,10 @@ void Session::New() {
  void Session::FillObjectTemplate(v8::Isolate* isolate,
                                   v8::Local<v8::ObjectTemplate> templ) {
    gin::ObjectTemplateBuilder(isolate, GetClassName(), templ)
@@ -143,12 +143,13 @@ diff --git a/electron/shell/browser/api/electron_api_session.cc b/electron/shell
        .SetMethod("resolveHost", &Session::ResolveHost)
        .SetMethod("resolveProxy", &Session::ResolveProxy)
        .SetMethod("getCacheSize", &Session::GetCacheSize)
-@@ -1929,6 +1971,9 @@
+@@ -1968,6 +2010,10 @@ void Initialize(v8::Local<v8::Object> exports,
             Session::GetConstructor(isolate, context, &Session::kWrapperInfo));
-   dict.SetMethod("fromPartition", &FromPartition);
-   dict.SetMethod("fromPath", &FromPath);
+   dict.SetMethod<&FromPartition>("fromPartition");
+   dict.SetMethod<&FromPath>("fromPath");
 +#if BUILDFLAG(IS_MAC)
-+  dict.SetMethod("openOwnedDownloadHistory", &electron::api::OpenOwnedDownloadHistory);
++  dict.SetMethod<&electron::api::OpenOwnedDownloadHistory>(
++      "openOwnedDownloadHistory");
 +#endif
  }
  
@@ -156,7 +157,7 @@ diff --git a/electron/shell/browser/api/electron_api_session.cc b/electron/shell
 diff --git a/electron/shell/browser/api/electron_api_session.h b/electron/shell/browser/api/electron_api_session.h
 --- a/electron/shell/browser/api/electron_api_session.h
 +++ b/electron/shell/browser/api/electron_api_session.h
-@@ -5,14 +5,17 @@
+@@ -5,13 +5,16 @@
  #ifndef ELECTRON_SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
  #define ELECTRON_SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
  
@@ -165,24 +166,23 @@ diff --git a/electron/shell/browser/api/electron_api_session.h b/electron/shell/
  #include <string>
  #include <vector>
  
+ #include "base/callback_list.h"
 +#include "base/files/file_path.h"
  #include "base/memory/raw_ptr.h"
- #include "base/memory/raw_ref.h"
- #include "base/memory/weak_ptr.h"
  #include "base/values.h"
 +#include "build/build_config.h"
  #include "content/public/browser/download_manager.h"
  #include "electron/buildflags/buildflags.h"
  #include "gin/weak_cell.h"
-@@ -60,6 +63,7 @@
+@@ -50,6 +53,7 @@ namespace api {
  
- namespace api {
- 
+ class Cookies;
+ class Extensions;
 +class OwnedDownloadHistory;
  class NetLog;
- class WebRequest;
- 
-@@ -120,6 +124,10 @@
+ class Protocol;
+ class ServiceWorkerContext;
+@@ -112,6 +116,10 @@ class Session final : public gin::Wrappable<Session>,
  
    // Methods.
    void Dispose();
@@ -193,9 +193,9 @@ diff --git a/electron/shell/browser/api/electron_api_session.h b/electron/shell/
    v8::Local<v8::Promise> ResolveHost(
        std::string host,
        std::optional<network::mojom::ResolveHostParametersPtr> params);
-@@ -220,6 +228,10 @@
-   v8::TracedReference<v8::Value> service_worker_context_;
+@@ -217,6 +225,10 @@ class Session final : public gin::Wrappable<Session>,
    cppgc::Member<api::WebRequest> web_request_;
+   cppgc::WeakMember<api::UtilityProcessWrapper> local_ai_handler_;
  
 +#if BUILDFLAG(IS_MAC)
 +  std::shared_ptr<OwnedDownloadHistory> owned_download_history_;
@@ -203,7 +203,7 @@ diff --git a/electron/shell/browser/api/electron_api_session.h b/electron/shell/
 +#endif
    raw_ptr<v8::Isolate> isolate_;
  
-   // The client id to enable the network throttler.
+   base::RepeatingClosureList local_ai_handler_changed_callbacks_;
 diff --git a/electron/shell/browser/api/owned_download_history.cc b/electron/shell/browser/api/owned_download_history.cc
 new file mode 100644
 --- /dev/null
@@ -746,7 +746,7 @@ new file mode 100644
 diff --git a/electron/spec/api-owned-guest-spec.ts b/electron/spec/api-owned-guest-spec.ts
 --- a/electron/spec/api-owned-guest-spec.ts
 +++ b/electron/spec/api-owned-guest-spec.ts
-@@ -2,6 +2,10 @@
+@@ -2,6 +2,10 @@ import { strict as assert } from 'node:assert';
  import { createHash, randomUUID } from 'node:crypto';
  import { createServer } from 'node:http';
  import { once } from 'node:events';
@@ -757,7 +757,7 @@ diff --git a/electron/spec/api-owned-guest-spec.ts b/electron/spec/api-owned-gue
  import { BrowserWindow, nativeImage, session, webContents } from 'electron';
  
  type Guest = Electron.WebContents & {
-@@ -264,4 +268,103 @@
+@@ -264,4 +268,103 @@ describe('owned guest presentation', function () {
      } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
    });
  
@@ -864,7 +864,7 @@ diff --git a/electron/spec/api-owned-guest-spec.ts b/electron/spec/api-owned-gue
 diff --git a/electron/typings/internal-electron.d.ts b/electron/typings/internal-electron.d.ts
 --- a/electron/typings/internal-electron.d.ts
 +++ b/electron/typings/internal-electron.d.ts
-@@ -78,8 +78,24 @@
+@@ -78,8 +78,24 @@ declare namespace Electron {
      _countExternalRequests(): number;
    }
  

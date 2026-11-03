@@ -6,42 +6,42 @@
   "runtime_activation": "held",
   "native_compiled": false,
   "native_accepted": false,
-  "foundation_patch_sha256": "f8f6715e491fc78fe1226fb483a6fc227cdb3eb4ef7df04ba5809c3eb1e97613",
-  "production_patch_sha256": "c0557cf1c680b1df7142951ca932f5df00bdc88edd143edcfe0f3ed31ad935b4",
+  "foundation_patch_sha256": "09c3d3b1b38b71b3af132acb64456a4e6a1a3cda2571940eec8c14170070ef2c",
+  "production_patch_sha256": "6a410a8023470626446620eaf9420e0a833cf82cc6f693b8bc0f99ce4eeeccbd",
   "patch": {
-    "path": "patches/electron-41.7.1-owned-download-history.patch",
-    "sha256": "36898f5f6b7ff4e20f2737ca55befbe838fe8a9241338d6266fb6f72c0fa6c8e"
+    "path": "patches/electron-45.2.1-owned-download-history.patch",
+    "sha256": "7d7892ab1c3cf15af42f0d33f8672ebc982507446dd6688257c012db684975b4"
   },
   "files": [
     {
       "path": "electron/BUILD.gn",
-      "before_sha256": "e1388f2d5fdecd9dccff96e68635bf12f776bed36ada0a7e3048c750f8f40b85",
-      "after_sha256": "2041a84c7e8e251bd16cc8125b0ab48c6f1dd5947b1c0c07daf5513fac18c376"
+      "before_sha256": "cba41e0a0766e9dced6c8be052bd5b3ffba3cbdc3b516dbbc69468143a4bc99a",
+      "after_sha256": "599e97c4a5696e56b16c0d363426a0a5efbc008301722cd010d8798aa2a909e4"
     },
     {
       "path": "electron/lib/browser/api/session.ts",
-      "before_sha256": "2be8ca5928901b28a753c73e39a964ffa7fb9a86a86c1da5a03b3167f0da1d44",
-      "after_sha256": "0952b677f20c0efbc1ba269ee3def18d57fe1387b6fc928900971a0c7e0ad5c6"
+      "before_sha256": "cfbd0fbdd7a26618e90e5d7f10312b5c7c5068c4b8236e744664326e9719cee5",
+      "after_sha256": "052c39451240d89bb11c171614b6c30e3f67cb150ca14f2770674f566e7878ff"
     },
     {
       "path": "electron/shell/browser/api/electron_api_download_item.cc",
-      "before_sha256": "c69503aa06c79aca3cb69b75ccccd1aac1dec0f101553848d3c3a868313857da",
-      "after_sha256": "da26625c63bfcc9bf50dd42f269b4ac3b603b5a74541016cbbc529abf247e0c1"
+      "before_sha256": "4904ead7fb6774b630eb6d55150f6a52bbe74b2d8a780f9d8caebf34581e46c9",
+      "after_sha256": "66929cb310022cdf5657b101ef4df3d6476a4bcbda61fa4f921c41dfe4161d28"
     },
     {
       "path": "electron/shell/browser/api/electron_api_download_item.h",
-      "before_sha256": "eec2b297163dd141b969a7b12a024c509806e1752e16c1f03a0aec6c044eef61",
-      "after_sha256": "d8d0de368ca224eee59163e3a3c5d247337b08fd549051bb790c1c21f4926644"
+      "before_sha256": "4d3dcffffb0fde45111bc09484ecef3d6c15b04c1bac9f2173e891859c3fcc0c",
+      "after_sha256": "499fb742294cbc88670c29e9aa7dd37d1b99f05253a73e71077df72f2e0554ef"
     },
     {
       "path": "electron/shell/browser/api/electron_api_session.cc",
-      "before_sha256": "55048137689de6273c5e01e76c13d71ea624d722ee7c1a020c08918507a04bbb",
-      "after_sha256": "4b460b29fb277b09c4a62b5d5e78e8713c583c75b93606c8c09b45022c5c5c9e"
+      "before_sha256": "fa3f768339de285b955f13344784dddd6b6a2ebe5e7c28fe7d48c387252da7fe",
+      "after_sha256": "1a65465186cd59ff316f6147ae654a5d137801d63e9126eafaecc79a12bc72b7"
     },
     {
       "path": "electron/shell/browser/api/electron_api_session.h",
-      "before_sha256": "b7acb48ef7bc41909283190330608882c9a95442f9ae6c36ee8071ea0f3db0f7",
-      "after_sha256": "5580aec237b3b1d062437ba8f90177a54882e7d0acf0108304ec7a727d260596"
+      "before_sha256": "377f21a0502d25106b1fa422c6a084fb5d58d035fc81e488f2a94a2f0fbbf0b1",
+      "after_sha256": "d4db61ce92662449d626f69e63614b31eb47feaf7096f635c39aaabe92444cc1"
     },
     {
       "path": "electron/shell/browser/api/owned_download_history.cc",
@@ -70,8 +70,8 @@
     },
     {
       "path": "electron/typings/internal-electron.d.ts",
-      "before_sha256": "abea2ab14db052e44cf95b7c43cd21418a356b7de1e751c0cc04a3f3e8142765",
-      "after_sha256": "f3492d5de54b176d124f84774dce260ffd7eb58d9fbc8b9f780a531c0456d78c"
+      "before_sha256": "865e93f47256a50475e2d89391186ccc5b70d549110966bb0ecb082c0d46aeb6",
+      "after_sha256": "6e195d8f8141b5d7310209b97ef215c2227885049d1d132a565a6d075bbe6e0f"
     }
   ],
   "source_contract": {
@@ -105,25 +105,25 @@
   },
   "upstream": {
     "electron": {
-      "version": "41.7.1",
-      "commit": "fda774933622cbc110f34a43015cc1fe6f4f56b3"
+      "version": "45.2.1",
+      "commit": "f81ca3d4f09f57667238120adacb01239d5ecd89"
     },
     "chromium": {
-      "version": "146.0.7680.216",
-      "commit": "ff9214069a282850ff7ebbef6615bb009cf45c57"
+      "version": "156.0.8078.75",
+      "commit": "861389936bf33ea77529ee5dcc0605e68f6bb620"
     },
     "proof_files": {
-      "chromium/gin/per_isolate_data.h": "c8b8ad68dbe4c9b143fa1165cfc8a02abb4c8718129f251088ea0ede8aff7d2f",
-      "chromium/sql/database.h": "e2fefc79676901c5304c80262e8fe910d1b43a607d34af889d15250d08055a4e",
-      "chromium/base/threading/sequence_bound.h": "fd105f998cd7bd0fdb8d7333e37c2bbb87c82d5f2145888b71776e22288024d2",
+      "chromium/gin/per_isolate_data.h": "6c095f8579f05d6da1e3fcf5442649e4d3129a2e551b61356a97dfb7c9fa5b2d",
+      "chromium/sql/database.h": "7b371c22e9a9ec9b61b45d04604fdca12bedc10428d3e09d6af15add722032f4",
+      "chromium/base/threading/sequence_bound.h": "f0e537d921d35ca445ecbef71af701a136e9e8665ef135dbe8edc4b2681ead2c",
       "chromium/components/history/content/browser/download_conversions.h": "c618e460415dbbadbb4f9a6b526d63929ac5b40f887d84c49120411dbdfcd640",
       "chromium/components/history/core/browser/download_database.h": "3ce5a8c7e576eac3478e1118fa8c0daaa0cac6c6236819d97080c4ff47f73d12",
       "chromium/components/history/core/browser/download_types.h": "b7a1751513129edf2f6533e6262615a3084188f6565181b6c7afee1b33fc125f",
-      "chromium/components/history/core/browser/download_database.cc": "adbc49cd7ba2315422ada5ba568d096b1ec8d3c7049b0fca2bd3fc574839dd0d",
+      "chromium/components/history/core/browser/download_database.cc": "c9831d365612c658a2c2935dd59b3ad5d31cbb73522a27d24dd7677b025756ec",
       "chromium/components/history/core/browser/download_row.h": "a2655d88502aa4427654107b2c22a5fd1ad7a1a951572f3bdc7440d8430232f9",
-      "chromium/components/download/public/common/simple_download_manager.h": "705c3ab67e2f9e0550f27a4ede385367b2417f0c4c1cd714140fa983a7157f9a",
-      "patches/chromium/chore_restore_some_deprecated_wrapper_utility_in_gin.patch": "ff8daa57e6c1fa6c3f93cd2dae86ade096e94cc9554e27cfd6f1471bd26a59be",
-      "chromium/chrome/browser/download/download_query.cc": "ea9d4ba2096e14a817db413dbfc3222e7d6bd2fd890da15670ae75e84c33a956",
+      "chromium/components/download/public/common/simple_download_manager.h": "aaa93221d2b570558cb6973063e88c7bbd088b87c9581044e4fff15438498a45",
+      "patches/chromium/chore_restore_some_deprecated_wrapper_utility_in_gin.patch": "f83b1cce2069e1efeaa5b9d6a49102b82fa26665a62f6415da0b6be987c6f2cb",
+      "chromium/chrome/browser/download/download_query.cc": "959f6bad22c0f1c9ecef49109e052eeb10e48f132203692665d0eeedd46ceff7",
       "chromium/base/i18n/string_search.h": "9682251399efab90541a55a0ddcdb06fe8f4cfdbfe1740e078dbe99839986219",
       "chromium/base/i18n/string_search.cc": "347f7f3391de440c8fd144203136ba36e19c76d2e35e0f08065d76f93b30670b"
     }
