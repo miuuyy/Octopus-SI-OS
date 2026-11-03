@@ -244,7 +244,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 "trace": format!("trace:{}:cp_current", run.as_str()),
                 "epoch": 0,
                 "interface_binding": support::all_binding("world_operator_chat"),
-                "outbound_interface_bindings": [support::all_binding("world_image_generation")],
+                "outbound_interface_bindings": [support::all_binding("system_web_search")],
                 "artifact_bindings": readable_role_bindings,
                 "required_verified_artifacts": []
             },
@@ -254,7 +254,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 "trace": format!("trace:{}:cp_context", run.as_str()),
                 "epoch": 0,
                 "interface_binding": support::all_binding("system_context"),
-                "outbound_interface_bindings": [support::all_binding("world_image_generation")],
+                "outbound_interface_bindings": [support::all_binding("system_web_search")],
                 "artifact_bindings": [],
                 "required_verified_artifacts": []
             },
@@ -264,7 +264,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 "trace": format!("trace:{}:cp_room", run.as_str()),
                 "epoch": 0,
                 "interface_binding": support::all_binding("system_room"),
-                "outbound_interface_bindings": [support::all_binding("world_image_generation")],
+                "outbound_interface_bindings": [support::all_binding("system_web_search")],
                 "artifact_bindings": [],
                 "required_verified_artifacts": []
             },
@@ -274,7 +274,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 "trace": format!("trace:{}:cp_worker", run.as_str()),
                 "epoch": 0,
                 "interface_binding": support::all_binding(target.as_str()),
-                "outbound_interface_bindings": [support::all_binding("world_image_generation")],
+                "outbound_interface_bindings": [support::all_binding("system_web_search")],
                 "artifact_bindings": [],
                 "required_verified_artifacts": []
             }
@@ -313,7 +313,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
     );
     assert_eq!(
         record["checkpoints"][0]["outbound_interface_bindings"],
-        serde_json::json!([support::all_binding("world_image_generation")])
+        serde_json::json!([support::all_binding("system_web_search")])
     );
     assert_eq!(
         authority.metadata_projection.role_artifacts,

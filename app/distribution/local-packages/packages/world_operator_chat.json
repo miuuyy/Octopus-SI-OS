@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "world_operator_chat",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "product_kind": "application",
   "product_id": "world_operator_chat",
   "release_status": "optional",
@@ -139,6 +139,28 @@
                 },
                 "uniqueItems": true
               }
+            },
+            {
+              "pointer": "/ceiling/tools",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            {
+              "pointer": "/ceiling/wek",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
             }
           ]
         }
@@ -154,6 +176,28 @@
           "fields": [
             {
               "pointer": "/ceiling/interfaces",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            {
+              "pointer": "/ceiling/tools",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            {
+              "pointer": "/ceiling/wek",
               "schema": {
                 "type": "array",
                 "items": {

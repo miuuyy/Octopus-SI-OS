@@ -1129,11 +1129,21 @@ mod tests {
 
     #[test]
     fn real_registry_forms_the_full_permitted_surface_once_per_owner_interface() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../..")
-            .canonicalize()
-            .unwrap();
-        let registry = repository.join("registry");
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("registry");
+        crate::tests::copy_planner_descriptors(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../registry"),
+            &registry,
+        );
+        let applications = ["world_mcp_firecrawl", "world_mcp_github", "world_mcp_unity"];
+        let worker_path = registry.join("interface/system_worker_coder_max/policy.json");
+        let mut worker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&worker_path).unwrap()).unwrap();
+        worker["ceiling"]["interfaces"]
+            .as_array_mut()
+            .unwrap()
+            .extend(applications.map(serde_json::Value::from));
+        std::fs::write(&worker_path, serde_json::to_vec_pretty(&worker).unwrap()).unwrap();
         let request = CapabilityFormationRequest::new(
             InterfaceId::new("system_worker_coder_max"),
             [
@@ -1228,11 +1238,7 @@ mod tests {
                         == WorkerEnvironmentKindId::new("remote_exec_server"))
         );
 
-        for interface in [
-            "world_mcp_firecrawl",
-            "world_mcp_github",
-            "world_mcp_unity",
-        ] {
+        for interface in applications {
             let id = InterfaceId::new(interface);
             let binding = &topology.operation_bindings[&id];
             assert!(!binding.operations.is_empty());

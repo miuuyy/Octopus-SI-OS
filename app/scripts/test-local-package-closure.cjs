@@ -553,7 +553,10 @@ async function boundedAgentPresetFixture(executable) {
     const profile = sidecar.task_authoring_profiles.find((entry) => entry.worker_choice_interface === agent.worker_interface);
     assert.deepEqual(profile.context_artifact_bindings, recipe.context_artifact_bindings);
     const policy = JSON.parse(await fs.readFile(path.join(active, "interface", agent.worker_interface, "policy.json")));
-    const sourcePolicy = JSON.parse(await fs.readFile(path.join(sourceRegistryRoot, "interface", recipe.worker_interface_id, "policy.json")));
+    const sourcePolicy = JSON.parse(await fs.readFile(path.join(active, "interface", recipe.worker_interface_id, "policy.json")));
+    assert.ok(sourcePolicy.ceiling.interfaces.includes("system_memory")
+      && ["memory.save", "memory.search", "memory.read", "memory.list"].every((tool) => sourcePolicy.ceiling.tools.includes(tool)),
+    "installed applications enter the preset worker's ceiling with their task tools");
     assert.deepEqual(policy, { ...sourcePolicy, id: agent.worker_interface });
     const settings = JSON.parse(await fs.readFile(path.join(active, "interface", agent.worker_interface, "client_template.json")));
     assert.equal(settings.provider_interface_id, providerId);

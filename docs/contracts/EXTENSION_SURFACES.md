@@ -185,15 +185,22 @@ Connect writes it.
 A Project task, an Agent and Home are offered an application only when their
 worker pin's ceiling holds it: every interface the application names, and each
 declared task capability's tool, owner interface and Worker Environment kind.
-Nobody keeps that list by hand: installing, removing or repairing an
-application writes its interfaces into, or out of, the ceilings of the worker
-pins its host package marks `application_host` — the task and Home workers of
-Octopus Home. Making an application available in a Project admits it within the
-EE chain and never widens a worker pin. An application the Project admits but the worker's
-ceiling does not is listed in the Agent dialog, disabled, with that reason. An
-Agent's pin is a copy of its source worker pin; saving the Agent re-forms its
-`policy.json` from that source, so a widened source ceiling reaches an existing
-Agent on its next save and never through any other path.
+Nobody keeps that list by hand: installing, removing or repairing a package
+writes all of that for every installed application into the ceilings of the
+worker pins their packages mark `application_host`, and takes out what only
+removed applications declared; what the host's own source policy grants and
+entries no application declares stay. Installation writes into no other worker
+pin. Every worker a pack offers as the Home worker, the task worker or an Agent
+preset source is such a host — the Home and task workers of Octopus Home and the
+Computer Use worker of Desktop Session. A host whose installed receipt predates
+its package's configuration contract refuses every package operation before
+anything changes; that Home is initialized fresh. Making an application
+available in a Project admits it within the EE chain and never widens a worker
+pin. An application the Project admits but the worker's ceiling does not is
+listed in the Agent dialog, disabled, with that reason. An Agent's pin is a copy
+of its source worker pin; saving the Agent re-forms its `policy.json` from that
+source, so a widened source ceiling reaches an existing Agent on its next save
+and never through any other path.
 
 Connected tasks share the application's one interface: one life, one session,
 one set of credentials. An operation call goes from the task's provider to that

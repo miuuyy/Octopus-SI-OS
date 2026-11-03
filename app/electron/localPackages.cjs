@@ -11,7 +11,7 @@ const packageTransactionSchema = require("../schemas/local_package_transaction.s
 const validators = new Ajv({ allErrors: true, strict: false, logger: false });
 validators.addSchema(packageReceiptSchema);
 const validatePackageManifest = validators.compile(packageManifestSchema);
-const APPLICATION_HOST_POINTER = "/ceiling/interfaces";
+const APPLICATION_HOST_FIELDS = Object.freeze({ interfaces: "/ceiling/interfaces", tools: "/ceiling/tools", wek: "/ceiling/wek" });
 const validateApplicationPack = validators.compile(applicationPackSchema);
 const validatePackageReceipt = validators.compile(packageReceiptSchema);
 const validatePackageTransaction = validators.compile(packageTransactionSchema);
@@ -315,6 +315,7 @@ async function installLocalPackages(options) {
     const packageIds = requiredUniqueIds(options?.packageIds, "packageIds");
     const expected = normalizeDigestMap(options?.expectedSourceDigests, packageIds, "expectedSourceDigests");
     const selected = requireReviewedPackageClosure(library, packageIds);
+    await installedApplicationHosts(roots, library);
     const result = await installResolvedPackages(roots, selected, {
       operationId,
       expected,
@@ -343,6 +344,7 @@ async function removeLocalPackages(options) {
     if (typeof options?.assertRemovable === "function") {
       for (const entry of selected) await options.assertRemovable(entry.manifest);
     }
+    await installedApplicationHosts(roots, library);
     const result = await removeResolvedPackages(roots, packageDependencyOrder(library, packageIds).filter((entry) => packageIds.includes(entry.manifest.id)).reverse(), {
       operationId,
       expected,
@@ -371,6 +373,7 @@ async function repairLocalPackages(options) {
       const state = await readPackageState(roots, dependency.manifest, source);
       if (!state.materialized || state.receiptState !== "valid") throw new Error(`Repair requires installed dependency '${dependency.manifest.id}'`);
     }
+    await installedApplicationHosts(roots, library);
     const result = await repairResolvedPackages(roots, selected, {
       operationId,
       expectedRepairs,
@@ -441,6 +444,7 @@ async function applyLocalApplicationPack(options) {
     if (packageIds.length === 0) throw new Error(`Application Pack '${packId}' selects no installable packages`);
     const expected = normalizeDigestMap(options?.expectedSourceDigests, packageIds, "expectedSourceDigests");
     const selected = requireReviewedPackageClosure(library, packageIds);
+    await installedApplicationHosts(roots, library);
     const result = await installResolvedPackages(roots, selected, {
       operationId,
       expected,
@@ -924,50 +928,80 @@ function parsePackageManifest(value, file) {
     validateConfigurationOwnership(member.configuration ?? [], label, member.registry_kind);
     validateDataDirectoryOwnership(member, label);
     if (member.application_host === true && (member.registry_kind !== "interface"
-      || !(member.configuration ?? []).some((entry) => entry.path === "policy.json"
-        && entry.fields.some((field) => field.pointer === APPLICATION_HOST_POINTER)))) {
-      throw new Error(`${label} hosts applications only as a worker whose policy.json configures '${APPLICATION_HOST_POINTER}'`);
+      || !Object.values(APPLICATION_HOST_FIELDS).every((pointer) => (member.configuration ?? []).some((entry) => entry.path === "policy.json"
+        && entry.fields.some((field) => field.pointer === pointer))))) {
+      throw new Error(`${label} hosts applications only as a worker whose policy.json configures ${Object.values(APPLICATION_HOST_FIELDS).map((pointer) => `'${pointer}'`).join(", ")}`);
     }
   }
   return manifest;
 }
 
-async function syncApplicationHosts(roots, library, operationId) {
+async function installedApplicationHosts(roots, library) {
   const installed = [];
+  const hosts = [];
   for (const entry of library.packages) {
-    if (await readReceipt(roots, entry.manifest.id)) installed.push(entry);
+    const receipt = await readReceipt(roots, entry.manifest.id);
+    if (!receipt) continue;
+    installed.push(entry);
+    for (const member of entry.manifest.members.filter((candidate) => candidate.application_host === true)) {
+      const baseline = receipt.members.find((candidate) => memberKey(candidate) === memberKey(member));
+      if (!baseline) throw new Error(`Package owner '${memberKey(member)}' configuration contract changed; initialize a fresh Home`);
+      assertCurrentConfiguration(member, baseline);
+      hosts.push(member);
+    }
   }
-  const hosts = installed.flatMap((entry) => entry.manifest.members.filter((member) => member.application_host === true));
+  return { installed, hosts };
+}
+
+async function syncApplicationHosts(roots, library, operationId) {
+  const { installed, hosts } = await installedApplicationHosts(roots, library);
   if (!hosts.length) return;
-  const applicationInterfaces = async (entry) => {
-    const ids = [];
+  const fields = Object.keys(APPLICATION_HOST_FIELDS);
+  const grants = async (entry) => {
+    const grant = Object.fromEntries(fields.map((field) => [field, []]));
     for (const member of entry.manifest.members.filter((candidate) => candidate.registry_kind === "interface")) {
       const file = path.join(memberPath(roots.sourceRegistryRoot, member), "application.json");
       if (!await pathExists(file)) continue;
-      ids.push(...parseApplicationManifest((await readJsonDocument(file, `application manifest ${member.owner}`)).value, member.owner, file).interfaces);
+      const application = parseApplicationManifest((await readJsonDocument(file, `application manifest ${member.owner}`)).value, member.owner, file);
+      grant.interfaces.push(...application.interfaces);
+      for (const capability of application.task_capabilities.tools) {
+        grant.interfaces.push(capability.interface);
+        grant.tools.push(capability.tool);
+        grant.wek.push(capability.worker_environment_kind);
+      }
     }
-    return ids;
+    return grant;
   };
-  const known = new Set();
-  const present = new Set();
+  const known = Object.fromEntries(fields.map((field) => [field, new Set()]));
+  const present = Object.fromEntries(fields.map((field) => [field, new Set()]));
   for (const entry of library.packages.filter((candidate) => candidate.manifest.product_kind === "application")) {
-    const ids = await applicationInterfaces(entry);
-    for (const id of ids) known.add(id);
-    if (installed.includes(entry)) for (const id of ids) present.add(id);
+    const grant = await grants(entry);
+    for (const field of fields) {
+      for (const id of grant[field]) known[field].add(id);
+      if (installed.includes(entry)) for (const id of grant[field]) present[field].add(id);
+    }
   }
   const publisher = packagePublisher(roots);
   for (const host of hosts) {
+    const source = (await readJsonDocument(path.join(memberPath(roots.sourceRegistryRoot, host), "policy.json"),
+      `application host source policy ${host.owner}`)).value?.ceiling ?? {};
     const file = path.join(memberPath(roots.activeRegistryRoot, host), "policy.json");
     const document = await readJsonDocument(file, `application host policy ${host.owner}`);
-    const current = document.value?.ceiling?.interfaces;
-    if (!Array.isArray(current) || current.some((id) => typeof id !== "string")) {
-      throw new Error(`Application host '${host.owner}' has no interface ceiling`);
-    }
-    const kept = current.filter((id) => !known.has(id) || present.has(id));
-    const next = [...kept, ...[...present].filter((id) => !kept.includes(id)).sort()];
-    if (next.length === current.length && next.every((id, index) => id === current[index])) continue;
     const policy = structuredClone(document.value);
-    policy.ceiling.interfaces = next;
+    let changed = false;
+    for (const field of fields) {
+      const current = policy?.ceiling?.[field];
+      if (!Array.isArray(current) || current.some((id) => typeof id !== "string")) {
+        throw new Error(`Application host '${host.owner}' has no ${field} ceiling`);
+      }
+      const baseline = new Set(Array.isArray(source[field]) ? source[field] : []);
+      const kept = current.filter((id) => !known[field].has(id) || present[field].has(id) || baseline.has(id));
+      const next = [...kept, ...[...present[field]].filter((id) => !kept.includes(id)).sort()];
+      if (next.length === current.length && next.every((id, index) => id === current[index])) continue;
+      policy.ceiling[field] = next;
+      changed = true;
+    }
+    if (!changed) continue;
     await publisher.publishFiles([{
       filePath: file,
       operationId: `package:${operationId}:application-host:${host.owner}`,

@@ -162,6 +162,10 @@ fn connected_application_operations_wait_per_call_on_the_shared_interface() {
     let mut provider: Value = serde_json::from_slice(&std::fs::read(&provider_path).unwrap()).unwrap();
     provider["interface_driver_config"]["private_config"].as_object_mut().unwrap().remove("input_intake");
     write(provider_path, &provider);
+    let worker_path = registry.join("interface/system_worker_coder_max/policy.json");
+    let mut worker: Value = serde_json::from_slice(&std::fs::read(&worker_path).unwrap()).unwrap();
+    worker["ceiling"]["interfaces"].as_array_mut().unwrap().push(json!("world_gmail"));
+    write(worker_path, &worker);
     let mut request: OperatorChatPlanRequest = serde_json::from_value(json!({
         "registry_root":registry,"ee_instances_root":ee,"run_records_root":dir.path().join("runs"),"interface_private_state_root":dir.path().join("private"),"write_hash_algorithm":"sha256",
         "chat_id":"application_operations","provider_interface_id":"world_provider_ollama",

@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.desktop_session",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "product_kind": "driver",
   "product_id": "desktop_session",
   "release_status": "optional",
@@ -146,7 +146,48 @@
     },
     {
       "registry_kind": "interface",
-      "owner": "system_worker_computer_use"
+      "owner": "system_worker_computer_use",
+      "application_host": true,
+      "configuration": [
+        {
+          "path": "policy.json",
+          "fields": [
+            {
+              "pointer": "/ceiling/interfaces",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            {
+              "pointer": "/ceiling/tools",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            },
+            {
+              "pointer": "/ceiling/wek",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "registry_kind": "artifact",

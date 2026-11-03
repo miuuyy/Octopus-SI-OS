@@ -243,8 +243,8 @@ Installation and access are separate:
    connects to the local server MCP for Unity starts from the Unity Editor and
    shows the Editor project it serves.
 3. **Make available** admits it within Home or the chosen Project's ceiling.
-   Installing an application lets the Home and task workers use it; there is
-   no separate list to edit. An application outside an Agent's ceiling appears
+   Installing an application lets the Home and task workers and the Computer
+   Use Agent preset use it; there is no separate list to edit. An application outside an Agent's ceiling appears
    disabled in the Agent dialog with the reason, and saving an Agent brings it
    up to its template's current ceiling.
 4. **Select/connect** gives a task the relevant bindings. A default for new
