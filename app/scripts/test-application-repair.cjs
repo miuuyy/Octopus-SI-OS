@@ -64,7 +64,7 @@ test("repairing a stale or receipt-less application asks the host to repair exac
   }, { get: (target, name) => target[name] ?? (typeof name === "string" && name.startsWith("on") ? () => () => {} : () => new Promise(() => {})) });
   root.render(React.createElement(ApplicationsView, { accessProfile: "live", searchFocusTick: 0 }));
   const repairButton = (name) => [...container.querySelectorAll("button")].find((candidate) => {
-    if (candidate.textContent !== "Repair") return false;
+    if (candidate.textContent !== "Repair" || candidate.disabled) return false;
     let card = candidate.parentElement;
     while (card && !card.textContent.includes("Application ")) card = card.parentElement;
     return card?.textContent.includes(name);
@@ -100,7 +100,7 @@ test("install review uses dialog sections and a catalogue refresh preserves the 
   }, { get: (target, name) => target[name] ?? (typeof name === "string" && name.startsWith("on") ? () => () => {} : () => new Promise(() => {})) });
   root.render(React.createElement(ApplicationsView, { key: "refresh", accessProfile: "live", searchFocusTick: 0 }));
   const install = () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Install");
-  const finishing = () => [...container.querySelectorAll('[role="progressbar"]')].some((node) => node.getAttribute("aria-label")?.startsWith("Finishing"));
+  const loading = () => [...container.querySelectorAll('[role="progressbar"]')].some((node) => node.getAttribute("aria-label")?.startsWith("Loading"));
   await until(install, () => "application offers Install");
   const heading = container.querySelector("h1");
   install().click();
@@ -114,11 +114,11 @@ test("install review uses dialog sections and a catalogue refresh preserves the 
   assert.equal(container.querySelector("h1"), heading);
   assert.equal(container.querySelector(".surface-content-loading-state"), null);
   assert.equal([...container.querySelectorAll("button")].some((button) => button.textContent === "Install" && !button.disabled), false, "no Install is offered before the post-install read lands");
-  assert.ok(finishing(), "the card reads Finishing until the post-install read lands");
+  assert.ok(loading(), "the card reads Loading until the post-install read lands");
   reads[0]({ applications: [{ ...fresh, installed: true }], projects: [], errors: [] });
   await settle();
   assert.equal(container.querySelector("h1"), heading);
-  assert.equal(finishing(), false, "Finishing clears once the read reports the application installed");
+  assert.equal(loading(), false, "Loading clears once the read reports the application installed");
   root.render(React.createElement(ApplicationsView, { key: "refresh", accessProfile: "lab", searchFocusTick: 0 }));
   await until(() => reads.length === 2, () => "new profile read started");
   assert.ok(container.querySelector(".surface-content-loading-state"));

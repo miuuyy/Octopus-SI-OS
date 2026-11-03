@@ -1860,10 +1860,10 @@ function ApplicationRemovalDialog({ application, lifecycle, onCancel, onConfirm 
 }
 
 function ApplicationLifecycleButton({ operation, variant }: {
-  operation: Pick<ApplicationLifecycleOperation, "operation" | "percent">;
+  operation: Pick<ApplicationLifecycleOperation, "operation" | "percent" | "phase">;
   variant: "ghost" | "primary";
 }) {
-  const label = operation.operation === "install" ? "Installing" : operation.operation === "repair" ? "Repairing" : "Removing";
+  const label = operation.operation === "remove" ? "Removing" : operation.phase === "complete" ? "Loading" : operation.operation === "install" ? "Installing" : "Repairing";
   const progress = Math.max(0, Math.min(100, operation.percent));
   return (
     <OcButton busy className="shrink-0" size="sm" variant={variant}>
