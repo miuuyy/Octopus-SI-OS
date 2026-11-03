@@ -168,6 +168,43 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Production and shipped npm advisories against the declared lockfiles
+        run: node app/scripts/check-dependency-audit.cjs
+
+      - name: Install Rust toolchain
+        if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependency advisory checker
+        id: cargo-deny
+        if: ${{ !cancelled() }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Cargo.lock advisories against deny.toml
+        if: ${{ !cancelled() && steps.cargo-deny.outcome == 'success' }}
+        run: cargo deny --locked check advisories
+
+      - name: Container room helper Cargo.lock advisories against its deny.toml
+        if: ${{ !cancelled() && steps.cargo-deny.outcome == 'success' }}
+        working-directory: registry/worker_environment_kind/container_session/packages/octopus-container-room/helper
+        run: cargo deny --locked check advisories
+
   workspace-check:
     runs-on: ubuntu-latest
     timeout-minutes: 30

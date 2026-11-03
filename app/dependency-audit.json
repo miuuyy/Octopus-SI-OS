@@ -1,0 +1,13 @@
+{
+  "packages": [
+    {
+      "root": "app",
+      "shippedDevDependencies": ["electron"]
+    },
+    {
+      "root": "registry/interface/world_provider_codex/packages/octopus-provider-codex/opencodex-bridge",
+      "shippedDevDependencies": ["bun"]
+    }
+  ],
+  "accepted": []
+}

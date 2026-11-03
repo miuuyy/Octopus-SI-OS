@@ -39,7 +39,7 @@ globset = "0.4"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
-quick-xml = { version = "0.38.4", features = ["serialize"] }
+quick-xml = { version = "0.41.0", features = ["serialize"] }
 reqwest = { version = "0.12", features = ["cookies"] }
 schemars = "0.8.22"
 serde_with = { version = "3.17", features = ["macros", "base64"] }

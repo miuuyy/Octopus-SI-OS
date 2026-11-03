@@ -152,6 +152,22 @@ Code Mode, process session and file publication tests one at a time.
 Source/type checks and contract tests do not prove a
 fresh packaged setup, a real model reply, or physical device permissions.
 
+The `dependency-audit` job fails on any high or critical npm advisory in the
+production dependencies, or in the development dependencies that ship
+(Electron in the client, Bun in the OpenCodex bridge, listed under
+`shippedDevDependencies`), of the lockfiles declared in
+[`app/dependency-audit.json`](../app/dependency-audit.json). It also fails on any
+RustSec vulnerability, unsound or unmaintained advisory, or yanked crate in
+`Cargo.lock` under [`deny.toml`](../deny.toml), and in the container room
+helper's own `Cargo.lock` under its `deny.toml`. An advisory is accepted only by
+an entry with its reason in one of those files, and an entry that no longer
+matches also fails the job. Both audits read live advisory databases, so a
+newly published advisory can fail the job without a code change: resolve it
+with a lockfile update or a reasoned entry, never by lowering the audit level.
+Run the same checks locally with `node app/scripts/check-dependency-audit.cjs`
+and `cargo deny --locked check advisories`, at the repository root and in
+`registry/worker_environment_kind/container_session/packages/octopus-container-room/helper`.
+
 For the terminal client, `npm --prefix app run test:cli` checks transcript,
 interaction, transport, packaging, and setup contracts. `npm --prefix app run
 build:cli` builds its release distribution; `build:cli-client` rebuilds only the

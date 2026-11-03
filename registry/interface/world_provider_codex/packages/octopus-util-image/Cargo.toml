@@ -11,7 +11,7 @@ doctest = false
 [dependencies]
 base64 = "0.22.1"
 image = { version = "^0.25.9", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
-lru = "0.16.3"
+lru = "0.18.2"
 sha1 = "0.10.6"
 mime_guess = "2.0.5"
 thiserror.workspace = true
