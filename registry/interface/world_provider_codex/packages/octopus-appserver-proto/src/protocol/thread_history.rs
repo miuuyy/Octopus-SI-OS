@@ -536,7 +536,8 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            octopus_protocol::items::TurnItem::Sleep(_) => {
+            octopus_protocol::items::TurnItem::FunctionCallOutput(_)
+            | octopus_protocol::items::TurnItem::Sleep(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -566,7 +567,8 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
-            octopus_protocol::items::TurnItem::Sleep(_) => {
+            octopus_protocol::items::TurnItem::FunctionCallOutput(_)
+            | octopus_protocol::items::TurnItem::Sleep(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),

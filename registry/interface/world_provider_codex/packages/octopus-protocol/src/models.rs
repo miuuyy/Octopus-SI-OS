@@ -231,7 +231,15 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         id: Option<String>,
-        call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        call_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        namespace: Option<String>,
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
@@ -701,7 +709,9 @@ impl From<ResponseInputItem> for ResponseItem {
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => Self::FunctionCallOutput {
                 id: None,
-                call_id,
+                call_id: Some(call_id),
+                name: None,
+                namespace: None,
                 output,
                 metadata: None,
             },
@@ -709,7 +719,9 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput {
                     id: None,
-                    call_id,
+                    call_id: Some(call_id),
+                    name: None,
+                    namespace: None,
                     output,
                     metadata: None,
                 }

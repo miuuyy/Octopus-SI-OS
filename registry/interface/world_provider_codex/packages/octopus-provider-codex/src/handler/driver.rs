@@ -436,6 +436,10 @@ impl CodexAppServerInterfaceDriver {
             .validate()
     }
 
+    pub(crate) fn retained_tool_output(&self) -> Result<Option<RetainedToolOutput>, InterfaceDriverError> {
+        RetainedToolOutput::from_private_config(&self.interface_private_config)
+    }
+
     pub(crate) fn native_thread_sandbox(&self) -> Result<SandboxMode, InterfaceDriverError> {
         match self.interface_private_config.get("native_thread_sandbox") {
             None => Ok(SandboxMode::ReadOnly),

@@ -1,6 +1,7 @@
     use super::*;
     include!("context_refresh.rs");
     include!("cut_turn_continuation.rs");
+    include!("retained_instruction_turn.rs");
     include!("steering_compatibility.rs");
     include!("pending_history.rs");
     include!("recovery_call_ownership.rs");

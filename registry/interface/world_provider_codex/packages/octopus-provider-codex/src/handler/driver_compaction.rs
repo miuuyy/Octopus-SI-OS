@@ -168,6 +168,7 @@ impl CodexAppServerInterfaceDriver {
                                     }
                                 }
                                 ThreadItem::UserMessage { .. }
+                                | ThreadItem::FunctionCallOutput { .. }
                                 | ThreadItem::AgentMessage { .. }
                                 | ThreadItem::Reasoning { .. } => {}
                                 item => {
@@ -201,6 +202,7 @@ impl CodexAppServerInterfaceDriver {
                                 compaction_completed = true;
                             }
                             ThreadItem::UserMessage { .. }
+                            | ThreadItem::FunctionCallOutput { .. }
                             | ThreadItem::AgentMessage { .. }
                             | ThreadItem::Reasoning { .. } => {}
                             item => {

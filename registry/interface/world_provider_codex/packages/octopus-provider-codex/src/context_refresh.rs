@@ -490,10 +490,15 @@ fn native_history_orphans(
             ) {
                 continue;
             }
-            serde_json::from_value::<octopus_protocol::models::ResponseItem>(item.clone())
+            let typed = serde_json::from_value::<octopus_protocol::models::ResponseItem>(item.clone())
                 .map_err(|error| {
                     refused(format!("native history call/output is malformed: {error}"))
                 })?;
+            if matches!(&typed, octopus_protocol::models::ResponseItem::FunctionCallOutput {
+                call_id: None, name: Some(name), ..
+            } if !name.is_empty()) {
+                continue;
+            }
             let id = item
                 .get("call_id")
                 .and_then(serde_json::Value::as_str)

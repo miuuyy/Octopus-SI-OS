@@ -163,6 +163,7 @@ pub(crate) fn started_item_output(
     if matches!(
         &item,
         ThreadItem::UserMessage { .. }
+            | ThreadItem::FunctionCallOutput { .. }
             | ThreadItem::HookPrompt { .. }
             | ThreadItem::AgentMessage { .. }
             | ThreadItem::ContextCompaction { .. }
@@ -335,7 +336,7 @@ pub(crate) fn rich_item_output(item: ThreadItem) -> Option<CodexTurnOutput> {
             summary,
             content,
         } => Some(CodexTurnOutput::reasoning(id, summary, content)),
-        ThreadItem::UserMessage { .. } => None,
+        ThreadItem::UserMessage { .. } | ThreadItem::FunctionCallOutput { .. } => None,
         ThreadItem::CommandExecution {
             id,
             command,

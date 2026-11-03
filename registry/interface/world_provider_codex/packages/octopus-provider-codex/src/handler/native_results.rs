@@ -509,7 +509,7 @@ pub(crate) fn recovered_tool_result_rollout_evidence(
                             octopus_protocol::models::ResponseItem::FunctionCall { call_id, .. }
                                 if call_id == expected_call_id => native_function_calls += 1,
                             octopus_protocol::models::ResponseItem::FunctionCallOutput {
-                                call_id, output, ..
+                                call_id: Some(call_id), output, ..
                             } if call_id == expected_call_id => {
                                 outputs += 1;
                                 let output = serde_json::to_value(output).map_err(|error| {

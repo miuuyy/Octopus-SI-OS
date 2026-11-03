@@ -5,6 +5,7 @@ pub(crate) struct LifecycleResumption {
     pub(crate) manifest_label: String,
     pub(crate) source_artifact: ArtifactRef,
     pub(crate) start_turn: Option<Vec<UserInput>>,
+    pub(crate) start_tool_output: Option<TurnToolOutput>,
     pub(crate) additional_context:
         Option<BTreeMap<String, octopus_appserver_proto::AdditionalContextEntry>>,
     pub(crate) resumed_provider_input: bool,
@@ -23,6 +24,7 @@ impl LifecycleResumption {
             manifest_label,
             source_artifact,
             start_turn: None,
+            start_tool_output: None,
             additional_context: None,
             resumed_provider_input: false,
             resume_boundary: false,
@@ -100,13 +102,9 @@ pub(crate) fn resume_lifecycle_inbound(
                     additional_context,
                     source_artifact,
                 } => {
-                    resumption.start_turn = Some(
-                        serde_json::from_value::<Vec<UserInput>>(turn_input).map_err(|error| {
-                            InterfaceDriverError::Protocol(format!(
-                                "lifecycle start-turn continuation is malformed: {error}"
-                            ))
-                        })?,
-                    );
+                    let (turn_input, tool_output) = resumed_turn_start(turn_input)?;
+                    resumption.start_turn = Some(turn_input);
+                    resumption.start_tool_output = tool_output;
                     resumption.additional_context = Some(additional_context);
                     resumption.source_artifact = source_artifact;
                 }

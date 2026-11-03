@@ -23,7 +23,7 @@ use octopus_appserver_proto::{
     ThreadStartParams, ThreadStartResponse, ThreadTokenUsage, TokenUsageBreakdown,
     TurnEnvironmentParams, TurnInterruptParams, TurnInterruptResponse, TurnItemsView, TurnPlanStep,
     TurnPlanUpdatedNotification, TurnStartParams, TurnStatus, TurnSteerParams, TurnSteerResponse,
-    UserInput, WebSearchAction,
+    TurnToolOutput, UserInput, WebSearchAction,
 };
 use octopus_descriptors::{InterfaceId, MarkId, VerifierId};
 use octopus_interfaces::{
@@ -38,7 +38,7 @@ use octopus_model_context_render::{
     resolve_instruction_context,
 };
 use octopus_protocol::config_types::{ReasoningSummary, WebSearchMode};
-use octopus_protocol::models::MessagePhase;
+use octopus_protocol::models::{FunctionCallOutputBody, FunctionCallOutputContentItem, MessagePhase};
 use octopus_protocol::openai_models::ReasoningEffort;
 use octopus_run_authoring::{
     ProviderEmission, ProviderEmissionRoute, ProviderInvocationSessionSnapshot,

@@ -14,6 +14,7 @@ impl TurnStartTriggers<'_, '_> {
     pub(crate) fn held(
         &self,
         turn_input: &[UserInput],
+        tool_output: Option<&TurnToolOutput>,
         additional_context: &BTreeMap<String, octopus_appserver_proto::AdditionalContextEntry>,
     ) -> Result<bool, InterfaceDriverError> {
         let TurnStartTriggers {
@@ -25,11 +26,7 @@ impl TurnStartTriggers<'_, '_> {
             cold_thread,
             first_turn_of_run,
         } = *self;
-        let serialized_turn_input = serde_json::to_value(&turn_input).map_err(|error| {
-            InterfaceDriverError::Protocol(format!(
-                "lifecycle start-turn input did not encode: {error}"
-            ))
-        })?;
+        let serialized_turn_input = held_turn_start(turn_input, tool_output)?;
         let continuation = LifecycleContinuation::StartTurn {
             turn_input: serialized_turn_input.clone(),
             additional_context: additional_context.clone(),

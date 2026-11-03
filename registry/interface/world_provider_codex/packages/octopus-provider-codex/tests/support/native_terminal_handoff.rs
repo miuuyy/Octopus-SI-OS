@@ -937,6 +937,8 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             for (key, value) in &canonical.interface_driver_config.as_ref().unwrap().private_config {
                 descriptor.interface_driver_config.as_mut().unwrap().private_config.entry(key.clone()).or_insert_with(|| value.clone());
             }
+            let compatibility = canonical.interface_driver_config.as_ref().unwrap().residual_ambient.as_ref().unwrap()["spawn"]["compatibility"].clone();
+            descriptor.interface_driver_config.as_mut().unwrap().residual_ambient = Some(json!({"spawn":{"compatibility":compatibility}}));
         }
         for key in ["context_output_labels","client_projection_output_labels","session_snapshot_labels","live_stream"] {
             descriptor.interface_driver_config.as_mut().unwrap().private_config.insert(key.into(), canonical.interface_driver_config.as_ref().unwrap().private_config[key].clone());

@@ -526,7 +526,13 @@ notification fails closed and names it. The provider descriptor also pins
 which Codex features are on and which are off; a binary that reports a
 different state for a feature the provider must prove fails the compatibility
 check, and features that change what the model sees are listed as residual
-sources.
+sources. A Codex-family descriptor may declare
+`private_config.retained_tool_output` with a tool `name` and the
+`arrival_labels` that are Octopus-authored instructions; such an arrival starts
+its turn as one retained, named tool output in the provider's tool namespace
+instead of a user message, so the instruction survives compaction. Operator input
+cannot be declared there, and a peer message that steers or is queued into an
+active turn still enters as user input.
 
 For the desktop picker, declare `private_config.model_catalog` in
 `interface_driver_config`. Each entry names its `model`, `display_name`,

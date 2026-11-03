@@ -338,12 +338,14 @@ impl CodexAppServerInterfaceDriver {
             manifest_label: mut effective_manifest_label,
             source_artifact: effective_source_artifact,
             start_turn: resumed_start_turn,
+            start_tool_output: resumed_tool_output,
             additional_context: resumed_additional_context,
             resumed_provider_input: lifecycle_resumed_provider_input,
             resume_boundary: lifecycle_resume_boundary,
             prompt_event: lifecycle_prompt_event,
         } = resumption;
         let lifecycle_start_resumed = resumed_start_turn.is_some();
+        let lifecycle_start_decided = lifecycle_start_resumed && lifecycle_prompt_event.is_none();
         let selected_files = selected_file_projection(
             &admitted_record,
             &input,
@@ -773,6 +775,18 @@ impl CodexAppServerInterfaceDriver {
         } else {
             native_turn_context(if cold_thread { conversation_block } else { recovered_result_context }, obligations_grant_block)
         };
+        let arrival_opens_turn = !lifecycle_start_decided
+            && !lifecycle_resume_boundary
+            && recovered_tool_continuation.is_none()
+            && cut_turn_continuation.is_none()
+            && resume_control_id.is_none();
+        let (turn_input, tool_output) = match resumed_tool_output {
+            Some(tool_output) => (turn_input, Some(tool_output)),
+            None => match self.retained_tool_output()?.filter(|declared| arrival_opens_turn && declared.opens(&manifest.label)) {
+                Some(declared) => (Vec::new(), Some(declared.output(&native_namespace, &native_catalog.tool_names, turn_input)?)),
+                None => (turn_input, None),
+            },
+        };
         if !thread_compact_requested
             && recovered_tool_continuation.is_none()
             && cut_turn_continuation.is_none()
@@ -789,7 +803,7 @@ impl CodexAppServerInterfaceDriver {
                 cold_thread,
                 first_turn_of_run,
             };
-            if start.held(&turn_input, &additional_context)? {
+            if start.held(&turn_input, tool_output.as_ref(), &additional_context)? {
                 return Ok(());
             }
         }
@@ -803,22 +817,25 @@ impl CodexAppServerInterfaceDriver {
         }
         let turn = ClientRequest::TurnStart {
             request_id: self.mint_request_id(),
-            params: fresh_turn_start_params(
-                thread_id.clone(),
-                turn_input,
-                model.clone(),
-                reasoning_effort.clone(),
-                self.bound_service_tier()?,
-                reasoning_summary,
-                additional_context,
-                if resume_control_id.is_some() || cut_turn_continuation.is_some() {
-                    TURN_TRIGGER_RESUME_INTERRUPTED_TASK
-                } else if recovered_tool_continuation.is_some() {
-                    TURN_TRIGGER_TOOL_RESULT_RECOVERY
-                } else {
-                    TURN_TRIGGER_INPUT
-                },
-            ),
+            params: TurnStartParams {
+                tool_output: tool_output.map(Box::new),
+                ..fresh_turn_start_params(
+                    thread_id.clone(),
+                    turn_input,
+                    model.clone(),
+                    reasoning_effort.clone(),
+                    self.bound_service_tier()?,
+                    reasoning_summary,
+                    additional_context,
+                    if resume_control_id.is_some() || cut_turn_continuation.is_some() {
+                        TURN_TRIGGER_RESUME_INTERRUPTED_TASK
+                    } else if recovered_tool_continuation.is_some() {
+                        TURN_TRIGGER_TOOL_RESULT_RECOVERY
+                    } else {
+                        TURN_TRIGGER_INPUT
+                    },
+                )
+            },
         };
         self.require_local_process_transport("turn").await?;
         sink.admit_app_server_dispatch(&turn, None).await?;

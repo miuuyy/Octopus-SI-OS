@@ -16,6 +16,7 @@ use octopus_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSou
 use octopus_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use octopus_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use octopus_protocol::items::TurnItem as CoreTurnItem;
+use octopus_protocol::models::FunctionCallOutputBody;
 use octopus_protocol::models::MessagePhase;
 use octopus_protocol::models::ResponseItem;
 use octopus_protocol::openai_models::ReasoningEffort;
@@ -184,6 +185,14 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    FunctionCallOutput {
+        id: String,
+        name: String,
+        namespace: Option<String>,
+        output: FunctionCallOutputBody,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     Plan { id: String, text: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -333,6 +342,7 @@ impl ThreadItem {
             ThreadItem::UserMessage { id, .. }
             | ThreadItem::HookPrompt { id, .. }
             | ThreadItem::AgentMessage { id, .. }
+            | ThreadItem::FunctionCallOutput { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
             | ThreadItem::CommandExecution { id, .. }
@@ -755,6 +765,12 @@ impl From<CoreTurnItem> for ThreadItem {
                     phase: agent.phase,
                 }
             }
+            CoreTurnItem::FunctionCallOutput(output) => ThreadItem::FunctionCallOutput {
+                id: output.id,
+                name: output.name,
+                namespace: output.namespace,
+                output: output.output,
+            },
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
                 id: plan.id,
                 text: plan.text,

@@ -1,5 +1,7 @@
 use super::*;
 
+const RETAINED_TOOL_OUTPUT_FEATURE: &str = "retain_client_tool_outputs";
+
 pub(crate) fn validate_codex_projection_descriptor_contract(
     descriptor: &InterfaceDescriptor,
 ) -> Result<(), InterfaceDriverError> {
@@ -37,7 +39,22 @@ pub(crate) fn codex_projection_output_labels(
             &client_projection_output_labels,
         )?;
     operator_continuity_from_private_config(&config.private_config)?;
-    input_message_contracts(&config.private_config)?;
+    let input_messages = input_message_contracts(&config.private_config)?;
+    if let Some(retained) = RetainedToolOutput::from_private_config(&config.private_config)? {
+        retained.refuse_operator_input(input_messages.keys())?;
+        let pinned = crate::CodexInstanceConfig::from_descriptor(descriptor)
+            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?
+            .compatibility
+            .is_some_and(|requirements| {
+                requirements.required_features.get(RETAINED_TOOL_OUTPUT_FEATURE) == Some(&true)
+            });
+        if !pinned {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "interface '{}' declares retained_tool_output without pinning '{RETAINED_TOOL_OUTPUT_FEATURE}' on in residual_ambient.spawn.compatibility.required_features; compaction would drop the retained instruction",
+                descriptor.id
+            )));
+        }
+    }
     Ok(client_projection_output_labels)
 }
 

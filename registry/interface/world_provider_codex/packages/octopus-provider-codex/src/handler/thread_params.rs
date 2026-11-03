@@ -104,6 +104,158 @@ pub(crate) fn fresh_turn_start_params(
     }
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetainedToolOutput {
+    name: String,
+    arrival_labels: Vec<String>,
+}
+
+impl RetainedToolOutput {
+    pub(crate) fn from_private_config(
+        config: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Option<Self>, InterfaceDriverError> {
+        let Some(value) = config.get("retained_tool_output") else {
+            return Ok(None);
+        };
+        let declared: Self = serde_json::from_value(value.clone()).map_err(|error| {
+            InterfaceDriverError::Protocol(format!(
+                "interface_driver_config.private_config.retained_tool_output is malformed: {error}"
+            ))
+        })?;
+        let exact = |value: &str| !value.is_empty() && value.trim() == value;
+        if !exact(&declared.name)
+            || !declared.name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            || declared.arrival_labels.is_empty()
+            || !declared.arrival_labels.iter().all(|label| exact(label))
+            || declared.arrival_labels.iter().collect::<BTreeSet<_>>().len() != declared.arrival_labels.len()
+        {
+            return Err(InterfaceDriverError::Protocol(
+                "interface_driver_config.private_config.retained_tool_output needs a tool identifier name and distinct exact arrival labels"
+                    .to_string(),
+            ));
+        }
+        Ok(Some(declared))
+    }
+
+    pub(crate) fn opens(&self, label: &str) -> bool {
+        self.arrival_labels.iter().any(|declared| declared == label)
+    }
+
+    pub(crate) fn refuse_operator_input<'a>(
+        &self,
+        declared_inputs: impl IntoIterator<Item = &'a String>,
+    ) -> Result<(), InterfaceDriverError> {
+        let operator = declared_inputs
+            .into_iter()
+            .map(String::as_str)
+            .chain([
+                OPERATOR_MESSAGE_LABEL,
+                OPERATOR_TURN_CONTROL_LABEL,
+                octopus_operator_chat_client::input_intake::INPUT_INTAKE_LABEL,
+            ])
+            .collect::<BTreeSet<_>>();
+        match self.arrival_labels.iter().find(|label| operator.contains(label.as_str())) {
+            Some(label) => Err(InterfaceDriverError::Protocol(format!(
+                "retained tool output arrival '{label}' is operator input, which enters a turn as user input"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn output(
+        &self,
+        namespace: &NativeToolNamespace,
+        tool_names: &BTreeMap<String, String>,
+        input: Vec<UserInput>,
+    ) -> Result<TurnToolOutput, InterfaceDriverError> {
+        if tool_names.contains_key(&self.name) {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "retained tool output '{}' collides with a callable tool in namespace '{}'",
+                self.name, namespace.name
+            )));
+        }
+        let mut texts = input
+            .into_iter()
+            .map(|item| match item {
+                UserInput::Text { text, text_elements } if text_elements.is_empty() && !text.is_empty() => Ok(text),
+                _ => Err(InterfaceDriverError::FailedClosed(format!(
+                    "retained tool output '{}' carries non-empty plain text only; the arrival holds other turn input",
+                    self.name
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let output = match texts.len() {
+            0 => {
+                return Err(InterfaceDriverError::FailedClosed(format!(
+                    "retained tool output '{}' has no text to carry",
+                    self.name
+                )));
+            }
+            1 => FunctionCallOutputBody::Text(texts.remove(0)),
+            _ => FunctionCallOutputBody::ContentItems(
+                texts
+                    .into_iter()
+                    .map(|text| FunctionCallOutputContentItem::InputText { text })
+                    .collect(),
+            ),
+        };
+        Ok(TurnToolOutput {
+            name: self.name.clone(),
+            namespace: Some(namespace.name.clone()),
+            output,
+            retain: true,
+        })
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct HeldToolOutput {
+    tool_output: TurnToolOutput,
+}
+
+pub(crate) fn held_turn_start(
+    turn_input: &[UserInput],
+    tool_output: Option<&TurnToolOutput>,
+) -> Result<serde_json::Value, InterfaceDriverError> {
+    match tool_output {
+        Some(tool_output) if turn_input.is_empty() => serde_json::to_value(HeldToolOutput {
+            tool_output: tool_output.clone(),
+        }),
+        Some(_) => {
+            return Err(InterfaceDriverError::FailedClosed(
+                "a retained tool output turn cannot also carry turn input".to_string(),
+            ));
+        }
+        None => serde_json::to_value(turn_input),
+    }
+    .map_err(|error| {
+        InterfaceDriverError::Protocol(format!("lifecycle start-turn input did not encode: {error}"))
+    })
+}
+
+pub(crate) fn resumed_turn_start(
+    turn_input: serde_json::Value,
+) -> Result<(Vec<UserInput>, Option<TurnToolOutput>), InterfaceDriverError> {
+    let malformed = |error: serde_json::Error| {
+        InterfaceDriverError::Protocol(format!(
+            "lifecycle start-turn continuation is malformed: {error}"
+        ))
+    };
+    if turn_input.is_object() {
+        let held: HeldToolOutput = serde_json::from_value(turn_input).map_err(malformed)?;
+        if !held.tool_output.retain || held.tool_output.name.is_empty() {
+            return Err(InterfaceDriverError::FailedClosed(
+                "lifecycle start-turn continuation holds a tool output that is not a named retained output"
+                    .to_string(),
+            ));
+        }
+        return Ok((Vec::new(), Some(held.tool_output)));
+    }
+    Ok((serde_json::from_value(turn_input).map_err(malformed)?, None))
+}
+
 pub(crate) fn validate_model_service_tier(
     model: &octopus_appserver_proto::Model,
     tier: &str,
