@@ -28,10 +28,10 @@
   },
   "connection": {
     "disclosure": [
-      "Uses the Gmail app connected to your ChatGPT account. Octopus reads your ChatGPT sign-in on this Mac and keeps no Google password or token of its own.",
+      "Connect uses the Gmail account linked to your ChatGPT account, or opens ChatGPT to link one. Octopus reads your ChatGPT sign-in and keeps no Google token.",
       "Tasks you connect to Gmail can search and read your email, threads, labels, drafts and attachments, and pass what they read to their model.",
       "Those tasks can also draft, send, forward, label, archive and delete email when their work calls for it.",
-      "Gmail stays linked in ChatGPT. Manage or disconnect it in ChatGPT under Settings, Apps."
+      "Gmail stays linked in ChatGPT: Disconnect in Octopus cannot unlink it. Choose, add or unlink Gmail accounts with Manage in ChatGPT."
     ]
   }
 }

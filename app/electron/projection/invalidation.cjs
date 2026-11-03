@@ -41,7 +41,7 @@ function invalidationProjection(store) {
           else if (change === "structure") invalidateProjection(false, "structure", filename);
           else if (change === "runs") invalidateProjection(false, "runs", filename);
           else if (change === "files") invalidateProjection(false, "files", filename);
-          else if (change === "ledger") signalLedgerProjectionChange();
+          else if (change === "ledger" || change === "state") signalLedgerProjectionChange();
         });
         watcher.on("error", (error) => {
           try { watcher.close(); } catch {}

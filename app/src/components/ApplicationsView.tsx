@@ -70,7 +70,7 @@ import { Glyph, type GlyphName } from "./IconGlyphs";
 import { OctopusLoadingState } from "./OctopusLoadingLogo";
 import { PackageInstallReviewDialog } from "./applications/PackageInstallReviewDialog";
 import { SetupDialogShell } from "./SetupDialogShell";
-import { useAppErrorToast } from "../toasts";
+import { appToast, useAppErrorToast } from "../toasts";
 
 type ApplicationsProjection = {
   status?: string;
@@ -137,10 +137,13 @@ type ApplicationLifecycleOperation = {
   phase: OctopusApplicationLifecycleProgress["phase"] | "failed";
   percent: number;
   error: string;
+  settlesAfterRead: number | null;
 };
 
-type ApplicationPackLifecycleOperation = Omit<ApplicationLifecycleOperation, "operation"> & {
+type ApplicationPackLifecycleOperation = Omit<ApplicationLifecycleOperation, "operation" | "settlesAfterRead"> & {
   operation: "install";
+  packageIds: string[];
+  settlesAfterRead: { applications: number; packs: number } | null;
 };
 
 type ApplicationCatalogView = "browse" | "manage";
@@ -204,9 +207,13 @@ export function ApplicationsView({
   const probeRequests = useRef(new Map<string, number>());
   const connectAvailable = canConnectApplications();
   const [removeId, setRemoveId] = useState("");
-  const [installReview, setInstallReview] = useState<ApplicationRecord | null>(null);
+  const [installReviewId, setInstallReviewId] = useState("");
   const [lifecycleOperations, setLifecycleOperations] = useState<Record<string, ApplicationLifecycleOperation>>({});
   const [packLifecycleOperations, setPackLifecycleOperations] = useState<Record<string, ApplicationPackLifecycleOperation>>({});
+  const applicationsReadSequence = useRef(0);
+  const applicationsReadLanded = useRef(0);
+  const packsReadSequence = useRef(0);
+  const packsReadLanded = useRef(0);
   const loaded = loadedProfile === accessProfile;
   const packsLoaded = packsLoadedProfile === accessProfile;
   useAppErrorToast(error || packError || clientSetupError);
@@ -217,6 +224,7 @@ export function ApplicationsView({
       return;
     }
     let cancelled = false;
+    const sequence = ++applicationsReadSequence.current;
     readProjection<ApplicationsProjection>("projection.operator.os.applications")
       .then((response) => {
         if (cancelled) return;
@@ -225,6 +233,11 @@ export function ApplicationsView({
         setRootEeId(typeof response.root_ee_id === "string" ? response.root_ee_id : "");
         setError(arrayStrings(response.errors).join("\n"));
         setLoadedProfile(accessProfile);
+        applicationsReadLanded.current = sequence;
+        setLifecycleOperations((current) => withoutSettledOperations(current, (operation) => (
+          operation.settlesAfterRead !== null && operation.settlesAfterRead < sequence
+        )));
+        settlePackOperations();
       })
       .catch((failure) => {
         if (cancelled) return;
@@ -266,12 +279,15 @@ export function ApplicationsView({
       return;
     }
     let cancelled = false;
+    const sequence = ++packsReadSequence.current;
     readProjection<LocalPackagesProjection>("projection.operator.os.local_packages")
       .then((response) => {
         if (cancelled) return;
         setApplicationPacks(arrayRecords(response.packs));
         setPackError(arrayStrings(response.errors).length ? "One or more local Application Packs could not be verified." : "");
         setPacksLoadedProfile(accessProfile);
+        packsReadLanded.current = sequence;
+        settlePackOperations();
       })
       .catch(() => {
         if (cancelled) return;
@@ -335,6 +351,7 @@ export function ApplicationsView({
   const selectedPack = applicationPacks.find((pack) => pack.id === selectedPackId) ?? null;
   const connectApplication = connectTarget ? applications.find((application) => application.id === connectTarget.applicationId) ?? null : null;
   const removeApplication = applications.find((application) => application.id === removeId) ?? null;
+  const installReview = applications.find((application) => application.id === installReviewId && !application.installed) ?? null;
   const connectionSummaries = useMemo(() => new Map(applications.map((application) => [
     application.id,
     applicationConnectionSummary(application, connectionProbes[application.id]),
@@ -351,6 +368,10 @@ export function ApplicationsView({
     probeRequests.current.clear();
     setConnectionProbes({});
   }, [accessProfile]);
+
+  useEffect(() => {
+    if (installReviewId && !installReview) setInstallReviewId("");
+  }, [installReview, installReviewId]);
 
   useEffect(() => {
     if (!probeKey) return;
@@ -413,6 +434,27 @@ export function ApplicationsView({
         ? browsePackRefs.current.get(nextId)
         : browseCardRefs.current.get(nextId)
     )?.scrollIntoView({ block: "nearest" });
+  }
+
+  function settlePackOperations() {
+    const applicationsLanded = applicationsReadLanded.current;
+    const packsLanded = packsReadLanded.current;
+    setPackLifecycleOperations((current) => withoutSettledOperations(current, (operation) => (
+      operation.settlesAfterRead !== null
+      && operation.settlesAfterRead.applications < applicationsLanded
+      && operation.settlesAfterRead.packs < packsLanded
+    )));
+  }
+
+  function lifecycleOf(application: ApplicationRecord): ApplicationLifecycleOperation | undefined {
+    const own = lifecycleOperations[application.id];
+    if (lifecycleBusy(own) || application.installed) return own;
+    const pack = Object.values(packLifecycleOperations).find((operation) => (
+      lifecycleBusy(operation) && operation.packageIds.includes(application.package_id)
+    ));
+    return pack
+      ? { operationId: pack.operationId, operation: pack.operation, phase: pack.phase, percent: pack.percent, error: "", settlesAfterRead: null }
+      : own;
   }
 
   function refreshConnection(application: ApplicationRecord) {
@@ -551,10 +593,11 @@ export function ApplicationsView({
 
   async function disconnectApplication(application: ApplicationRecord) {
     const summary = summaryOf(application);
+    const results: Record<string, OctopusApplicationConnectionState> = {};
     setDisconnectingId(application.id);
     try {
       for (const interfaceId of summary.moduleInterfaces) {
-        await disconnectApplicationInterface(application.id, interfaceId);
+        results[interfaceId] = await disconnectApplicationInterface(application.id, interfaceId);
       }
       for (const interfaceId of summary.fieldInterfaces) {
         const saved = summary.fields.filter((field) => field.interface_id === interfaceId && field.private_saved).map((field) => field.name);
@@ -571,6 +614,13 @@ export function ApplicationsView({
     } catch (failure) {
       setError(formatProjectionError(failure));
     } finally {
+      if (Object.keys(results).length) {
+        setConnectionProbes((current) => ({
+          ...current,
+          [application.id]: { checking: false, interfaces: { ...current[application.id]?.interfaces, ...results } },
+        }));
+      }
+      for (const state of Object.values(results)) announceDisconnectResult(application.name, state);
       setDisconnectingId("");
       connectionChanged(application.id);
     }
@@ -610,11 +660,11 @@ export function ApplicationsView({
   }
 
   async function installApplication(application: ApplicationRecord) {
-    if (accessProfile !== "live" || application.installed || !application.source_digest || application.install_block_reason) return;
+    if (accessProfile !== "live" || application.installed || !application.source_digest || application.install_block_reason || lifecycleBusy(lifecycleOf(application))) return;
     const operationId = crypto.randomUUID();
     setLifecycleOperations((current) => ({
       ...current,
-      [application.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "" },
+      [application.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -625,7 +675,7 @@ export function ApplicationsView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [application.id]: { operationId, operation: "install", phase: "complete", percent: 100, error: "" },
+        [application.id]: { operationId, operation: "install", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current },
       }));
       setReloadTick((current) => current + 1);
     } catch (failure) {
@@ -637,6 +687,7 @@ export function ApplicationsView({
           phase: "failed",
           percent: current[application.id]?.percent ?? 0,
           error: formatProjectionError(failure),
+          settlesAfterRead: null,
         },
       }));
     }
@@ -644,11 +695,11 @@ export function ApplicationsView({
 
   async function repairApplication(application: ApplicationRecord) {
     const expectation = applicationRepairExpectation(application);
-    if (accessProfile !== "live" || !expectation) return;
+    if (accessProfile !== "live" || !expectation || lifecycleBusy(lifecycleOf(application))) return;
     const operationId = crypto.randomUUID();
     setLifecycleOperations((current) => ({
       ...current,
-      [application.id]: { operationId, operation: "repair", phase: "preflight", percent: 0, error: "" },
+      [application.id]: { operationId, operation: "repair", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -659,7 +710,7 @@ export function ApplicationsView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [application.id]: { operationId, operation: "repair", phase: "complete", percent: 100, error: "" },
+        [application.id]: { operationId, operation: "repair", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current },
       }));
       setReloadTick((current) => current + 1);
     } catch (failure) {
@@ -671,24 +722,26 @@ export function ApplicationsView({
           phase: "failed",
           percent: current[application.id]?.percent ?? 0,
           error: formatProjectionError(failure),
+          settlesAfterRead: null,
         },
       }));
     }
   }
 
   function installOrRepairApplication(application: ApplicationRecord) {
+    if (lifecycleBusy(lifecycleOf(application))) return;
     if (applicationRepairExpectation(application)) return repairApplication(application);
-    if (application.install_packages.length > 1) setInstallReview(application);
+    if (application.install_packages.length > 1) setInstallReviewId(application.id);
     else return installApplication(application);
   }
 
   async function removeInstalledApplication(application: ApplicationRecord) {
-    if (accessProfile !== "live" || !application.installed || !application.installed_digest || !application.removal_allowed) return;
+    if (accessProfile !== "live" || !application.installed || !application.installed_digest || !application.removal_allowed || lifecycleBusy(lifecycleOf(application))) return;
     const operationId = crypto.randomUUID();
     setRemoveId("");
     setLifecycleOperations((current) => ({
       ...current,
-      [application.id]: { operationId, operation: "remove", phase: "preflight", percent: 0, error: "" },
+      [application.id]: { operationId, operation: "remove", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -699,7 +752,7 @@ export function ApplicationsView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [application.id]: { operationId, operation: "remove", phase: "complete", percent: 100, error: "" },
+        [application.id]: { operationId, operation: "remove", phase: "complete", percent: 100, error: "", settlesAfterRead: applicationsReadSequence.current },
       }));
       if (selectedId === application.id) closeApplication();
       setReloadTick((current) => current + 1);
@@ -712,6 +765,7 @@ export function ApplicationsView({
           phase: "failed",
           percent: current[application.id]?.percent ?? 0,
           error: formatProjectionError(failure),
+          settlesAfterRead: null,
         },
       }));
     }
@@ -719,7 +773,7 @@ export function ApplicationsView({
 
   async function applyApplicationPack(pack: ApplicationPackRecord) {
     const selectedRecommended = selectedPackRecommendations(pack, packRecommendedSelections[pack.id]);
-    if (accessProfile !== "live" || applicationPackInstallBlockReason(pack, selectedRecommended)) return;
+    if (accessProfile !== "live" || applicationPackInstallBlockReason(pack, selectedRecommended) || lifecycleBusy(packLifecycleOperations[pack.id])) return;
     const operationId = crypto.randomUUID();
     const packageIds = pack.components.flatMap((component) => (
       component.selection === "included" || selectedRecommended.includes(component.package_id)
@@ -733,7 +787,7 @@ export function ApplicationsView({
     }));
     setPackLifecycleOperations((current) => ({
       ...current,
-      [pack.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "" },
+      [pack.id]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", packageIds, settlesAfterRead: null },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -745,7 +799,15 @@ export function ApplicationsView({
       });
       setPackLifecycleOperations((current) => ({
         ...current,
-        [pack.id]: { operationId, operation: "install", phase: "complete", percent: 100, error: "" },
+        [pack.id]: {
+          operationId,
+          operation: "install",
+          phase: "complete",
+          percent: 100,
+          error: "",
+          packageIds,
+          settlesAfterRead: { applications: applicationsReadSequence.current, packs: packsReadSequence.current },
+        },
       }));
       setReloadTick((current) => current + 1);
     } catch (failure) {
@@ -757,6 +819,8 @@ export function ApplicationsView({
           phase: "failed",
           percent: current[pack.id]?.percent ?? 0,
           error: formatProjectionError(failure),
+          packageIds,
+          settlesAfterRead: null,
         },
       }));
     }
@@ -839,7 +903,7 @@ export function ApplicationsView({
                     ) : catalogView === "manage" ? (
                       <>
                         {manageApplications.length ? (
-                          <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} connectionFor={connectionActions} highlightedId={highlightedId} lifecycleOperations={lifecycleOperations} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} setupStatusByInterface={setupStatusByInterface} />
+                          <ManageApplicationsList accessProfile={accessProfile} applicationRefs={manageCardRefs} applications={manageApplications} connectionFor={connectionActions} highlightedId={highlightedId} lifecycleFor={lifecycleOf} onInstall={(application) => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "manage")} onRemove={(application) => setRemoveId(application.id)} setupStatusByInterface={setupStatusByInterface} />
                         ) : <SurfaceState compact title={`No ${CATEGORY_COPY[manageCategory].title.toLowerCase()} found`} />}
                       </>
                     ) : (
@@ -892,7 +956,7 @@ export function ApplicationsView({
                             items={rows}
                             key={category}
                             renderCard={(application) => (
-                              <ApplicationCard accessProfile={accessProfile} application={application} connection={connectionActions(application)} highlighted={highlightedId === application.id} lifecycle={lifecycleOperations[application.id]} onInstall={() => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "browse")} onRemove={() => setRemoveId(application.id)} setRef={(node) => {
+                              <ApplicationCard accessProfile={accessProfile} application={application} connection={connectionActions(application)} highlighted={highlightedId === application.id} lifecycle={lifecycleOf(application)} onInstall={() => void installOrRepairApplication(application)} onOpen={(id) => openApplication(id, "browse")} onRemove={() => setRemoveId(application.id)} setRef={(node) => {
                                 if (node) browseCardRefs.current.set(application.id, node);
                                 else browseCardRefs.current.delete(application.id);
                               }} setupStatus={applicationSetupStatus(application, setupStatusByInterface)} />
@@ -937,7 +1001,7 @@ export function ApplicationsView({
                 availabilitySavingEeId={availabilitySaving?.applicationId === selected.id ? availabilitySaving.eeId : ""}
                 configurationSaving={configurationSaving === selected.id}
                 connection={connectionActions(selected)}
-                lifecycle={lifecycleOperations[selected.id]}
+                lifecycle={lifecycleOf(selected)}
                 onAvailabilityChange={(state, next) => void changeAvailability(selected, state, next)}
                 onBack={closeApplication}
                 onInstall={() => void installOrRepairApplication(selected)}
@@ -964,12 +1028,12 @@ export function ApplicationsView({
         sessionKey={connectTarget?.session ?? 0}
         summary={connectApplication ? summaryOf(connectApplication) : null}
       />
-      <ApplicationRemovalDialog application={removeApplication} lifecycle={removeApplication ? lifecycleOperations[removeApplication.id] : undefined} onCancel={() => setRemoveId("")} onConfirm={() => removeApplication && void removeInstalledApplication(removeApplication)} />
+      <ApplicationRemovalDialog application={removeApplication} lifecycle={removeApplication ? lifecycleOf(removeApplication) : undefined} onCancel={() => setRemoveId("")} onConfirm={() => removeApplication && void removeInstalledApplication(removeApplication)} />
       <PackageInstallReviewDialog
-        onCancel={() => setInstallReview(null)}
+        onCancel={() => setInstallReviewId("")}
         onConfirm={() => {
           const application = installReview;
-          setInstallReview(null);
+          setInstallReviewId("");
           if (application) void installApplication(application);
         }}
         review={installReview ? {
@@ -998,7 +1062,7 @@ function ApplicationPackCard({ accessProfile, clientSetup, clientSetupError, hig
 }) {
   const inventory = applicationPackInventory(pack);
   const needsApply = applicationPackNeedsApply(pack);
-  const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
+  const busy = lifecycle && lifecycle.phase !== "failed";
   const blockReason = applicationPackInstallBlockReason(pack);
   const actionLabel = lifecycle?.phase === "failed"
     ? "Retry"
@@ -1067,7 +1131,7 @@ function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, e
   const recommendedExtensions = pack.extensions.filter((extension) => extension.selection === "recommended");
   const inventory = applicationPackInventory(pack);
   const needsApply = applicationPackNeedsApply(pack, selectedRecommended);
-  const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
+  const busy = lifecycle && lifecycle.phase !== "failed";
   const blockReason = applicationPackInstallBlockReason(pack, selectedRecommended);
   const actionLabel = lifecycle?.phase === "failed"
     ? "Retry"
@@ -1253,13 +1317,13 @@ type ApplicationConnectionActions = {
   onCheck: () => void;
 };
 
-function ManageApplicationsList({ accessProfile, applicationRefs, applications, connectionFor, highlightedId, lifecycleOperations, onInstall, onOpen, onRemove, setupStatusByInterface }: {
+function ManageApplicationsList({ accessProfile, applicationRefs, applications, connectionFor, highlightedId, lifecycleFor, onInstall, onOpen, onRemove, setupStatusByInterface }: {
   accessProfile: OctopusClientAccessProfile;
   applicationRefs: RefObject<Map<string, HTMLElement>>;
   applications: ApplicationRecord[];
   connectionFor: (application: ApplicationRecord) => ApplicationConnectionActions;
   highlightedId: string;
-  lifecycleOperations: Record<string, ApplicationLifecycleOperation>;
+  lifecycleFor: (application: ApplicationRecord) => ApplicationLifecycleOperation | undefined;
   onInstall: (application: ApplicationRecord) => void;
   onOpen: (id: string) => void;
   onRemove: (application: ApplicationRecord) => void;
@@ -1274,7 +1338,7 @@ function ManageApplicationsList({ accessProfile, applicationRefs, applications, 
           connection={connectionFor(application)}
           highlighted={highlightedId === application.id}
           key={application.id}
-          lifecycle={lifecycleOperations[application.id]}
+          lifecycle={lifecycleFor(application)}
           onInstall={() => onInstall(application)}
           onOpen={onOpen}
           onRemove={() => onRemove(application)}
@@ -1348,7 +1412,7 @@ function ApplicationCardActions({ accessProfile, application, connection, lifecy
   view: ApplicationCatalogView;
 }) {
   const available = application.project_states.some((state) => state.policy_allowed);
-  const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
+  const busy = lifecycle && lifecycle.phase !== "failed";
   const repairable = Boolean(applicationRepairExpectation(application));
   if (!application.installed) return (
     <div className="flex shrink-0 flex-col items-end gap-1">
@@ -1443,7 +1507,7 @@ function ApplicationDetail({
 }) {
   const summary = connection.summary;
   const partiallyConnectedRunCount = application.partially_connected_run_ids?.length ?? 0;
-  const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
+  const busy = lifecycle && lifecycle.phase !== "failed";
   const repairable = Boolean(applicationRepairExpectation(application));
   const usable = application.installed && application.valid;
   const environmentFields = (application.configuration?.fields ?? []).filter((field) => field.authored === false);
@@ -1513,7 +1577,14 @@ function ApplicationDetail({
             {usable && summary.status !== "none" ? (
               <DetailSection title="Connection">
                 <DetailRow label="Status" value={<ConnectionStatusValue summary={summary} />} />
-                {summary.account ? <DetailRow label="Account" value={summary.account.detail ? `${summary.account.label} · ${summary.account.detail}` : summary.account.label} /> : null}
+                {summary.account ? (
+                  <DetailRow label="Account" value={(
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span>{summary.account.label}</span>
+                      {summary.account.detail ? <span className="text-xs text-secondary">{summary.account.detail}</span> : null}
+                    </span>
+                  )} />
+                ) : null}
                 {summary.fields.map((field) => (
                   <DetailRow
                     action={field.private_saved && summary.fieldInterfaces.includes(field.interface_id) ? (
@@ -1674,7 +1745,7 @@ function ApplicationRemovalDialog({ application, lifecycle, onCancel, onConfirm 
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const busy = lifecycle && lifecycle.phase !== "failed" && lifecycle.phase !== "complete";
+  const busy = lifecycle && lifecycle.phase !== "failed";
   return (
     <SetupDialogShell ariaLabel={application ? `Remove ${application.name}` : "Remove application"} busy={Boolean(busy)} onClose={onCancel} open={Boolean(application)} panelClassName="max-w-md">
       {application ? (
@@ -1694,7 +1765,7 @@ function ApplicationRemovalDialog({ application, lifecycle, onCancel, onConfirm 
   );
 }
 
-function ApplicationLifecycleProgress({ operation }: { operation: ApplicationLifecycleOperation }) {
+function ApplicationLifecycleProgress({ operation }: { operation: Pick<ApplicationLifecycleOperation, "operation" | "percent" | "phase"> }) {
   const progress = Math.max(0, Math.min(100, operation.percent));
   const label = operation.operation === "repair"
     ? operation.phase === "preflight" || operation.phase === "verifying"
@@ -1718,6 +1789,29 @@ function ApplicationLifecycleProgress({ operation }: { operation: ApplicationLif
         ? "Finishing"
         : "Removing";
   return <OcInlineProgress label={label} progressLabel={`${label} ${progress}%`} showValue value={progress} />;
+}
+
+function lifecycleBusy(operation: { phase: ApplicationLifecycleOperation["phase"] } | undefined): boolean {
+  return Boolean(operation && operation.phase !== "failed");
+}
+
+function withoutSettledOperations<T extends { phase: ApplicationLifecycleOperation["phase"] }>(
+  operations: Record<string, T>,
+  settled: (operation: T) => boolean,
+): Record<string, T> {
+  const remaining = Object.entries(operations).filter(([, operation]) => operation.phase !== "complete" || !settled(operation));
+  return remaining.length === Object.keys(operations).length ? operations : Object.fromEntries(remaining);
+}
+
+function announceDisconnectResult(name: string, state: OctopusApplicationConnectionState) {
+  const manage = state.manage;
+  const options = manage ? { action: { label: manage.label, onSelect: () => { window.open(manage.url, "_blank", "noopener,noreferrer"); } } } : undefined;
+  const duration = manage ? 10 : undefined;
+  if (state.state === "error") appToast.danger(state.message || `${name} could not be disconnected.`, duration, options);
+  else if (state.state === "expired") appToast.info(state.message || `${name} needs to be reconnected.`, duration, options);
+  else if (state.state === "connected") appToast.info(state.message || `${name} is still connected.`, duration, options);
+  else if (manage) appToast.info(state.message || `${name} is disconnected.`, duration, options);
+  else appToast.success(state.message || `${name} is disconnected.`);
 }
 
 function applicationRepairExpectation(application: ApplicationRecord): {

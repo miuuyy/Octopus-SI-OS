@@ -39,7 +39,8 @@ function createApplicationConnectionHost({ resolveTargets, scope = () => "" }) {
       const timer = setTimeout(() => controller.abort(new ApplicationConnectionStopped(`${target.source} did not answer within ${PROBE_TIMEOUT_MS / 1000} seconds.`, "failed")), PROBE_TIMEOUT_MS);
       try {
         const ctx = await target.createContext({ kind: "probe", input: {}, signal: controller.signal, progress: discardProgress });
-        return { interfaceId: target.interfaceId, state: validateConnectionState(await untilAborted(target.module.probe(ctx), controller.signal), target.source) };
+        const state = validateConnectionState(await untilAborted(target.module.probe(ctx), controller.signal), target.source);
+        return { interfaceId: target.interfaceId, state: await withOperationCatalog(target, state) };
       } catch (error) {
         return { interfaceId: target.interfaceId, state: connectionFailure(controller.signal.aborted ? controller.signal.reason : error) };
       } finally {
@@ -112,6 +113,7 @@ function createApplicationConnectionHost({ resolveTargets, scope = () => "" }) {
         await ctx.saveValues(Object.fromEntries(Object.keys(ctx.values).map((name) => [name, null])));
         state = validateConnectionState(await untilAborted(target.module.probe(ctx), controller.signal), target.source);
       }
+      state = await withOperationCatalog(target, state);
       requireScope(startScope);
       return state;
     } catch (error) {
@@ -164,6 +166,7 @@ function createRegistryConnectionTargets({ registryRoot, octopusHome, launchEnvi
         const catalog = operationCatalogTarget(descriptor, directory, id, registry);
         targets.push({
           interfaceId: id,
+          name: manifest.name,
           module,
           source: `Connection module ${reference}`,
           catalog,
@@ -224,6 +227,22 @@ async function registryConnectionContext({ kind, input, signal, progress, descri
       return published;
     } : null,
   });
+}
+
+async function withOperationCatalog(target, state) {
+  if (state.state !== "connected" || !target.catalog) return state;
+  try {
+    if ((await fs.lstat(target.catalog.file)).isFile()) return state;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const message = `${target.name} is linked, but its tools are not available to tasks yet. Connect it to make them available.`;
+  return {
+    state: "not_connected",
+    ...(state.account ? { account: state.account } : {}),
+    ...(state.manage ? { manage: state.manage } : {}),
+    message: message.length > 300 ? `${message.slice(0, 299)}…` : message,
+  };
 }
 
 function operationCatalogTarget(descriptor, directory, interfaceId, registry) {
@@ -452,7 +471,7 @@ function connectionInput(value, inputNames, interfaceId) {
 function validateConnectionState(value, source) {
   const fail = (reason) => { throw new Error(`${source} returned an invalid connection state: ${reason}.`); };
   if (!isPlainRecord(value)) fail("expected an object");
-  const unknown = Object.keys(value).filter((key) => !["state", "account", "message"].includes(key));
+  const unknown = Object.keys(value).filter((key) => !["state", "account", "manage", "message"].includes(key));
   if (unknown.length) fail(`unknown field ${unknown.join(", ")}`);
   if (!CONNECTION_STATES.has(value.state)) fail("state must be connected, not_connected, expired or error");
   const state = { state: value.state };
@@ -462,6 +481,19 @@ function validateConnectionState(value, source) {
     }
     state.account = { label: connectionText(value.account.label, 96, "account.label", fail) };
     if (value.account.detail !== undefined) state.account.detail = connectionText(value.account.detail, 160, "account.detail", fail);
+  }
+  if (value.manage !== undefined) {
+    if (!isPlainRecord(value.manage) || Object.keys(value.manage).some((key) => !["label", "url"].includes(key))) {
+      fail("manage must contain only label and url");
+    }
+    const label = connectionText(value.manage.label, 48, "manage.label", fail);
+    let url;
+    try {
+      url = connectionHttpsUrl(value.manage.url, "manage.url");
+    } catch {
+      fail("manage.url must be an https address without credentials");
+    }
+    state.manage = { label, url };
   }
   if (value.message !== undefined) state.message = connectionText(value.message, 300, "message", fail, true);
   return state;

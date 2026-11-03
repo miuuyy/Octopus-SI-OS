@@ -5,7 +5,7 @@
   "handler_config": {
     "operation": "call_tool"
   },
-  "description": "Call a Gmail tool from gmail.list_tools with its exact name and argument object, including the link_id of the chosen Gmail account. Tools outside the Gmail connector are refused.",
+  "description": "Call a Gmail tool from gmail.list_tools with its exact name and argument object. When the tool's input schema asks for link_id, pass the link_id of the chosen Gmail account. Tools outside the Gmail connector are refused.",
   "input_schema": {
     "type": "object",
     "properties": {

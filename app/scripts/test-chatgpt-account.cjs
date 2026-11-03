@@ -497,6 +497,7 @@ test("reopened setup displays committed progress before workspace discovery and 
       resumeClientSetup: () => { resumeCalls++; return new Promise(() => {}); },
     },
     "../../projectionLive": { useProjectionStructureGeneration: () => 0 }, "../../design-system/components": ui,
+    "../../toasts": { appToast: { danger: () => ({ close() {} }) } },
     "../OctopusLoadingLogo": { OctopusLoadingState: () => "Opening Octopus", OctopusLoadingLogo: () => null },
     "./WorkspaceSetupOverlay": { WorkspaceSetupProgress: progressView, WorkspaceSetupOverlay: progressView, createDefaultWorkspaceSetupDraft: () => ({}) },
   });
@@ -675,6 +676,7 @@ test("completed Home uses checked local receipts offline and cancels proof acros
       resumeClientSetup: async () => { setupWrites++; throw new Error("unexpected setup resume"); },
     },
     "../../projectionLive": { useProjectionStructureGeneration: () => 0 }, "../../design-system/components": ui,
+    "../../toasts": { appToast: { danger: () => ({ close() {} }) } },
     "../OctopusLoadingLogo": logo, "./WorkspaceSetupOverlay": { WorkspaceSetupOverlay: () => "Review setup", createDefaultWorkspaceSetupDraft: () => ({}) },
   });
   const { App } = loadTs("App.tsx", {

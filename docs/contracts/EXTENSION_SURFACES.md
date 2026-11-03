@@ -145,7 +145,11 @@ connected account and walk you through browser sign-in or pairing. A module may
 live in a family owner's folder; the Application's package then names that
 owner's package in `required_packages`, so installing it installs the module.
 Applications without a module are connected once their required setup fields
-are saved. The
+are saved. The account a module shows is the service account the application
+works in, such as the Gmail mailbox; the sign-in it is reached through, such as
+the ChatGPT account, appears only as its detail. A module may also return a
+`manage` link (a label and an https address) to the page where that account is
+managed, which the client offers in the connection menu. The
 connection check is presentation only: the interface still refuses to work with
 bad credentials, and nothing is recorded in a run or the ledger. For an MCP
 application that declares `server_tool_operations`, Connect also turns each tool
@@ -156,7 +160,19 @@ server's tools, rewrites its operation catalog artifact
 (`artifact-operation-catalog-<interface>`) from the whole `operations/` folder.
 Connected tasks bind that catalog, so the model sees each operation as its own
 tool — including tools published after the task was created. A task cannot be
-composed while the catalog is missing; reconnecting the application writes it.
+composed while the catalog is missing, so the check reports an application whose
+service is linked but whose catalog was never written as not connected, and
+Connect writes it.
+
+A Project task, an Agent and Home are offered an application only when their
+worker pin's ceiling holds it: every interface the application names, and each
+declared task capability's tool, owner interface and Worker Environment kind.
+Making an application available in a Project admits it within the EE chain and
+never widens a worker pin. An application the Project admits but the worker's
+ceiling does not is listed in the Agent dialog, disabled, with that reason. An
+Agent's pin is a copy of its source worker pin; saving the Agent re-forms its
+`policy.json` from that source, so a widened source ceiling reaches an existing
+Agent on its next save and never through any other path.
 
 Connected tasks share the application's one interface: one life, one session,
 one set of credentials. An operation call goes from the task's provider to that

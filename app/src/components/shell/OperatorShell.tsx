@@ -278,7 +278,12 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   );
   const [settingsRecordingId, setSettingsRecordingId] = useState("");
   const activeNavigation = surfaceNavigation;
-  const activeDestination = activeNavigation.entries[activeNavigation.index] ?? clientDestination("voice");
+  const navigationDestination = activeNavigation.entries[activeNavigation.index] ?? clientDestination("voice");
+  const activeDestination = useMemo(() => (
+    navigationDestination.surfaceId === "chat" && !navigationDestination.runId && chatWorkspace.activeRunId
+      ? { ...navigationDestination, runId: chatWorkspace.activeRunId }
+      : navigationDestination
+  ), [chatWorkspace.activeRunId, navigationDestination]);
   const settingsOpen = Boolean(activeDestination.settingsSection);
   const paneScope = JSON.stringify([runtimeHost.home, activeDestination.surfaceId, activeDestination.runId ?? ""]);
   const paneStateKey = secondaryPaneStorageKey(accessProfile, homeRunId, clientWindow.scope, paneScope);
@@ -351,11 +356,11 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     [chatWorkspace.runs, clientPreferences.showInternalRuns],
   );
   useEffect(() => {
-    if (agentProjectWorkspace.loading) return;
+    if (agentProjectWorkspace.phase === "initial-loading" || agentProjectWorkspace.phase === "failed") return;
     if (projectFilterEeId && !agentProjectWorkspace.projects.some((project) => project.id === projectFilterEeId)) {
       setProjectFilterEeId("");
     }
-  }, [agentProjectWorkspace.loading, agentProjectWorkspace.projects, projectFilterEeId, setProjectFilterEeId]);
+  }, [agentProjectWorkspace.phase, agentProjectWorkspace.projects, projectFilterEeId, setProjectFilterEeId]);
 
   useEffect(() => {
     if (homeRunId) {
@@ -669,12 +674,12 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       if (!surfaceBelongsToWorkspace(surface, target.workspaceKey)) return false;
       if (target.surfaceId !== "chat") return true;
       return !target.runId
-        || !chatWorkspace.runsLoaded
+        || chatWorkspace.runsPhase !== "ready"
         || chatWorkspace.runs.some((run) => run.runId === target.runId);
     });
     if (nextTabs.length === secondaryTabs.length) return;
     secondaryTabModel.reconcileTabs(nextTabs);
-  }, [chatWorkspace.runs, chatWorkspace.runsLoaded, secondaryTabModel.reconcileTabs, secondaryTabs, surfaceRegistry.loading, topology, visibleSurfaces]);
+  }, [chatWorkspace.runs, chatWorkspace.runsPhase, secondaryTabModel.reconcileTabs, secondaryTabs, surfaceRegistry.loading, topology, visibleSurfaces]);
 
   useEffect(() => {
     if (!homeRunId.trim()) return;
@@ -774,7 +779,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   }, [chatWorkspace, surfaceNavigation]);
 
   useEffect(() => {
-    if (activeDestination.surfaceId !== "chat" || activeDestination.runId || !chatWorkspace.activeRunId) return;
+    if (navigationDestination.surfaceId !== "chat" || navigationDestination.runId || !chatWorkspace.activeRunId) return;
     setSurfaceNavigation((current) => {
       const destination = current.entries[current.index];
       if (destination?.surfaceId !== "chat" || destination.runId) return current;
@@ -783,16 +788,16 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       ));
       return { ...current, entries };
     });
-  }, [activeDestination.runId, activeDestination.surfaceId, chatWorkspace.activeRunId]);
+  }, [navigationDestination.runId, navigationDestination.surfaceId, chatWorkspace.activeRunId]);
 
   useEffect(() => {
     if (surfaceRegistry.loading) return;
-    const chatRunIds = chatWorkspace.loadingRuns ? undefined : new Set([
+    const chatRunIds = chatWorkspace.runsPhase !== "ready" ? undefined : new Set([
       ...chatWorkspace.runs.map((run) => run.runId),
       chatWorkspace.activeRunId,
     ].filter(Boolean));
     setSurfaceNavigation((current) => normalizeSurfaceNavigation(current, visibleSurfaces, chatRunIds));
-  }, [chatWorkspace.activeRunId, chatWorkspace.loadingRuns, chatWorkspace.runs, surfaceRegistry.loading, visibleSurfaces]);
+  }, [chatWorkspace.activeRunId, chatWorkspace.runsPhase, chatWorkspace.runs, surfaceRegistry.loading, visibleSurfaces]);
 
   useEffect(() => {
     if (surfaceRegistry.loading || !activeSurface) return;
@@ -2233,7 +2238,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
 
   useAdmittedClientActions({
     enabled: accessProfile === "live" && clientWindow.primary && runtimeHost.available && runtimeHost.ready
-      && surfaceRegistry.hydrated && agentProjectWorkspace.status === "ready" && !agentProjectWorkspace.error && homeChatWorkspace.runsLoaded
+      && surfaceRegistry.hydrated && agentProjectWorkspace.status === "ready" && !agentProjectWorkspace.error && homeChatWorkspace.runsLoaded && !homeChatWorkspace.runListError
       && homeChatWorkspace.activeRunId === homeRunId && homeChatWorkspace.activeRun?.runId === homeRunId
       && homeChatWorkspace.activeRun?.clientSurfaceRole === "home"
       && homeChatWorkspace.activeRun?.chatInterfaceId === agentProjectWorkspace.homeInterfaceId,
@@ -2481,7 +2486,9 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         activeSurfaceId={primarySurfaceTarget.surfaceId}
         activeChatRunId={primarySurfaceTarget.runId}
         chatRuns={taskChatRuns}
-        chatRunsLoading={chatWorkspace.loadingRuns}
+        chatRunsPhase={chatWorkspace.runsPhase}
+        chatRunListError={chatWorkspace.runListError}
+        onRetryChatRuns={chatWorkspace.refreshRuns}
         homeRunId={homeRunId}
         inboxUnreadCount={markActivity.unreadCount}
         inboxArrivalId={markActivity.arrivalId}

@@ -135,6 +135,7 @@ type DriverLifecycleOperation = {
   phase: OctopusApplicationLifecycleProgress["phase"] | "failed";
   percent: number;
   error: string;
+  settlesAfterRead: number | null;
 };
 
 export function DriversView({
@@ -161,7 +162,7 @@ export function DriversView({
   const browseCardRefs = useRef(new Map<string, HTMLDivElement>());
   const manageCardRefs = useRef(new Map<string, HTMLDivElement>());
   const [home, setHome] = useState("");
-  const [installReview, setInstallReview] = useState<DriverRecord | null>(null);
+  const [installReviewName, setInstallReviewName] = useState("");
   const [addingPreset, setAddingPreset] = useState<{ preset: DriverAgentPreset; scope: AgentPresetScope; home: string; operationId: string } | null>(null);
   const [presetProviders, setPresetProviders] = useState<OctopusProviderInterface[]>([]);
   const [presetProject, setPresetProject] = useState("");
@@ -189,6 +190,7 @@ export function DriversView({
   const [reloadTick, setReloadTick] = useState(0);
   const [removeName, setRemoveName] = useState("");
   const [lifecycleOperations, setLifecycleOperations] = useState<Record<string, DriverLifecycleOperation>>({});
+  const driversReadSequence = useRef(0);
   useAppErrorToast(error);
 
   useEffect(() => {
@@ -197,6 +199,7 @@ export function DriversView({
       return;
     }
     let cancelled = false;
+    const sequence = ++driversReadSequence.current;
     setLoaded(false);
     readProjection<DriversProjection>("projection.operator.os.drivers")
       .then((response) => {
@@ -209,6 +212,12 @@ export function DriversView({
         setHostManifestReady(response.host_manifest_ready === true);
         setError(arrayStrings(response.errors).join("\n"));
         setLoaded(true);
+        setLifecycleOperations((current) => {
+          const remaining = Object.entries(current).filter(([, operation]) => (
+            operation.phase !== "complete" || operation.settlesAfterRead === null || operation.settlesAfterRead >= sequence
+          ));
+          return remaining.length === Object.keys(current).length ? current : Object.fromEntries(remaining);
+        });
       })
       .catch((failure) => {
         if (cancelled) return;
@@ -255,8 +264,13 @@ export function DriversView({
   const selected = drivers.find((driver) => driver.name === selectedName) ?? null;
   const setupDriver = drivers.find((driver) => driver.name === setupName) ?? null;
   const removeDriver = drivers.find((driver) => driver.name === removeName) ?? null;
+  const installReview = drivers.find((driver) => driver.name === installReviewName && !driver.installed) ?? null;
   const keyboardNames = (catalogView === "manage" ? visibleInstalled : visible).map((driver) => driver.name);
   const keyboardCardRefs = catalogView === "manage" ? manageCardRefs : browseCardRefs;
+
+  useEffect(() => {
+    if (installReviewName && !installReview) setInstallReviewName("");
+  }, [installReview, installReviewName]);
 
   useEffect(() => {
     if (!loaded || !selectedName || selected) return;
@@ -510,7 +524,8 @@ export function DriversView({
   }
 
   function requestDriverInstall(driver: DriverRecord) {
-    if ((driver.install_packages?.length ?? 0) > 1) setInstallReview(driver);
+    if (driverLifecycleBusy(lifecycleOperations[driverPackageId(driver)])) return;
+    if ((driver.install_packages?.length ?? 0) > 1) setInstallReviewName(driver.name);
     else void installDriver(driver);
   }
 
@@ -560,12 +575,13 @@ export function DriversView({
       || driver.source_available !== true
       || !driver.source_digest
       || driver.install_block_reason
+      || driverLifecycleBusy(lifecycleOperations[driverPackageId(driver)])
     ) return;
     const packageId = driverPackageId(driver);
     const operationId = crypto.randomUUID();
     setLifecycleOperations((current) => ({
       ...current,
-      [packageId]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "" },
+      [packageId]: { operationId, operation: "install", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -576,7 +592,7 @@ export function DriversView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [packageId]: { operationId, operation: "install", phase: "complete", percent: 100, error: "" },
+        [packageId]: { operationId, operation: "install", phase: "complete", percent: 100, error: "", settlesAfterRead: driversReadSequence.current },
       }));
       setReloadTick((current) => current + 1);
     } catch (failure) {
@@ -588,6 +604,7 @@ export function DriversView({
           phase: "failed",
           percent: current[packageId]?.percent ?? 0,
           error: formatProjectionError(failure),
+          settlesAfterRead: null,
         },
       }));
     }
@@ -599,13 +616,14 @@ export function DriversView({
       || !driver.installed
       || !driver.installed_digest
       || driver.removal_allowed !== true
+      || driverLifecycleBusy(lifecycleOperations[driverPackageId(driver)])
     ) return;
     const packageId = driverPackageId(driver);
     const operationId = crypto.randomUUID();
     setRemoveName("");
     setLifecycleOperations((current) => ({
       ...current,
-      [packageId]: { operationId, operation: "remove", phase: "preflight", percent: 0, error: "" },
+      [packageId]: { operationId, operation: "remove", phase: "preflight", percent: 0, error: "", settlesAfterRead: null },
     }));
     try {
       await mutateOctopusOsWorkspace({
@@ -616,7 +634,7 @@ export function DriversView({
       });
       setLifecycleOperations((current) => ({
         ...current,
-        [packageId]: { operationId, operation: "remove", phase: "complete", percent: 100, error: "" },
+        [packageId]: { operationId, operation: "remove", phase: "complete", percent: 100, error: "", settlesAfterRead: driversReadSequence.current },
       }));
       if (selectedName === driver.name) {
         setSelectedName("");
@@ -634,6 +652,7 @@ export function DriversView({
           phase: "failed",
           percent: current[packageId]?.percent ?? 0,
           error: formatProjectionError(failure),
+          settlesAfterRead: null,
         },
       }));
     }
@@ -646,10 +665,10 @@ export function DriversView({
   return (
     <>
       <PackageInstallReviewDialog
-        onCancel={() => setInstallReview(null)}
+        onCancel={() => setInstallReviewName("")}
         onConfirm={() => {
           if (installReview) void installDriver(installReview);
-          setInstallReview(null);
+          setInstallReviewName("");
         }}
         review={installReview ? {
           logo: <DriverVisual driver={installReview} size="detail" />,
@@ -1509,7 +1528,7 @@ function driverAvailableScopeCount(driver: DriverRecord): number {
 }
 
 function driverLifecycleBusy(operation: DriverLifecycleOperation | undefined): boolean {
-  return Boolean(operation && operation.phase !== "failed" && operation.phase !== "complete");
+  return Boolean(operation && operation.phase !== "failed");
 }
 
 function driverPackageId(driver: DriverRecord): string {

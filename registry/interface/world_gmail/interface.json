@@ -38,7 +38,11 @@
       },
       "connector_link": {
         "connector_id": "connector_2128aebfecb84f64a069897515042a44",
-        "name": "Gmail"
+        "name": "Gmail",
+        "account_profile": {
+          "tool": "gmail.get_profile",
+          "email_field": "email"
+        }
       },
       "client_connection": {
         "schema_version": 1,

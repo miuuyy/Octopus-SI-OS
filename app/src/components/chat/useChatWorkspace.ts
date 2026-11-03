@@ -12,6 +12,7 @@ import {
   type ChatWorkerEnvironmentRoom,
 } from "../../chatRuns";
 import { useClientPreferences } from "../../clientPreferences";
+import type { ProjectionResourcePhase } from "../projectionResource";
 import { useRuntimeHomeHealth } from "../../runtimeHost";
 import { latestContextUsage } from "./contextUsage";
 import { withRunOperationTargets } from "./runOperationTargets";
@@ -249,8 +250,12 @@ export function useChatWorkspace(
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const [runsError, setRunsError] = useState("");
+  const [runListError, setRunListError] = useState("");
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const runsPhase: ProjectionResourcePhase = !runsLoaded
+    ? runListError ? "failed" : "initial-loading"
+    : runListError ? "degraded" : loadingRuns ? "refreshing" : "ready";
   const [activeRunId, setActiveRunId] = useState("");
   const projectedActiveRun = useMemo(() => runs.find((run) => run.runId === activeRunId) ?? null, [activeRunId, runs]);
   const [error, setError] = useState("");
@@ -355,7 +360,7 @@ export function useChatWorkspace(
     messageReadEpochRef.current += 1; messageReadGenerationRef.current.clear();
     messageCacheRef.current.clear(); runReceiptSequenceRef.current.clear(); projectedRunsRef.current = [];
     activeRunIdRef.current = "";
-    setActiveRunId(""); setRuns([]); setMessages([]); setRunsLoaded(false);
+    setActiveRunId(""); setRuns([]); setMessages([]); setRunsLoaded(false); setRunListError("");
     setPendingByRunKey({}); setPendingSteeringMessages([]); setInFlightRunKeys([]);
     setInFlightTurnControlTargets({}); setSteeringComposerPendingRunKeys([]); setPendingTurnControls({});
     setPendingPausedQueueSubmission(null); setError("");
@@ -490,6 +495,7 @@ export function useChatWorkspace(
     statusReads.invalidate();
     if (!enabled || !hasProjectionBridge()) {
       setRunsLoaded(false);
+      setRunListError("");
       setLoadingRuns(false);
       return;
     }
@@ -500,11 +506,13 @@ export function useChatWorkspace(
       projectedRunsRef.current = nextRuns;
       setRuns((current) => mergeProjectedChatRuns(current, nextRuns));
       setRunsError("");
+      setRunListError("");
       setRunsLoaded(true);
     } catch (failure) {
       if (runReadGenerationRef.current === generation) {
-        setRunsLoaded(false);
-        setRunsError(formatProjectionError(failure));
+        const message = formatProjectionError(failure) || "Projection read failed";
+        setRunListError(message);
+        setRunsError(message);
       }
     } finally {
       if (runReadGenerationRef.current === generation) {
@@ -1050,7 +1058,7 @@ export function useChatWorkspace(
   }, [agentPresets, executionContexts, executionContextsLoaded, providerInterfacesLoaded]);
 
   useEffect(() => {
-    if (!enabled || !runtimeReady || storageBlockReason || !queueReady || !runsLoaded) return;
+    if (!enabled || !runtimeReady || storageBlockReason || !queueReady || !runsLoaded || runListError) return;
     const ready = queueDispatchCandidates(queueStore.snapshot, runs);
     for (const item of ready) {
       if (interfaceFailureReason(item.runKey, item.providerInterfaceId)) continue;
@@ -1063,7 +1071,7 @@ export function useChatWorkspace(
         if (deliveryScopeCurrent()) setError(formatRuntimeError(failure));
       });
     }
-  }, [runs, runsLoaded, enabled, runtimeReady, storageBlockReason, interfaceFailures, queueReady, queuedTurns, pausedQueueRunKeys, inFlightRunKeys, steeringComposerPendingRunKeys]);
+  }, [runs, runsLoaded, runListError, enabled, runtimeReady, storageBlockReason, interfaceFailures, queueReady, queuedTurns, pausedQueueRunKeys, inFlightRunKeys, steeringComposerPendingRunKeys]);
 
   const renderedMessages = useMemo<ChatRenderMessage[]>(() => {
     const projected = messages.map(toRender);
@@ -1157,7 +1165,7 @@ export function useChatWorkspace(
   const queueRecoveryReads = useMemo(() => new Map<string, string>(), [accessProfile, runtimeHome]);
   const [queueRecoveryPass, setQueueRecoveryPass] = useState(0);
   useEffect(() => {
-    if (!enabled || !runtimeReady || !queueReady || !runsLoaded) return;
+    if (!enabled || !runtimeReady || !queueReady || !runsLoaded || runListError) return;
     let cancelled = false;
     const candidates = runs.flatMap((run) => {
       const pending = queuedTurns.filter((item) => item.runKey === run.runId && ["accepted", "unknown", "sending"].includes(item.status));
@@ -1193,7 +1201,7 @@ export function useChatWorkspace(
       if (queueOwner.active && deliveryScopeCurrent() && candidates.length > batch.length) setQueueRecoveryPass((pass) => pass + 1);
     });
     return () => { cancelled = true; };
-  }, [enabled, runtimeReady, queueReady, runsLoaded, runs, queuedTurns, queueRecoveryPass]);
+  }, [enabled, runtimeReady, queueReady, runsLoaded, runListError, runs, queuedTurns, queueRecoveryPass]);
 
   const artifactWriterAvailable = canSubmitOperatorTurn();
   const steeringWriterAvailable = canSubmitOperatorSteer();
@@ -3162,7 +3170,9 @@ export function useChatWorkspace(
     retryQueuedTurn: (...args: Parameters<typeof retryQueuedTurn>) => retryQueuedTurn(...args).catch((failure) => setError(formatRuntimeError(failure))),
     runs: presentedRuns,
     runsError,
+    runListError,
     runsLoaded,
+    runsPhase,
     runtimeReady,
     selectRun,
     setEndpoint,

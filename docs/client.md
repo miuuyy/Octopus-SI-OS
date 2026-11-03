@@ -219,8 +219,17 @@ Installation and access are separate:
 2. **Connect** supplies the required account, key, or device. Where the
    application declares a connection check, the client verifies what you enter
    against the real service, walks you through browser sign-in or pairing, and
-   shows the connected account.
+   shows the connected account. Gmail works through the Gmail app linked to
+   your ChatGPT account: the card shows the mailbox it uses, with the ChatGPT
+   account beneath it. If Gmail is already linked there, Octopus still asks you
+   to **Connect** once before tasks can use it. **Manage in ChatGPT** opens the
+   page where you switch, add or unlink mailboxes; Disconnect in Octopus does
+   not unlink Gmail from ChatGPT.
 3. **Make available** admits it within Home or the chosen Project's ceiling.
+   The task or Agent's worker must also be allowed to use the application; one
+   that is available but outside that ceiling appears disabled in the Agent
+   dialog with the reason. Saving an Agent brings it up to its template's
+   current ceiling.
 4. **Select/connect** gives a task the relevant bindings. A default for new
    tasks is not evidence that an existing task already uses it.
 
@@ -232,7 +241,9 @@ open-world — the rule Codex uses for app tools.
 An installed package grants no authority by itself. Each card offers the next
 step — **Install**, **Repair** or **Connect** — or shows **Connected** with a
 menu to reconnect or disconnect; **Reconnect required** and **Connection
-issue** appear only when the check fails. The detail page shows the connected
+issue** appear only when the check fails. After Install, Repair or Remove the
+card shows **Finishing** until the catalog reflects the result, so a second
+press cannot start the same change again. The detail page shows the connected
 account, where the application is available, and how many tasks use it.
 Removal can be blocked while live records depend on it.
 
@@ -341,11 +352,10 @@ To understand updates and local JSON changes, read
 each with its own switch and a count kept on this device:
 
 - **Gesture feedback** briefly shows which command a swipe or fist ran.
-- **What's new on Home** introduces one new capability with a card on Home.
 - **Shortcut coach** shows a command's keyboard shortcut after you have opened
   it from the command menu three times.
 
-Experiments change presentation only. All three start on, in each profile
+Experiments change presentation only. Both start on, in each profile
 separately, and nothing they count leaves the client.
 
 ## Experimental interaction and Test

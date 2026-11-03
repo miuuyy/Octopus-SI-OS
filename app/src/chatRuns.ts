@@ -110,6 +110,7 @@ export type ChatWorkerChoice = {
   selectedWorkerEnvironmentKinds: string[];
   selectedTools: ChatApplicationToolCapability[];
   applications: ChatApplicationChoice[];
+  unavailableApplications: ChatUnavailableApplicationChoice[];
   drivers: ChatDriverChoice[];
 };
 
@@ -159,6 +160,10 @@ export type ChatApplicationChoice = {
     tools: ChatApplicationToolCapability[];
   };
   selectedByDefault: boolean;
+};
+
+export type ChatUnavailableApplicationChoice = ChatApplicationChoice & {
+  reason: string;
 };
 
 export type ChatApplicationToolCapability = {
@@ -551,6 +556,7 @@ export function projectChatExecutionContexts(
         selectedWorkerEnvironmentKinds: asStringArray(worker.selected_worker_environment_kinds),
         selectedTools: asApplicationToolCapabilities(worker.selected_tools),
         applications: asApplicationChoices(worker.applications, applicationCatalog),
+        unavailableApplications: asUnavailableApplicationChoices(worker.unavailable_applications, applicationCatalog),
         drivers: asDriverChoices(worker.drivers),
       }];
     });
@@ -727,6 +733,20 @@ function asApplicationChoices(
       taskCapabilities: asApplicationTaskCapabilities(application.task_capabilities),
       selectedByDefault: selection.selected_by_default === true,
     }];
+  });
+}
+
+function asUnavailableApplicationChoices(
+  value: unknown,
+  catalog: ReadonlyMap<string, Record<string, unknown>>,
+): ChatUnavailableApplicationChoice[] {
+  const reasons = new Map((Array.isArray(value) ? value : []).map((candidate) => [
+    asString(asRecord(candidate).id),
+    asString(asRecord(candidate).reason),
+  ] as const));
+  return asApplicationChoices(value, catalog).flatMap((application) => {
+    const reason = reasons.get(application.id);
+    return reason ? [{ ...application, reason }] : [];
   });
 }
 

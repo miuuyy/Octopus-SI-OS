@@ -38,6 +38,7 @@ import { useChatgptAccount } from "../../account/useChatgptAccount";
 import { ChatGptSignInGate } from "./ChatGptSignInGate";
 import { chatgptSignInCompleted } from "../../onboarding/chatgptSignIn";
 import { OcButton } from "../../design-system/components";
+import { appToast } from "../../toasts";
 import { OctopusLoadingLogo, OctopusLoadingState } from "../OctopusLoadingLogo";
 import {
   WorkspaceSetupOverlay,
@@ -188,7 +189,9 @@ function WorkspaceHomeGate({ runtimeHome, children }: Pick<Props, "runtimeHome" 
   const [snapshot, setSnapshot] = useState<GateSnapshot | null>(null);
   const [setup, setSetup] = useState<OctopusClientSetupState | null>(null);
   const [error, setError] = useState("");
+  const [failedReads, setFailedReads] = useState(0);
   const [retry, setRetry] = useState(0);
+  const issue = useRef<{ close: () => void } | null>(null);
   useEffect(() => {
     let active = true;
     void readGateSnapshot(false, (current) => { if (active) setSetup(current); }).then((next) => {
@@ -197,12 +200,28 @@ function WorkspaceHomeGate({ runtimeHome, children }: Pick<Props, "runtimeHome" 
       setError("");
     }, (failure) => {
       if (!active) return;
-      setSnapshot(null);
+      setSnapshot((current) => current && shellGateSnapshot(current) ? current : null);
       setError(failure instanceof Error ? failure.message : String(failure));
+      setFailedReads((value) => value + 1);
     });
     return () => { active = false; };
   }, [structureGeneration, retry]);
-  if (error) return <GateState title="Workspace could not be checked" detail={error} tone="danger"
+  const shellMounted = snapshot !== null && shellGateSnapshot(snapshot);
+  useEffect(() => {
+    if (!error || !shellMounted) return;
+    issue.current = appToast.danger(`Workspace could not be checked: ${error}`, 0, {
+      action: { label: "Try again", onSelect: () => setRetry((value) => value + 1) },
+      dedupeKey: `workspace-gate:${runtimeHome}`,
+    });
+  }, [error, failedReads, runtimeHome, shellMounted]);
+  useEffect(() => {
+    if (!error || !shellMounted) return;
+    return () => {
+      issue.current?.close();
+      issue.current = null;
+    };
+  }, [error, runtimeHome, shellMounted]);
+  if (error && !shellMounted) return <GateState title="Workspace could not be checked" detail={error} tone="danger"
     action={<OcButton onClick={() => setRetry((value) => value + 1)}>Try again</OcButton>} />;
   if (!snapshot) return setup?.status === "in_progress"
     ? <WorkspaceSetupProgress applyState={savedSetupProgress(setup)} />
@@ -774,6 +793,10 @@ function proveCompletedClientSetup(
   ) {
     throw new ProductSetupError("Setup finished, but Home and the selected project tree do not match its receipt.");
   }
+}
+
+function shellGateSnapshot(snapshot: GateSnapshot): boolean {
+  return snapshot.clientSetup?.status === "complete" && completedSetupMatrix(snapshot, null).mode === "shell";
 }
 
 function completedSetupMatrix(snapshot: GateSnapshot, draft: WorkspaceSetupDraft | null): GateMatrix {

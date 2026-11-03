@@ -1,7 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { OctopusClientAccessProfile } from "./electron";
 
-export type ClientExperimentId = "gesture_feedback" | "home_whats_new" | "shortcut_coach";
+export type ClientExperimentId = "gesture_feedback" | "shortcut_coach";
 
 export type ClientExperiment = Readonly<{
   id: ClientExperimentId;
@@ -20,13 +20,6 @@ export const clientExperiments: readonly ClientExperiment[] = [
     signalLabel: "commands shown",
   },
   {
-    id: "home_whats_new",
-    title: "What's new on Home",
-    description: "Introduces one new capability at a time with a card on Home.",
-    question: "Do people try a new capability sooner when Home offers it?",
-    signalLabel: "cards acted on",
-  },
-  {
     id: "shortcut_coach",
     title: "Shortcut coach",
     description: "After a command is opened from the menu three times, shows its keyboard shortcut.",
@@ -38,11 +31,10 @@ export const clientExperiments: readonly ClientExperiment[] = [
 export type ClientExperimentState = Readonly<{
   disabled: readonly ClientExperimentId[];
   signals: Readonly<Partial<Record<ClientExperimentId, number>>>;
-  dismissedAnnouncements: readonly string[];
   menuCommandUses: Readonly<Record<string, number>>;
 }>;
 
-const EMPTY_STATE: ClientExperimentState = Object.freeze({ disabled: [], signals: {}, dismissedAnnouncements: [], menuCommandUses: {} });
+const EMPTY_STATE: ClientExperimentState = Object.freeze({ disabled: [], signals: {}, menuCommandUses: {} });
 const STORAGE_KEY = "octopus.client-experiments.v1";
 const stores = new Map<OctopusClientAccessProfile, ExperimentStore>();
 
@@ -88,11 +80,6 @@ export function recordClientExperimentSignal(profile: OctopusClientAccessProfile
   updateStore(store, { signals: { ...store.current.signals, [id]: (store.current.signals[id] ?? 0) + 1 } });
 }
 
-export function dismissClientAnnouncement(profile: OctopusClientAccessProfile, id: string): void {
-  const store = experimentStore(profile);
-  updateStore(store, { dismissedAnnouncements: [...new Set([...store.current.dismissedAnnouncements, id])] });
-}
-
 export function recordMenuCommandUse(profile: OctopusClientAccessProfile, commandId: string): number {
   const store = experimentStore(profile);
   const uses = (store.current.menuCommandUses[commandId] ?? 0) + 1;
@@ -126,7 +113,6 @@ function readState(profile: OctopusClientAccessProfile): ClientExperimentState {
     return Object.freeze({
       disabled: Array.isArray(value.disabled) ? value.disabled.filter(isExperimentId) : [],
       signals: isRecord(value.signals) ? value.signals as ClientExperimentState["signals"] : {},
-      dismissedAnnouncements: Array.isArray(value.dismissedAnnouncements) ? value.dismissedAnnouncements.filter((id) => typeof id === "string") : [],
       menuCommandUses: isRecord(value.menuCommandUses) ? value.menuCommandUses as ClientExperimentState["menuCommandUses"] : {},
     });
   } catch {

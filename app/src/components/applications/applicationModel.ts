@@ -100,6 +100,7 @@ export type ApplicationConnectionStatus = "none" | "checking" | "connected" | "n
 export type ApplicationConnectionSummary = {
   status: ApplicationConnectionStatus;
   account: { label: string; detail?: string } | null;
+  manage: { label: string; url: string } | null;
   message: string;
   moduleInterfaces: string[];
   fieldInterfaces: string[];
@@ -115,7 +116,7 @@ export function applicationConnectionSummary(
   const fieldInterfaces = application.installed
     ? [...new Set(fields.map((field) => field.interface_id))].filter((interfaceId) => !moduleInterfaces.includes(interfaceId))
     : [];
-  const base = { account: null, message: "", moduleInterfaces, fieldInterfaces, fields };
+  const base = { account: null, manage: null, message: "", moduleInterfaces, fieldInterfaces, fields };
   if (!application.installed || (moduleInterfaces.length === 0 && fieldInterfaces.length === 0)) {
     return { ...base, status: "none" };
   }
@@ -134,13 +135,14 @@ export function applicationConnectionSummary(
   ];
   const failure = states.find((state) => state.state === "error") as OctopusApplicationConnectionState | undefined;
   const account = states.flatMap((state) => "account" in state && state.account ? [state.account] : [])[0] ?? null;
-  if (failure) return { ...base, account, status: "error", message: failure.message || "The connection could not be checked." };
-  if (states.some((state) => state.state === "checking")) return { ...base, account, status: "checking" };
+  const manage = states.flatMap((state) => "manage" in state && state.manage ? [state.manage] : [])[0] ?? null;
+  if (failure) return { ...base, account, manage, status: "error", message: failure.message || "The connection could not be checked." };
+  if (states.some((state) => state.state === "checking")) return { ...base, account, manage, status: "checking" };
   const expired = states.find((state) => state.state === "expired") as OctopusApplicationConnectionState | undefined;
-  if (expired) return { ...base, account, status: "expired", message: expired.message || "" };
+  if (expired) return { ...base, account, manage, status: "expired", message: expired.message || "" };
   const missing = states.find((state) => state.state === "not_connected") as OctopusApplicationConnectionState | undefined;
-  if (missing) return { ...base, account, status: "not_connected", message: missing.message || "" };
-  return { ...base, account, status: "connected" };
+  if (missing) return { ...base, account, manage, status: "not_connected", message: missing.message || "" };
+  return { ...base, account, manage, status: "connected" };
 }
 
 export function configurationFieldKey(field: Pick<ApplicationConfigurationField, "interface_id" | "name">): string {

@@ -1,8 +1,20 @@
-module.exports = { operatorChatContextProjection };
+module.exports = { applicationWithinWorkerCeiling, operatorChatContextProjection };
 
 const { payloadArtifactBindings } = require("../contentAddressedArtifact.cjs");
 const { descriptorRows, eeInstanceRows, octopusOsInterfaceSidecars } = require("./registryRows.cjs");
 const { arrayValue, numberValue, objectOrEmpty, stringValue } = require("./values.cjs");
+
+function applicationWithinWorkerCeiling(application, ceiling) {
+  const interfaces = new Set(arrayValue(ceiling?.interfaces).map(stringValue).filter(Boolean));
+  const tools = new Set(arrayValue(ceiling?.tools).map(stringValue).filter(Boolean));
+  const kinds = new Set(arrayValue(ceiling?.wek).map(stringValue).filter(Boolean));
+  return arrayValue(application?.interfaces).map(stringValue).filter(Boolean).every((interfaceId) => interfaces.has(interfaceId))
+    && arrayValue(application?.task_capabilities?.tools).every((capability) => (
+      tools.has(stringValue(capability?.tool))
+      && interfaces.has(stringValue(capability?.interface))
+      && kinds.has(stringValue(capability?.worker_environment_kind))
+    ));
+}
 
 function operatorChatContextProjection(store) {
   function operatorChatContextRows(projection) {
@@ -67,6 +79,7 @@ function operatorChatContextProjection(store) {
         && stringValue(row.interface_type).toLowerCase() === "system"
         && stringValue(row.role).toLowerCase() === "worker"
       ));
+    const workersById = new Map(workers.map((row) => [stringValue(row.id ?? row.rule_id), row]));
     const installedApplications = arrayValue(store.operatorOsApplications(projection).applications);
     const installedDrivers = arrayValue(store.operatorOsDrivers(projection).drivers);
     return environments.flatMap((environment) => {
@@ -90,7 +103,14 @@ function operatorChatContextProjection(store) {
       const availableWorkers = workers
         .filter((worker) => interfaceAllowed(stringValue(worker.id)))
         .map((worker) => {
-          const ceiling = objectOrEmpty(objectOrEmpty(worker.worker_policy).ceiling);
+          const clientTemplate = objectOrEmpty(worker.client_worker_template);
+          const clientTemplateMatchesProject = stringValue(clientTemplate.project_ee_id) === stringValue(environment.ee_id)
+            && stringValue(clientTemplate.worker_interface) === stringValue(worker.id);
+          const sourceWorker = clientTemplateMatchesProject ? workersById.get(stringValue(worker.copy_of)) : worker;
+          const outsideCeilingReason = sourceWorker
+            ? "Not in this Agent's capability ceiling"
+            : `Source worker template '${stringValue(worker.copy_of)}' is not installed`;
+          const ceiling = objectOrEmpty(objectOrEmpty((sourceWorker ?? worker).worker_policy).ceiling);
           const workerInterfaces = new Set(arrayValue(ceiling.interfaces).map(stringValue).filter(Boolean));
           const workerTools = new Set(arrayValue(ceiling.tools).map(stringValue).filter(Boolean));
           const workerKinds = new Set(arrayValue(ceiling.wek).map(stringValue).filter(Boolean));
@@ -101,46 +121,47 @@ function operatorChatContextProjection(store) {
           const agentPresentation = agentPresentations.get(
             `${stringValue(environment.ee_id)}\0${stringValue(worker.id)}`,
           );
-          const clientTemplate = objectOrEmpty(worker.client_worker_template);
-          const clientTemplateMatchesProject = stringValue(clientTemplate.project_ee_id) === stringValue(environment.ee_id)
-            && stringValue(clientTemplate.worker_interface) === stringValue(worker.id);
           const profileInputs = new Set(arrayValue(authoringProfile?.external_inputs).map((route) => stringValue(route?.interface_id)).filter(Boolean));
           const profileOutputs = new Set(arrayValue(authoringProfile?.model_outputs).map((route) => stringValue(route?.interface_id)).filter(Boolean));
           const profileArtifacts = new Set(arrayValue(authoringProfile?.context_artifact_bindings).map((binding) => stringValue(binding?.id)).filter(Boolean));
           const profileKinds = new Set(arrayValue(authoringProfile?.selected_worker_environment_kinds).map(stringValue).filter(Boolean));
-          const applications = installedApplications.flatMap((application) => {
+          const projectApplications = installedApplications.flatMap((application) => {
             const projectState = arrayValue(application?.project_states).find((state) => (
               stringValue(state?.ee_id) === stringValue(environment.ee_id)
             ));
             const interfaces = arrayValue(application?.interfaces).map(stringValue).filter(Boolean);
-            const artifactBindings = arrayValue(application?.artifact_bindings);
-            const taskTools = arrayValue(application?.task_capabilities?.tools);
-            const available = application?.valid === true
+            const taskTools = arrayValue(application?.task_capabilities?.tools).map((capability) => ({
+              tool: stringValue(capability?.tool),
+              owner: stringValue(capability?.interface),
+              kind: stringValue(capability?.worker_environment_kind),
+            }));
+            const projectAvailable = application?.valid === true
               && projectState?.policy_allowed === true
-              && interfaces.every((interfaceId) => (
-                interfaceAllowed(interfaceId) && workerInterfaces.has(interfaceId)
-              ))
-              && taskTools.every((capability) => {
-                const tool = stringValue(capability?.tool);
-                const owner = stringValue(capability?.interface);
-                const kind = stringValue(capability?.worker_environment_kind);
-                return tool && owner && kind
-                  && workerTools.has(tool)
-                  && workerInterfaces.has(owner)
-                  && workerKinds.has(kind)
-                  && (allowedTools === null || allowedTools.has(tool))
-                  && interfaceAllowed(owner)
-                  && (allowedKinds === null || allowedKinds.has(kind));
-              });
-            if (!available) return [];
-            const explicitlySelected = interfaces.some((interfaceId) => (
-              profileInputs.has(interfaceId) || profileOutputs.has(interfaceId)
-            )) || artifactBindings.some((binding) => profileArtifacts.has(stringValue(binding?.artifact_id)));
-            return [{
-              id: stringValue(application.id),
-              selected_by_default: projectState?.selected_by_default === true || explicitlySelected,
-            }];
+              && interfaces.every(interfaceAllowed)
+              && taskTools.every(({ tool, owner, kind }) => tool && owner && kind
+                && (allowedTools === null || allowedTools.has(tool))
+                && interfaceAllowed(owner)
+                && (allowedKinds === null || allowedKinds.has(kind)));
+            if (!projectAvailable) return [];
+            return [{ application, projectState, interfaces, withinCeiling: applicationWithinWorkerCeiling(application, ceiling) }];
           });
+          const applications = projectApplications
+            .filter(({ withinCeiling }) => withinCeiling)
+            .map(({ application, projectState, interfaces }) => {
+              const explicitlySelected = interfaces.some((interfaceId) => (
+                profileInputs.has(interfaceId) || profileOutputs.has(interfaceId)
+              )) || arrayValue(application?.artifact_bindings).some((binding) => profileArtifacts.has(stringValue(binding?.artifact_id)));
+              return {
+                id: stringValue(application.id),
+                selected_by_default: projectState?.selected_by_default === true || explicitlySelected,
+              };
+            });
+          const unavailableApplications = projectApplications
+            .filter(({ withinCeiling }) => !withinCeiling)
+            .map(({ application }) => ({
+              id: stringValue(application.id),
+              reason: outsideCeilingReason,
+            }));
           const drivers = installedDrivers.flatMap((driver) => {
             const name = stringValue(driver?.name);
             const projectState = arrayValue(driver?.project_states).find((state) => (
@@ -232,6 +253,7 @@ function operatorChatContextProjection(store) {
             selected_worker_environment_kinds: arrayValue(authoringProfile?.selected_worker_environment_kinds),
             selected_tools: arrayValue(authoringProfile?.selected_tools),
             applications,
+            unavailable_applications: unavailableApplications,
             drivers,
           };
         })

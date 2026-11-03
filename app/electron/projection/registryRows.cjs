@@ -54,7 +54,7 @@ function projectionTruthChange(filename) {
       && /^ledger-cursor(?:\.[A-Za-z0-9_-]+)?\.json$/.test(segments[2])
     ) return null;
     if (segments.length === 3 && segments[2].endsWith(".json")) {
-      return segments[2] === INTERFACE_PRIVATE_ENVIRONMENT_FILE ? "structure" : "runs";
+      return segments[2] === INTERFACE_PRIVATE_ENVIRONMENT_FILE ? "structure" : "state";
     }
     return segments[2] === "worker-environments"
       && segments.length === 5

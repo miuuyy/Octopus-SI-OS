@@ -27,31 +27,10 @@ export function ApplicationMiniLogo({ application }: { application: ApplicationR
   return <ApplicationLogo application={application} className="size-[13px] overflow-hidden rounded-[4px] bg-surface ring-1 ring-border ring-inset" logoSize={8} />;
 }
 
-export function OctopusConnectMark({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cx("block bg-white", className)}
-      style={{
-        WebkitMaskImage: "url(./octopus-logo.png)",
-        WebkitMaskPosition: "center",
-        WebkitMaskRepeat: "no-repeat",
-        WebkitMaskSize: "contain",
-        maskImage: "url(./octopus-logo.png)",
-        maskPosition: "center",
-        maskRepeat: "no-repeat",
-        maskSize: "contain",
-      }}
-    />
-  );
-}
-
 export function ConnectLogoRow({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-black text-white shadow-sm">
-        <OctopusConnectMark className="size-10" />
-      </span>
+      <img alt="" className="-m-[7px] size-[70px] shrink-0" draggable={false} src="./octopus-dev-dock-icon.png" />
       <span aria-hidden="true" className="flex items-center gap-1">
         <span className="size-1.5 rounded-full bg-border" />
         <span className="size-1.5 rounded-full bg-border" />

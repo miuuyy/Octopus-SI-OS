@@ -5,7 +5,7 @@
   "handler_config": {
     "operation": "list_tools"
   },
-  "description": "List one page of the Gmail tools available through the ChatGPT account, with each tool's schema and linked Gmail accounts in _meta.link_accounts.",
+  "description": "List one page of the Gmail tools available through the ChatGPT account, with each tool's input schema and _meta. When several Gmail accounts are linked, a tool's input schema carries the choice of account as link_id.",
   "input_schema": {
     "type": "object",
     "properties": {

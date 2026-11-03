@@ -28,6 +28,7 @@ import { subscribeClientCommands } from "../../clientActions";
 import type { RuntimeHostView } from "../../runtimeHost";
 import type { TitlebarSurfaceAction, TitlebarSurfaceContext } from "./DesktopTitleBar";
 import type { OctopusOsProjectWorkspace } from "../../shell/useOctopusOsProjects";
+import type { ProjectionResourcePhase } from "../projectionResource";
 import type { OctopusProviderInterface } from "../../electron";
 import type { ClientAgentDefinition } from "../../agentPresets";
 import { clientWindowStateKey, clientWindowStateStorage } from "../../shell/clientWindowModel";
@@ -53,7 +54,9 @@ type Props = {
   activeSurfaceId: string;
   activeChatRunId: string;
   chatRuns: ChatRun[];
-  chatRunsLoading: boolean;
+  chatRunsPhase: ProjectionResourcePhase;
+  chatRunListError: string;
+  onRetryChatRuns: () => Promise<void>;
   homeRunId: string;
   inboxUnreadCount: number;
   inboxArrivalId?: string;
@@ -123,7 +126,9 @@ export function AppShell({
   activeSurfaceId,
   activeChatRunId,
   chatRuns,
-  chatRunsLoading,
+  chatRunsPhase,
+  chatRunListError,
+  onRetryChatRuns,
   homeRunId,
   inboxUnreadCount,
   inboxArrivalId,
@@ -366,7 +371,9 @@ export function AppShell({
                   activeSurfaceId={activeSurfaceId}
                   activeChatRunId={activeChatRunId}
                   chatRuns={chatRuns}
-                  chatRunsLoading={chatRunsLoading}
+                  chatRunsPhase={chatRunsPhase}
+                  chatRunListError={chatRunListError}
+                  onRetryChatRuns={onRetryChatRuns}
                   homeRunId={homeRunId}
                   activityContent={activityContent}
                   agentPinnedChatIds={agentPinnedChatIds}

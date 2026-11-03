@@ -123,7 +123,7 @@ test("run progress refreshes exact records without invalidating configuration or
     const beforeStateReads = catalogReads;
     await fs.mkdir(path.join(home, "interfaces/provider"), { recursive: true });
     await fs.writeFile(path.join(home, "interfaces/provider/stream-state.json"), "{}");
-    await changed("runs");
+    await changed("ledger");
     assert.equal((await read("projection.runs.list", { include_ledger: false })).runs.length, 1);
     assert.equal(catalogReads, beforeStateReads);
     await fs.writeFile(path.join(home, "interfaces/provider/environment.json"), JSON.stringify({ schema_version: 1, interface: "provider", values: {} }));

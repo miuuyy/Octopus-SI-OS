@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsPromises = require("node:fs/promises");
 const path = require("node:path");
@@ -7,6 +8,14 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { publishServerTools } = require("../../world_mcp_example/packages/octopus-mcp-client/server_operations.cjs");
 
 const MAX_ACCOUNT_FILE_BYTES = 1024 * 1024;
+const MAILBOX_FILE = "connection-mailboxes.json";
+const MAX_MAILBOX_FILE_BYTES = 16 * 1024;
+const MAX_REMEMBERED_MAILBOXES = 32;
+const MAX_PROFILE_READS = 8;
+const MANAGE_LABEL = "Manage in ChatGPT";
+const LINK_ID = /^[\x21-\x7e]{1,256}$/;
+const PROFILE_FIELD = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const TOOL_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 const ACCESS_TOKEN_EXPIRY_SKEW_MS = 30_000;
 const LINK_TIMEOUT_MS = 10 * 60_000;
 const LINK_FIRST_POLL_MS = 3_000;
@@ -85,6 +94,11 @@ function connectionConfig(descriptor) {
     || filter.meta_key !== "connector_id" || !filter.values.includes(link.connector_id)) {
     throw invalid("its connector link is not admitted by its tool filter");
   }
+  const profile = link.account_profile;
+  if (!isObject(profile) || Object.keys(profile).some((key) => !["tool", "email_field"].includes(key))
+    || !TOOL_NAME.test(profile.tool ?? "") || !PROFILE_FIELD.test(profile.email_field ?? "")) {
+    throw invalid("its connector link declares no account profile tool and email field");
+  }
   const versions = config.protocol_versions;
   if (!Array.isArray(versions) || !versions.length || !versions.every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
     || !isText(config.client_name) || !isText(config.client_version)) {
@@ -107,6 +121,8 @@ function connectionConfig(descriptor) {
     values: new Set(filter.values),
     connectorId: link.connector_id,
     name: link.name,
+    profileTool: profile.tool,
+    profileEmailField: profile.email_field,
     versions,
     clientName: config.client_name,
     clientVersion: config.client_version,
@@ -135,18 +151,31 @@ function jwtClaims(token) {
   }
 }
 
-function accountLabel(idToken) {
+function signInEmail(idToken) {
   const claims = jwtClaims(idToken);
   const email = claims?.email ?? claims?.["https://api.openai.com/profile"]?.email;
-  return isText(email) ? email : "ChatGPT account";
+  return isText(email) ? email : null;
 }
 
-async function readBoundedRegularFile(file) {
+function signInAccount(signIn) {
+  return { label: signIn ? `ChatGPT account ${signIn}` : "ChatGPT account" };
+}
+
+function manageLink(config) {
+  return { label: MANAGE_LABEL, url: connectorLinkUrl(config) };
+}
+
+function mailbox(value) {
+  return typeof value === "string" && value.length <= 254
+    && /^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+$/u.test(value) ? value : null;
+}
+
+async function readBoundedRegularFile(file, limit) {
   const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
   const handle = await fsPromises.open(file, fs.constants.O_RDONLY | noFollow);
   try {
     const before = await handle.stat();
-    if (!before.isFile() || before.size <= 0 || before.size > MAX_ACCOUNT_FILE_BYTES) {
+    if (!before.isFile() || before.size <= 0 || before.size > limit) {
       throw new Error("not a bounded regular file");
     }
     const bytes = await handle.readFile();
@@ -164,7 +193,7 @@ async function readCredential(ctx, config) {
   }
   let bytes;
   try {
-    bytes = await readBoundedRegularFile(file);
+    bytes = await readBoundedRegularFile(file, MAX_ACCOUNT_FILE_BYTES);
   } catch (error) {
     if (error?.code === "ENOENT") return { stop: { state: "not_connected", message: SIGN_IN_FIRST } };
     throw new ConnectionStop("error", UNREADABLE_SIGN_IN);
@@ -182,13 +211,13 @@ async function readCredential(ctx, config) {
   if (!isText(tokens?.access_token) || !isText(tokens?.account_id)) {
     return { stop: { state: "not_connected", message: SIGN_IN_FIRST } };
   }
-  const account = { label: accountLabel(tokens.id_token) };
+  const signIn = signInEmail(tokens.id_token);
   const expiresAt = jwtClaims(tokens.access_token)?.exp;
   if (!Number.isFinite(expiresAt)) throw new ConnectionStop("error", UNREADABLE_SIGN_IN);
   if (expiresAt * 1000 <= Date.now() + ACCESS_TOKEN_EXPIRY_SKEW_MS) {
-    return { stop: { state: "expired", account, message: SIGN_IN_EXPIRED } };
+    return { stop: { state: "expired", account: signInAccount(signIn), manage: manageLink(config), message: SIGN_IN_EXPIRED } };
   }
-  return { accessToken: tokens.access_token, accountId: tokens.account_id, account };
+  return { accessToken: tokens.access_token, accountId: tokens.account_id, signIn };
 }
 
 function parseEventStream(text, method) {
@@ -288,8 +317,7 @@ async function rpc(ctx, config, credential, session, method, params) {
   return response.result;
 }
 
-async function listConnectorTools(ctx, config, credential) {
-  const session = { id: null, protocol: config.versions[0], nextId: 1 };
+async function listConnectorTools(ctx, config, credential, session) {
   const initialized = await rpc(ctx, config, credential, session, "initialize", {
     protocolVersion: session.protocol,
     capabilities: {},
@@ -312,7 +340,7 @@ async function listConnectorTools(ctx, config, credential) {
     if (!Array.isArray(result.tools)) throw new ConnectionStop("error", "ChatGPT's apps service sent a malformed tool list.");
     for (const tool of result.tools) {
       const value = tool?._meta?.[config.metaKey];
-      if (typeof value === "string" && config.values.has(value)) tools.push(tool);
+      if (typeof value === "string" && config.values.has(value) && tool._meta._codex_apps?.synthetic_link !== true) tools.push(tool);
     }
     if (result.nextCursor === undefined || result.nextCursor === null) return tools;
     if (!isText(result.nextCursor) || cursors.has(result.nextCursor)) {
@@ -324,20 +352,105 @@ async function listConnectorTools(ctx, config, credential) {
   throw new ConnectionStop("error", "ChatGPT's apps service sent more tool pages than this application allows.");
 }
 
-function connectedState(config, account, tools) {
-  if (!tools.length) {
-    return { state: "not_connected", account, message: `${config.name} is not connected to this ChatGPT account.` };
+function linkIds(tool) {
+  const ids = [];
+  if (LINK_ID.test(tool?._meta?.link_id ?? "")) ids.push(tool._meta.link_id);
+  for (const entry of Array.isArray(tool?._meta?.link_accounts) ? tool._meta.link_accounts : []) {
+    if (LINK_ID.test(entry?.link_id ?? "")) ids.push(entry.link_id);
   }
-  const emails = new Set();
+  return ids;
+}
+
+function profileRequest(config, tools, link) {
   for (const tool of tools) {
-    const linked = tool?._meta?.link_accounts;
-    for (const entry of Array.isArray(linked) ? linked : []) {
-      if (isText(entry?.profile_email)) emails.add(entry.profile_email);
+    if (tool.name !== config.profileTool || tool.annotations?.readOnlyHint !== true) continue;
+    if (tool._meta._codex_apps?.requires_explicit_link_id === true) {
+      if (isObject(tool.inputSchema?.properties?.link_id) && linkIds(tool).includes(link)) {
+        return { name: tool.name, arguments: { link_id: link }, _meta: tool._meta };
+      }
+    } else if (tool._meta.link_id === link) {
+      return { name: tool.name, arguments: {}, _meta: tool._meta };
     }
   }
-  const connected = { label: account.label };
-  if (emails.size) connected.detail = `${config.name}: ${[...emails].join(", ")}`;
-  return { state: "connected", account: connected };
+  return null;
+}
+
+async function readMailbox(ctx, config, credential, session, request) {
+  try {
+    const result = await rpc(ctx, config, credential, session, "tools/call", request);
+    return result.isError === true || !isObject(result.structuredContent) ? null : mailbox(result.structuredContent[config.profileEmailField]);
+  } catch (error) {
+    if (!(error instanceof ConnectionStop) || error.state !== "error" || ctx.signal?.aborted) throw error;
+    return null;
+  }
+}
+
+async function readMailboxes(ctx, config, credential, session, tools, links, remembered) {
+  const mailboxes = new Map();
+  let reads = 0;
+  for (const link of links) {
+    if (remembered.has(link)) {
+      mailboxes.set(link, remembered.get(link));
+      continue;
+    }
+    const request = reads < MAX_PROFILE_READS ? profileRequest(config, tools, link) : null;
+    if (!request) continue;
+    reads += 1;
+    const email = await readMailbox(ctx, config, credential, session, request);
+    if (email) mailboxes.set(link, email);
+  }
+  return mailboxes;
+}
+
+function mailboxFile(ctx) {
+  if (typeof ctx.privateDirectory !== "string" || !path.isAbsolute(ctx.privateDirectory)) {
+    throw new ConnectionStop("error", "Octopus did not provide this application's private directory.");
+  }
+  return path.join(ctx.privateDirectory, MAILBOX_FILE);
+}
+
+async function rememberedMailboxes(ctx, config) {
+  let document;
+  try {
+    document = JSON.parse((await readBoundedRegularFile(mailboxFile(ctx), MAX_MAILBOX_FILE_BYTES)).toString("utf8"));
+  } catch (error) {
+    if (error instanceof ConnectionStop) throw error;
+    return new Map();
+  }
+  const entries = isObject(document?.links) ? Object.entries(document.links) : [];
+  if (document?.schema_version !== 1 || document.connector_id !== config.connectorId || entries.length > MAX_REMEMBERED_MAILBOXES
+    || entries.some(([link, email]) => !LINK_ID.test(link) || !mailbox(email))) {
+    return new Map();
+  }
+  return new Map(entries);
+}
+
+async function rememberMailboxes(ctx, config, mailboxes) {
+  const file = mailboxFile(ctx);
+  const links = Object.fromEntries([...mailboxes].slice(0, MAX_REMEMBERED_MAILBOXES));
+  const body = `${JSON.stringify({ schema_version: 1, connector_id: config.connectorId, links }, null, 2)}\n`;
+  if (Buffer.byteLength(body) > MAX_MAILBOX_FILE_BYTES) throw new Error(`the ${config.name} mailbox list is too large`);
+  const temporary = path.join(path.dirname(file), `.${MAILBOX_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  try {
+    await fsPromises.writeFile(temporary, body, { flag: "wx", mode: 0o600 });
+    await fsPromises.rename(temporary, file);
+  } catch (error) {
+    await fsPromises.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+function connectedState(config, signIn, links, mailboxes) {
+  const emails = [...new Set(links.flatMap((link) => (mailboxes.has(link) ? [mailboxes.get(link)] : [])))];
+  const unread = links.filter((link) => !mailboxes.has(link)).length;
+  const state = {
+    state: "connected",
+    account: { label: emails.length ? emails.join(", ") : `${config.name} linked in ChatGPT`, detail: `Through ${signInAccount(signIn).label}` },
+    manage: manageLink(config),
+  };
+  if (!emails.length) state.message = `${config.name} is linked in ChatGPT, but Octopus could not read which mailbox it uses.`;
+  else if (unread) state.message = `Octopus could not read the mailbox of ${unread} more ${config.name} account${unread === 1 ? "" : "s"} linked in ChatGPT.`;
+  return state;
 }
 
 function finish(state) {
@@ -346,39 +459,62 @@ function finish(state) {
     result.account = { label: clip(state.account.label, 96) };
     if (state.account.detail) result.account.detail = clip(state.account.detail, 160);
   }
+  if (state.manage) result.manage = { label: clip(state.manage.label, 48), url: state.manage.url };
   if (state.message) result.message = clip(state.message, 300);
   return result;
 }
 
-async function inspect(ctx) {
-  let account;
+async function inspect(ctx, fresh) {
+  let signedIn = null;
+  const outcome = (state, tools = [], mailboxes = new Map()) => ({ state: finish(state), tools, mailboxes, signedIn: Boolean(signedIn) });
   try {
     const config = connectionConfig(ctx.descriptor);
     const credential = await readCredential(ctx, config);
-    if (credential.stop) return { state: finish(credential.stop), tools: [] };
-    account = credential.account;
-    const tools = await listConnectorTools(ctx, config, credential);
-    return { state: finish(connectedState(config, account, tools)), tools };
+    if (credential.stop) return outcome(credential.stop);
+    signedIn = { account: signInAccount(credential.signIn), manage: manageLink(config) };
+    const session = { id: null, protocol: config.versions[0], nextId: 1 };
+    const tools = await listConnectorTools(ctx, config, credential, session);
+    if (!tools.length) {
+      return outcome({ state: "not_connected", ...signedIn, message: `${config.name} is not linked to this ChatGPT account.` });
+    }
+    const links = [...new Set(tools.flatMap(linkIds))];
+    const remembered = fresh ? new Map() : await rememberedMailboxes(ctx, config);
+    const mailboxes = await readMailboxes(ctx, config, credential, session, tools, links, remembered);
+    return outcome(connectedState(config, credential.signIn, links, mailboxes), tools, mailboxes);
   } catch (error) {
-    if (error instanceof ConnectionStop) return { state: finish({ state: error.state, account, message: error.message }), tools: [] };
-    return { state: finish({ state: "error", account, message: `The connection could not be checked: ${error?.message ?? error}` }), tools: [] };
+    if (error instanceof ConnectionStop) return outcome({ state: error.state, ...signedIn, message: error.message });
+    return outcome({ state: "error", ...signedIn, message: `The connection could not be checked: ${error?.message ?? error}` });
   }
 }
 
 async function probe(ctx) {
-  return (await inspect(ctx)).state;
+  return (await inspect(ctx, false)).state;
 }
 
-async function published(ctx, inspected) {
-  if (inspected.state.state !== "connected" || typeof ctx.publishOperations !== "function") return inspected.state;
+async function published(ctx, config, inspected) {
+  if (inspected.state.state !== "connected") return inspected.state;
+  let unkept = "";
+  try {
+    await rememberMailboxes(ctx, config, inspected.mailboxes);
+  } catch (error) {
+    unkept = `Octopus could not keep the ${config.name} mailbox list and reads it again on the next check: ${error?.message ?? error}`;
+  }
+  if (typeof ctx.publishOperations !== "function") {
+    return unkept ? finish({ ...inspected.state, message: [inspected.state.message, unkept].filter(Boolean).join(" ") }) : inspected.state;
+  }
   const tools = inspected.tools.map((tool) => {
-    const linked = (Array.isArray(tool?._meta?.link_accounts) ? tool._meta.link_accounts : []).filter((entry) => isText(entry?.link_id));
+    const linked = (Array.isArray(tool._meta.link_accounts) ? tool._meta.link_accounts : []).filter((entry) => LINK_ID.test(entry?.link_id ?? ""));
     if (!linked.length) return tool;
-    const accounts = linked.map((entry) => `${entry.link_id}${isText(entry.profile_email) ? ` (${entry.profile_email})` : ""}`).join(", ");
+    const accounts = linked.map((entry) => `${entry.link_id}${inspected.mailboxes.has(entry.link_id) ? ` (${inspected.mailboxes.get(entry.link_id)})` : ""}`).join(", ");
     return { ...tool, description: `${isText(tool.description) ? `${tool.description}\n\n` : ""}Linked accounts, by link_id: ${accounts}.` };
   });
   const { published: count, skipped } = await publishServerTools(ctx, tools);
-  const message = [`${count} tool${count === 1 ? " is" : "s are"} available to connected tasks.`, skipped.length ? `Only through call_tool: ${skipped.join("; ")}` : ""].filter(Boolean).join(" ");
+  const message = [
+    inspected.state.message,
+    `${count} tool${count === 1 ? " is" : "s are"} available to connected tasks.`,
+    unkept,
+    skipped.length ? `Only through call_tool: ${skipped.join("; ")}` : "",
+  ].filter(Boolean).join(" ");
   return finish({ ...inspected.state, message });
 }
 
@@ -393,9 +529,9 @@ function describedConfig(ctx) {
 async function connect(ctx) {
   const { config, state: invalidState } = describedConfig(ctx);
   if (!config) return invalidState;
-  const first = await inspect(ctx);
+  const first = await inspect(ctx, true);
   let state = first.state;
-  if (state.state !== "not_connected" || !state.account) return published(ctx, first);
+  if (state.state !== "not_connected" || !first.signedIn) return published(ctx, config, first);
   const url = connectorLinkUrl(config);
   try {
     await ctx.openExternal(url);
@@ -403,7 +539,7 @@ async function connect(ctx) {
     return finish({ ...state, state: "error", message: `Octopus could not open the ChatGPT page for ${config.name}: ${error?.message ?? error}` });
   }
   await ctx.progress({
-    message: `Connect ${config.name} on the ChatGPT page that opened. Octopus continues when ChatGPT reports it connected.`,
+    message: `Link ${config.name} on the ChatGPT page that opened and choose its account there. Octopus continues when ChatGPT reports it linked.`,
     url,
     code: "connector_link_pending",
   });
@@ -415,14 +551,14 @@ async function connect(ctx) {
       if (!ctx.signal?.aborted) throw error;
     }
     if (ctx.signal?.aborted) return finish({ ...state, message: `Connecting ${config.name} was cancelled.` });
-    const next = await inspect(ctx);
+    const next = await inspect(ctx, true);
     state = next.state;
-    if (state.state === "connected" || state.state === "expired" || !state.account) return published(ctx, next);
+    if (state.state === "connected" || state.state === "expired" || !next.signedIn) return published(ctx, config, next);
   }
   return finish({
+    ...state,
     state: state.state === "error" ? "error" : "not_connected",
-    account: state.account,
-    message: `${config.name} was not connected within ${LINK_TIMEOUT_MS / 60_000} minutes. Connect it on ChatGPT, then try again.`,
+    message: `${config.name} was not linked within ${LINK_TIMEOUT_MS / 60_000} minutes. Link it on ChatGPT, then try again.`,
   });
 }
 
@@ -433,7 +569,7 @@ async function disconnect(ctx) {
   if (state.state !== "connected") return state;
   return finish({
     ...state,
-    message: `${config.name} stays connected to your ChatGPT account. To disconnect it, open ChatGPT Settings, Apps, and disconnect ${config.name} there.`,
+    message: `Octopus cannot unlink ${config.name} from your ChatGPT account, so it stays linked. To disconnect it or change its account, choose ${MANAGE_LABEL} and do it there.`,
   });
 }
 

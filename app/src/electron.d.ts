@@ -1527,6 +1527,7 @@ export type OctopusApplicationPrivateConfigurationMutation = {
 export type OctopusApplicationConnectionState = {
   state: "connected" | "not_connected" | "expired" | "error";
   account?: { label: string; detail?: string };
+  manage?: { label: string; url: string };
   message?: string;
 };
 

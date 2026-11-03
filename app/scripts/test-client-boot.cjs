@@ -70,6 +70,27 @@ const LaunchTerminal = compile("src/components/onboarding/LaunchTerminal.tsx", {
   "../terminal/OctopusTerminal": "export function OctopusTerminal(props) { globalThis.__boot.terminals.push(props); return null; }",
   "../OctopusLoadingLogo": nothing("OctopusLoadingLogo"),
 }, "LaunchTerminal");
+const WorkspaceSetupGate = compile("src/components/onboarding/WorkspaceSetupGate.tsx", {
+  "../chat/chatWorkspaceCapabilities": "export const providerServiceTierAvailable = () => false;",
+  "../../extensions/useClientExtensions": "export function useClientExtensions() { return { loading: true }; }",
+  "../../onboarding/workspaceSetup": "export const clearWorkspaceSetupDraft = () => {}; export const compileWorkspaceInitializeRequest = () => ({}); export const readWorkspaceSetupDraft = () => null; export const saveWorkspaceSetupDraft = (draft) => draft; export const workspaceInitializeRequestDigest = async () => \"\";",
+  "../../projectionClient": `const gate = () => globalThis.__boot.gate;
+export async function readCurrentClientSetup() { gate().reads += 1; if (gate().failure) throw new Error(gate().failure); return gate().setup; }
+export async function readWorkspaceSetupState() { return gate().workspace; }
+export async function readProjection() { return gate().scope; }
+export async function beginClientSetup() { throw new Error("setup is outside this fixture"); }
+export async function readClientSetup() { return null; }
+export async function resumeClientSetup() { throw new Error("setup is outside this fixture"); }
+export function onClientSetupProgress() { return () => {}; }`,
+  "../../projectionLive": `import { useState } from "react"; export function useProjectionStructureGeneration() { const [generation, setGeneration] = useState(0); globalThis.__boot.gate.change = () => setGeneration((value) => value + 1); return generation; }`,
+  "../../account/useChatgptAccount": "export function useChatgptAccount() { return { account: null }; }",
+  "./ChatGptSignInGate": nothing("ChatGptSignInGate"),
+  "../../onboarding/chatgptSignIn": "export const chatgptSignInCompleted = () => false;",
+  "../../design-system/components": `import { createElement } from "react"; export function OcButton({ children, onClick }) { return createElement("button", { onClick, type: "button" }, children); }`,
+  "../../toasts": "export const appToast = { danger(title, duration, options) { const toasts = globalThis.__boot.gate.toasts; let toast = toasts.find((item) => item.open && item.options.dedupeKey === options.dedupeKey); if (toast) Object.assign(toast, { title, options, count: toast.count + 1 }); else toasts.push(toast = { title, duration, options, open: true, count: 1 }); return { close() { toast.open = false; } }; } };",
+  "../OctopusLoadingLogo": `import { createElement } from "react"; export function OctopusLoadingLogo() { return null; } export function OctopusLoadingState({ label }) { return createElement("div", { className: "stub-loading" }, label); }`,
+  "./WorkspaceSetupOverlay": `${nothing("WorkspaceSetupOverlay", "WorkspaceSetupProgress")}\nexport const createDefaultWorkspaceSetupDraft = () => null;`,
+}, "WorkspaceSetupGate");
 const RuntimeTopologyProbe = compile("src/runtimeTopology.ts", {}, "useRuntimeTopology").then((useRuntimeTopology) => function Probe() {
   boot.topology = useRuntimeTopology(true, [], false);
   return null;
@@ -293,4 +314,35 @@ test("topology retains the last world and read error until a focus or explicit r
   root.render(null); await settle(5);
   window.dispatchEvent(new Event("focus")); await settle();
   assert.equal(reads, 3);
+});
+
+
+test("a shell-ready Home keeps the shell mounted when a background check fails and gates only on a successful blocked read", async () => {
+  root.render(null); await settle(5);
+  const digest = (character) => character.repeat(64);
+  const gate = boot.gate = { reads: 0, failure: "", toasts: [], mounts: 0, unmounts: 0, change: null,
+    setup: { status: "complete", operationId: "op-1", receiptDigest: digest("a"), plan: { workspace: { request_digest: digest("b") } } },
+    workspace: { status: "configured", errors: [], receipt: { operationId: "op-1", requestDigest: digest("b"), rootEeId: "ee.root", homeRunId: "run.home", homeInterfaceId: "chat.home", projects: [] } },
+    scope: { status: "ready", root_ee_id: "ee.root", home_run_id: "run.home", home_interface_id: "chat.home", root_environment: { ee_id: "ee.root", record_digest: digest("c") }, projects: [], errors: [] } };
+  function Shell() {
+    React.useEffect(() => { gate.mounts += 1; return () => { gate.unmounts += 1; }; }, []);
+    return React.createElement("section", { className: "stub-gated-shell" });
+  }
+  root.render(React.createElement(await WorkspaceSetupGate, { accessProfile: "live", runtimeHome: "/fixture-home" }, React.createElement(Shell)));
+  await settle(40);
+  assert.ok(shown(".stub-gated-shell"));
+  gate.failure = "projection busy"; gate.change(); await settle(40);
+  assert.deepEqual([shown(".stub-gated-shell"), gate.mounts, gate.unmounts], [true, 1, 0], "a failed background check keeps the mounted shell");
+  assert.equal(shown("#welcome-title"), false, "the failure is not a blocking gate");
+  assert.deepEqual(gate.toasts.map((toast) => [toast.title, toast.open, toast.options.action.label]), [["Workspace could not be checked: projection busy", true, "Try again"]]);
+  const selectAction = (toast) => { toast.options.action.onSelect(); toast.open = false; };
+  selectAction(gate.toasts[0]); await settle(40);
+  assert.deepEqual(gate.toasts.map((toast) => [toast.title, toast.open]), [["Workspace could not be checked: projection busy", false], ["Workspace could not be checked: projection busy", true]], "a retry that fails again shows the issue again");
+  gate.failure = ""; selectAction(gate.toasts[1]); await settle(40);
+  assert.deepEqual([gate.reads, gate.toasts.some((toast) => toast.open), gate.mounts, gate.unmounts], [4, false, 1, 0], "retry clears the issue without remounting the shell");
+  gate.workspace = { ...gate.workspace, status: "degraded", errors: ["Workspace receipt is damaged"] };
+  gate.change(); await settle(40);
+  assert.equal(shown(".stub-gated-shell"), false, "a successful read that blocks the Home still gates");
+  assert.equal(document.querySelector("#welcome-title").textContent, "Workspace setup needs repair");
+  root.render(null); await settle(5);
 });

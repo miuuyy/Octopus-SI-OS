@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const { clientAgentCatalogDigest, clientAgentCatalogPath, parseClientAgentCatalog, readClientAgentCatalog, requiredClientAgentIcon, requiredClientAgentId, requiredClientAgentName, planClientAgentTemplate, requireAgentSourceAdmission } = require("../clientAgentCatalog.cjs");
 const { jsonDocumentDigest, readOptionalRegularJsonDocument, readRegularJsonDocument, requirePlainDirectory, requireUnchangedJsonDigest, stableJson } = require("./jsonFiles.cjs");
+const { applicationWithinWorkerCeiling } = require("./operatorChatContext.cjs");
 const { parseClientWorkerTemplate, parseOctopusOsSidecar, parseUniqueRegistryIds } = require("./sidecars.cjs");
 const { scopeEnvironmentChain, scopedRecordPath } = require("./taskDeletion.cjs");
 const { arrayValue, isPlainRecord, objectOrEmpty, requiredAbsolutePath, requiredApplicationOperationId, requiredDigest, requiredSafeRegistryId, requiredString, stringValue } = require("./values.cjs");
@@ -112,21 +113,12 @@ async function createOctopusOsAgentTemplate(
     .update(`${operationId}\0${workerInterfaceId}`)
     .digest("hex")
     .slice(0, 32)}`;
-  const sourceDirectory = path.join(interfaceRoot, sourceWorkerInterfaceId);
-  await requirePlainDirectory(sourceDirectory, `source worker template ${sourceWorkerInterfaceId}`);
-  const sourceInterfacePath = path.join(sourceDirectory, "interface.json");
-  const sourcePolicyPath = path.join(sourceDirectory, "policy.json");
-  const sourceInterface = await readRegularJsonDocument(sourceInterfacePath, `source worker descriptor ${sourceWorkerInterfaceId}`);
-  const sourcePolicy = await readRegularJsonDocument(sourcePolicyPath, `source worker policy ${sourceWorkerInterfaceId}`);
-  if (
-    stringValue(sourceInterface.document?.id) !== sourceWorkerInterfaceId
-    || stringValue(sourceInterface.document?.interface_type).toLowerCase() !== "system"
-    || stringValue(sourceInterface.document?.role).toLowerCase() !== "worker"
-    || stringValue(sourcePolicy.document?.id) !== sourceWorkerInterfaceId
-    || !isPlainRecord(sourcePolicy.document?.ceiling)
-  ) {
-    throw new Error(`source worker template '${sourceWorkerInterfaceId}' is malformed`);
-  }
+  const {
+    interfacePath: sourceInterfacePath,
+    policyPath: sourcePolicyPath,
+    interface: sourceInterface,
+    policy: sourcePolicy,
+  } = await readSourceWorkerTemplate(interfaceRoot, sourceWorkerInterfaceId);
   const targetDirectory = path.join(interfaceRoot, workerInterfaceId);
   const targetInterfacePath = path.join(targetDirectory, "interface.json");
   const targetPolicyPath = path.join(targetDirectory, "policy.json");
@@ -348,10 +340,40 @@ async function mutateOctopusOsAgentTemplate(
   };
   const nextName = requiredAgentName(request?.name);
   const nextIcon = requiredAgentIcon(request?.icon);
+  const agentInterfacePath = path.join(workerDirectory, "interface.json");
+  const agentPolicyPath = path.join(workerDirectory, "policy.json");
+  const agentInterface = await readRegularJsonDocument(agentInterfacePath, `Agent worker descriptor ${workerInterfaceId}`);
+  const agentPolicy = await readRegularJsonDocument(agentPolicyPath, `Agent worker policy ${workerInterfaceId}`);
+  if (
+    stringValue(agentInterface.document?.id) !== workerInterfaceId
+    || stringValue(agentPolicy.document?.id) !== workerInterfaceId
+  ) {
+    throw new Error(`Agent worker template '${workerInterfaceId}' is malformed`);
+  }
+  const sourceWorkerInterfaceId = requiredSafeRegistryId(
+    agentInterface.document?.copy_of,
+    `Agent worker template '${workerInterfaceId}' source`,
+  );
+  const source = await readSourceWorkerTemplate(interfaceRoot, sourceWorkerInterfaceId);
+  const nextPolicy = { ...structuredClone(source.policy.document), id: workerInterfaceId };
+  const policyChanged = stableJson(agentPolicy.document) !== stableJson(nextPolicy);
+  const applicationCatalog = new Map(arrayValue(chatContexts?.application_catalog).map((application) => [stringValue(application?.id), application]));
+  const outsidePin = [
+    ...[next.provider_interface_id].filter((id) => !arrayValue(nextPolicy.ceiling.interfaces).includes(id)),
+    ...next.application_ids.filter((id) => !applicationCatalog.has(id) || !applicationWithinWorkerCeiling(applicationCatalog.get(id), nextPolicy.ceiling)),
+    ...next.worker_environment_kinds.filter((kind) => !arrayValue(nextPolicy.ceiling.wek).includes(kind)),
+  ];
+  if (outsidePin.length) {
+    throw new Error(`Agent selection is outside source worker template '${sourceWorkerInterfaceId}': ${outsidePin.join(", ")}`);
+  }
+  if (stableJson(nextPolicy.ceiling.interface_policy ?? null) !== stableJson(agentPolicy.document.ceiling?.interface_policy ?? null)) {
+    throw new Error(`source worker template '${sourceWorkerInterfaceId}' changed its provider interface policy; create a new Agent from it to choose a model under that policy`);
+  }
   if (
     stableJson(current.document) === stableJson(next)
     && presentation.name === nextName
     && presentation.icon === nextIcon
+    && !policyChanged
   ) {
     return {
       action,
@@ -372,10 +394,14 @@ async function mutateOctopusOsAgentTemplate(
     updated_at_ms: Date.now(),
   };
   parseClientAgentCatalog(nextAgentCatalog, agentCatalog.file);
+  await requireUnchangedJsonDigest(agentInterfacePath, agentInterface.digest, `Agent worker descriptor ${workerInterfaceId}`);
+  await requireUnchangedJsonDigest(source.interfacePath, source.interface.digest, `source worker descriptor ${sourceWorkerInterfaceId}`);
+  await requireUnchangedJsonDigest(source.policyPath, source.policy.digest, `source worker policy ${sourceWorkerInterfaceId}`);
   await commitClientAuthoring({
     label: `configure Agent client template ${workerInterfaceId}`,
     writes: [
       { file: templatePath, beforeDigest: current.digest, next },
+      ...(policyChanged ? [{ file: agentPolicyPath, beforeDigest: agentPolicy.digest, next: nextPolicy }] : []),
       { file: agentCatalog.file, beforeDigest: agentCatalog.digest, next: nextAgentCatalog },
     ],
     removals: [],
@@ -390,6 +416,25 @@ async function mutateOctopusOsAgentTemplate(
     agentCatalogDigest: clientAgentCatalogDigest(nextAgentCatalog),
     changed: true,
   };
+}
+
+async function readSourceWorkerTemplate(interfaceRoot, sourceWorkerInterfaceId) {
+  const sourceDirectory = path.join(interfaceRoot, sourceWorkerInterfaceId);
+  await requirePlainDirectory(sourceDirectory, `source worker template ${sourceWorkerInterfaceId}`);
+  const interfacePath = path.join(sourceDirectory, "interface.json");
+  const policyPath = path.join(sourceDirectory, "policy.json");
+  const sourceInterface = await readRegularJsonDocument(interfacePath, `source worker descriptor ${sourceWorkerInterfaceId}`);
+  const sourcePolicy = await readRegularJsonDocument(policyPath, `source worker policy ${sourceWorkerInterfaceId}`);
+  if (
+    stringValue(sourceInterface.document?.id) !== sourceWorkerInterfaceId
+    || stringValue(sourceInterface.document?.interface_type).toLowerCase() !== "system"
+    || stringValue(sourceInterface.document?.role).toLowerCase() !== "worker"
+    || stringValue(sourcePolicy.document?.id) !== sourceWorkerInterfaceId
+    || !isPlainRecord(sourcePolicy.document?.ceiling)
+  ) {
+    throw new Error(`source worker template '${sourceWorkerInterfaceId}' is malformed`);
+  }
+  return { interfacePath, policyPath, interface: sourceInterface, policy: sourcePolicy };
 }
 
 function clientAgentTemplateFromRequest(request, chatContexts, projectEeId, workerInterfaceId) {

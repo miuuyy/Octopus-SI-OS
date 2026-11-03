@@ -1004,7 +1004,7 @@ function scheduleNativeDesktopPresentations() {
       for (const room of result.worker_environments ?? []) {
         if (room.worker_environment_kind === "browser_session" && nativeBrowserHost && home === nativeBrowserHome) {
           const history = room.client_surfaces?.find(value => value.protocol === "browser.native.downloads.v1" && value.mode === "direct");
-          if (history && nativeBrowserHost.getEngineInfo().capabilities.persistentDownloadHistory) { historyRooms.push({ room, surface: history }); runIds.add(room.run_id); }
+          if (room.lifecycle === "active" && history && nativeBrowserHost.getEngineInfo().capabilities.persistentDownloadHistory) { historyRooms.push({ room, surface: history }); runIds.add(room.run_id); }
           const surface = room.client_surfaces?.find(value => ["browser.native.v1", "browser.native.downloads.v1"].includes(value.protocol)
             && value.mode === "direct" && value.data?.engine_handle && value.data?.browser_context_id);
           if (room.lifecycle === "active" && surface) { browserRooms.push({ room, surface }); runIds.add(room.run_id); }

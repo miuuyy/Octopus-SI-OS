@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { readClientAgentCatalog } = require("../electron/clientAgentCatalog.cjs");
 const { mutateOctopusOsWorkspace } = require("../electron/projection.cjs");
+const { operatorChatContextProjection } = require("../electron/projection/operatorChatContext.cjs");
 
 async function main(rootScope = false) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "octopus-agent-template-test-"));
@@ -282,16 +283,46 @@ async function main(rootScope = false) {
       { commitClientAuthoring, chatContexts },
     );
     assert.equal(repeatedConfiguration.changed, false);
-    const deleted = await mutateOctopusOsWorkspace(
+    const agentPolicyPath = path.join(interfaceRoot, created.workerInterfaceId, "policy.json");
+    const projectedAgent = () => {
+      const contexts = projectedChatContexts(configuredScope, projectEeId, [{ ...sourceInterface, worker_policy: sourcePolicy }, {
+        ...clonedInterface,
+        worker_policy: clonedPolicy,
+        client_worker_template: { project_ee_id: projectEeId, worker_interface: created.workerInterfaceId },
+      }]);
+      return { contexts, row: contexts.contexts[0].workers.find((worker) => worker.id === created.workerInterfaceId) };
+    };
+    assert.deepEqual(projectedAgent().row.unavailable_applications, [{ id: "world_mail", reason: "Not in this Agent's capability ceiling" }]);
+    sourcePolicy.ceiling.interfaces.push("world_mail");
+    await writeJson(path.join(interfaceRoot, sourceWorkerInterfaceId, "policy.json"), sourcePolicy);
+    const widened = projectedAgent();
+    assert.deepEqual(widened.row.applications, [{ id: "world_mail", selected_by_default: false }]);
+    const reformed = await mutateOctopusOsWorkspace(
       registryRoot,
       octopusHomeRoot,
       configuredScope,
+      {
+        ...configureRequest,
+        applicationIds: ["world_mail"],
+        expectedClientTemplateDigest: configured.clientTemplateDigest,
+        expectedAgentCatalogDigest: catalog.digest,
+      },
+      { commitClientAuthoring, chatContexts: widened.contexts },
+    );
+    assert.equal(reformed.changed, true);
+    assert.deepEqual(await readJson(agentPolicyPath), { ...sourcePolicy, id: created.workerInterfaceId });
+    assert.deepEqual((await readJson(clonedClientTemplatePath)).application_ids, ["world_mail"]);
+    catalog = await readClientAgentCatalog(octopusHomeRoot);
+    const deleted = await mutateOctopusOsWorkspace(
+      registryRoot,
+      octopusHomeRoot,
+      { ...configuredScope, agent_catalog_digest: catalog.digest, agent_presentations: catalog.document.agents },
       {
         action: "delete_agent_template",
         agentId: created.agentId,
         projectEeId,
         workerInterfaceId: created.workerInterfaceId,
-        expectedClientTemplateDigest: configured.clientTemplateDigest,
+        expectedClientTemplateDigest: reformed.clientTemplateDigest,
         expectedAgentCatalogDigest: catalog.digest,
       },
       { commitClientAuthoring, chatContexts },
@@ -303,6 +334,23 @@ async function main(rootScope = false) {
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
+}
+
+function projectedChatContexts(scope, projectEeId, workers) {
+  const application = { id: "world_mail", valid: true, interfaces: ["world_mail"], task_capabilities: { tools: [] }, project_states: [{ ee_id: projectEeId, policy_allowed: true }] };
+  const provider = { id: "world_provider_codex", interface_type: "world", role: "provider", interface_driver_config: { private_config: { client_projection_output_labels: ["final", "error"] } } };
+  const formedWorkers = workers.map((worker) => ({ worker_interface_id: worker.id, interface_policy: { world_provider_codex: { models: ["catalog-model-b"] } } }));
+  return { application_catalog: [application], contexts: operatorChatContextProjection({
+    operatorOsScope: () => scope,
+    operatorOsApplications: () => ({ applications: [application] }),
+    operatorOsDrivers: () => ({ drivers: [] }),
+  }).operatorChatContextRows({
+    operatorChatProtocol: { terminalOutputLabel: "final", errorOutputLabel: "error" },
+    descriptors: { interface: [...workers, provider], ee_template: [] },
+    eeInstances: [{ ee_id: projectEeId }],
+    eePolicyProjection: { environments: [{ ee_id: projectEeId, formed_envelope: {}, workers: formedWorkers }] },
+    structureMemo: new Map(), ledgerMemo: new Map(), runRecords: [], ledgerRows: [],
+  }) };
 }
 
 async function projectedScope({

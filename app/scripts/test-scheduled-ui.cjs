@@ -34,6 +34,7 @@ const compiled = build({
       ? "export function useProjectionGeneration() { return 0; } export function currentProjectionStructureGeneration() { return 0; }"
       : `export function canMutateScheduledInterfaces() { return globalThis.scheduleFixture.writable; }
          export function hasProjectionBridge() { return false; }
+         export function formatProjectionError(error) { return error instanceof Error ? error.message : String(error); }
          export function projectionTargetLabel() { return ""; }
          export async function readProjection(name) { const f = globalThis.scheduleFixture; f.reads.push(name); if (f.error) throw Error(f.error); return { scheduled_interfaces: f.rows }; }
          export async function mutateScheduledInterface(request) { return globalThis.scheduleFixture.mutate(request); }`, loader: "js" }));
@@ -41,11 +42,11 @@ const compiled = build({
 }).then(({ outputFiles }) => { const module = { exports: {} }; Function("module", "exports", "require", outputFiles[0].text)(module, module.exports, require); return module.exports; });
 
 function sidebarChrome(ui) {
-  const projectWorkspace = { projects: [], rootEeId: "", homeRunId: "", homeInterfaceId: "", rootContext: null, rootAllowedChildTemplateIds: [], templates: [], status: "", loading: false, pending: false, error: "",
+  const projectWorkspace = { projects: [], rootEeId: "", homeRunId: "", homeInterfaceId: "", rootContext: null, rootAllowedChildTemplateIds: [], templates: [], status: "", phase: "ready", pending: false, error: "",
     updatePresentation() {}, async createProject() {}, async createAgentTemplate() { return { agentId: "", workerInterfaceId: "" }; } };
   return function Navigation() {
     const [surface, setSurface] = React.useState("scheduled");
-    return React.createElement(ui.Sidebar, { accessProfile: "live", navigationSection: "tasks", activeSurfaceId: surface, activeChatRunId: "", chatRuns: [], chatRunsLoading: false, homeRunId: "", runtimeHost: { home: "fixture" }, surfaceErrors: [], surfaces: [],
+    return React.createElement(ui.Sidebar, { accessProfile: "live", navigationSection: "tasks", activeSurfaceId: surface, activeChatRunId: "", chatRuns: [], chatRunsPhase: "ready", chatRunListError: "", async onRetryChatRuns() {}, homeRunId: "", runtimeHost: { home: "fixture" }, surfaceErrors: [], surfaces: [],
       agentPinnedChatIds: [], agentChatOrderIds: [], agentProjectFilterEeId: "", agentProjectWorkspace: projectWorkspace, agentExecutionContexts: [], agentDefinitions: [], agentProviderInterfaces: [], agentModelsLoading: false, agentModelError: "",
       async onRefreshAgentModels() {}, onSurfaceChange: setSurface, onSelectChat() {}, onNewChat() {}, onAgentPinnedChatIdsChange() {}, onAgentChatOrderIdsChange() {}, onAgentProjectFilterEeIdChange() {}, onSearch() {} });
   };

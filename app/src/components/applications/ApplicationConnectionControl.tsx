@@ -53,6 +53,7 @@ export function ApplicationConnectionControl({
       </OcButton>
     );
   }
+  const manage = summary.manage;
   const disconnectable = summary.moduleInterfaces.length > 0
     || summary.fields.some((field) => field.private_saved && summary.fieldInterfaces.includes(field.interface_id));
   const label = disconnecting
@@ -91,6 +92,14 @@ export function ApplicationConnectionControl({
       <OcDropdown align="end" anchorRef={triggerRef} contentWidth="menu" onOpenChange={setMenuOpen} open={menuOpen}>
         {summary.status === "error" ? (
           <OcMenuItem label="Check again" leadingIcon="retry" onClick={() => { setMenuOpen(false); onCheck(); }} role="menuitem" />
+        ) : null}
+        {manage ? (
+          <OcMenuItem
+            label={manage.label}
+            leadingIcon="openExternal"
+            onClick={() => { setMenuOpen(false); window.open(manage.url, "_blank", "noopener,noreferrer"); }}
+            role="menuitem"
+          />
         ) : null}
         <OcMenuItem
           disabled={!connectAvailable}

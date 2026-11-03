@@ -235,6 +235,39 @@ test("connecting publishes server tools as operations of the declaring interface
   assert.equal((await host.probe({ applicationId: id })).interfaces[0].state.state, "not_connected");
 });
 
+test("a linked interface without its operation catalog asks for Connect, which writes it, and its manage link is checked", async () => {
+  const id = "world_demo_mail";
+  const declared = descriptor(id, directModule);
+  Object.assign(declared.interface_driver_config.private_config, {
+    operation_catalog_dir: "operations",
+    operation_catalog_label: "mcp.operation_catalog",
+    operation_request_label: "mcp.operation.request",
+  });
+  write(`${id}/interface.json`, declared);
+  write(`${id}/operations/demo.call_tool.json`, { id: "demo.call_tool", request_label: "mcp.operation.request", output_label: "mcp.tool.result",
+    handler_config: { operation: "call_tool" }, description: "Call a tool", input_schema: { type: "object" } });
+  const manage = { label: "Manage in Demo", url: "https://example.com/manage" };
+  const linked = { state: "connected", account: { label: "me@example.com" }, manage };
+  globalThis.demoConnection.probe = async () => linked;
+  globalThis.demoConnection.connect = async () => linked;
+  assert.deepEqual((await host.probe({ applicationId: id })).interfaces[0].state, {
+    state: "not_connected",
+    account: linked.account,
+    manage,
+    message: "Demo Mail is linked, but its tools are not available to tasks yet. Connect it to make them available.",
+  });
+  assert.deepEqual(await host.connect({ operationId: operationId(), applicationId: id, interfaceId: id, input: {} }), linked);
+  assert.deepEqual((await host.probe({ applicationId: id })).interfaces[0].state, linked);
+  for (const [label, wrong] of [
+    ["an http manage link", { label: "Manage", url: "http://example.com/" }],
+    ["a manage label over 48 characters", { label: "x".repeat(49), url: manage.url }],
+    ["an unknown manage field", { ...manage, scope: "all" }],
+  ]) {
+    globalThis.demoConnection.connect = async () => ({ ...linked, manage: wrong });
+    await assert.rejects(host.connect({ operationId: operationId(), applicationId: id, interfaceId: id, input: {} }), /manage/, label);
+  }
+});
+
 test("distributed applications install every interface their connection modules load", () => {
   const repository = path.resolve(__dirname, "../..");
   const library = path.join(repository, "app/distribution/local-packages/packages");

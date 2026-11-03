@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import type { ChatApplicationChoice, ChatExecutionContext, ChatWorkerChoice } from "../../chatRuns";
+import type { ChatApplicationChoice, ChatExecutionContext, ChatUnavailableApplicationChoice, ChatWorkerChoice } from "../../chatRuns";
 import type { OctopusProviderInterface } from "../../electron";
 import {
   AGENT_PRESET_ICONS,
@@ -104,6 +104,8 @@ export function AgentPresetDialog({ busy = false, contexts, initialProjectEeId, 
   const reasoningOptions = selectedProvider && providerModel ? providerReasoningEfforts(selectedProvider, providerModel) : [];
   const applications = selectedWorker?.applications.filter((application) => application.category !== "artifact") ?? [];
   const contextArtifacts = selectedWorker?.applications.filter((application) => application.category === "artifact") ?? [];
+  const unavailableApplications = selectedWorker?.unavailableApplications.filter((application) => application.category !== "artifact") ?? [];
+  const unavailableContextArtifacts = selectedWorker?.unavailableApplications.filter((application) => application.category === "artifact") ?? [];
   const drivers = selectedWorker?.drivers ?? [];
   const invalidReason = modelsLoading ? "Refreshing available models…" : modelError || declaredSelectedProvider?.modelCatalogError || unavailableModels || validateSelection({
     applicationIds,
@@ -316,11 +318,7 @@ export function AgentPresetDialog({ busy = false, contexts, initialProjectEeId, 
           <AgentChoiceDisclosure
             description="Connectors and tools offered to each new task."
             empty="This Agent template exposes no applications in the selected project."
-            items={applications.map((application) => ({
-              id: application.id,
-              label: application.name,
-              description: application.description || applicationBindingSummary(application),
-            }))}
+            items={applicationChoiceItems(applications, unavailableApplications)}
             open={openChoiceSection === "applications"}
             readOnly={busy || readOnly}
             selectedIds={applicationIds}
@@ -332,11 +330,7 @@ export function AgentPresetDialog({ busy = false, contexts, initialProjectEeId, 
           <AgentChoiceDisclosure
             description="Artifact bindings for skills, memory, and prepared context."
             empty="No skill, memory, or context artifact packages are available to this Agent template."
-            items={contextArtifacts.map((application) => ({
-              id: application.id,
-              label: application.name,
-              description: application.description || applicationBindingSummary(application),
-            }))}
+            items={applicationChoiceItems(contextArtifacts, unavailableContextArtifacts)}
             open={openChoiceSection === "context"}
             readOnly={busy || readOnly}
             selectedIds={applicationIds}
@@ -402,6 +396,7 @@ type AgentChoiceOption = {
   id: string;
   label: string;
   description: string;
+  unavailable?: boolean;
 };
 
 function AgentChoiceDisclosure({ description, empty, items, open, readOnly, selectedIds, title, onOpenChange, onToggle }: {
@@ -415,6 +410,7 @@ function AgentChoiceDisclosure({ description, empty, items, open, readOnly, sele
   onOpenChange: () => void;
   onToggle: (id: string) => void;
 }) {
+  const choosableItems = items.filter((item) => !item.unavailable || selectedIds.includes(item.id));
   const selectedCount = items.filter((item) => selectedIds.includes(item.id)).length;
   return (
     <section className="overflow-hidden rounded-xl border border-token-border bg-token-main-surface-primary">
@@ -429,7 +425,7 @@ function AgentChoiceDisclosure({ description, empty, items, open, readOnly, sele
           <span className="mt-0.5 block truncate text-xs leading-4 text-token-description-foreground">{description}</span>
         </span>
         <span className="shrink-0 text-sm text-token-description-foreground">
-          {items.length ? `${selectedCount} of ${items.length}` : "None"}
+          {choosableItems.length ? `${selectedCount} of ${choosableItems.length}` : "None"}
         </span>
         <Glyph className={`shrink-0 transition-transform duration-basic ${open ? "rotate-180" : ""}`} name="chevronDown" size={15} />
       </button>
@@ -441,7 +437,7 @@ function AgentChoiceDisclosure({ description, empty, items, open, readOnly, sele
                 checked={selectedIds.includes(item.id)}
                 className="w-full py-2.5"
                 description={item.description}
-                disabled={readOnly}
+                disabled={readOnly || Boolean(item.unavailable) && !selectedIds.includes(item.id)}
                 key={item.id}
                 label={item.label}
                 onCheckedChange={() => onToggle(item.id)}
@@ -543,6 +539,25 @@ function validateSelection(input: {
 
 function toggleId(values: readonly string[], id: string): string[] {
   return values.includes(id) ? values.filter((value) => value !== id) : [...values, id].sort();
+}
+
+function applicationChoiceItems(
+  available: readonly ChatApplicationChoice[],
+  unavailable: readonly ChatUnavailableApplicationChoice[],
+): AgentChoiceOption[] {
+  return [
+    ...available.map((application) => ({
+      id: application.id,
+      label: application.name,
+      description: application.description || applicationBindingSummary(application),
+    })),
+    ...unavailable.map((application) => ({
+      id: application.id,
+      label: application.name,
+      description: application.reason,
+      unavailable: true,
+    })),
+  ];
 }
 
 function applicationBindingSummary(application: ChatApplicationChoice): string {
