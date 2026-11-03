@@ -305,7 +305,7 @@ pub(crate) fn plan_capability_sidecars(
     interface_root: &Path,
     source_interface_id: &str,
     target_interface_id: &str,
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
     config: &ClientConfig,
     identity: &PlannedIdentity,
     writes: &mut Vec<PlannedClientWrite>,

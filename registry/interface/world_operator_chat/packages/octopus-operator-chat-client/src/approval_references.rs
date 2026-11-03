@@ -34,7 +34,7 @@ pub(crate) struct BrowserHistoryAccessReferences {
 }
 
 pub(crate) fn planned_browser_history_access(
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
     config: &ClientConfig,
     _identity: &PlannedIdentity,
 ) -> Result<Option<BrowserHistoryAccessReferences>, String> {
@@ -73,7 +73,7 @@ pub(crate) struct BrowserWaitCompletionReferences {
 
 pub(crate) fn planned_browser_wait_completion(
     registry_root: &Path,
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
     config: &ClientConfig,
     identity: &PlannedIdentity,
 ) -> Result<Option<BrowserWaitCompletionReferences>, String> {
@@ -113,7 +113,7 @@ pub(crate) fn planned_browser_wait_completion(
 }
 
 pub(crate) fn planned_browser_upload_approval(
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
     config: &ClientConfig,
     identity: &PlannedIdentity,
 ) -> Result<Option<BrowserUploadApprovalReferences>, String> {
@@ -153,7 +153,7 @@ pub(crate) fn planned_browser_upload_approval(
 
 pub(crate) fn plan_desktop_app_approval(
     content: &str,
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
     config: &ClientConfig,
     identity: &PlannedIdentity,
 ) -> Result<String, String> {
@@ -206,7 +206,7 @@ pub(crate) fn plan_desktop_app_approval(
 
 pub(crate) fn planned_nested_resumes(
     registry_root: &Path,
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
 ) -> Result<BTreeSet<String>, String> {
     if binding.sidecars.iter().any(|sidecar| sidecar.file_name == "desktop.json") {
         let path = registry_root.join("interface").join(binding.interface.id.as_str()).join("desktop.json");
@@ -239,7 +239,7 @@ pub(crate) fn planned_nested_approval(
     registry_root: &Path,
     config: &ClientConfig,
     identity: &PlannedIdentity,
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
     exact_tool: &str,
 ) -> Result<Option<serde_json::Value>, String> {
     let mut choices = Vec::new();

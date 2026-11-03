@@ -1,8 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/markdown_render_tests.rs
-assertion_line: 1317
-expression: "plain_lines(&text).join(\"\\n\")"
----
-This paragraph keeps strikethrough intact near a
-link (https://example.com/path) while enough
-surrounding prose forces wrapping.

@@ -32,7 +32,6 @@
     "world_provider_zai",
     "world_provider_kimi_code",
     "world_provider_azure_openai",
-    "world_terminal",
     "system_coder_env",
     "system_workspace_env",
     "system_exec_env",

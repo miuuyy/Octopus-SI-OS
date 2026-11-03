@@ -267,7 +267,7 @@ pub(crate) fn capability_binding_tools(
     config: &ClientConfig,
     identity: &PlannedIdentity,
     source_interface_id: &InterfaceId,
-    binding: &octopus_world_terminal_client::ToolCapabilityBinding,
+    binding: &crate::capability_formation::ToolCapabilityBinding,
 ) -> Result<Vec<String>, String> {
     binding
         .tools

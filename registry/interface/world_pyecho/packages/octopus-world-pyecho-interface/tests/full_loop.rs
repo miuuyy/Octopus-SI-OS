@@ -42,7 +42,7 @@ fn write_pyecho_run_record(runs_dir: &Path, run_id: &str) {
                 "run": run_id,
                 "trace": format!("trace:{run_id}:cp_pyecho_in"),
                 "epoch": 0,
-                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_terminal")),
+                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_operator_chat")),
                 "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_pyecho"))],
                 "artifact_bindings": []
             }],
@@ -94,7 +94,7 @@ async fn a_pure_python_interface_folder_lifts_and_round_trips_an_artifact_throug
         &mut log,
         &mut arrival_blobs,
         &input,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect("the input artifact routes through the run to the python interface");

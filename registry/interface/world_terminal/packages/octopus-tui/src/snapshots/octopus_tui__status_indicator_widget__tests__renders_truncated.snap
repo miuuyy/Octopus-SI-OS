@@ -1,7 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/status_indicator_widget.rs
-assertion_line: 362
-expression: terminal.backend()
----
-"• Working (0s • esc…"
-"                    "

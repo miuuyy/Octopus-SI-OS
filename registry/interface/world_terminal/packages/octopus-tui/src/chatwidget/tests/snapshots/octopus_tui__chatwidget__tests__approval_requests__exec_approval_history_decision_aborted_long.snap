@@ -1,7 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/chatwidget/tests/approval_requests.rs
-assertion_line: 454
-expression: lines_to_single_string(&aborted_long)
----
-✗ You canceled the request to run echo
-  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...

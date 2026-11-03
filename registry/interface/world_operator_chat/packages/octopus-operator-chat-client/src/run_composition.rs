@@ -1490,7 +1490,7 @@ fn finish_policy_updates(
 
 fn validate_context_and_marks(
     request: &RunCompositionRequest,
-    chain: &[octopus_world_terminal_client::LiveEePolicyLayer],
+    chain: &[crate::capability_formation::LiveEePolicyLayer],
     roles: &[String],
     context: &[ArtifactBindingSeed],
     result_receiving: Option<&ToolResultReceiving>,

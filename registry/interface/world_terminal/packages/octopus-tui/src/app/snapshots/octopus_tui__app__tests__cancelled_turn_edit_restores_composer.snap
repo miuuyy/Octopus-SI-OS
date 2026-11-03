@@ -1,6 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/app/tests.rs
-assertion_line: 5022
-expression: app.chat_widget.composer_text_with_pending()
----
-edit me

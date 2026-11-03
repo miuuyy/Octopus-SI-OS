@@ -1,6 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/app/history_ui_tests.rs
-assertion_line: 12
-expression: render_cell(&cell)
----
-• Opened this session in Codex Desktop.

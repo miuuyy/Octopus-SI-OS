@@ -11,7 +11,6 @@ use octopus_descriptors::{
     Descriptor, DescriptorHash, DescriptorName, EeId, InterfaceId, RunId, loader,
 };
 use octopus_ee::{EeInstance, EeTemplateDescriptor, EeTree};
-use octopus_interfaces::InterfaceDescriptor;
 use octopus_runtime::Runtime;
 
 const TEST_INTERFACE_INPUT_LABEL: &str = "interface.input";
@@ -19,18 +18,6 @@ pub const OPERATOR_INPUT_LABEL: &str = "operator.input";
 
 pub fn all_binding(interface: impl Into<String>) -> octopus_runtime::AuthoredInterfaceBinding {
     octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new(interface))
-}
-
-pub fn terminal_interface_descriptor() -> InterfaceDescriptor {
-    serde_json::from_value(serde_json::json!({
-        "id": "world_terminal",
-        "interface_type": "world",
-        "role": "user",
-        "direction": "inbound",
-        "source_names": ["operator.terminal"],
-        "interface_driver_ref": "test_terminal"
-    }))
-    .expect("test terminal interface descriptor parses")
 }
 
 pub fn worker_role_artifact_bindings(workers: &[&str]) -> Vec<serde_json::Value> {
@@ -92,8 +79,8 @@ pub fn write_terminal_run_record_at_checkpoint(
                 "run": run,
                 "trace": format!("trace:{}:{checkpoint}", run.as_str()),
                 "epoch": 0,
-                "interface_binding": all_binding("world_terminal"),
-                "outbound_interface_bindings": [all_binding("world_terminal")],
+                "interface_binding": all_binding("world_operator_chat"),
+                "outbound_interface_bindings": [all_binding("world_operator_chat")],
                 "artifact_bindings": worker_role_artifact_bindings(&["system_worker_coder_max"]),
             }],
             "active_checkpoints": [checkpoint],
@@ -124,8 +111,8 @@ pub fn write_terminal_run_record_with_required_verified_artifacts(
                 "run": run,
                 "trace": format!("trace:{}:ckpt-0", run.as_str()),
                 "epoch": 0,
-                "interface_binding": all_binding("world_terminal"),
-                "outbound_interface_bindings": [all_binding("world_terminal")],
+                "interface_binding": all_binding("world_operator_chat"),
+                "outbound_interface_bindings": [all_binding("world_operator_chat")],
                 "artifact_bindings": worker_role_artifact_bindings(&["system_worker_coder_max"]),
                 "required_verified_artifacts": required_verified_artifacts,
             }],

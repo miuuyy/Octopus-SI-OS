@@ -49,7 +49,7 @@ fn write_terminal_run_record_with_context_bindings(
             "run": run,
             "trace": format!("trace:{}:cp_boot_terminal_input", run.as_str()),
             "epoch": 0,
-            "interface_binding": support::all_binding("world_terminal"),
+            "interface_binding": support::all_binding("world_operator_chat"),
             "outbound_interface_bindings": [support::all_binding(outbound_interface)],
             "artifact_bindings": artifact_bindings,
         }],
@@ -121,7 +121,7 @@ async fn terminal_turn_receives_nonempty_role_and_goal_context() {
         &mut log,
         &mut blob_handle,
         &submit,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect("the terminal submit drives arrival→run through the gate");

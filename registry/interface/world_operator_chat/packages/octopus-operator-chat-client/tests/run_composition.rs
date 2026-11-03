@@ -473,11 +473,11 @@ fn private_system_composition_is_fresh_exact_and_checked_under_policy() {
         std::fs::create_dir_all(write.path.parent().unwrap()).unwrap();
         std::fs::write(&write.path, &write.content).unwrap();
     }
-    let topology = octopus_world_terminal_client::form_capability_topology(
+    let topology = octopus_operator_chat_client::capability_formation::form_capability_topology(
         &request.roots.registry_root,
-        &octopus_world_terminal_client::CapabilityFormationRequest::from_live_chain(
+        &octopus_operator_chat_client::capability_formation::CapabilityFormationRequest::from_live_chain(
             plan.worker_interface_id.clone(),
-            octopus_world_terminal_client::resolve_live_ee_policy_chain(
+            octopus_operator_chat_client::capability_formation::resolve_live_ee_policy_chain(
                 &request.roots.ee_instances_root,
                 &request.ee_id.clone().into(),
             )

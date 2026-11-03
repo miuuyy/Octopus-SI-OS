@@ -1,9 +1,0 @@
----
-source: tui/src/app/thread_goal_actions.rs
-expression: terminal.backend()
----
-
-
-■ Goals need a saved session. This session is temporary.
-Run `octopus` to start a saved chat, or `octopus resume` / `/resume` to
-reopen one.

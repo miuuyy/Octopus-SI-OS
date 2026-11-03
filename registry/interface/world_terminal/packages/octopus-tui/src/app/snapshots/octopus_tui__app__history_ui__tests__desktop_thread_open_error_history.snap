@@ -1,6 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/app/history_ui_tests.rs
-assertion_line: 19
-expression: render_cell(&cell)
----
-■ Failed to open this session in Codex Desktop: launch failed. Install or launch Codex Desktop and try again.

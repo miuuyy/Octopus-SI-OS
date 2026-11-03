@@ -123,7 +123,7 @@ async function main(rootScope = false) {
       providerInterfaceId: "world_provider_codex",
       providerModel: "catalog-model-a",
       reasoningEffort: "high",
-      applicationIds: ["world_terminal"],
+      applicationIds: ["world_operator_chat"],
       driverNames: ["process_session"],
     };
     const chatContexts = {
@@ -134,7 +134,7 @@ async function main(rootScope = false) {
           authoring_profile: true,
           provider_interface_ids: ["world_provider_codex"],
           interface_policy: { world_provider_codex: { models: ["catalog-model-a", "catalog-model-b"] } },
-          applications: [{ id: "world_terminal" }],
+          applications: [{ id: "world_operator_chat" }],
           drivers: [{ name: "process_session" }],
         }],
       }],
@@ -186,7 +186,7 @@ async function main(rootScope = false) {
       provider_interface_id: "world_provider_codex",
       provider_model: "catalog-model-a",
       reasoning_effort: "high",
-      application_ids: ["world_terminal"],
+      application_ids: ["world_operator_chat"],
       worker_environment_kinds: ["process_session"],
     });
     for (const file of [rootTemplatePath, projectTemplatePath]) {

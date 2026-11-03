@@ -1193,7 +1193,7 @@ mod tests {
             trace: TraceId("t1".into()),
             kind: MovementKind::InterfaceOutbound,
             from: Endpoint::Interface(InterfaceId::new("world_provider_codex")),
-            to: Endpoint::Interface(InterfaceId::new("world_terminal")),
+            to: Endpoint::Interface(InterfaceId::new("world_operator_chat")),
             artifact: Some(ArtifactRef {
                 id: ArtifactId::new(format!(
                     "interface.output:{}",
@@ -1201,7 +1201,7 @@ mod tests {
                 )),
                 content: ContentHash::of_bytes(b"two"),
             }),
-            invocation_metadata: Some(metadata("run_alpha", "c2", "world_terminal")),
+            invocation_metadata: Some(metadata("run_alpha", "c2", "world_operator_chat")),
             causal_floor: None,
         });
         log.append(MovementDraft {
@@ -1333,7 +1333,7 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(by_artifact.len(), 1);
-        assert_eq!(by_artifact[0].to_id, "world_terminal");
+        assert_eq!(by_artifact[0].to_id, "world_operator_chat");
     }
 
     #[test]
@@ -1357,7 +1357,7 @@ mod tests {
         );
         assert_eq!(
             reader
-                .bounded_interface_delivery_candidate("world_terminal", 0, 3)
+                .bounded_interface_delivery_candidate("world_operator_chat", 0, 3)
                 .unwrap()
                 .unwrap()
                 .seq,
@@ -1485,7 +1485,7 @@ mod tests {
         let reader = LedgerSqliteReader::open(&path).unwrap();
         assert_eq!(
             reader
-                .bounded_interface_delivery_candidate("world_terminal", 0, 3)
+                .bounded_interface_delivery_candidate("world_operator_chat", 0, 3)
                 .unwrap(),
             Some(IndexedMovementRowRange {
                 seq: 1,
@@ -1620,7 +1620,7 @@ mod tests {
             trace: TraceId("legacy".into()),
             kind: MovementKind::InterfaceOutbound,
             from: Endpoint::Interface(InterfaceId::new("system_worker_test")),
-            to: Endpoint::Interface(InterfaceId::new("world_terminal")),
+            to: Endpoint::Interface(InterfaceId::new("world_operator_chat")),
             artifact: None,
             invocation_metadata: Some(metadata("run_alpha", "c1", "world_other")),
         };

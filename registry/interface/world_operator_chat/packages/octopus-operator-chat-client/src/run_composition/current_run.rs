@@ -266,7 +266,7 @@ pub(crate) fn form_current_worker(capabilities: &CapabilityRegistry, ee_root: &P
     for (base,descriptor) in &tools {
         let binding=projected.get_mut(&descriptor.interface).ok_or("current tool lost its exact owner")?;
         let [kind]=descriptor.supported_worker_environment_kinds.as_slice() else {return Err("current tool has no unique formed code-world".into());};
-        binding.tools.push(octopus_world_terminal_client::FormedToolCapability {tool:octopus_descriptors::ToolId::new(base),worker_environment_kind:kind.clone()});
+        binding.tools.push(crate::capability_formation::FormedToolCapability {tool:octopus_descriptors::ToolId::new(base),worker_environment_kind:kind.clone()});
         if origins[base].1 {selected_tools.push(SelectedToolSeed {tool:base.clone(),interface:descriptor.interface.to_string(),worker_environment_kind:kind.to_string()});}
     }
     projected.retain(|_,binding|!binding.tools.is_empty());

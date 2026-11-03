@@ -72,9 +72,7 @@ fn opaque_terminal_section_schema(
         instance_type: Some(schemars::schema::InstanceType::Object.into()),
         metadata: Some(Box::new(schemars::schema::Metadata {
             description: Some(
-                "Terminal-owned [tui] section; schema lives with the world_terminal \
-                 interface's config surface (octopus-world-terminal-config)."
-                    .to_string(),
+                "Codex terminal [tui] section, carried opaquely.".to_string(),
             ),
             ..Default::default()
         })),

@@ -4,13 +4,7 @@ use std::process::Command;
 
 const HOT_PATH_PACKAGES: &[&str] = &["octopus-app", "octopus-app-server"];
 
-const ENTRY_SURFACE_PACKAGES: &[&str] = &[
-    "octopus-core",
-    "octopus-provider-codex",
-    "octopus-tui",
-    "octopus-cli",
-    "octopus-codex-cli",
-];
+const ENTRY_SURFACE_PACKAGES: &[&str] = &["octopus-provider-codex"];
 
 const REGISTRY_INTERFACE_OWNER_PACKAGES: &[(&str, &str, &str)] = &[
     (
@@ -76,7 +70,6 @@ const PROVIDER_BLIND_PRODUCT_ROOT_PACKAGES: &[&str] = &[
     "octopus-runtime",
     "octopus-app-server",
     "octopus-app",
-    "octopus-tui",
 ];
 
 const FORBIDDEN_RUNTIME_PRODUCT_INTERFACE_PACKAGES: &[&str] = &[
@@ -776,97 +769,6 @@ fn production_manifest_sections(text: &str) -> &str {
         .expect("manifest text has a production prefix")
 }
 
-const FORBIDDEN_TERMINAL_MODEL_PROVIDER_PACKAGES: &[&str] = &[
-    "octopus-chatgpt",
-    "octopus-ollama",
-    "octopus-realtime-webrtc",
-    "octopus-responses-api-proxy",
-    "octopus-client",
-    "octopus-backend-client",
-    "octopus-cxapi",
-    "octopus-prompts",
-    "octopus-provider-codex",
-    "octopus-appserver-proto",
-    "octopus-collab-templates",
-    "octopus-install-context",
-    "octopus-message-history",
-    "octopus-utils-sandbox-summary",
-    "octopus-utils-oss",
-    "octopus-otel",
-    "octopus-login",
-    "octopus-protocol",
-    "octopus-features",
-    "octopus-core",
-    "octopus-config",
-];
-
-const TRACKED_TRANSITIONAL_TERMINAL_PROVIDER_EDGES: &[&str] = &[];
-
-#[test]
-fn terminal_product_does_not_refuse_to_the_model_provider() {
-    let repo_root = repo_root();
-    let manifest = repo_root
-        .join("registry")
-        .join("interface")
-        .join("world_terminal")
-        .join("packages")
-        .join("octopus-tui")
-        .join("Cargo.toml");
-    let text = std::fs::read_to_string(&manifest)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest.display()));
-    let production_sections = production_manifest_sections(&text);
-
-    for forbidden in FORBIDDEN_TERMINAL_MODEL_PROVIDER_PACKAGES {
-        assert!(
-            !production_sections.contains(&format!("{forbidden} =")),
-            "octopus-tui (the terminal product) must not link model-provider package {forbidden}; \
-             the model turn runs ONLY under the octopus-app daemon (the interface-life switch \
-             spawns world_provider_codex's life.json process — the box links zero provider \
-             code). The terminal is a thin artifact client — do not re-fuse the spine"
-        );
-    }
-
-    for forbidden in PROVIDER_IMPLEMENTATION_PACKAGES {
-        assert!(
-            !production_sections.contains(&format!("{forbidden} =")),
-            "octopus-tui (the terminal product) must not directly link neutral provider/interface package {forbidden}; it speaks artifacts and descriptors only"
-        );
-    }
-
-    for tracked in TRACKED_TRANSITIONAL_TERMINAL_PROVIDER_EDGES {
-        let still_linked = production_sections.contains(&format!("{tracked} ="));
-        assert!(
-            still_linked,
-            "octopus-tui no longer links the tracked transitional provider edge {tracked}: the \
-             Stage B/C terminal↔model rewire has landed. MOVE {tracked} from \
-             TRACKED_TRANSITIONAL_TERMINAL_PROVIDER_EDGES into \
-             FORBIDDEN_TERMINAL_MODEL_PROVIDER_PACKAGES so the vertebra stays sealed against re-fusion"
-        );
-        assert!(
-            !FORBIDDEN_TERMINAL_MODEL_PROVIDER_PACKAGES.contains(tracked),
-            "{tracked} is both a tracked transitional edge and a forbidden package; pick one"
-        );
-    }
-
-    for line in production_sections.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        if !line.contains("world_provider_codex") && !line.contains("system_interface_authoring") {
-            continue;
-        }
-        let dep_name = line.split('=').next().map(str::trim).unwrap_or_default();
-        assert!(
-            TRACKED_TRANSITIONAL_TERMINAL_PROVIDER_EDGES.contains(&dep_name),
-            "octopus-tui production manifest path-links a provider code-world folder via \
-             `{dep_name}` which is NOT in TRACKED_TRANSITIONAL_TERMINAL_PROVIDER_EDGES. No \
-             provider edge may hide from the ratchet: conduct it through the architecture, or \
-             enumerate it as a tracked transitional edge with its cut-map section"
-        );
-    }
-}
-
 fn manifest_dir_lives_under_provider_implementation(manifest_dir: &str) -> bool {
     let mut components = Path::new(manifest_dir).components();
     while let Some(component) = components.next() {
@@ -896,7 +798,7 @@ fn provider_implementation_path_classifier_covers_concrete_provider_folders() {
         "/workspace/registry/interface/packages/octopus-world-provider-example"
     ));
     assert!(!manifest_dir_lives_under_provider_implementation(
-        "/workspace/registry/interface/world_terminal/packages/octopus-tui"
+        "/workspace/registry/interface/world_operator_chat/packages/octopus-operator-chat-client"
     ));
 }
 
@@ -948,41 +850,6 @@ fn production_roots_keep_registry_implementation_boundaries() {
             breached.join("\n")
         );
     }
-}
-
-#[test]
-fn terminal_client_surface_is_selected_only_by_registry_policy() {
-    let repo_root = repo_root();
-    let interface_root = repo_root.join("registry").join("interface");
-    let mut selected = Vec::new();
-    for entry in std::fs::read_dir(&interface_root).expect("registry/interface readable") {
-        let entry = entry.expect("registry/interface entry readable");
-        if !entry.file_type().expect("interface entry type").is_dir() {
-            continue;
-        }
-        let path = entry.path().join("client_surface.json");
-        if !path.exists() {
-            continue;
-        }
-        let policy: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(&path)
-                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display())),
-        )
-        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
-        if policy
-            .pointer("/client_surface/embedded_composer")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-        {
-            selected.push(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-
-    assert_eq!(
-        selected,
-        vec!["world_terminal".to_string()],
-        "embedded terminal/client surface must be registry policy, not a runtime/TUI literal"
-    );
 }
 
 #[test]

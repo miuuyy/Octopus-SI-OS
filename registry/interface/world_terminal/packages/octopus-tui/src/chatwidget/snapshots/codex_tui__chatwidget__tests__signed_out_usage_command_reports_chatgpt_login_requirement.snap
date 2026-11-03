@@ -1,5 +1,0 @@
----
-source: tui/src/chatwidget/tests/slash_commands.rs
-expression: rendered
----
-■ Connect a ChatGPT provider credential to use /usage.

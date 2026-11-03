@@ -16,7 +16,7 @@ mod support;
 const MODEL_REFERENCE_MS: u64 = 5_000;
 const FRAMEWORK_BUDGET: Duration = Duration::from_millis(MODEL_REFERENCE_MS / 5);
 const SAMPLES: usize = 20;
-const INPUT: &str = "world_terminal";
+const INPUT: &str = "world_operator_chat";
 const PROVIDER: &str = "world_provider_codex";
 const WORKER: &str = "system_worker_coder_max";
 
@@ -126,7 +126,7 @@ async fn measure_round_trips(ee_count: usize, depth: usize) -> Duration {
         let background = format!("background_{index:04}");
         write_json(
             &runs.join(format!("{background}.json")),
-            &run_record(&background, &id, 0, "system_context", "world_terminal"),
+            &run_record(&background, &id, 0, "system_context", "world_operator_chat"),
         );
     }
     embedded

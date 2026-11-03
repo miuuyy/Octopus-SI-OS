@@ -2,7 +2,7 @@
   "id": "system_worker_pyecho",
   "ceiling": {
     "interfaces": [
-      "world_terminal",
+      "world_operator_chat",
       "world_pyecho",
       "system_worker_pyecho"
     ],

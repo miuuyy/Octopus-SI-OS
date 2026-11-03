@@ -23,9 +23,6 @@ mod rustls_provider;
 mod spawn;
 mod uds;
 
-#[cfg(feature = "embed-support")]
-mod embed_support;
-
 use std::error::Error;
 use std::fmt;
 use std::io::Error as IoError;
@@ -68,9 +65,6 @@ pub use crate::remote::RemoteAppServerRequestHandle;
 pub use crate::spawn::SpawnAppServerClient;
 pub use crate::spawn::SpawnAppServerRequestHandle;
 pub use crate::spawn::SpawnConfig;
-
-#[cfg(feature = "embed-support")]
-pub use crate::embed_support::*;
 
 pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 

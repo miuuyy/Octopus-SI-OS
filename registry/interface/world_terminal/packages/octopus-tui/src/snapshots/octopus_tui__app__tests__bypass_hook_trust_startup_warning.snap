@@ -1,7 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/app/tests.rs
-assertion_line: 157
-expression: rendered
----
-⚠ `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without
-  review for this invocation.

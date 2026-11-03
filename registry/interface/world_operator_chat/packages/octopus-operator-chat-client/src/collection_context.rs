@@ -454,7 +454,7 @@ fn target_grant(
         return Err("catalogue target worker policy identity differs".into());
     }
     let mut layers = Vec::new();
-    for layer in octopus_world_terminal_client::resolve_live_ee_policy_chain(
+    for layer in crate::capability_formation::resolve_live_ee_policy_chain(
         ee_root,
         &EeId::new(&scope.ee_id),
     )

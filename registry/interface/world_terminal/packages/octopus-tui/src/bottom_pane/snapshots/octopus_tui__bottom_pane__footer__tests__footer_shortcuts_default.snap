@@ -1,6 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/bottom_pane/footer.rs
-assertion_line: 1513
-expression: terminal.backend()
----
-"  ? for shortcuts                                            100% context left  "

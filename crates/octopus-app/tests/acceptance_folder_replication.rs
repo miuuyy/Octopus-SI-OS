@@ -292,7 +292,7 @@ fn write_terminal_to_provider_run_record(runs_dir: &Path, run_id: &str, checkpoi
                 "run": run_id,
                 "trace": format!("trace:{run_id}:{checkpoint}"),
                 "epoch": 0,
-                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_terminal")),
+                "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_operator_chat")),
                 "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_provider_codex"))],
                 "artifact_bindings": [],
             }],
@@ -356,7 +356,7 @@ async fn the_spine_restarts_green_with_the_provider_folder_gone_and_refuses_its_
         &mut log,
         &mut arrival_blobs,
         &input,
-        &octopus_descriptors::InterfaceId::new("world_terminal"),
+        &octopus_descriptors::InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect_err("the route to the absent world must refuse at send time");
@@ -426,7 +426,7 @@ async fn the_spine_restarts_green_with_the_provider_folder_gone_and_refuses_its_
         &mut log,
         &mut arrival_blobs,
         &input,
-        &octopus_descriptors::InterfaceId::new("world_terminal"),
+        &octopus_descriptors::InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect("after restore the SAME checkpoint admits — the limb woke up, nothing was rebooted");
@@ -481,7 +481,7 @@ async fn the_spine_boots_green_over_a_mid_authored_interface_folder() {
 }
 
 #[tokio::test]
-async fn the_spine_restarts_green_with_the_terminal_folder_gone() {
+async fn the_spine_restarts_green_with_the_operator_chat_folder_gone() {
     use octopus_app_server::{build_embedded_spine, SharedBlobs, SpineRootConfig};
     use octopus_ledger::InMemoryBlobs;
     use octopus_runtime::RunId;
@@ -489,7 +489,7 @@ async fn the_spine_restarts_green_with_the_terminal_folder_gone() {
 
     let dir = tempfile::tempdir().expect("temp root");
     let temp_registry = dir.path().join("registry");
-    copy_registry_descriptors_without(&temp_registry, &["world_terminal"]);
+    copy_registry_descriptors_without(&temp_registry, &["world_operator_chat"]);
 
     let blobs: SharedBlobs = Arc::new(std::sync::Mutex::new(InMemoryBlobs::new()));
     let interface_artifact_root = dir.path().join("handler-interface-artifacts");
@@ -503,10 +503,10 @@ async fn the_spine_restarts_green_with_the_terminal_folder_gone() {
         ee_instances_root: interface_artifact_root.join("ee_instances"),
     })
     .await
-    .expect("the spine BOOTS GREEN with the terminal folder physically gone");
+    .expect("the spine BOOTS GREEN with the operator chat folder physically gone");
 
     assert!(!embedded
         .interfaces_loaded
         .iter()
-        .any(|(_, interface)| interface.id.as_str() == "world_terminal"));
+        .any(|(_, interface)| interface.id.as_str() == "world_operator_chat"));
 }

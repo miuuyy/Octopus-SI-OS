@@ -243,7 +243,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 "run": run,
                 "trace": format!("trace:{}:cp_current", run.as_str()),
                 "epoch": 0,
-                "interface_binding": support::all_binding("world_terminal"),
+                "interface_binding": support::all_binding("world_operator_chat"),
                 "outbound_interface_bindings": [support::all_binding("world_image_generation")],
                 "artifact_bindings": readable_role_bindings,
                 "required_verified_artifacts": []
@@ -298,7 +298,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 checkpoint: &current,
                 epoch: octopus_run_record::GrantEpoch(0),
             },
-            &InterfaceId::new("world_terminal"),
+            &InterfaceId::new("world_operator_chat"),
             &target,
             "test.artifact",
         )
@@ -373,7 +373,7 @@ async fn active_run_bindings_form_exact_role_dependency_closure_without_widening
                 checkpoint: &current,
                 epoch: octopus_run_record::GrantEpoch(0),
             },
-            &InterfaceId::new("world_terminal"),
+            &InterfaceId::new("world_operator_chat"),
             &target,
             "test.artifact",
         )

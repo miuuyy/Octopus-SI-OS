@@ -1,7 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/history_cell/tests.rs
-assertion_line: 906
-expression: rendered
----
-• Searched the web for example search query with several generic
-  words to exercise wrapping

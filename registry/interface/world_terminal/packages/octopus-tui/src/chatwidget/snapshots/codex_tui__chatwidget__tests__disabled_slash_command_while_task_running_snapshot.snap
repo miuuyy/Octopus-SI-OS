@@ -1,5 +1,0 @@
----
-source: tui/src/chatwidget/tests/exec_flow.rs
-expression: blob
----
-■ '/resume' is disabled while a task is in progress.

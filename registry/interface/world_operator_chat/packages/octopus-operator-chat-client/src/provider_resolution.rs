@@ -352,3 +352,71 @@ pub(crate) fn collect_provider_operation_request_labels(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_registry_provider_catalog_admits_its_default_model_and_effort() {
+        let interface_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../../registry/interface")
+            .canonicalize()
+            .unwrap();
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&interface_root).unwrap() {
+            let path = entry.unwrap().path().join("interface.json");
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let provider = parse_strict::<InterfaceDescriptor>(&bytes).unwrap();
+            let Some(config) = provider.interface_driver_config.as_ref() else { continue };
+            if !config.private_config.contains_key("model_catalog") {
+                continue;
+            }
+            let id = provider.id.as_str();
+            let formed = provider.interface_policy.variables["models"]
+                .default
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|model| model.as_str().unwrap().to_string())
+                .collect::<BTreeSet<_>>();
+            let model = config.private_config["model"].as_str().unwrap();
+            let configured_effort = config
+                .private_config
+                .get("reasoning_effort")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let catalog = resolved_provider_model_catalog(
+                config,
+                &provider.id,
+                &formed,
+                model,
+                configured_effort,
+            )
+            .unwrap_or_else(|error| panic!("{id}: {error}"));
+            let selected = catalog
+                .iter()
+                .find(|preset| preset.model == model)
+                .unwrap_or_else(|| panic!("{id}: catalog does not admit default model '{model}'"));
+            let effort = if configured_effort.is_empty() {
+                selected.default_reasoning_effort.as_str()
+            } else {
+                configured_effort
+            };
+            assert!(
+                selected.supported_reasoning_efforts.is_empty()
+                    || selected.supported_reasoning_efforts.iter().any(|supported| supported == effort),
+                "{id}: default model '{model}' does not support default effort '{effort}'"
+            );
+            assert!(
+                effort.is_empty()
+                    || config.supported_reasoning_efforts.is_empty()
+                    || config.supported_reasoning_efforts.iter().any(|supported| supported == effort),
+                "{id}: default effort '{effort}' is outside its interface ceiling"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 30, "only {checked} provider catalogs were checked");
+    }
+}

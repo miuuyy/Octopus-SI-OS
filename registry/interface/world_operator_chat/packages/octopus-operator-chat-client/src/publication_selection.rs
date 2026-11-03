@@ -718,7 +718,7 @@ pub fn validate_target_read_formation(
     worker_interface: &str,
 ) -> Result<(), String> {
     let registry_root = canonical_registry_root(registry_root)?;
-    let chain = octopus_world_terminal_client::resolve_live_ee_policy_chain(
+    let chain = crate::capability_formation::resolve_live_ee_policy_chain(
         ee_instances_root,
         &octopus_descriptors::EeId::new(ee_id),
     )

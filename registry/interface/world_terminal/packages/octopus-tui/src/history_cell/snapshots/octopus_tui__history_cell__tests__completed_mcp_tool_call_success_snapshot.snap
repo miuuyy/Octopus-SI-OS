@@ -1,7 +1,0 @@
----
-source: interfaces/octopus-codex-tui/src/history_cell/tests.rs
-assertion_line: 960
-expression: rendered
----
-• Called search.find_docs({"limit":3,"query":"ratatui styling"})
-  └ Found styling guidance in styles.md

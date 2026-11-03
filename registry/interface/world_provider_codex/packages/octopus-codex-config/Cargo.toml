@@ -26,10 +26,6 @@ octopus-network-proxy = { package = "octopus-network-proxy", path = "../../../..
 octopus-protocol = { path = "../octopus-protocol" }
 octopus-util-abspath = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-abspath" }
 octopus-util-pathuri = { path = "../../../../worker_environment_kind/process_session/packages/octopus-util-pathuri" }
-# The provider→terminal keymap bridge is DEAD (config divorce closed the §9.13
-# residual flag): the `[tui]` section — keymap included — is typed by the terminal's
-# own config surface (octopus-world-terminal-config); this crate carries the table
-# opaquely and links ZERO terminal code.
 
 base64 = "0.22.1"
 dunce = "1.0.4"

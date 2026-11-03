@@ -76,7 +76,7 @@ impl Arrival {
     pub fn fire_and_forget(artifact: InterfaceArtifactFile) -> Self {
         Self {
             artifact,
-            interface: InterfaceId::new("world_terminal"),
+            interface: InterfaceId::new("world_operator_chat"),
             evidence: Vec::new(),
             verdict_tx: None,
             retained: None,
@@ -1320,7 +1320,7 @@ mod tests {
         checkpoint["run"] = serde_json::json!("receiver");
         checkpoint["trace"] = serde_json::json!("boot-receive");
         checkpoint["interface_binding"] = serde_json::json!(binding("system_worker_planner"));
-        checkpoint["outbound_interface_bindings"] = serde_json::json!([binding("world_terminal")]);
+        checkpoint["outbound_interface_bindings"] = serde_json::json!([binding("world_operator_chat")]);
         checkpoint["required_verified_artifacts"] = serde_json::json!(["first","second"].map(|label|
             serde_json::json!({"mark":"coder.build.ok", "artifact_label":label, "verifier":"artifact_exists", "params":{}})));
         std::fs::write(state.join("runs/receiver.json"), b"{").unwrap();
@@ -1353,7 +1353,7 @@ mod tests {
                         loop {
                             let rows = DurableLog::open(root.join("movements.jsonl")).unwrap().read_from(Seq(0));
                             if rows.iter().filter(|row| row.kind == MovementKind::InterfaceOutbound
-                                && row.to == Endpoint::Interface(InterfaceId::new("world_terminal"))).count() == 2 {
+                                && row.to == Endpoint::Interface(InterfaceId::new("world_operator_chat"))).count() == 2 {
                                 break;
                             }
                             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1387,7 +1387,7 @@ mod tests {
                 .iter()
                 .filter(|movement| {
                     movement.kind == MovementKind::InterfaceOutbound
-                        && movement.to == Endpoint::Interface(InterfaceId::new("world_terminal"))
+                        && movement.to == Endpoint::Interface(InterfaceId::new("world_operator_chat"))
                 })
                 .collect();
             assert_eq!(outbound.len(), 2);
@@ -1504,8 +1504,8 @@ mod tests {
                     "run": run,
                     "trace": format!("trace:{}:{checkpoint}", run.as_str()),
                     "epoch": 0,
-                    "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("world_terminal")),
-                    "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("world_terminal"))],
+                    "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("world_operator_chat")),
+                    "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(InterfaceId::new("world_operator_chat"))],
                     "artifact_bindings": probe_role_bindings(),
                 }],
                 "active_checkpoints": [checkpoint],
@@ -1933,7 +1933,7 @@ mod tests {
             &mut log,
             &mut arrival_blobs,
             &flash_team_submit(&blobs, &dir.path().join("interface-artifacts"), "UNIT"),
-            &InterfaceId::new("world_terminal"),
+            &InterfaceId::new("world_operator_chat"),
         )
         .await
         .expect("one interface artifact admission is admitted through the runtime gate");

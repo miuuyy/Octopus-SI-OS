@@ -311,7 +311,7 @@ pub(crate) fn tool_result_requirements(output: &BoundCheckpointTemplate, result:
 }
 
 pub(crate) fn result_receiving_authorized(
-    registry: &Path, chain: &[octopus_world_terminal_client::LiveEePolicyLayer],
+    registry: &Path, chain: &[crate::capability_formation::LiveEePolicyLayer],
     policy: &WorkerInterfacePolicy, result: &ToolResultReceiving,
 ) -> Result<bool, String> {
     result.requirement("declared")?;

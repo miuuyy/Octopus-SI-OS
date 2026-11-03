@@ -11,14 +11,15 @@ use octopus_policy::{
 };
 use octopus_run_record::{ArtifactBinding, RunRecord};
 use octopus_tool_registry::{ToolDescriptor, load_tool_descriptor_from_dir};
-use octopus_world_terminal_client::{
+use capability_formation::{
     CapabilityFormationRequest, CapabilityRegistry, FormedCapabilityTopology,
     resolve_live_ee_policy_chain,
 };
 #[cfg(test)]
-use octopus_world_terminal_client::form_capability_topology;
+use capability_formation::form_capability_topology;
 use sha2::{Digest, Sha256};
 
+pub mod capability_formation;
 pub mod context_bindings;
 pub mod collection_context;
 mod maintenance_attachment;

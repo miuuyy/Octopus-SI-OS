@@ -60,7 +60,7 @@ async fn embedded_spine_drives_a_live_turn_through_the_shared_root() {
         &mut log,
         &mut blob_handle,
         &submit,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect("the embedded chat submit must drive arrival→run through the gate");
@@ -121,7 +121,7 @@ async fn embedded_spine_admits_artifact_movement_without_mounted_interface_trans
         &mut log,
         &mut blob_handle,
         &submit,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect("the act flows through runtime admission as artifact movement");
@@ -185,7 +185,7 @@ async fn failed_verifier_gate_records_durable_movements_and_no_mark() {
         &mut log,
         &mut blob_handle,
         &submit,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect_err("a failed verifier gate returns the verification error to the interface");
@@ -305,7 +305,7 @@ async fn a_failed_verification_never_poisons_the_pair_for_retry() {
         &mut log,
         &mut blob_handle,
         &failing,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect_err("the first artifact fails its verifier");
@@ -333,7 +333,7 @@ async fn a_failed_verification_never_poisons_the_pair_for_retry() {
         &mut log,
         &mut blob_handle,
         &passing,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect(
@@ -399,7 +399,7 @@ async fn passing_verifier_gate_records_the_mark_tick() {
         &mut log,
         &mut blob_handle,
         &submit,
-        &InterfaceId::new("world_terminal"),
+        &InterfaceId::new("world_operator_chat"),
     )
     .await
     .expect("an artifact satisfying the requirement admits through the gate");
@@ -462,10 +462,10 @@ async fn passing_verifier_gate_records_the_mark_tick() {
     });
     resumed.runtime.reconstruct_spent_checkpoints_from_log(&interrupted).unwrap();
     admit_interface_artifact_arrival(&resumed, &mut interrupted, &mut blob_handle,
-        &submit, &InterfaceId::new("world_terminal")).await.unwrap();
+        &submit, &InterfaceId::new("world_operator_chat")).await.unwrap();
     let recovered = interrupted.read_from(octopus_ledger::Seq(0));
     assert_eq!(recovered.iter().filter(|row| row.kind == MovementKind::InterfaceArrival).count(), 1);
     resumed.runtime.reconstruct_spent_checkpoints_from_movements(&recovered).unwrap();
     assert!(admit_interface_artifact_arrival(&resumed, &mut interrupted, &mut blob_handle,
-        &submit, &InterfaceId::new("world_terminal")).await.is_err());
+        &submit, &InterfaceId::new("world_operator_chat")).await.is_err());
 }
