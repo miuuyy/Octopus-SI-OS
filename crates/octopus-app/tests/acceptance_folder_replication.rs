@@ -278,6 +278,17 @@ fn copy_registry_descriptors_without(temp_registry: &Path, exclude: &[&str]) {
 
 fn write_terminal_to_provider_run_record(runs_dir: &Path, run_id: &str, checkpoint: &str) {
     std::fs::create_dir_all(runs_dir).expect("runs dir creates");
+    let worker_pin: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(repo_registry_root().join("interface/system_worker_coder_max/policy.json"))
+            .expect("the coder worker pin reads"),
+    )
+    .expect("the coder worker pin parses");
+    let role_artifact_bindings: Vec<serde_json::Value> = worker_pin["role_artifacts"]
+        .as_array()
+        .expect("the coder worker pin declares its role artifacts")
+        .iter()
+        .map(|id| serde_json::json!({ "id": id }))
+        .collect();
     std::fs::write(
         runs_dir.join(format!("{run_id}.json")),
         serde_json::to_vec_pretty(&serde_json::json!({
@@ -294,7 +305,7 @@ fn write_terminal_to_provider_run_record(runs_dir: &Path, run_id: &str, checkpoi
                 "epoch": 0,
                 "interface_binding": octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_operator_chat")),
                 "outbound_interface_bindings": [octopus_runtime::AuthoredInterfaceBinding::all(octopus_descriptors::InterfaceId::new("world_provider_codex"))],
-                "artifact_bindings": [],
+                "artifact_bindings": role_artifact_bindings,
             }],
             "active_checkpoints": [checkpoint],
         }))

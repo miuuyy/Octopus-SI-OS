@@ -225,7 +225,7 @@ pub fn form_worker_run_policy(
             formed.pin.inputs.insert(name, *hash);
         }
     }
-    narrow_context_to_authored_doors(&mut formed, authored)?;
+    narrow_context_to_authored_doors(&mut formed, authored, formation_source_hashes)?;
     for interface in formed.context.interfaces.iter() {
         let name = interface_descriptor_source_name(interface);
         let hash = formation_source_hashes.get(&name).ok_or_else(|| {
@@ -261,18 +261,24 @@ pub fn form_worker_run_policy(
 
 /// The authored-bindings leg of §5. `boundary` stays the static ceiling (§3a);
 /// only `context` (the per-run grant, §3b) is cut to active run doors. A pinned
-/// folder is admitted only when that exact interface survived the ceiling∩EE reach.
+/// folder is admitted only when that exact interface survived the ceiling∩EE reach
+/// and its descriptor is in the loaded registry snapshot; a pin to a folder that is
+/// gone drops here, and the runtime refuses that route at send time (§6).
 /// Tools narrow to those an admitted door owns; WEK narrows to the kinds those
 /// surviving tools reach.
 fn narrow_context_to_authored_doors(
     formed: &mut FormedPolicy,
     authored: &AuthoredBindings<'_>,
+    formation_source_hashes: &BTreeMap<DescriptorName, DescriptorHash>,
 ) -> Result<(), WorkerPolicyError> {
     let reach = &formed.context.interfaces;
     let doors: BTreeSet<InterfaceId> = authored
         .interfaces
         .iter()
-        .filter(|folder| reach.contains(folder))
+        .filter(|folder| {
+            reach.contains(folder)
+                && formation_source_hashes.contains_key(&interface_descriptor_source_name(folder))
+        })
         .cloned()
         .collect();
     formed.context.interfaces = CapSet::from_allowed(doors);

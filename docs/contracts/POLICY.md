@@ -312,7 +312,9 @@ runaway depth as a resource limit, not as the terminal condition.
 
 - **Formation strips dead bindings.** A binding to an interface the EE does not
   permit is dropped when the grant is composed. A binding cannot outlive its
-  allowance.
+  allowance. A binding to an interface whose folder is missing from the
+  registry is dropped the same way: the run keeps living, and only the route
+  through that interface is refused, as `unknown_interface`.
 - **Emission is refused at the gate.** An attempt to emit through a binding
   that is not in the formed grant is turned back as a typed movement  - 
   `DeliveryRefused` with reason `policy` or `no_binding` - not a silent drop.
