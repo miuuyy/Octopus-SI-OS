@@ -39,7 +39,9 @@ import { useProjectionStructureGeneration } from "../projectionLive";
 import {
   OcAnimatedActionSlot,
   OcButton,
+  OcCard,
   OcEmptyState,
+  OcFieldRow,
   OcIconButton,
   OcInlineProgress,
   OcMenuItem,
@@ -974,7 +976,6 @@ export function ApplicationsView({
                           />
                         ) : null}
                         <CatalogInstalledRail
-                          emptyLabel="No applications installed yet"
                           getItemKey={(application) => application.id}
                           getItemLabel={(application) => application.name}
                           items={applications.filter((application) => application.installed)}
@@ -1235,14 +1236,14 @@ function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, e
               </div>
             ) : null}
             <DetailSection title="Setup">
-              <div className="flex flex-col gap-2">
+              <dl>
                 <DetailRow label="Installed" value={`${inventory.installedCount} of ${inventory.includedCount} included components are fully installed and verified.`} />
                 {applicationPackSetupVerified(pack, clientSetup) ? <DetailRow label="Workspace setup" value="Home, selected projects, local capabilities, and provider account access were verified together." /> : null}
                 {setupStatus && inventory.ready ? <DetailRow label="Provider setup" value={setupStatus.message} /> : null}
                 {homeProviderName ? <DetailRow label="Home" value={`During first setup, this pack connects Home through ${homeProviderName}.`} /> : null}
                 <DetailRow label="Welcome defaults" value={projectDefaults.length ? `During first setup: ${projectDefaults.join(", ")}. Applying the pack here does not change your project choices.` : "This pack does not suggest any defaults during first setup."} />
                 {recommendedExtensions.length ? <DetailRow label="Optional additions" value="Recommended client additions remain independent and can be installed from Extensions." /> : null}
-              </div>
+              </dl>
             </DetailSection>
             <DetailSection title="What’s in this pack">
               <div className="flex flex-col gap-2">
@@ -1264,18 +1265,18 @@ function ApplicationPackDetail({ accessProfile, clientSetup, clientSetupError, e
               </div>
             </DetailSection>
             <DetailSection title="Permissions">
-              <div className="flex flex-col gap-1">
+              <dl>
                 {included.map((component) => (
                   <DetailRow key={component.package_id} label={applicationPackPermissionLabel(component)} value={applicationPackPermissionDetail(component)} />
                 ))}
                 <DetailRow label="Project access" value="Capabilities are available only in Home and projects where you allow them; applying the pack does not turn them on for every task." />
-              </div>
+              </dl>
             </DetailSection>
             <DetailSection title="Information">
-              <div className="flex flex-col gap-1">
+              <dl>
                 <DetailRow label="Version" value={pack.version} />
                 <DetailRow label="Source" value="Reviewed local Application Pack" />
-              </div>
+              </dl>
             </DetailSection>
           </div>
         </div>
@@ -1668,28 +1669,24 @@ function ApplicationDetail({
                   <div className="flex flex-col gap-[var(--detail-page-section-gap)] pt-[var(--detail-page-section-gap)]">
                     {summary.status !== "none" ? (
                       <DetailSection title="Connection">
-                        <DetailRow label="Status" value={<ConnectionStatusValue summary={summary} />} />
-                        {summary.account ? (
-                          <DetailRow label="Account" value={(
-                            <span className="flex min-w-0 flex-col gap-0.5">
-                              <span>{summary.account.label}</span>
-                              {summary.account.detail ? <span className="text-xs text-secondary">{summary.account.detail}</span> : null}
-                            </span>
-                          )} />
-                        ) : null}
-                        {summary.fields.map((field) => (
-                          <DetailRow
-                            action={field.private_saved && summary.fieldInterfaces.includes(field.interface_id) ? (
-                              <OcButton disabled={configurationSaving || connection.disconnecting} onClick={() => onSaveConfiguration(field.interface_id, {}, [field.name])} size="xs" variant="ghost">Clear</OcButton>
-                            ) : null}
-                            key={configurationFieldKey(field)}
-                            label={field.label}
-                            value={configurationFieldStatus(field)}
+                        <OcCard>
+                          <OcFieldRow
+                            control={<ConnectionStatusValue summary={summary} />}
+                            description={summary.account?.detail || (summary.message && summary.status !== "connected" ? summary.message : undefined)}
+                            label={summary.account?.label ?? application.name}
+                            leading={<ApplicationLogo application={application} className="size-8 overflow-hidden rounded-lg border border-default bg-transparent" logoSize={16} />}
                           />
-                        ))}
-                        {help ? (
-                          <DetailRow label="Help" value={<a className="cursor-interaction text-default underline underline-offset-2" href={help.url} rel="noreferrer" target="_blank">{help.label}</a>} />
-                        ) : null}
+                          {summary.fields.map((field) => (
+                            <OcFieldRow
+                              control={field.private_saved && summary.fieldInterfaces.includes(field.interface_id) ? (
+                                <OcButton disabled={configurationSaving || connection.disconnecting} onClick={() => onSaveConfiguration(field.interface_id, {}, [field.name])} size="sm" variant="ghost">Clear</OcButton>
+                              ) : null}
+                              description={configurationFieldStatus(field)}
+                              key={configurationFieldKey(field)}
+                              label={field.label}
+                            />
+                          ))}
+                        </OcCard>
                       </DetailSection>
                     ) : null}
                     <DetailSection title="Available in">
@@ -1699,56 +1696,65 @@ function ApplicationDetail({
                         projects={projects}
                         rootEeId={rootEeId}
                         savingEeId={availabilitySavingEeId}
-                        variant="page"
                       />
-                      <div className="px-2 pt-1 text-xs text-secondary">Existing tasks don't change. New tasks started where New tasks is on include {application.name}.</div>
+                      <p className="px-2 pt-2 text-xs leading-4 text-secondary">Existing tasks don't change. New tasks started where New tasks is on include {application.name}.</p>
                     </DetailSection>
                     {environmentFields.length ? (
                       <DetailSection title="Environment">
-                        <div className="px-2 pb-1 text-xs text-secondary">Private values for this application's processes. A value you don't set here comes from the environment Octopus starts with.</div>
-                        {environmentFields.map((field) => (
-                          <EnvironmentFieldRow
-                            field={field}
-                            key={configurationFieldKey(field)}
-                            onSave={(updates, clears) => onSaveConfiguration(field.interface_id, updates, clears)}
-                            saving={configurationSaving}
-                          />
-                        ))}
+                        <OcCard>
+                          {environmentFields.map((field) => (
+                            <EnvironmentFieldRow
+                              field={field}
+                              key={configurationFieldKey(field)}
+                              onSave={(updates, clears) => onSaveConfiguration(field.interface_id, updates, clears)}
+                              saving={configurationSaving}
+                            />
+                          ))}
+                        </OcCard>
+                        <p className="px-2 pt-2 text-xs leading-4 text-secondary">Private values for this application's processes. A value you don't set here comes from the environment Octopus starts with.</p>
                       </DetailSection>
                     ) : null}
                   </div>
                 </motion.div>
               ) : null}
             </AnimatePresence>
-            <DetailSection title="Included">
-              {application.interfaces.map((interfaceId) => <DetailRow key={interfaceId} label="Interface" value={interfaceId} />)}
-              {application.artifact_bindings.map((binding) => <DetailRow key={binding.artifact_id} label="Guide for the model" value={binding.label?.trim() || binding.artifact_id} />)}
-              <DetailRow label="Task access" value="A task gets it only when you connect it to that task." />
-              <DetailRow label="Tasks" value={partiallyConnectedRunCount
-                ? `Connection incomplete in ${partiallyConnectedRunCount} task${partiallyConnectedRunCount === 1 ? "" : "s"}.`
-                : application.connected_run_ids.length
-                  ? `Used in ${application.connected_run_ids.length} task${application.connected_run_ids.length === 1 ? "" : "s"}.`
-                  : "Not used in a task yet."} />
+            <DetailSection title="Includes">
+              {application.interfaces.map((interfaceId) => (
+                <IncludedItem description="Interface" glyph="interfaces" key={interfaceId} title={interfaceId} />
+              ))}
+              {application.artifact_bindings.map((binding) => (
+                <IncludedItem description="Guide for the model" glyph="artifact" key={binding.artifact_id} title={binding.label?.trim() || binding.artifact_id} />
+              ))}
             </DetailSection>
             <DetailSection title="Information">
-              <DetailRow label="Installed" value={application.installed
-                ? "Package installed in Octopus Home."
-                : application.materialized || application.partially_materialized
-                  ? "Package files were found, but Octopus could not verify one complete installation."
-                  : "Available to install. No interfaces or task bindings have been added."} />
-              {!application.valid ? <DetailRow label="Installation issue" value={application.missing_interface_ids.length
-                ? `Missing interfaces: ${application.missing_interface_ids.join(", ")}`
-                : application.receipt_state && application.receipt_state !== "valid"
-                  ? "The package files do not have one matching install receipt."
-                  : "The package manifest could not be admitted."} /> : null}
-              {setupStatus && application.installed ? <DetailRow label="Provider setup" value={setupStatus.message} /> : null}
-              {application.installed && application.removal_block_reason ? <DetailRow label="Removal" value={application.removal_block_reason} /> : null}
-              {application.source_kind === "local" ? null : <DetailRow label="Package source" value="This build ships no package for it, so it cannot be repaired or updated." />}
-              <DetailRow label="Developer" value={application.developer} />
-              <DetailRow label="Category" value={CATEGORY_COPY[application.category].title} />
-              <DetailRow label="Version" value={application.version} />
-              <DetailRow label="Manifest" value={application.manifest_path} />
+              <dl>
+                {application.developer ? <DetailRow label="Developer" value={application.developer} /> : null}
+                <DetailRow label="Category" value={CATEGORY_COPY[application.category].title} />
+                {application.version ? <DetailRow label="Version" value={application.version} /> : null}
+                {application.installed ? (
+                  <DetailRow label="Tasks" value={partiallyConnectedRunCount
+                    ? `Connection incomplete in ${partiallyConnectedRunCount} task${partiallyConnectedRunCount === 1 ? "" : "s"}`
+                    : application.connected_run_ids.length
+                      ? `Used in ${application.connected_run_ids.length} task${application.connected_run_ids.length === 1 ? "" : "s"}`
+                      : "Not used in a task yet"} />
+                ) : null}
+                {setupStatus && application.installed ? <DetailRow label="Provider setup" value={setupStatus.message} /> : null}
+                {!application.valid && (application.installed || application.materialized || application.partially_materialized) ? (
+                  <DetailRow label="Installation" value={application.missing_interface_ids.length
+                    ? `Missing interfaces: ${application.missing_interface_ids.join(", ")}`
+                    : application.receipt_state && application.receipt_state !== "valid"
+                      ? "The package files do not have one matching install receipt."
+                      : "The package manifest could not be admitted."} />
+                ) : null}
+                {application.installed && application.removal_block_reason ? <DetailRow label="Removal" value={application.removal_block_reason} /> : null}
+                {application.source_kind === "local" ? null : <DetailRow label="Package" value="This build ships no package for it, so it cannot be repaired or updated." />}
+              </dl>
             </DetailSection>
+            <div className="flex flex-col gap-3 px-[var(--detail-page-inline-inset)] text-sm leading-5 text-tertiary select-text">
+              <p>A task gets {application.name} only when you connect it to that task.</p>
+              {(application.connection?.disclosure ?? []).map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+              {help ? <p><a className="cursor-interaction underline underline-offset-2 hover:text-secondary" href={help.url} rel="noreferrer" target="_blank">{help.label}</a></p> : null}
+            </div>
           </div>
         </div>
       </div>
@@ -1767,15 +1773,10 @@ function ConnectionStatusValue({ summary }: { summary: ApplicationConnectionSumm
           ? "Connection issue"
           : "Not connected";
   return (
-    <span className="flex min-w-0 flex-col gap-0.5">
-      <span>
-        <OcStatus
-          label={label}
-          tone={summary.status === "connected" ? "success" : summary.status === "expired" ? "warning" : summary.status === "error" ? "danger" : "neutral"}
-        />
-      </span>
-      {summary.message && summary.status !== "connected" ? <span className="text-xs text-secondary whitespace-pre-line">{summary.message}</span> : null}
-    </span>
+    <OcStatus
+      label={label}
+      tone={summary.status === "connected" ? "success" : summary.status === "expired" ? "warning" : summary.status === "error" ? "danger" : "neutral"}
+    />
   );
 }
 
@@ -1790,10 +1791,10 @@ function EnvironmentFieldRow({ field, onSave, saving }: {
     setEditing(false);
     setValue("");
   }
+  const status = configurationFieldStatus(field);
   return (
-    <div className="grid min-h-9 grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] items-center gap-4 rounded-lg px-2 py-1.5 hover:bg-token-foreground/3">
-      <span className="truncate font-mono text-xs text-token-text-secondary" title={field.label === field.name ? field.name : `${field.label} (${field.name})`}>{field.name}</span>
-      {editing ? (
+    <OcFieldRow
+      control={editing ? (
         <form className="flex min-w-0 items-center gap-1" onSubmit={(event) => {
           event.preventDefault();
           if (!value) return;
@@ -1804,7 +1805,7 @@ function EnvironmentFieldRow({ field, onSave, saving }: {
             aria-label={field.label}
             autoComplete="off"
             autoFocus
-            className="h-7 min-w-0 flex-1 rounded-md border border-primary-outline bg-primary-soft px-2 text-sm text-default outline-none placeholder:text-tertiary focus:border-ring"
+            className="h-7 w-48 min-w-0 rounded-md border border-primary-outline bg-primary-soft px-2 text-sm text-default outline-none placeholder:text-tertiary focus:border-ring"
             onChange={(event) => setValue(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
@@ -1817,19 +1818,18 @@ function EnvironmentFieldRow({ field, onSave, saving }: {
             type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"}
             value={value}
           />
-          <OcButton disabled={!value || saving} size="xs" type="submit" variant="secondary">Save</OcButton>
-          <OcButton onClick={close} size="xs" variant="ghost">Cancel</OcButton>
+          <OcButton disabled={!value || saving} size="sm" type="submit" variant="secondary">Save</OcButton>
+          <OcButton onClick={close} size="sm" variant="ghost">Cancel</OcButton>
         </form>
       ) : (
-        <span className="flex min-w-0 items-center justify-between gap-2 text-sm text-default">
-          <span className="min-w-0 truncate">{configurationFieldStatus(field)}</span>
-          <span className="flex shrink-0 items-center gap-1">
-            {field.private_saved ? <OcButton disabled={saving} onClick={() => onSave({}, [field.name])} size="xs" variant="ghost">Clear</OcButton> : null}
-            {field.source === "conflict" ? null : <OcButton disabled={saving} onClick={() => setEditing(true)} size="xs" variant="ghost">{field.private_saved ? "Change" : "Set"}</OcButton>}
-          </span>
-        </span>
+        <>
+          {field.private_saved ? <OcButton disabled={saving} onClick={() => onSave({}, [field.name])} size="sm" variant="ghost">Clear</OcButton> : null}
+          {field.source === "conflict" ? null : <OcButton disabled={saving} onClick={() => setEditing(true)} size="sm" variant="ghost">{field.private_saved ? "Change" : "Set"}</OcButton>}
+        </>
       )}
-    </div>
+      description={field.label === field.name ? status : `${field.name} · ${status}`}
+      label={field.label}
+    />
   );
 }
 
@@ -1956,14 +1956,27 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
-function DetailRow({ action, label, value }: { action?: ReactNode; label: string; value: ReactNode }) {
+function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="grid min-h-9 grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] items-start gap-4 rounded-lg px-2 py-1.5 hover:bg-token-foreground/3">
-      <span className="text-sm text-token-text-secondary">{label}</span>
-      <span className="flex min-w-0 items-center justify-between gap-3">
-        <span className="min-w-0 text-sm text-default select-text [overflow-wrap:anywhere]">{value}</span>
-        {action ? <span className="-my-1 shrink-0">{action}</span> : null}
-      </span>
+    <div className="grid min-h-[var(--height-token-row)] grid-cols-1 items-start gap-x-3 gap-y-0.5 py-row-y text-base leading-5 [@container_(min-width:24rem)]:grid-cols-[var(--detail-property-label-width,120px)_minmax(0,1fr)] [@container_(min-width:24rem)]:items-center">
+      <dt className="flex min-w-0 items-center gap-2 text-text-description [overflow-wrap:anywhere]">{label}</dt>
+      <dd className="m-0 flex min-w-0 items-center text-default select-text [overflow-wrap:anywhere]">{value}</dd>
+    </div>
+  );
+}
+
+function IncludedItem({ description, glyph, title }: { description: string; glyph: GlyphName; title: string }) {
+  return (
+    <div className="flex min-h-[var(--height-token-row)] w-full min-w-0 flex-col justify-center gap-2.5 rounded-[var(--radius-token-row)] px-[var(--padding-row-x)] py-[var(--padding-row-y)]">
+      <div className="flex items-center gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-secondary text-secondary">
+          <Glyph name={glyph} size={16} />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+          <div className="truncate text-default">{title}</div>
+          <div className="line-clamp-3 text-sm leading-relaxed text-secondary">{description}</div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { OcExpandableList, OcIconButton, cx } from "../../design-system/componen
 import "./catalog.css";
 
 export type CatalogInstalledRailProps<T> = {
-  emptyLabel?: ReactNode;
   getItemKey: (item: T) => string;
   getItemLabel: (item: T) => string;
   items: readonly T[];
@@ -17,7 +16,6 @@ export type CatalogInstalledRailProps<T> = {
 };
 
 export function CatalogInstalledRail<T>({
-  emptyLabel = "Nothing installed yet",
   getItemKey,
   getItemLabel,
   items,
@@ -28,7 +26,9 @@ export function CatalogInstalledRail<T>({
   title = "Installed",
 }: CatalogInstalledRailProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
   const [capacity, setCapacity] = useState(items.length);
+  const shown = items.length > 0;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -38,63 +38,73 @@ export function CatalogInstalledRail<T>({
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, []);
+  }, [shown]);
 
   const visibleCount = items.length > capacity ? Math.max(0, capacity - 1) : capacity;
   const visibleItems = items.slice(0, visibleCount);
   const hiddenItems = items.slice(visibleCount);
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3 border-b border-border/40 px-2 pb-2">
-        <h2 className="text-lg leading-6 font-medium text-default">{title}</h2>
-        <OcIconButton glyph="settings" label={manageLabel} onClick={onManage} size="xs" variant="ghost" />
-      </div>
-      <div className="px-2">
-        <div className="group/catalog-installed-row flex h-11 w-full justify-start overflow-visible" ref={containerRef}>
-          {!items.length ? <span className="flex items-center text-sm text-secondary">{emptyLabel}</span> : null}
-          {visibleItems.map((item) => {
-            const itemLabel = getItemLabel(item);
-            return (
-              <button
-                aria-label={itemLabel}
-                className="group relative flex size-11 shrink-0 cursor-interaction items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
-                key={getItemKey(item)}
-                onClick={() => onOpen(item)}
-                type="button"
-              >
-                <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface shadow-lg ring-1 ring-border ring-inset transition-transform duration-basic ease-out group-hover:-translate-y-1 group-focus-visible:translate-y-0 motion-reduce:transition-none">
-                  {renderIcon(item, "tile")}
-                </span>
-                <span aria-hidden="true" className="pointer-events-none absolute start-1/2 top-full z-10 -translate-x-1/2 text-xs leading-4 whitespace-nowrap text-secondary opacity-0 transition-opacity duration-basic ease-out group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]/catalog-installed-row:translate-y-1 group-has-[:focus-visible]/catalog-installed-row:duration-0 motion-reduce:transition-none">
-                  {itemLabel}
-                </span>
-              </button>
-            );
-          })}
-          {hiddenItems.length ? (
-            <button
-              aria-label={`${hiddenItems.length} more. ${manageLabel}`}
-              className="group relative flex size-11 shrink-0 cursor-interaction items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
-              onClick={onManage}
-              type="button"
-            >
-              <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface shadow-lg ring-1 ring-border ring-inset transition-transform duration-basic ease-out group-hover:-translate-y-1 group-focus-visible:translate-y-0 motion-reduce:transition-none">
-                <span className="grid grid-cols-2 gap-0.5">
-                  {hiddenItems.slice(0, 4).map((item) => (
-                    <span className="flex size-[13px] items-center justify-center overflow-hidden rounded-[4px] bg-surface ring-1 ring-border ring-inset" key={getItemKey(item)}>
-                      {renderIcon(item, "mini")}
+    <AnimatePresence initial={false}>
+      {items.length ? (
+        <motion.section
+          animate={{ height: "auto", marginBottom: 0, opacity: 1, transitionEnd: { overflow: "visible" } }}
+          className="flex flex-col gap-3"
+          exit={{ height: 0, marginBottom: "-2rem", opacity: 0, overflow: "hidden" }}
+          initial={{ height: 0, marginBottom: "-2rem", opacity: 0, overflow: "hidden" }}
+          key="installed"
+          transition={reducedMotion ? { duration: 0 } : { duration: 0.24, ease: [0.2, 0, 0, 1] }}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-border/40 px-2 pb-2">
+            <h2 className="text-lg leading-6 font-medium text-default">{title}</h2>
+            <OcIconButton glyph="settings" label={manageLabel} onClick={onManage} size="xs" variant="ghost" />
+          </div>
+          <div className="px-2">
+            <div className="group/catalog-installed-row flex h-11 w-full justify-between overflow-visible" ref={containerRef}>
+              {visibleItems.map((item) => {
+                const itemLabel = getItemLabel(item);
+                return (
+                  <button
+                    aria-label={itemLabel}
+                    className="group relative flex size-11 shrink-0 cursor-interaction items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                    key={getItemKey(item)}
+                    onClick={() => onOpen(item)}
+                    type="button"
+                  >
+                    <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface shadow-lg ring-1 ring-border ring-inset transition-transform duration-basic ease-out group-hover:-translate-y-1 group-focus-visible:translate-y-0 motion-reduce:transition-none">
+                      {renderIcon(item, "tile")}
                     </span>
-                  ))}
-                </span>
-              </span>
-              <span aria-hidden="true" className="pointer-events-none absolute start-1/2 top-full z-10 -translate-x-1/2 text-xs leading-4 whitespace-nowrap text-secondary opacity-0 transition-opacity duration-basic ease-out group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]/catalog-installed-row:translate-y-1 group-has-[:focus-visible]/catalog-installed-row:duration-0 motion-reduce:transition-none">
-                {hiddenItems.length} more
-              </span>
-            </button>
-          ) : null}
-        </div>
-      </div>
-    </section>
+                    <span aria-hidden="true" className="pointer-events-none absolute start-1/2 top-full z-10 -translate-x-1/2 text-xs leading-4 whitespace-nowrap text-secondary opacity-0 transition-opacity duration-basic ease-out group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]/catalog-installed-row:translate-y-1 group-has-[:focus-visible]/catalog-installed-row:duration-0 motion-reduce:transition-none">
+                      {itemLabel}
+                    </span>
+                  </button>
+                );
+              })}
+              {hiddenItems.length ? (
+                <button
+                  aria-label={`${hiddenItems.length} more. ${manageLabel}`}
+                  className="group relative flex size-11 shrink-0 cursor-interaction items-center justify-center rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                  onClick={onManage}
+                  type="button"
+                >
+                  <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface shadow-lg ring-1 ring-border ring-inset transition-transform duration-basic ease-out group-hover:-translate-y-1 group-focus-visible:translate-y-0 motion-reduce:transition-none">
+                    <span className="grid grid-cols-2 gap-0.5">
+                      {hiddenItems.slice(0, 4).map((item) => (
+                        <span className="flex size-[13px] items-center justify-center overflow-hidden rounded-[4px] bg-surface ring-1 ring-border ring-inset" key={getItemKey(item)}>
+                          {renderIcon(item, "mini")}
+                        </span>
+                      ))}
+                    </span>
+                  </span>
+                  <span aria-hidden="true" className="pointer-events-none absolute start-1/2 top-full z-10 -translate-x-1/2 text-xs leading-4 whitespace-nowrap text-secondary opacity-0 transition-opacity duration-basic ease-out group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]/catalog-installed-row:translate-y-1 group-has-[:focus-visible]/catalog-installed-row:duration-0 motion-reduce:transition-none">
+                    {hiddenItems.length} more
+                  </span>
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </motion.section>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

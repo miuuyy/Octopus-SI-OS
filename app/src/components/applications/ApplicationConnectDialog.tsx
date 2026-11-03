@@ -287,7 +287,6 @@ function ConnectDialogContent({
                 projects={projects}
                 rootEeId={rootEeId}
                 savingEeId={availabilitySavingEeId}
-                variant="dialog"
               />
               <div className="text-xs text-secondary">Existing tasks don't change.</div>
             </div>
