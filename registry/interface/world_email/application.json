@@ -22,7 +22,7 @@
       "Octopus signs in to your mailbox over an encrypted connection with an app password that stays on this computer.",
       "Only new mail from your own address and the senders you allow reaches your tasks; everything else stays where it is.",
       "Connected tasks can send, reply, forward, flag and move mail as you, and every send is recorded.",
-      "Disconnect at any time to remove the saved address and password."
+      "Disconnect removes the saved address and app password from this computer; revoke the app password with your provider to end its access."
     ],
     "help": {
       "label": "Create a Gmail app password",

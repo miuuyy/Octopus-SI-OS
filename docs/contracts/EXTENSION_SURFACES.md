@@ -142,12 +142,30 @@ interface can declare a connection module under its `packages/` folder in
 `private_config.client_connection`; the client runs its `probe`, `connect` and
 `disconnect` to check what you enter against the real service, show the
 connected account and walk you through browser sign-in or pairing. A module may
-live in a family owner's folder; the Application's package then names that
-owner's package in `required_packages`, so installing it installs the module.
+live in a family owner's folder when that owner declares it, as its own module
+or in its `family_modules`; the Application's package then names that owner's
+package in `required_packages`, so installing it installs the module. The MCP
+client package owns two such modules: `connection.cjs` for servers reached with
+a key or OAuth, and `chatgpt_apps.cjs` for apps linked to the ChatGPT account,
+such as Gmail, GitHub and Google Drive. Each ChatGPT app declares its connector
+as data in `private_config.connector_link`: the connector id, the slug of its
+ChatGPT apps page, and a read-only profile tool with the email or login field
+that names the account. An application on `connection.cjs` names its account
+through `private_config.account_profile`: an MCP resource that lists accounts,
+or an https request to the service's own API that verifies the key. Each
+connection check opens its own MCP session and ends it with HTTP DELETE.
 Applications without a module are connected once their required setup fields
 are saved. The account a module shows is the service account the application
 works in, such as the Gmail mailbox; the sign-in it is reached through, such as
-the ChatGPT account, appears only as its detail. A module may also return a
+the ChatGPT account, appears only as its detail. A bot connector shows the bot
+as its account (the Telegram bot's @username, the Slack bot and its workspace,
+the Email mailbox). When the service is the ChatGPT account itself, as for
+Image Generation, the label is that account and the detail is its ChatGPT plan.
+A module reads each value the way the interface's life receives it: a value in
+the launch environment wins over the saved one, a different saved value is an
+error, and Connect does not save a value the environment already supplies.
+Disconnect returns the state that actually remains and names what still grants
+access. A module may also return a
 `manage` link (a label and an https address) to the page where that account is
 managed, which the client offers in the connection menu. The
 connection check is presentation only: the interface still refuses to work with
@@ -167,8 +185,11 @@ Connect writes it.
 A Project task, an Agent and Home are offered an application only when their
 worker pin's ceiling holds it: every interface the application names, and each
 declared task capability's tool, owner interface and Worker Environment kind.
-Making an application available in a Project admits it within the EE chain and
-never widens a worker pin. An application the Project admits but the worker's
+Nobody keeps that list by hand: installing, removing or repairing an
+application writes its interfaces into, or out of, the ceilings of the worker
+pins its host package marks `application_host` — the task and Home workers of
+Octopus Home. Making an application available in a Project admits it within the
+EE chain and never widens a worker pin. An application the Project admits but the worker's
 ceiling does not is listed in the Agent dialog, disabled, with that reason. An
 Agent's pin is a copy of its source worker pin; saving the Agent re-forms its
 `policy.json` from that source, so a widened source ceiling reaches an existing
@@ -491,6 +512,15 @@ declared capacity. Claude Code and Anthropic declare 700,000 tokens;
 uses these per-model values without global context or compaction overrides.
 Context usage remains the provider's reported usable
 window; the client does not substitute a display-only limit.
+
+The OpenCodex bridge pins its upstream release in `upstream.json`, with every
+upstream surface it reads; the build fails when its sources read anything the
+pin does not declare. Public destinations keep OpenCodex's 300-second stall
+clock, and a local one (loopback, private, `.local`, `.lan`) uses the
+interface's request timeout, so a silent local stream fails instead of
+hanging. The managed Codex CLI pin lists every app-server notification Octopus
+decodes and the ones it opts out of; installing a binary that sends any other
+notification fails closed and names it.
 
 For the desktop picker, declare `private_config.model_catalog` in
 `interface_driver_config`. Each entry names its `model`, `display_name`,

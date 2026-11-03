@@ -26,6 +26,15 @@
       "event_journal_segment_bytes": 16777216,
       "event_journal_retained_segments": 64,
       "reconnect_backoff_ms": 2000,
+      "account_profile": {
+        "request": "https://api.firecrawl.dev/v2/team/credit-usage",
+        "label": "Your Firecrawl team",
+        "via": "your Firecrawl API key",
+        "manage": {
+          "label": "Manage API keys in Firecrawl",
+          "url": "https://www.firecrawl.dev/app/api-keys"
+        }
+      },
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"

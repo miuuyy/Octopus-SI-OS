@@ -5,7 +5,7 @@
   "handler_config": {
     "operation": "list_tools"
   },
-  "description": "List one page of tools from the bound remote MCP World interface.",
+  "description": "List one page of the GitHub tools available through the ChatGPT account, with each tool's input schema and _meta. When several GitHub accounts are linked, a tool's input schema carries the choice of account as link_id.",
   "input_schema": {
     "type": "object",
     "properties": {

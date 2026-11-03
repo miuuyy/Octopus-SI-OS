@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "Slack",
-    "description": "Message the task you connect to Slack, and let it answer and post in Slack.",
+    "description": "Message the tasks you connect to Slack, and let them answer and post in Slack.",
     "developer": "Octopus",
     "category": "connector",
     "icon": "message"

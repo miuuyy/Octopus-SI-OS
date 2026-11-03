@@ -17,6 +17,7 @@ const APP_PASSWORD_REQUIRED = /application-specific password|app password|app-sp
 const ACCESS_TURNED_OFF = /not enabled for imap|imap access is disabled|imap is disabled|smtpclientauthentication is disabled|basic authentication is disabled|\b5\.7\.139\b/i;
 const TEMPORARY = /\[(?:UNAVAILABLE|INUSE|LIMIT|SERVERBUG)\]|try again|temporar|too many/i;
 const KEEP_LOOKING = new Set(["unreachable", "timeout", "wrong_port"]);
+const MANAGE_URL = /^https:\/\/[A-Za-z0-9.-]+(?:\/[\x21-\x7e]*)?$/;
 
 class MailFailure extends Error {
   constructor(kind, message, server = "") {
@@ -36,12 +37,15 @@ function loadConfig() {
   const port = (value) => Number.isInteger(value) && value >= 1 && value <= 65535;
   const endpoint = (value) => typeof value?.host === "string" && HOST.test(value.host) && port(value.port) && ["implicit", "starttls"].includes(value.tls);
   const profile = (value) => typeof value?.sign_in_help === "string" && value.sign_in_help.length > 0;
+  const manageable = (value) => value === undefined || (Object.keys(value ?? {}).length === 2
+    && typeof value.label === "string" && value.label.length > 0 && value.label.length <= 48
+    && typeof value.url === "string" && MANAGE_URL.test(value.url));
   const rules = (value) => port(value?.default_port)
     && ["implicit_tls_ports", "starttls_ports", "discovery_ports"].every((key) => Array.isArray(value[key]) && value[key].every(port))
     && value.discovery_ports[0] === value.default_port;
   const valid = config?.schema_version === 1
     && Array.isArray(config.providers)
-    && config.providers.every((provider) => Array.isArray(provider?.domains) && endpoint(provider.imap) && endpoint(provider.smtp) && profile(provider))
+    && config.providers.every((provider) => Array.isArray(provider?.domains) && endpoint(provider.imap) && endpoint(provider.smtp) && profile(provider) && manageable(provider.manage))
     && profile(config.custom_provider)
     && rules(config.endpoints?.imap)
     && rules(config.endpoints?.smtp)
@@ -134,7 +138,40 @@ function resolveAccount(config, entries, discover) {
     smtpOverride: smtpOverride !== null,
     allowed: normalizeAllowedSenders(entries.allowed),
     help: (provider ?? config.custom_provider).sign_in_help,
+    manage: provider?.manage ?? null,
   };
+}
+
+async function effective(ctx, name) {
+  const saved = ctx.values?.[name];
+  const ambient = await ctx.launchEnvironment(name);
+  if (typeof saved === "string" && typeof ambient === "string" && saved !== ambient) {
+    throw new MailFailure("input", `${name} is set in this Mac's environment and saved in Octopus with a different value, so the Email interface cannot start. Remove it from the environment or connect with the same value.`);
+  }
+  return typeof ambient === "string" ? ambient : typeof saved === "string" ? saved : "";
+}
+
+async function entries(ctx, names, typed) {
+  const values = {};
+  for (const [key, name] of Object.entries(names)) {
+    const input = typed ? ctx.input?.[name] : undefined;
+    const ambient = await ctx.launchEnvironment(name);
+    if (typeof input === "string" && typeof ambient === "string" && input.trim() !== ambient.trim()) {
+      throw new MailFailure("input", `${name} is set in this Mac's environment to a different value, and the Email interface uses that one. Remove it from the environment or enter the same value.`);
+    }
+    values[key] = typeof input === "string" ? input : await effective(ctx, name);
+  }
+  return { address: values.address, password: values.password, imap: values.imap_host, smtp: values.smtp_host, allowed: values.allowed_senders };
+}
+
+async function save(ctx, changes) {
+  const written = {};
+  for (const [name, value] of Object.entries(changes)) written[name] = typeof (await ctx.launchEnvironment(name)) === "string" ? null : value;
+  await ctx.saveValues(written);
+}
+
+function managed(state, account) {
+  return account?.manage ? { ...state, manage: { ...account.manage } } : state;
 }
 
 function transportFailure(endpoint, error) {
@@ -473,14 +510,13 @@ function serverValue(endpoint) {
 async function probe(ctx) {
   const config = loadConfig();
   const names = environmentNames(ctx.descriptor);
-  const saved = (name) => ctx.values[names[name]] ?? "";
   let account;
   try {
-    account = resolveAccount(config, { address: saved("address"), password: saved("password"), imap: saved("imap_host"), smtp: saved("smtp_host"), allowed: saved("allowed_senders") }, false);
+    account = resolveAccount(config, await entries(ctx, names, false), false);
   } catch (error) {
     return { state: "error", message: failureMessage(error, null) };
   }
-  if (!account) return { state: "not_connected" };
+  if (!account) return { state: "not_connected", message: "Enter your email address and app password to connect Email." };
   const timeout = config.transport.connect_timeout_ms;
   const results = await Promise.allSettled([
     checkImap(account.imap[0], account, timeout, ctx.signal),
@@ -489,18 +525,17 @@ async function probe(ctx) {
   if (ctx.signal?.aborted) throw ctx.signal.reason;
   const failure = results.find((result) => result.status === "rejected")?.reason;
   const label = accountState(account, account.imap[0], account.smtp[0]);
-  if (!failure) return { state: "connected", account: label };
+  if (!failure) return managed({ state: "connected", account: label }, account);
   const expired = failure instanceof MailFailure && ["auth", "app_password"].includes(failure.kind);
-  return { state: expired ? "expired" : "error", account: label, message: failureMessage(failure, account, true) };
+  return managed({ state: expired ? "expired" : "error", account: label, message: failureMessage(failure, account, true) }, account);
 }
 
 async function connect(ctx) {
   const config = loadConfig();
   const names = environmentNames(ctx.descriptor);
-  const entry = (name) => ctx.input[names[name]] ?? ctx.values[names[name]] ?? "";
   let account;
   try {
-    account = resolveAccount(config, { address: entry("address"), password: entry("password"), imap: entry("imap_host"), smtp: entry("smtp_host"), allowed: entry("allowed_senders") }, true);
+    account = resolveAccount(config, await entries(ctx, names, true), true);
   } catch (error) {
     return { state: "error", message: failureMessage(error, null) };
   }
@@ -511,24 +546,45 @@ async function connect(ctx) {
     const imap = await firstWorking(account.imap, (endpoint) => checkImap(endpoint, account, timeout, ctx.signal));
     ctx.progress({ message: `Checking that ${account.smtp[0].host} accepts mail from ${account.address}…` });
     const smtp = await firstWorking(account.smtp, (endpoint) => checkSmtp(endpoint, account, timeout, ctx.signal));
-    await ctx.saveValues({
+    await save(ctx, {
       [names.address]: account.address,
       [names.password]: account.password,
       [names.imap_host]: account.imapOverride ? serverValue(imap) : null,
       [names.smtp_host]: account.smtpOverride ? serverValue(smtp) : null,
       [names.allowed_senders]: account.allowed.length ? account.allowed.join(", ") : null,
     });
-    return { state: "connected", account: accountState(account, imap, smtp) };
+    return managed({ state: "connected", account: accountState(account, imap, smtp) }, account);
   } catch (error) {
     if (ctx.signal?.aborted) throw ctx.signal.reason;
-    return { state: "error", account: accountState(account, account.imap[0], account.smtp[0]), message: failureMessage(error, account) };
+    return managed({ state: "error", account: accountState(account, account.imap[0], account.smtp[0]), message: failureMessage(error, account) }, account);
   }
 }
 
 async function disconnect(ctx) {
+  const config = loadConfig();
   const names = environmentNames(ctx.descriptor);
+  let account = null;
+  try {
+    account = resolveAccount(config, await entries(ctx, names, false), false);
+  } catch (error) {
+    if (!(error instanceof MailFailure)) throw error;
+  }
   await ctx.saveValues(Object.fromEntries(Object.values(names).map((name) => [name, null])));
-  return { state: "not_connected" };
+  const kept = [];
+  for (const name of [names.address, names.password]) {
+    if (typeof (await ctx.launchEnvironment(name)) === "string") kept.push(name);
+  }
+  const removed = `Email is disconnected: Octopus removed ${account?.address ?? "the mailbox"} and its app password from this Mac.`;
+  const revoke = "The app password itself keeps working until you revoke it in your mail provider's account settings.";
+  if (!kept.length) return managed({ state: "not_connected", message: clip(`${removed} ${revoke}`) }, account);
+  const them = kept.length === 1 ? "it" : "them";
+  const listed = `${kept.join(" and ")} ${kept.length === 1 ? "is" : "are"} set in this Mac's environment`;
+  const state = await probe(ctx);
+  if (state.state === "error") return { ...state, message: clip(`Octopus removed the saved mailbox settings, but ${listed} and checking ${them} failed: ${state.message}`) };
+  if (state.state === "not_connected") {
+    return managed({ ...state, message: clip(`${removed} ${listed}, but the Email interface cannot sign in without the removed settings. Revoke the app password with your mail provider.`) }, account);
+  }
+  return { ...state, message: clip(`Octopus removed the saved mailbox settings, but ${listed}, so the Email interface keeps using ${them}. Remove ${them} there to disconnect.`) };
 }
 
 module.exports = { schemaVersion: 1, probe, connect, disconnect };

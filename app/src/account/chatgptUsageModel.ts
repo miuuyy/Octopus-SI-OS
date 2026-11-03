@@ -44,10 +44,18 @@ export function accountResetTime(resetsAt: number | null, durationMins: number |
   return `Resets ${time}`;
 }
 
+const PLAN_NAMES: Record<string, string> = {
+  free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite", promax: "Pro (Max)", team: "Team",
+  self_serve_business_prolite: "Self Serve Business ProLite", self_serve_business_usage_based: "Self Serve Business Usage Based",
+  business: "Business", ent26: "Enterprise", enterprise_cbp_automation: "Enterprise (Automation)",
+  enterprise_cbp_usage_based: "Enterprise CBP Usage Based", enterprise: "Enterprise", hc: "Enterprise",
+  edu: "Edu", education: "Edu", edu_plus: "Edu Plus", edu_pro: "Edu Pro", sci: "Academic Researchers", sci_plus: "Academic Researchers Plus",
+};
+
 export function accountPlanLabel(plan: string | null | undefined): string {
   const value = plan?.trim();
   if (!value) return "Plan unavailable";
-  return value === "promax" ? "Pro Max" : value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return PLAN_NAMES[value.toLowerCase()] ?? value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function accountRemainingLabel(remaining: number | null, suffix = "left"): string {

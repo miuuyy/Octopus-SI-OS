@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "world_mcp_firecrawl",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "product_kind": "application",
   "product_id": "world_mcp_firecrawl",
   "release_status": "optional",

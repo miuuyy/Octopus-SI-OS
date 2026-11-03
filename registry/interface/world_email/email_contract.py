@@ -135,8 +135,19 @@ def validate_endpoint_spec(value, name):
     return value
 
 
-def validate_profile(value, name, required):
-    value = require_keys(value, required | {"sent_copy", "authserv_ids", "sign_in_help"}, set(), name)
+def validate_manage(value, name):
+    value = require_keys(value, {"label", "url"}, set(), name)
+    require_string(value["label"], f"{name}.label", maximum=48)
+    url = require_string(value["url"], f"{name}.url", maximum=2048)
+    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(?:/[\x21-\x7e]*)?", url):
+        raise ContractError(f"{name}.url must be an https address without credentials")
+    return value
+
+
+def validate_profile(value, name, required, optional=frozenset()):
+    value = require_keys(value, required | {"sent_copy", "authserv_ids", "sign_in_help"}, optional, name)
+    if "manage" in value:
+        validate_manage(value["manage"], f"{name}.manage")
     if value["sent_copy"] not in SENT_COPY_MODES:
         raise ContractError(f"{name}.sent_copy must be provider, append or none")
     for index, pattern in enumerate(require_string_list(value["authserv_ids"], f"{name}.authserv_ids")):
@@ -164,7 +175,7 @@ def validate_config(config):
     ids, domains = set(), set()
     for index, provider in enumerate(config["providers"]):
         name = f"Email providers[{index}]"
-        validate_profile(provider, name, {"id", "domains", "imap", "smtp"})
+        validate_profile(provider, name, {"id", "domains", "imap", "smtp"}, {"manage"})
         require_string(provider["id"], f"{name}.id", maximum=64)
         if provider["id"] in ids:
             raise ContractError(f"Email provider {provider['id']!r} is repeated")

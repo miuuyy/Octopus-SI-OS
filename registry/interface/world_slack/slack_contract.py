@@ -323,7 +323,7 @@ def envelope_key(envelope):
     return "digest-" + hashlib.sha256(encoded).hexdigest()
 
 
-HANDLERS = {"message.post", "message.ephemeral", "message.update", "message.delete", "reaction.add", "reaction.remove", "file.upload", "view.open", "view.push", "view.update", "view.publish", "callback.respond", "thread.status", "profile.status.set", "web_api"}
+HANDLERS = {"message.post", "message.ephemeral", "message.update", "message.delete", "reaction.add", "reaction.remove", "file.upload", "view.open", "view.push", "view.update", "view.publish", "callback.respond", "thread.status", "web_api"}
 
 
 def validate_handlers(catalog):

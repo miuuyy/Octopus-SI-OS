@@ -5,7 +5,7 @@
   "handler_config": {
     "operation": "close"
   },
-  "description": "Close the bound remote MCP transport session.",
+  "description": "Close the GitHub MCP connection; the next operation connects again with the current ChatGPT sign-in.",
   "input_schema": {
     "type": "object",
     "additionalProperties": false

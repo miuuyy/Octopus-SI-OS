@@ -5,7 +5,7 @@
   "handler_config": {
     "operation": "call_tool"
   },
-  "description": "Call any tool declared by the bound remote MCP server. Use the exact tool name and argument object from github.list_tools; the interface capability gate and server contract remain fail-closed.",
+  "description": "Call a GitHub tool from github.list_tools with its exact name and argument object. When the tool's input schema asks for link_id, pass the link_id of the chosen GitHub account. Tools outside the GitHub connector are refused.",
   "input_schema": {
     "type": "object",
     "properties": {

@@ -11,7 +11,8 @@
       "smtp": {"host": "smtp.gmail.com", "port": 465, "tls": "implicit"},
       "sent_copy": "provider",
       "authserv_ids": ["mx.google.com"],
-      "sign_in_help": "Gmail needs an app password: turn on 2-Step Verification, then create one at myaccount.google.com/apppasswords."
+      "sign_in_help": "Gmail needs an app password: turn on 2-Step Verification, then create one at myaccount.google.com/apppasswords.",
+      "manage": {"label": "Manage in Google Account", "url": "https://myaccount.google.com/apppasswords"}
     },
     {
       "id": "icloud",
@@ -20,7 +21,8 @@
       "smtp": {"host": "smtp.mail.me.com", "port": 587, "tls": "starttls"},
       "sent_copy": "append",
       "authserv_ids": ["bimi.icloud.com", "dmarc.icloud.com", "dkim-verifier.icloud.com", "spf.icloud.com"],
-      "sign_in_help": "iCloud Mail needs an app-specific password: create one at account.apple.com under Sign-In and Security."
+      "sign_in_help": "iCloud Mail needs an app-specific password: create one at account.apple.com under Sign-In and Security.",
+      "manage": {"label": "Manage in Apple Account", "url": "https://account.apple.com/account/manage"}
     },
     {
       "id": "outlook",
@@ -29,7 +31,8 @@
       "smtp": {"host": "smtp-mail.outlook.com", "port": 587, "tls": "starttls"},
       "sent_copy": "provider",
       "authserv_ids": ["(none)"],
-      "sign_in_help": "Microsoft may refuse password sign-in for mail apps; with two-step verification on, try an app password from account.microsoft.com/security."
+      "sign_in_help": "Microsoft may refuse password sign-in for mail apps; with two-step verification on, try an app password from account.microsoft.com/security.",
+      "manage": {"label": "Manage in Microsoft account", "url": "https://account.microsoft.com/security"}
     },
     {
       "id": "yahoo",
@@ -38,7 +41,8 @@
       "smtp": {"host": "smtp.mail.yahoo.com", "port": 465, "tls": "implicit"},
       "sent_copy": "provider",
       "authserv_ids": ["*.yahoo.com"],
-      "sign_in_help": "Yahoo Mail needs an app password: create one under Account Security at login.yahoo.com."
+      "sign_in_help": "Yahoo Mail needs an app password: create one under Account Security at login.yahoo.com.",
+      "manage": {"label": "Manage in Yahoo", "url": "https://login.yahoo.com/account/security"}
     },
     {
       "id": "yandex",
@@ -47,7 +51,8 @@
       "smtp": {"host": "smtp.yandex.com", "port": 465, "tls": "implicit"},
       "sent_copy": "provider",
       "authserv_ids": ["*.yandex.net", "*.yandex.ru"],
-      "sign_in_help": "Yandex Mail needs an app password for mail (id.yandex.com, Security) and IMAP access turned on in the mail settings."
+      "sign_in_help": "Yandex Mail needs an app password for mail (id.yandex.com, Security) and IMAP access turned on in the mail settings.",
+      "manage": {"label": "Manage in Yandex ID", "url": "https://id.yandex.com/security"}
     },
     {
       "id": "mailru",

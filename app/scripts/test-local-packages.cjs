@@ -8,6 +8,7 @@ const { once } = require("node:events");
 const {
   applyLocalApplicationPack,
   inspectLocalPackageInstallation,
+  installLocalPackages,
   readLocalPackageCatalog,
   readLocalPackageInstallation,
   withLocalPackageInstallation,
@@ -837,6 +838,46 @@ async function editableInstalledOwnerFixture() {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 
+async function applicationHostFixture() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-application-host-")));
+  try {
+    const roots = rootsFor(root);
+    const hostPolicy = path.join(roots.activeRegistryRoot, "interface/system_worker_host/policy.json");
+    await writeJson(path.join(roots.sourceRegistryRoot, "interface/system_worker_host/interface.json"), {
+      id: "system_worker_host", interface_type: "system", role: "worker", direction: "bidirectional", source_names: ["host"],
+    });
+    await writeJson(path.join(roots.sourceRegistryRoot, "interface/system_worker_host/policy.json"), {
+      id: "system_worker_host", ceiling: { interfaces: ["system_room", "world_local_only"], tools: [] },
+    });
+    await writeJson(path.join(roots.sourceRegistryRoot, "interface/world_mail/interface.json"), {
+      id: "world_mail", interface_type: "world", role: "service", direction: "bidirectional", source_names: ["mail"],
+    });
+    await writeJson(path.join(roots.sourceRegistryRoot, "interface/world_mail/application.json"), {
+      schema_version: 3, id: "world_mail", name: "Mail", description: "Mail fixture.", category: "plugin",
+      developer: "Octopus", version: "1.0.0", logo: "logo.svg", interfaces: ["world_mail"],
+    });
+    await fs.writeFile(path.join(roots.sourceRegistryRoot, "interface/world_mail/logo.svg"), "<svg/>");
+    await writeJson(path.join(roots.libraryRoot, "packages", "host.json"), {
+      schema: "octopus.local_package", schema_version: 1, id: "host", version: "1.0.0", product_kind: "driver", product_id: "host",
+      release_status: "optional", display: { name: "Host", description: "Hosts applications.", developer: "Octopus", category: "driver" },
+      members: [{ registry_kind: "interface", owner: "system_worker_host", primary: true, application_host: true,
+        configuration: [{ path: "policy.json", fields: [{ pointer: "/ceiling/interfaces", schema: { type: "array", items: { type: "string" } } }] }] }],
+    });
+    const digests = async (...ids) => Object.fromEntries((await readLocalPackageCatalog(roots)).packages
+      .filter((entry) => ids.includes(entry.id)).map((entry) => [entry.id, entry.source_digest]));
+    const ceiling = async () => JSON.parse(await fs.readFile(hostPolicy, "utf8")).ceiling.interfaces;
+    await installLocalPackages({ ...roots, operationId: "host_install_0001", packageIds: ["host"], expectedSourceDigests: await digests("host") });
+    await installLocalPackages({ ...roots, operationId: "host_install_0002", packageIds: ["world_mail"], expectedSourceDigests: await digests("world_mail") });
+    assert.deepEqual(await ceiling(), ["system_room", "world_local_only", "world_mail"], "an installed application enters every application host");
+    const installed = (await readLocalPackageCatalog(roots)).packages.find((entry) => entry.id === "host");
+    await repairLocalPackages({ ...roots, operationId: "host_repair_0001", packageIds: ["host"], expectedRepairs: { host: repairExpectation(installed) } });
+    assert.deepEqual(await ceiling(), ["system_room", "world_local_only", "world_mail"], "repairing the host keeps installed applications");
+    const mail = (await readLocalPackageCatalog(roots)).packages.find((entry) => entry.id === "world_mail");
+    await removeLocalPackages({ ...roots, operationId: "host_remove_0001", packageIds: ["world_mail"], expectedInstalledDigests: { world_mail: mail.installed_digest } });
+    assert.deepEqual(await ceiling(), ["system_room", "world_local_only"], "a removed application leaves the hosts; other entries stay");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+}
+
 if (process.argv[2] === "--child") {
   crashChild(process.argv[3], process.argv[4]).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
@@ -845,6 +886,7 @@ if (process.argv[2] === "--child") {
 } else {
   (process.argv[2] === "--consent-recipe" ? consentRecipeFixture() : process.argv[2] === "--clone-isolation" ? cloneIsolationFixture() : run()).then(async () => {
     if (!process.argv[2]) await editableInstalledOwnerFixture();
+    if (!process.argv[2]) await applicationHostFixture();
     if (!process.argv[2]) await cloneIsolationFixture();
     if (!process.argv[2]) await require("./test-package-ownership.cjs").runPackageOwnership();
     if (!process.argv[2]) await require("./test-configuration-diagnostics.cjs").runConfigurationDiagnostics();

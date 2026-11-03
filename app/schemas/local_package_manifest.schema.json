@@ -114,6 +114,9 @@
           "primary": {
             "type": "boolean"
           },
+          "application_host": {
+            "const": true
+          },
           "data_directories": {
             "type": "array",
             "minItems": 1,

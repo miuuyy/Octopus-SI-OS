@@ -1280,9 +1280,6 @@ def execute_operation(api, config, handler, args, source_hash, key, media):
     if operation == "thread.status":
         params = {"channel_id": target_channel(args, config), "thread_ts": require_ts(args.get("thread_ts"), "Slack set_thread_status thread_ts"), "status": args["status"]}
         return {"response": api.call("assistant.threads.setStatus", params, team_id=team)}
-    if operation == "profile.status.set":
-        profile = {"status_text": args.get("status_text", ""), "status_emoji": args.get("status_emoji", ""), "status_expiration": args.get("status_expiration", 0)}
-        return {"response": api.call("users.profile.set", {"profile": profile}, team_id=team)}
     if operation == "web_api":
         params = {name: value for name, value in args.items() if name != "team_id"}
         params.update(handler.get("params", {}))

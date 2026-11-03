@@ -162,11 +162,15 @@ test("cancelling a waiting attempt stops it, and only one attempt per interface 
   assert.deepEqual(host.cancel({ operationId: id }), { cancelled: false });
 });
 
-test("a crate module is shared only when its owner declares it identically, and disconnecting without an export clears saved values", async () => {
+test("a crate module is shared only when its owner declares it as its module or one of its family modules, and disconnecting without an export clears saved values", async () => {
   await host.connect({ operationId: operationId(), applicationId: "world_demo_shared", interfaceId: "world_demo_shared", input: {} });
   assert.deepEqual(savedValues("world_demo_shared"), { DEMO_ADDRESS: "shared@example.com", DEMO_TOKEN: "token-1" });
   assert.deepEqual(await host.disconnect({ applicationId: "world_demo_shared", interfaceId: "world_demo_shared" }), { state: "not_connected" });
   assert.equal(savedValues("world_demo_shared"), null);
+  const familyOwner = descriptor("world_demo_owner", "interface://world_demo_owner/packages/demo-crate/other.cjs");
+  familyOwner.interface_driver_config.private_config.client_connection.family_modules = [sharedModule];
+  write("world_demo_owner/interface.json", familyOwner);
+  assert.equal((await host.probe({ applicationId: "world_demo_shared" })).interfaces[0].state.state, "not_connected");
   write("world_demo_owner/interface.json", descriptor("world_demo_owner", "interface://world_demo_owner/packages/demo-crate/other.cjs"));
   assert.match((await host.probe({ applicationId: "world_demo_shared" })).interfaces[0].state.message, /is not declared by its installed owner/);
   write("world_demo_owner/interface.json", descriptor("world_demo_owner", null));

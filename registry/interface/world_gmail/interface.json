@@ -39,14 +39,16 @@
       "connector_link": {
         "connector_id": "connector_2128aebfecb84f64a069897515042a44",
         "name": "Gmail",
+        "slug": "gmail",
         "account_profile": {
           "tool": "gmail.get_profile",
-          "email_field": "email"
+          "email_field": "email",
+          "noun": "mailbox"
         }
       },
       "client_connection": {
         "schema_version": 1,
-        "module": "interface://world_gmail/packages/connection.cjs"
+        "module": "interface://world_mcp_example/packages/octopus-mcp-client/chatgpt_apps.cjs"
       },
       "server_tool_operations": {
         "prefix": "gmail"

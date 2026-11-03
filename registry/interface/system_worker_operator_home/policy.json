@@ -15,7 +15,6 @@
       "system_context",
       "system_memory",
       "world_cron",
-      "world_gmail",
       "world_provider_realtime",
       "world_provider_claude_cli",
       "system_service_input",

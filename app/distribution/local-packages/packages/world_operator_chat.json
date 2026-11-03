@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "world_operator_chat",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "product_kind": "application",
   "product_id": "world_operator_chat",
   "release_status": "optional",
@@ -123,11 +123,49 @@
     },
     {
       "registry_kind": "interface",
-      "owner": "system_worker_operator_home"
+      "owner": "system_worker_operator_home",
+      "application_host": true,
+      "configuration": [
+        {
+          "path": "policy.json",
+          "fields": [
+            {
+              "pointer": "/ceiling/interfaces",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "registry_kind": "interface",
-      "owner": "system_worker_operator_task"
+      "owner": "system_worker_operator_task",
+      "application_host": true,
+      "configuration": [
+        {
+          "path": "policy.json",
+          "fields": [
+            {
+              "pointer": "/ceiling/interfaces",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "registry_kind": "mark",

@@ -363,7 +363,7 @@ test("usage preserves multiple buckets, unknown windows, zero remaining and rese
   assert.equal(groups[0].windows[1].reported, false);
   assert.equal(accountRemainingLabel(75.3), "75% left");
   assert.equal(accountRemainingLabel(null), "Unavailable");
-  assert.equal(usageModel.accountPlanLabel("promax"), "Pro Max");
+  assert.equal(usageModel.accountPlanLabel("promax"), "Pro (Max)");
   assert.equal(accountResetTime(null), "Reset time unavailable");
   const date = new Date(2000000000000), now = date.getTime() - 3_600_000;
   assert.equal(accountResetTime(2000000000, 300, now), `Resets ${new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(date)}`);
@@ -540,7 +540,7 @@ test("account menu prefers top placement and retains viewport collision handling
         "../chat/MessageTooltip": { MessageTooltip: ({ children }) => children },
   });
   const menu = () => renderToStaticMarkup(React.createElement(AccountRailButton, { accessProfile: "live", runtimeHost: {}, onLogOut() {}, onOpenSettings() {} }));
-  assert.match(menu(), /Account: Administrator/); assert.match(menu(), /<small>ChatGPT Pro Max<\/small>/);
+  assert.match(menu(), /Account: Administrator/); assert.match(menu(), /<small>ChatGPT Pro \(Max\)<\/small>/);
   assert.doesNotMatch(menu(), /first@example.test/); assert.ok(menu().indexOf("Settings") < menu().indexOf("Usage"));
   assert.doesNotMatch(menu(), /Log out of ChatGPT|Usage remaining|Using ChatGPT/);
   account = null; assert.match(menu(), /Administrator/); assert.match(menu(), /ChatGPT unavailable/);

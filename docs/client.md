@@ -219,17 +219,23 @@ Installation and access are separate:
 2. **Connect** supplies the required account, key, or device. Where the
    application declares a connection check, the client verifies what you enter
    against the real service, walks you through browser sign-in or pairing, and
-   shows the connected account. Gmail works through the Gmail app linked to
-   your ChatGPT account: the card shows the mailbox it uses, with the ChatGPT
-   account beneath it. If Gmail is already linked there, Octopus still asks you
-   to **Connect** once before tasks can use it. **Manage in ChatGPT** opens the
-   page where you switch, add or unlink mailboxes; Disconnect in Octopus does
-   not unlink Gmail from ChatGPT.
+   shows the connected account. Gmail, GitHub and Google Drive work through the
+   apps linked to your ChatGPT account, and Octopus keeps no GitHub or Google
+   token: the card shows the account each one uses (the Gmail mailbox, the
+   GitHub login, the Google Drive account), with the ChatGPT account beneath
+   it. If an app is already linked there, Octopus still asks you to **Connect**
+   once before tasks can use it. **Manage in ChatGPT** opens the page where you
+   switch, add or unlink its accounts, and for GitHub the repositories its app
+   reaches; Disconnect in Octopus does not unlink it from ChatGPT. Image
+   Generation needs no key: it uses the ChatGPT account signed in on this Mac
+   and shows that account with its plan, which must be a paid one. Unity MCP
+   connects to the local server MCP for Unity starts from the Unity Editor and
+   shows the Editor project it serves.
 3. **Make available** admits it within Home or the chosen Project's ceiling.
-   The task or Agent's worker must also be allowed to use the application; one
-   that is available but outside that ceiling appears disabled in the Agent
-   dialog with the reason. Saving an Agent brings it up to its template's
-   current ceiling.
+   Installing an application lets the Home and task workers use it; there is
+   no separate list to edit. An application outside an Agent's ceiling appears
+   disabled in the Agent dialog with the reason, and saving an Agent brings it
+   up to its template's current ceiling.
 4. **Select/connect** gives a task the relevant bindings. A default for new
    tasks is not evidence that an existing task already uses it.
 

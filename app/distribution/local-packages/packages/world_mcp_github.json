@@ -2,13 +2,13 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "world_mcp_github",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "product_kind": "application",
   "product_id": "world_mcp_github",
   "release_status": "optional",
   "display": {
     "name": "GitHub",
-    "description": "GitHub's MCP server: repositories, code, issues, pull requests and workflows. Needs a GitHub access token.",
+    "description": "Work with repositories, code, issues, pull requests and workflows through the GitHub app connected to your ChatGPT account.",
     "developer": "Octopus",
     "category": "plugin",
     "icon": "github"

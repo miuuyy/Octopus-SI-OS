@@ -9,33 +9,52 @@
   "interface_driver_ref": "image_generation",
   "interface_driver_config": {
     "private_config": {
-      "input_request_label": "image.generation.request",
+      "operation_catalog_dir": "operations",
+      "operation_catalog_label": "image.operation_catalog",
+      "operation_request_label": "image.operation.request",
       "prompt_field": "prompt",
-      "model": "gpt-image-1",
-      "size": "1024x1024",
-      "n": 1,
+      "model": "gpt-image-2",
+      "size": "auto",
+      "quality": "auto",
+      "background": "opaque",
       "data_path": "data",
       "b64_field": "b64_json",
       "url_field": "url",
       "allow_endpoint_origin": true,
       "allowed_url_origins": [],
-      "revised_prompt_field": "revised_prompt",
       "media_label": "image.generated",
       "max_image_bytes": 33554432,
+      "auth": {
+        "mode": "chatgpt_account",
+        "auth_file_env": "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+        "account_header": "ChatGPT-Account-ID"
+      },
+      "account_check": {
+        "url": "https://chatgpt.com/backend-api/wham/usage",
+        "email_field": "email",
+        "account_field": "account_id",
+        "plan_field": "plan_type",
+        "excluded_plans": [
+          "free"
+        ],
+        "manage": {
+          "label": "Manage in ChatGPT",
+          "url": "https://chatgpt.com/settings/usage"
+        }
+      },
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_image_generation/packages/octopus-image-generation-interface/connection.cjs"
       }
     },
     "transport": {
-      "base_url": "https://api.openai.com/v1/images/generations",
-      "base_url_env": "OCTOPUS_IMAGE_GENERATION_URL",
+      "base_url": "https://chatgpt.com/backend-api/codex/images/generations",
       "wire": "image_json_http",
-      "auth_env_key": "OCTOPUS_IMAGE_GENERATION_API_KEY",
-      "auth_header": "Authorization",
-      "auth_value_prefix": "Bearer ",
-      "request_timeout_ms": 120000,
-      "max_response_bytes": 16777216
+      "headers": {
+        "originator": "octopus_desktop"
+      },
+      "request_timeout_ms": 300000,
+      "max_response_bytes": 50331648
     }
   }
 }

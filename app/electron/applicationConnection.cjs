@@ -410,19 +410,34 @@ function declaresConnectionModule(descriptor) {
   return isPlainRecord(config) && Object.prototype.hasOwnProperty.call(config, "client_connection");
 }
 
+function connectionModuleParts(module) {
+  const parts = typeof module === "string" && module.match(/^interface:\/\/([A-Za-z0-9_-]+)\/(packages\/.+\.cjs)$/);
+  return parts && !parts[2].split("/").some((part) => !part || part === "." || part === ".." || /[\\\x00]/.test(part)) ? parts : null;
+}
+
+function validConnectionDeclaration(declaration, interfaceId) {
+  if (!isPlainRecord(declaration) || declaration.schema_version !== 1 || !connectionModuleParts(declaration.module)
+    || Object.keys(declaration).some((key) => !["schema_version", "module", "family_modules"].includes(key))) {
+    return false;
+  }
+  const family = declaration.family_modules;
+  return family === undefined || (Array.isArray(family) && family.length > 0 && new Set(family).size === family.length
+    && family.every((module) => connectionModuleParts(module)?.[1] === interfaceId && module !== declaration.module));
+}
+
 async function loadConnectionModule(registryRoot, descriptor) {
   const declaration = descriptor.interface_driver_config.private_config.client_connection;
-  const parts = isPlainRecord(declaration) && typeof declaration.module === "string"
-    && declaration.module.match(/^interface:\/\/([A-Za-z0-9_-]+)\/(packages\/.+\.cjs)$/);
-  if (!parts || declaration.schema_version !== 1 || Object.keys(declaration).some((key) => !["schema_version", "module"].includes(key))
-    || parts[2].split("/").some((part) => !part || part === "." || part === ".." || /[\\\x00]/.test(part))) {
+  if (!validConnectionDeclaration(declaration, descriptor.id)) {
     throw new Error(`Interface '${descriptor.id}' has an invalid client connection declaration.`);
   }
+  const parts = connectionModuleParts(declaration.module);
   const owner = (await readRegularJsonDocument(
     path.join(registryRoot, "interface", parts[1], "interface.json"),
     `interface descriptor ${parts[1]}`,
   )).document;
-  if (stringValue(owner?.id) !== parts[1] || owner.interface_driver_config?.private_config?.client_connection?.module !== declaration.module) {
+  const offered = owner?.interface_driver_config?.private_config?.client_connection;
+  if (stringValue(owner?.id) !== parts[1] || !validConnectionDeclaration(offered, parts[1])
+    || !(offered.module === declaration.module || offered.family_modules?.includes(declaration.module))) {
     throw new Error(`Connection module ${declaration.module} is not declared by its installed owner.`);
   }
   const root = await fs.realpath(registryRoot);

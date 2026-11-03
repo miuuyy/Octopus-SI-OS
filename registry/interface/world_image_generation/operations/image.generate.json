@@ -1,0 +1,48 @@
+{
+  "id": "image.generate",
+  "request_label": "image.operation.request",
+  "output_label": "image.operation.result",
+  "handler_config": {
+    "operation": "generate"
+  },
+  "description": "Create one image from a text prompt. The result shows you the image itself. Write the whole prompt yourself: subject, composition, style, colors, exact text to render and what to leave out. Generation takes up to a few minutes; make one call per image and wait for its result.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32000,
+        "description": "Complete description of the image to create."
+      },
+      "size": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "1024x1024",
+          "1536x1024",
+          "1024x1536"
+        ],
+        "description": "auto by default, or 1024x1024 (square), 1536x1024 (landscape) or 1024x1536 (portrait)."
+      },
+      "quality": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "low",
+          "medium",
+          "high"
+        ],
+        "description": "auto by default. Higher quality takes longer and uses more of the plan's image usage."
+      },
+      "transparent_background": {
+        "type": "boolean",
+        "description": "true when the image needs a transparent background, such as an icon, sticker or cutout; an opaque background otherwise."
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "additionalProperties": false
+  }
+}

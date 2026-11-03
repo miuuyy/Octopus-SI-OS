@@ -10,7 +10,8 @@
   "interface_driver_config": {
     "private_config": {
       "protocol_versions": [
-        "2025-11-25"
+        "2025-11-25",
+        "2025-06-18"
       ],
       "client_name": "octopus-mcp-client",
       "client_version": "1",
@@ -24,20 +25,40 @@
       "event_journal_segment_bytes": 16777216,
       "event_journal_retained_segments": 64,
       "reconnect_backoff_ms": 2000,
+      "auth": {
+        "mode": "chatgpt_account",
+        "auth_file_env": "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
+        "account_header": "ChatGPT-Account-ID"
+      },
+      "tool_filter": {
+        "meta_key": "connector_id",
+        "values": [
+          "connector_76869538009648d5b282a4bb21c3d157"
+        ]
+      },
+      "connector_link": {
+        "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+        "name": "GitHub",
+        "slug": "github",
+        "account_profile": {
+          "tool": "github.get_user_login",
+          "login_field": "login",
+          "noun": "login"
+        }
+      },
       "client_connection": {
         "schema_version": 1,
-        "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"
+        "module": "interface://world_mcp_example/packages/octopus-mcp-client/chatgpt_apps.cjs"
       },
       "server_tool_operations": {
         "prefix": "github"
       }
     },
     "transport": {
-      "base_url": "https://api.githubcopilot.com/mcp/",
+      "base_url": "https://chatgpt.com/backend-api/ps/mcp",
       "wire": "mcp_streamable_http",
-      "auth_env_key": "WORLD_MCP_GITHUB_BEARER",
       "request_timeout_ms": 120000,
-      "max_response_bytes": 8388608
+      "max_response_bytes": 33554432
     }
   }
 }

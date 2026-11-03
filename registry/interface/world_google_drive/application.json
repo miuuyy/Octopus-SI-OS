@@ -1,0 +1,37 @@
+{
+  "schema_version": 3,
+  "id": "world_google_drive",
+  "name": "Google Drive",
+  "description": "Search, read and edit files, Docs, Sheets and Slides with the Google Drive app connected to your ChatGPT account.",
+  "category": "plugin",
+  "developer": "Octopus",
+  "version": "1.0.0",
+  "icon": "folder",
+  "logo": "application-logo.svg",
+  "interfaces": [
+    "world_google_drive"
+  ],
+  "artifact_bindings": [
+    {
+      "artifact_id": "artifact-application-google-drive-context",
+      "label": "Google Drive capability contract"
+    }
+  ],
+  "task_capabilities": {
+    "tools": [
+      {
+        "tool": "artifact.send",
+        "interface": "system_room",
+        "worker_environment_kind": "system_room"
+      }
+    ]
+  },
+  "connection": {
+    "disclosure": [
+      "Connect uses the Google Drive linked to your ChatGPT account, or opens ChatGPT to link one. Octopus reads your ChatGPT sign-in and keeps no Google token.",
+      "Tasks you connect to Google Drive can search and read your files, Docs, Sheets, Slides and comments, and pass what they read to their model.",
+      "Those tasks can also create, edit, upload, copy, share and delete files when their work calls for it.",
+      "Google Drive stays linked in ChatGPT: Disconnect in Octopus cannot unlink it. Choose, add or unlink Google accounts with Manage in ChatGPT."
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "google_drive.call_tool",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.tool.result",
+  "handler_config": {
+    "operation": "call_tool"
+  },
+  "description": "Call a Google Drive tool from google_drive.list_tools with its exact name and argument object. When the tool's input schema asks for link_id, pass the link_id of the chosen Google account. Tools outside the Google Drive connector are refused.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "arguments": {
+        "type": "object"
+      },
+      "progress_token": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "number"
+          }
+        ]
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600000
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  }
+}

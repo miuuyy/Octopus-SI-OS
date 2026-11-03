@@ -1,0 +1,30 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_google_drive",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_google_drive",
+  "release_status": "optional",
+  "display": {
+    "name": "Google Drive",
+    "description": "Search, read and edit files, Docs, Sheets and Slides with the Google Drive app connected to your ChatGPT account.",
+    "developer": "Octopus",
+    "category": "plugin",
+    "icon": "folder"
+  },
+  "required_packages": [
+    "world_mcp_example"
+  ],
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_google_drive",
+      "primary": true
+    },
+    {
+      "registry_kind": "artifact",
+      "owner": "artifact-application-google-drive-context"
+    }
+  ]
+}

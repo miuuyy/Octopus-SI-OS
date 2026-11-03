@@ -5,7 +5,7 @@
   "handler_config": {
     "operation": "status"
   },
-  "description": "Inspect negotiated capabilities, transport session, auth handle status and durable event cursor.",
+  "description": "Inspect the GitHub connection: negotiated capabilities, ChatGPT sign-in state and the declared tool filter.",
   "input_schema": {
     "type": "object",
     "additionalProperties": false

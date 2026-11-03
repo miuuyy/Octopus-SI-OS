@@ -33,7 +33,10 @@
       "reconnect_backoff_ms": 2000,
       "client_connection": {
         "schema_version": 1,
-        "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"
+        "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs",
+        "family_modules": [
+          "interface://world_mcp_example/packages/octopus-mcp-client/chatgpt_apps.cjs"
+        ]
       }
     },
     "transport": {

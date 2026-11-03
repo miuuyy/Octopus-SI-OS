@@ -5,7 +5,7 @@
   "description": "Search the web, scrape and crawl pages into clean markdown, and extract structured data.",
   "category": "plugin",
   "developer": "Firecrawl",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "icon": "globe",
   "logo": "application-logo.svg",
   "interfaces": [
@@ -40,9 +40,9 @@
   },
   "connection": {
     "disclosure": [
-      "Tasks you connect can search, scrape and crawl the web through Firecrawl.",
-      "Requests use your Firecrawl credits.",
-      "The key stays on this Mac, readable only by the Firecrawl interface."
+      "Tasks you connect can search the web and scrape, map and crawl pages through Firecrawl, and pass what they read to their model.",
+      "Requests use the credits of the Firecrawl team that owns the key.",
+      "Connect checks the key with Firecrawl before saving it. The key stays on this Mac, readable only by the Firecrawl interface."
     ],
     "help": {
       "label": "Get a Firecrawl API key",

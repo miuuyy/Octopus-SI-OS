@@ -11,6 +11,7 @@ const packageTransactionSchema = require("../schemas/local_package_transaction.s
 const validators = new Ajv({ allErrors: true, strict: false, logger: false });
 validators.addSchema(packageReceiptSchema);
 const validatePackageManifest = validators.compile(packageManifestSchema);
+const APPLICATION_HOST_POINTER = "/ceiling/interfaces";
 const validateApplicationPack = validators.compile(applicationPackSchema);
 const validatePackageReceipt = validators.compile(packageReceiptSchema);
 const validatePackageTransaction = validators.compile(packageTransactionSchema);
@@ -314,13 +315,15 @@ async function installLocalPackages(options) {
     const packageIds = requiredUniqueIds(options?.packageIds, "packageIds");
     const expected = normalizeDigestMap(options?.expectedSourceDigests, packageIds, "expectedSourceDigests");
     const selected = requireReviewedPackageClosure(library, packageIds);
-    return installResolvedPackages(roots, selected, {
+    const result = await installResolvedPackages(roots, selected, {
       operationId,
       expected,
       assertMutable: options?.assertMutable,
       packId: optionalId(options?.packId, "packId"),
       onProgress: options?.onProgress,
     });
+    await syncApplicationHosts(roots, library, operationId);
+    return result;
   });
 }
 
@@ -340,11 +343,13 @@ async function removeLocalPackages(options) {
     if (typeof options?.assertRemovable === "function") {
       for (const entry of selected) await options.assertRemovable(entry.manifest);
     }
-    return removeResolvedPackages(roots, packageDependencyOrder(library, packageIds).filter((entry) => packageIds.includes(entry.manifest.id)).reverse(), {
+    const result = await removeResolvedPackages(roots, packageDependencyOrder(library, packageIds).filter((entry) => packageIds.includes(entry.manifest.id)).reverse(), {
       operationId,
       expected,
       onProgress: options?.onProgress,
     });
+    await syncApplicationHosts(roots, library, operationId);
+    return result;
   });
 }
 
@@ -366,11 +371,13 @@ async function repairLocalPackages(options) {
       const state = await readPackageState(roots, dependency.manifest, source);
       if (!state.materialized || state.receiptState !== "valid") throw new Error(`Repair requires installed dependency '${dependency.manifest.id}'`);
     }
-    return repairResolvedPackages(roots, selected, {
+    const result = await repairResolvedPackages(roots, selected, {
       operationId,
       expectedRepairs,
       onProgress: options?.onProgress,
     });
+    await syncApplicationHosts(roots, library, operationId);
+    return result;
   });
 }
 
@@ -441,6 +448,7 @@ async function applyLocalApplicationPack(options) {
       packId,
       onProgress: options?.onProgress,
     });
+    await syncApplicationHosts(roots, library, operationId);
     return { ...result, action: "apply_application_pack", packId };
   });
 }
@@ -915,8 +923,58 @@ function parsePackageManifest(value, file) {
     const label = `${manifest.id}:${memberKey(member)}`;
     validateConfigurationOwnership(member.configuration ?? [], label, member.registry_kind);
     validateDataDirectoryOwnership(member, label);
+    if (member.application_host === true && (member.registry_kind !== "interface"
+      || !(member.configuration ?? []).some((entry) => entry.path === "policy.json"
+        && entry.fields.some((field) => field.pointer === APPLICATION_HOST_POINTER)))) {
+      throw new Error(`${label} hosts applications only as a worker whose policy.json configures '${APPLICATION_HOST_POINTER}'`);
+    }
   }
   return manifest;
+}
+
+async function syncApplicationHosts(roots, library, operationId) {
+  const installed = [];
+  for (const entry of library.packages) {
+    if (await readReceipt(roots, entry.manifest.id)) installed.push(entry);
+  }
+  const hosts = installed.flatMap((entry) => entry.manifest.members.filter((member) => member.application_host === true));
+  if (!hosts.length) return;
+  const applicationInterfaces = async (entry) => {
+    const ids = [];
+    for (const member of entry.manifest.members.filter((candidate) => candidate.registry_kind === "interface")) {
+      const file = path.join(memberPath(roots.sourceRegistryRoot, member), "application.json");
+      if (!await pathExists(file)) continue;
+      ids.push(...parseApplicationManifest((await readJsonDocument(file, `application manifest ${member.owner}`)).value, member.owner, file).interfaces);
+    }
+    return ids;
+  };
+  const known = new Set();
+  const present = new Set();
+  for (const entry of library.packages.filter((candidate) => candidate.manifest.product_kind === "application")) {
+    const ids = await applicationInterfaces(entry);
+    for (const id of ids) known.add(id);
+    if (installed.includes(entry)) for (const id of ids) present.add(id);
+  }
+  const publisher = packagePublisher(roots);
+  for (const host of hosts) {
+    const file = path.join(memberPath(roots.activeRegistryRoot, host), "policy.json");
+    const document = await readJsonDocument(file, `application host policy ${host.owner}`);
+    const current = document.value?.ceiling?.interfaces;
+    if (!Array.isArray(current) || current.some((id) => typeof id !== "string")) {
+      throw new Error(`Application host '${host.owner}' has no interface ceiling`);
+    }
+    const kept = current.filter((id) => !known.has(id) || present.has(id));
+    const next = [...kept, ...[...present].filter((id) => !kept.includes(id)).sort()];
+    if (next.length === current.length && next.every((id, index) => id === current[index])) continue;
+    const policy = structuredClone(document.value);
+    policy.ceiling.interfaces = next;
+    await publisher.publishFiles([{
+      filePath: file,
+      operationId: `package:${operationId}:application-host:${host.owner}`,
+      expectedBeforeHash: document.digest,
+      content: `${JSON.stringify(policy, null, 2)}\n`,
+    }]);
+  }
 }
 
 function validateDataDirectoryOwnership(member, label) {

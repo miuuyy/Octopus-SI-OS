@@ -1,11 +1,11 @@
 {
-  "id": "github.ping",
+  "id": "google_drive.close",
   "request_label": "mcp.operation.request",
   "output_label": "mcp.result",
   "handler_config": {
-    "operation": "ping"
+    "operation": "close"
   },
-  "description": "Probe the bound remote MCP protocol endpoint.",
+  "description": "Close the Google Drive MCP connection; the next operation connects again with the current ChatGPT sign-in.",
   "input_schema": {
     "type": "object",
     "additionalProperties": false

@@ -4,8 +4,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const connection = require("../packages/connection.cjs");
 const descriptor = require("../interface.json");
+const [, owner, file] = descriptor.interface_driver_config.private_config.client_connection.module.match(/^interface:\/\/([^/]+)\/(.+)$/);
+const connection = require(path.resolve(__dirname, "../..", owner, file));
 
 const CONNECTOR = descriptor.interface_driver_config.private_config.connector_link.connector_id;
 const ACCESS_TOKEN_PREFIX = "e30.";
@@ -150,7 +151,7 @@ test("synthetic link tools are not a connection; Connect links Gmail, remembers 
   assert.equal(connected.state, "connected");
   assert.equal(connected.account.label, "owner@gmail.example");
   assert.deepEqual(state.published[0].map((operation) => operation.name), ["gmail.search_emails", PROFILE]);
-  assert.equal(fs.statSync(path.join(directory, "connection-mailboxes.json")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(directory, "connection-accounts.json")).mode & 0o777, 0o600);
 
   const before = calls(state).length;
   assert.equal((await connection.probe(ctx)).account.label, "owner@gmail.example");

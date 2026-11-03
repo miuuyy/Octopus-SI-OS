@@ -116,7 +116,7 @@ class SlackContractTests(unittest.TestCase):
         private = json.loads((ROOT / "interface.json").read_text(encoding="utf-8"))["interface_driver_config"]["private_config"]
         loaded = slack_contract.validate_handlers(catalog.load_catalog(str(ROOT), private, "slack"))
         self.assertEqual((loaded["catalog_label"], loaded["request_label"], loaded["result_label"]), ("slack.operation_catalog", "slack.operation.request", "slack.operation.result"))
-        self.assertEqual(len(loaded["operations"]), 34)
+        self.assertEqual(len(loaded["operations"]), 33)
         for identity, spec in loaded["operations"].items():
             self.assertTrue(spec["description"].endswith("."), identity)
             self.assertIn("team_id", spec["input_schema"]["properties"], identity)

@@ -136,20 +136,24 @@ function connectionModule(configure) {
   return require(path.join(root, "packages", "connection.cjs"));
 }
 
-function context({ input = {}, values = {} } = {}) {
+function context({ input = {}, values = {}, launch = {} } = {}) {
   const saved = [];
   const progress = [];
+  let current = { ...values };
   return {
     saved,
     progress,
     ctx: {
       descriptor,
       interfaceId: "world_email",
-      values,
+      get values() { return current; },
       input,
-      saveValues: async (changes) => { saved.push(changes); },
+      saveValues: async (changes) => {
+        saved.push(changes);
+        current = Object.fromEntries(Object.entries({ ...current, ...changes }).filter(([, value]) => value !== null));
+      },
       privateDirectory: os.tmpdir(),
-      launchEnvironment: () => undefined,
+      launchEnvironment: (name) => launch[name],
       openExternal: async () => {},
       progress: (update) => progress.push(update.message),
       signal: new AbortController().signal,
@@ -191,11 +195,23 @@ test("connect signs in to both servers, finds the submission port and saves what
   assert.equal(expired.state, "expired");
   assert.match(expired.message, /did not accept the saved email address and app password/);
   assert.doesNotMatch(expired.message, new RegExp(wrong));
-  assert.deepEqual(await connection.probe(context().ctx), { state: "not_connected" });
+  assert.deepEqual(await connection.probe(context().ctx), { state: "not_connected", message: "Enter your email address and app password to connect Email." });
+  const split = await connection.probe(context({ values, launch: { [names.address_env]: "other@example.test" } }).ctx);
+  assert.equal(split.state, "error");
+  assert.match(split.message, new RegExp(`^${names.address_env} is set in this Mac's environment and saved in Octopus with a different value`));
 
   const cleared = context({ values });
-  assert.deepEqual(await connection.disconnect(cleared.ctx), { state: "not_connected" });
+  assert.deepEqual(await connection.disconnect(cleared.ctx), {
+    state: "not_connected",
+    message: "Email is disconnected: Octopus removed Owner@example.test and its app password from this Mac. The app password itself keeps working until you revoke it in your mail provider's account settings.",
+  });
   assert.deepEqual(cleared.saved, [Object.fromEntries(Object.values(names).map((name) => [name, null]))]);
+  const google = await connection.disconnect(context({ values: { [names.address_env]: "owner@gmail.com", [names.password_env]: PASSWORD } }).ctx);
+  assert.deepEqual(google.manage, { label: "Manage in Google Account", url: "https://myaccount.google.com/apppasswords" });
+  assert.match(google.message, /until you revoke it in your mail provider's account settings\.$/);
+  const leftover = await connection.disconnect(context({ values, launch: { [names.address_env]: "Owner@example.test" } }).ctx);
+  assert.equal(leftover.state, "not_connected");
+  assert.match(leftover.message, new RegExp(`${names.address_env} is set in this Mac's environment, but the Email interface cannot sign in without the removed settings`));
 });
 
 test("connect explains an app-password refusal and never signs in without encryption", async () => {

@@ -1,0 +1,19 @@
+{
+  "id": "google_drive.list_tools",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "list_tools"
+  },
+  "description": "List one page of the Google Drive tools available through the ChatGPT account, with each tool's input schema and _meta. When several Google accounts are linked, a tool's input schema carries the choice of account as link_id.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "cursor": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false
+  }
+}

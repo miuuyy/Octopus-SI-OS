@@ -26,6 +26,13 @@
       "event_journal_segment_bytes": 16777216,
       "event_journal_retained_segments": 64,
       "reconnect_backoff_ms": 2000,
+      "account_profile": {
+        "resource": "mcpforunity://instances",
+        "accounts": "/instances",
+        "name": "/name",
+        "via": "MCP for Unity on this Mac",
+        "absent": "MCP for Unity is running, but no Unity Editor is connected to it. Open your project in Unity and let MCP for Unity connect it."
+      },
       "client_connection": {
         "schema_version": 1,
         "module": "interface://world_mcp_example/packages/octopus-mcp-client/connection.cjs"

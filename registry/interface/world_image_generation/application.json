@@ -2,10 +2,10 @@
   "schema_version": 3,
   "id": "world_image_generation",
   "name": "Image Generation",
-  "description": "Create images from a prompt while working in a task. Uses the OpenAI Images API unless you set another URL.",
+  "description": "Create images from a prompt while working in a task, with the image generation of your ChatGPT plan.",
   "category": "plugin",
   "developer": "Octopus",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "icon": "image",
   "logo": "application-logo.png",
   "interfaces": [
@@ -17,45 +17,12 @@
       "label": "Image Generation contract"
     }
   ],
-  "task_capabilities": {
-    "tools": [
-      {
-        "tool": "artifact.send",
-        "interface": "system_room",
-        "worker_environment_kind": "system_room"
-      }
-    ]
-  },
-  "setup": {
-    "fields": [
-      {
-        "interface": "world_image_generation",
-        "pointer": "/interface_driver_config/transport/auth_env_key",
-        "label": "API key",
-        "kind": "secret",
-        "required": true,
-        "placeholder": "sk-\u2026"
-      },
-      {
-        "interface": "world_image_generation",
-        "pointer": "/interface_driver_config/transport/base_url_env",
-        "label": "API URL (optional)",
-        "kind": "url",
-        "required": false,
-        "placeholder": "https://api.openai.com/v1/images/generations",
-        "help": "Only for another OpenAI-compatible Images API."
-      }
-    ]
-  },
   "connection": {
     "disclosure": [
-      "Tasks you connect can create images from prompts.",
-      "Requests use your OpenAI API account and its billing.",
-      "The key stays on this Mac, readable only by the Image Generation interface."
-    ],
-    "help": {
-      "label": "Create an OpenAI API key",
-      "url": "https://platform.openai.com/api-keys"
-    }
+      "Connect uses the ChatGPT account signed in on this Mac. Octopus keeps no separate key for Image Generation.",
+      "Tasks you connect can create images from prompts. Prompts go to ChatGPT, and each image counts against your plan's image usage.",
+      "The image comes back only to the task that asked for it, which sees it and can describe or use it.",
+      "Image generation needs a paid ChatGPT plan. To use another account, sign in to ChatGPT with it in Octopus."
+    ]
   }
 }

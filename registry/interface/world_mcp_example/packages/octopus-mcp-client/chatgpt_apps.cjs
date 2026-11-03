@@ -5,17 +5,19 @@ const fs = require("node:fs");
 const fsPromises = require("node:fs/promises");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { publishServerTools } = require("../../world_mcp_example/packages/octopus-mcp-client/server_operations.cjs");
+const { publishServerTools } = require("./server_operations.cjs");
 
-const MAX_ACCOUNT_FILE_BYTES = 1024 * 1024;
-const MAILBOX_FILE = "connection-mailboxes.json";
-const MAX_MAILBOX_FILE_BYTES = 16 * 1024;
-const MAX_REMEMBERED_MAILBOXES = 32;
+const MAX_SIGN_IN_FILE_BYTES = 1024 * 1024;
+const ACCOUNTS_FILE = "connection-accounts.json";
+const MAX_ACCOUNTS_FILE_BYTES = 16 * 1024;
+const MAX_REMEMBERED_ACCOUNTS = 32;
 const MAX_PROFILE_READS = 8;
 const MANAGE_LABEL = "Manage in ChatGPT";
 const LINK_ID = /^[\x21-\x7e]{1,256}$/;
 const PROFILE_FIELD = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const TOOL_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const NOUN = /^[a-z][a-z ]{0,30}[a-z]$/;
 const ACCESS_TOKEN_EXPIRY_SKEW_MS = 30_000;
 const LINK_TIMEOUT_MS = 10 * 60_000;
 const LINK_FIRST_POLL_MS = 3_000;
@@ -28,6 +30,11 @@ const MAX_REQUEST_TIMEOUT_MS = 600_000;
 const TRANSPORT_OWNED_HEADERS = new Set([
   "authorization", "content-type", "accept", "mcp-protocol-version", "mcp-session-id", "last-event-id",
 ]);
+const ACCOUNT_VALUES = {
+  email_field: (value) => (typeof value === "string" && value.length <= 254
+    && /^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+$/u.test(value) ? value : null),
+  login_field: (value) => (typeof value === "string" && /^[^\s\u0000-\u001f\u007f]{1,96}$/u.test(value) ? value : null),
+};
 const SIGN_IN_FIRST = "Sign in to ChatGPT first.";
 const SIGN_IN_EXPIRED = "ChatGPT sign-in expired — sign in again in Octopus.";
 const UNREADABLE_SIGN_IN = "The ChatGPT sign-in on this Mac can't be read. Sign in to ChatGPT again in Octopus.";
@@ -61,6 +68,16 @@ function boundedInteger(value, fallback, maximum, field) {
   return value;
 }
 
+function accountProfile(profile) {
+  const fields = isObject(profile) ? Object.keys(profile).filter((key) => Object.hasOwn(ACCOUNT_VALUES, key)) : [];
+  if (!isObject(profile) || fields.length !== 1
+    || Object.keys(profile).some((key) => !["tool", "noun", fields[0]].includes(key))
+    || !TOOL_NAME.test(profile.tool ?? "") || !PROFILE_FIELD.test(profile[fields[0]] ?? "") || !NOUN.test(profile.noun ?? "")) {
+    throw invalid("its connector link declares no account profile tool, one email or login field and the noun of its account");
+  }
+  return { tool: profile.tool, field: profile[fields[0]], value: ACCOUNT_VALUES[fields[0]], noun: profile.noun };
+}
+
 function connectionConfig(descriptor) {
   const driver = descriptor?.interface_driver_config;
   const config = driver?.private_config;
@@ -90,15 +107,12 @@ function connectionConfig(descriptor) {
     throw invalid("it declares no tool filter");
   }
   const link = config.connector_link;
-  if (!/^[A-Za-z0-9_-]+$/.test(link?.connector_id ?? "") || !isText(link?.name)
+  if (!isObject(link) || Object.keys(link).some((key) => !["connector_id", "name", "slug", "account_profile"].includes(key))
+    || !/^[A-Za-z0-9_-]+$/.test(link.connector_id ?? "") || !isText(link.name) || !SLUG.test(link.slug ?? "")
     || filter.meta_key !== "connector_id" || !filter.values.includes(link.connector_id)) {
-    throw invalid("its connector link is not admitted by its tool filter");
+    throw invalid("its connector link is not a connector id, name and slug admitted by its tool filter");
   }
-  const profile = link.account_profile;
-  if (!isObject(profile) || Object.keys(profile).some((key) => !["tool", "email_field"].includes(key))
-    || !TOOL_NAME.test(profile.tool ?? "") || !PROFILE_FIELD.test(profile.email_field ?? "")) {
-    throw invalid("its connector link declares no account profile tool and email field");
-  }
+  const profile = accountProfile(link.account_profile);
   const versions = config.protocol_versions;
   if (!Array.isArray(versions) || !versions.length || !versions.every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
     || !isText(config.client_name) || !isText(config.client_version)) {
@@ -121,8 +135,8 @@ function connectionConfig(descriptor) {
     values: new Set(filter.values),
     connectorId: link.connector_id,
     name: link.name,
-    profileTool: profile.tool,
-    profileEmailField: profile.email_field,
+    slug: link.slug,
+    profile,
     versions,
     clientName: config.client_name,
     clientVersion: config.client_version,
@@ -134,10 +148,7 @@ function connectionConfig(descriptor) {
 }
 
 function connectorLinkUrl(config) {
-  let slug = "";
-  for (const character of config.name) slug += /[A-Za-z0-9]/.test(character) ? character.toLowerCase() : "-";
-  slug = slug.replace(/^-+|-+$/g, "") || "app";
-  return `${config.origin}/apps/${slug}/${config.connectorId}`;
+  return `${config.origin}/apps/${config.slug}/${config.connectorId}`;
 }
 
 function jwtClaims(token) {
@@ -165,11 +176,6 @@ function manageLink(config) {
   return { label: MANAGE_LABEL, url: connectorLinkUrl(config) };
 }
 
-function mailbox(value) {
-  return typeof value === "string" && value.length <= 254
-    && /^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+$/u.test(value) ? value : null;
-}
-
 async function readBoundedRegularFile(file, limit) {
   const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
   const handle = await fsPromises.open(file, fs.constants.O_RDONLY | noFollow);
@@ -193,7 +199,7 @@ async function readCredential(ctx, config) {
   }
   let bytes;
   try {
-    bytes = await readBoundedRegularFile(file, MAX_ACCOUNT_FILE_BYTES);
+    bytes = await readBoundedRegularFile(file, MAX_SIGN_IN_FILE_BYTES);
   } catch (error) {
     if (error?.code === "ENOENT") return { stop: { state: "not_connected", message: SIGN_IN_FIRST } };
     throw new ConnectionStop("error", UNREADABLE_SIGN_IN);
@@ -363,7 +369,7 @@ function linkIds(tool) {
 
 function profileRequest(config, tools, link) {
   for (const tool of tools) {
-    if (tool.name !== config.profileTool || tool.annotations?.readOnlyHint !== true) continue;
+    if (tool.name !== config.profile.tool || tool.annotations?.readOnlyHint !== true) continue;
     if (tool._meta._codex_apps?.requires_explicit_link_id === true) {
       if (isObject(tool.inputSchema?.properties?.link_id) && linkIds(tool).includes(link)) {
         return { name: tool.name, arguments: { link_id: link }, _meta: tool._meta };
@@ -375,62 +381,63 @@ function profileRequest(config, tools, link) {
   return null;
 }
 
-async function readMailbox(ctx, config, credential, session, request) {
+async function readAccount(ctx, config, credential, session, request) {
   try {
     const result = await rpc(ctx, config, credential, session, "tools/call", request);
-    return result.isError === true || !isObject(result.structuredContent) ? null : mailbox(result.structuredContent[config.profileEmailField]);
+    return result.isError === true || !isObject(result.structuredContent)
+      ? null : config.profile.value(result.structuredContent[config.profile.field]);
   } catch (error) {
     if (!(error instanceof ConnectionStop) || error.state !== "error" || ctx.signal?.aborted) throw error;
     return null;
   }
 }
 
-async function readMailboxes(ctx, config, credential, session, tools, links, remembered) {
-  const mailboxes = new Map();
+async function readAccounts(ctx, config, credential, session, tools, links, remembered) {
+  const accounts = new Map();
   let reads = 0;
   for (const link of links) {
     if (remembered.has(link)) {
-      mailboxes.set(link, remembered.get(link));
+      accounts.set(link, remembered.get(link));
       continue;
     }
     const request = reads < MAX_PROFILE_READS ? profileRequest(config, tools, link) : null;
     if (!request) continue;
     reads += 1;
-    const email = await readMailbox(ctx, config, credential, session, request);
-    if (email) mailboxes.set(link, email);
+    const account = await readAccount(ctx, config, credential, session, request);
+    if (account) accounts.set(link, account);
   }
-  return mailboxes;
+  return accounts;
 }
 
-function mailboxFile(ctx) {
+function accountsFile(ctx) {
   if (typeof ctx.privateDirectory !== "string" || !path.isAbsolute(ctx.privateDirectory)) {
     throw new ConnectionStop("error", "Octopus did not provide this application's private directory.");
   }
-  return path.join(ctx.privateDirectory, MAILBOX_FILE);
+  return path.join(ctx.privateDirectory, ACCOUNTS_FILE);
 }
 
-async function rememberedMailboxes(ctx, config) {
+async function rememberedAccounts(ctx, config) {
   let document;
   try {
-    document = JSON.parse((await readBoundedRegularFile(mailboxFile(ctx), MAX_MAILBOX_FILE_BYTES)).toString("utf8"));
+    document = JSON.parse((await readBoundedRegularFile(accountsFile(ctx), MAX_ACCOUNTS_FILE_BYTES)).toString("utf8"));
   } catch (error) {
     if (error instanceof ConnectionStop) throw error;
     return new Map();
   }
   const entries = isObject(document?.links) ? Object.entries(document.links) : [];
-  if (document?.schema_version !== 1 || document.connector_id !== config.connectorId || entries.length > MAX_REMEMBERED_MAILBOXES
-    || entries.some(([link, email]) => !LINK_ID.test(link) || !mailbox(email))) {
+  if (document?.schema_version !== 1 || document.connector_id !== config.connectorId || entries.length > MAX_REMEMBERED_ACCOUNTS
+    || entries.some(([link, account]) => !LINK_ID.test(link) || !config.profile.value(account))) {
     return new Map();
   }
   return new Map(entries);
 }
 
-async function rememberMailboxes(ctx, config, mailboxes) {
-  const file = mailboxFile(ctx);
-  const links = Object.fromEntries([...mailboxes].slice(0, MAX_REMEMBERED_MAILBOXES));
+async function rememberAccounts(ctx, config, accounts) {
+  const file = accountsFile(ctx);
+  const links = Object.fromEntries([...accounts].slice(0, MAX_REMEMBERED_ACCOUNTS));
   const body = `${JSON.stringify({ schema_version: 1, connector_id: config.connectorId, links }, null, 2)}\n`;
-  if (Buffer.byteLength(body) > MAX_MAILBOX_FILE_BYTES) throw new Error(`the ${config.name} mailbox list is too large`);
-  const temporary = path.join(path.dirname(file), `.${MAILBOX_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  if (Buffer.byteLength(body) > MAX_ACCOUNTS_FILE_BYTES) throw new Error(`the ${config.name} ${config.profile.noun} list is too large`);
+  const temporary = path.join(path.dirname(file), `.${ACCOUNTS_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`);
   try {
     await fsPromises.writeFile(temporary, body, { flag: "wx", mode: 0o600 });
     await fsPromises.rename(temporary, file);
@@ -440,16 +447,17 @@ async function rememberMailboxes(ctx, config, mailboxes) {
   }
 }
 
-function connectedState(config, signIn, links, mailboxes) {
-  const emails = [...new Set(links.flatMap((link) => (mailboxes.has(link) ? [mailboxes.get(link)] : [])))];
-  const unread = links.filter((link) => !mailboxes.has(link)).length;
+function connectedState(config, signIn, links, accounts) {
+  const labels = [...new Set(links.flatMap((link) => (accounts.has(link) ? [accounts.get(link)] : [])))];
+  const unread = links.filter((link) => !accounts.has(link)).length;
+  const noun = config.profile.noun;
   const state = {
     state: "connected",
-    account: { label: emails.length ? emails.join(", ") : `${config.name} linked in ChatGPT`, detail: `Through ${signInAccount(signIn).label}` },
+    account: { label: labels.length ? labels.join(", ") : `${config.name} linked in ChatGPT`, detail: `Through ${signInAccount(signIn).label}` },
     manage: manageLink(config),
   };
-  if (!emails.length) state.message = `${config.name} is linked in ChatGPT, but Octopus could not read which mailbox it uses.`;
-  else if (unread) state.message = `Octopus could not read the mailbox of ${unread} more ${config.name} account${unread === 1 ? "" : "s"} linked in ChatGPT.`;
+  if (!labels.length) state.message = `${config.name} is linked in ChatGPT, but Octopus could not read which ${noun} it uses.`;
+  else if (unread) state.message = `Octopus could not read the ${noun} of ${unread} more ${config.name} account${unread === 1 ? "" : "s"} linked in ChatGPT.`;
   return state;
 }
 
@@ -466,7 +474,7 @@ function finish(state) {
 
 async function inspect(ctx, fresh) {
   let signedIn = null;
-  const outcome = (state, tools = [], mailboxes = new Map()) => ({ state: finish(state), tools, mailboxes, signedIn: Boolean(signedIn) });
+  const outcome = (state, tools = [], accounts = new Map()) => ({ state: finish(state), tools, accounts, signedIn: Boolean(signedIn) });
   try {
     const config = connectionConfig(ctx.descriptor);
     const credential = await readCredential(ctx, config);
@@ -478,9 +486,9 @@ async function inspect(ctx, fresh) {
       return outcome({ state: "not_connected", ...signedIn, message: `${config.name} is not linked to this ChatGPT account.` });
     }
     const links = [...new Set(tools.flatMap(linkIds))];
-    const remembered = fresh ? new Map() : await rememberedMailboxes(ctx, config);
-    const mailboxes = await readMailboxes(ctx, config, credential, session, tools, links, remembered);
-    return outcome(connectedState(config, credential.signIn, links, mailboxes), tools, mailboxes);
+    const remembered = fresh ? new Map() : await rememberedAccounts(ctx, config);
+    const accounts = await readAccounts(ctx, config, credential, session, tools, links, remembered);
+    return outcome(connectedState(config, credential.signIn, links, accounts), tools, accounts);
   } catch (error) {
     if (error instanceof ConnectionStop) return outcome({ state: error.state, ...signedIn, message: error.message });
     return outcome({ state: "error", ...signedIn, message: `The connection could not be checked: ${error?.message ?? error}` });
@@ -495,9 +503,9 @@ async function published(ctx, config, inspected) {
   if (inspected.state.state !== "connected") return inspected.state;
   let unkept = "";
   try {
-    await rememberMailboxes(ctx, config, inspected.mailboxes);
+    await rememberAccounts(ctx, config, inspected.accounts);
   } catch (error) {
-    unkept = `Octopus could not keep the ${config.name} mailbox list and reads it again on the next check: ${error?.message ?? error}`;
+    unkept = `Octopus could not keep the ${config.name} ${config.profile.noun} list and reads it again on the next check: ${error?.message ?? error}`;
   }
   if (typeof ctx.publishOperations !== "function") {
     return unkept ? finish({ ...inspected.state, message: [inspected.state.message, unkept].filter(Boolean).join(" ") }) : inspected.state;
@@ -505,7 +513,7 @@ async function published(ctx, config, inspected) {
   const tools = inspected.tools.map((tool) => {
     const linked = (Array.isArray(tool._meta.link_accounts) ? tool._meta.link_accounts : []).filter((entry) => LINK_ID.test(entry?.link_id ?? ""));
     if (!linked.length) return tool;
-    const accounts = linked.map((entry) => `${entry.link_id}${inspected.mailboxes.has(entry.link_id) ? ` (${inspected.mailboxes.get(entry.link_id)})` : ""}`).join(", ");
+    const accounts = linked.map((entry) => `${entry.link_id}${inspected.accounts.has(entry.link_id) ? ` (${inspected.accounts.get(entry.link_id)})` : ""}`).join(", ");
     return { ...tool, description: `${isText(tool.description) ? `${tool.description}\n\n` : ""}Linked accounts, by link_id: ${accounts}.` };
   });
   const { published: count, skipped } = await publishServerTools(ctx, tools);

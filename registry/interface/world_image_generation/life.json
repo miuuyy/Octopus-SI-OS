@@ -9,9 +9,8 @@
         "max_payload_bytes": 268435456
       },
       "args": [],
-      "inherit_env_from_interface": [
-        "/interface_driver_config/transport/auth_env_key",
-        "/interface_driver_config/transport/base_url_env"
+      "inherit_env": [
+        "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
       ],
       "authority": {
         "read_root_slots": [],
@@ -21,7 +20,9 @@
         "write_paths": [],
         "executable_paths": [],
         "executable_commands": [],
-        "read_env_paths": [],
+        "read_env_paths": [
+          "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
+        ],
         "write_env_paths": [],
         "executable_env_paths": [],
         "allow_network": true,

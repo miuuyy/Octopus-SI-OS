@@ -579,7 +579,7 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         "unsubscribe_resource",
     ];
     let tool_filtered_operations: &[&str] = &["call_tool", "close", "list_tools", "status"];
-    let expected: [(&str, &str, Option<&str>, usize, &[&str]); 4] = [
+    let expected: [(&str, &str, Option<&str>, usize, &[&str]); 5] = [
         (
             "world_mcp_example",
             "mcp.example",
@@ -598,8 +598,15 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
             "world_mcp_github",
             "github",
             Some("artifact-application-mcp-github-context"),
-            21,
-            generic_operations,
+            4,
+            tool_filtered_operations,
+        ),
+        (
+            "world_google_drive",
+            "google_drive",
+            Some("artifact-application-google-drive-context"),
+            4,
+            tool_filtered_operations,
         ),
         (
             "world_gmail",
@@ -719,7 +726,7 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         }
         total += catalog.operations.len();
     }
-    assert_eq!(total, 68);
+    assert_eq!(total, 55);
 }
 
 #[test]
