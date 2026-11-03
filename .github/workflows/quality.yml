@@ -137,6 +137,7 @@ jobs:
           node registry/interface/world_mcp_example/packages/octopus-mcp-client/test_connection.cjs
           node registry/interface/world_image_generation/packages/octopus-image-generation-interface/test_connection.cjs
           node --test registry/interface/world_gmail/tests/test_connection.cjs
+          node --test registry/interface/world_mcp_example/packages/octopus-mcp-client/test_chatgpt_apps.cjs
           python3 registry/interface/world_telegram/tests/test_telegram_contract.py
           node registry/interface/world_telegram/tests/test_connection.cjs
           python3 registry/interface/world_email/tests/test_email_contract.py
@@ -246,14 +247,13 @@ jobs:
       - name: MCP operations and optional reasoning model catalogues
         run: |
           cargo test --locked -p octopus-mcp-client --lib every_remote_mcp_operation_is_interface_local_and_strictly_loadable
-          cargo test --locked -p octopus-world-terminal-client --lib every_registry_provider_catalog_admits_its_default_model_and_effort
+          cargo test --locked -p octopus-operator-chat-client --lib every_registry_provider_catalog_admits_its_default_model_and_effort
 
   native-client:
     runs-on: macos-latest
     timeout-minutes: 30
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      OCTOPUS_NATIVE_NODE_HEADERS: ${{ github.workspace }}/app/build/node-v24.15.0/include/node
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -271,10 +271,8 @@ jobs:
 
       - name: Prepare pinned client native headers
         run: |
-          mkdir -p app/build
-          curl -fL https://nodejs.org/download/release/v24.15.0/node-v24.15.0-headers.tar.gz -o app/build/node-v24.15.0-headers.tar.gz
-          printf '%s  %s\n' 9a9250039fef572d0bcc110ac5e78055faf5604421211d2d5f578ebc5a34e703 app/build/node-v24.15.0-headers.tar.gz | shasum -a 256 -c -
-          tar -xzf app/build/node-v24.15.0-headers.tar.gz -C app/build
+          headers="$(node app/native/runtime.cjs headers)"
+          echo "OCTOPUS_NATIVE_NODE_HEADERS=$headers" >> "$GITHUB_ENV"
 
       - name: Build the client filesystem module
         run: node app/native/build.cjs
@@ -318,7 +316,6 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      OCTOPUS_NATIVE_NODE_HEADERS: ${{ github.workspace }}/app/build/node-v24.15.0/include/node
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -336,10 +333,8 @@ jobs:
 
       - name: Prepare pinned client native headers
         run: |
-          mkdir -p app/build
-          curl -fL https://nodejs.org/download/release/v24.15.0/node-v24.15.0-headers.tar.gz -o app/build/node-v24.15.0-headers.tar.gz
-          printf '%s  %s\n' 9a9250039fef572d0bcc110ac5e78055faf5604421211d2d5f578ebc5a34e703 app/build/node-v24.15.0-headers.tar.gz | shasum -a 256 -c -
-          tar -xzf app/build/node-v24.15.0-headers.tar.gz -C app/build
+          headers="$(node app/native/runtime.cjs headers)"
+          echo "OCTOPUS_NATIVE_NODE_HEADERS=$headers" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
