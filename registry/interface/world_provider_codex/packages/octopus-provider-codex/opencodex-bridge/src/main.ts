@@ -3,6 +3,7 @@ import { createAnthropicAdapter } from "../node_modules/@bitkyc08/opencodex/src/
 import { createAzureAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/azure.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
 import { createClaudeCliAdapter } from "./claude-cli.ts";
+import { createGrokCliAdapter, runGrokCaptureMcpServer } from "./grok-cli.ts";
 import { runCodeBuddyMcpServer } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/mcp-server.ts";
 import { createGoogleAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/google.ts";
 import { createOpenAIChatAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/openai-chat.ts";
@@ -33,7 +34,7 @@ import type {
   OcxProviderConfig,
 } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 
-type AdapterName = "anthropic" | "azure" | "claude-cli" | "google" | "openai-chat" | "openai-responses";
+type AdapterName = "anthropic" | "azure" | "claude-cli" | "google" | "grok-cli" | "openai-chat" | "openai-responses";
 
 type ProviderOptions = {
   annotate_empty_tool_outputs?: boolean;
@@ -85,6 +86,7 @@ const adapterNames = new Set<AdapterName>([
   "azure",
   "claude-cli",
   "google",
+  "grok-cli",
   "openai-chat",
   "openai-responses",
 ]);
@@ -352,6 +354,7 @@ function adapterFor(config: RuntimeProvider): ProviderAdapter {
     });
   }
   if (config.adapter === "google") return createGoogleAdapter(provider);
+  if (config.adapter === "grok-cli") return createGrokCliAdapter(provider);
   if (config.adapter === "openai-chat") return createOpenAIChatAdapter(provider);
   return createResponsesPassthroughAdapter(provider);
 }
@@ -715,6 +718,11 @@ async function serve(config: BridgeConfig): Promise<void> {
 if (process.argv[2] === "__codebuddy-mcp") {
   await runCodeBuddyMcpServer(process.argv[3] ?? "");
   await new Promise<never>(() => undefined);
+}
+
+if (process.argv[2] === "__grok-mcp") {
+  await runGrokCaptureMcpServer(process.argv[3] ?? "");
+  process.exit(0);
 }
 
 try {

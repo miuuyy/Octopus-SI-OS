@@ -135,7 +135,7 @@ host configuration. When none is configured, the composer explains the missing
 folder before submission; changing access settings remains available.
 
 The bundled providers default to a 400,000-token context window. Claude Code
-and Anthropic default to 700,000 tokens. Models with a smaller declared capacity
+and Anthropic default to 700,000 tokens. Grok CLI defaults to 500,000 tokens. Models with a smaller declared capacity
 keep that limit. The context indicator uses the provider's reported usable
 capacity, which can reserve space within that window.
 

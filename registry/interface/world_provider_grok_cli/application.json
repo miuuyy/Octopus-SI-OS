@@ -1,0 +1,15 @@
+{
+  "schema_version": 3,
+  "id": "world_provider_grok_cli",
+  "name": "Grok CLI",
+  "description": "Grok models through the Grok CLI you are signed in to on this Mac.",
+  "category": "provider",
+  "developer": "xAI",
+  "version": "1.0.0",
+  "icon": "sparkles",
+  "logo": "application-logo.svg",
+  "logo_dark": "application-logo-dark.svg",
+  "interfaces": [
+    "world_provider_grok_cli"
+  ]
+}

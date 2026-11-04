@@ -576,6 +576,18 @@ The bridge supplies its interface-private
 temporary directory to the CLI explicitly; the client does not copy tokens or
 choose a replacement provider.
 
+Grok CLI runs the signed-in `grok` headless for one model turn per request. Its
+home is a turn-private directory holding only a capture catalog of the client's
+tools, so Claude Code skills, plugins and MCP servers on the Mac stay out; the
+CLI's own sign-in stays in `~/.grok`. The turn's system prompt is a private
+agent profile that lists the catalog, the CLI's built-in tools and tool search
+are removed, and `--max-turns 1` ends the CLI after the model's first message.
+Grok reaches catalog tools through `use_tool`; those calls, parallel ones in one
+message, return to the client as its function calls. The capture server
+acknowledges a call so the CLI can close that message, and no model reads the
+acknowledgement. A call outside the catalog fails the turn. Grok CLI turns carry
+text only.
+
 A replayed intermediate output does not establish that earlier context has been
 restored. Snapshot recovery proves inserted history entries through the checked
 source and output publications, preserving their content and order.

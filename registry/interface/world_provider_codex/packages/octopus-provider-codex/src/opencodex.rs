@@ -41,6 +41,7 @@ pub(crate) enum OpenCodexAdapter {
     Azure,
     ClaudeCli,
     Google,
+    GrokCli,
     OpenaiChat,
     OpenaiResponses,
 }

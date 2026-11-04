@@ -25,6 +25,8 @@ type ProviderSpec = {
   base_url?: { env: string; label: string };
   model?: { env: string; label: string; slug: string; display_name: string };
   cli?: { commands: string[]; env: string[]; home_read: string[]; home_write: string[] };
+  endpoint?: string;
+  models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
 };
 
 type Spec = { schema_version: 1; template_interface: string; providers: ProviderSpec[] };
@@ -50,7 +52,7 @@ const EFFORT_DESCRIPTIONS: Record<Effort, string> = {
   max: "Maximum reasoning depth for the hardest problems",
 };
 const THINKING_TOGGLE_DESCRIPTIONS: Partial<Record<Effort, string>> = { none: "Thinking off", high: "Thinking on" };
-const ADAPTERS = new Set(["anthropic", "azure", "claude-cli", "google", "openai-chat", "openai-responses"]);
+const ADAPTERS = new Set(["anthropic", "azure", "claude-cli", "google", "grok-cli", "openai-chat", "openai-responses"]);
 const CODEX_ONLY_PRIVATE_CONFIG = ["provider_operations", "web_search", "client_metadata"];
 const CODEX_NATIVE_SEARCH_TOOLS = ["web.search", "web.extract"];
 const CODEX_ONLY_OVERRIDES = [/^model_context_window=/, /^model_auto_compact_token_limit=/];
@@ -140,6 +142,17 @@ function registryModels(spec: ProviderSpec, seed: any): ModelRow[] {
       : {}),
     input_modalities: spec.input_modalities ?? seed.modelInputModalities?.[slug] ?? ["text"],
     ...reasoning(seed, slug),
+  }));
+}
+
+function declaredModels(spec: ProviderSpec): ModelRow[] {
+  return spec.models!.map((row) => ({
+    slug: row.slug,
+    display_name: row.display_name,
+    ...(row.context_window ? { context_window: row.context_window } : {}),
+    input_modalities: spec.input_modalities ?? ["text"],
+    efforts: EFFORT_ORDER.filter((effort) => row.efforts.includes(effort)),
+    ...(row.default_effort ? { default_effort: row.default_effort } : {}),
   }));
 }
 
@@ -365,9 +378,11 @@ for (const provider of spec.providers) {
   if (!ADAPTERS.has(adapter)) throw new Error(`${provider.interface}: adapter ${adapter} is not served by the bridge`);
   if (!provider.key && !provider.local && !provider.cli) throw new Error(`${provider.interface}: a remote provider needs a key field or a signed-in CLI`);
   if (provider.cli && provider.key) throw new Error(`${provider.interface}: a CLI provider keeps its sign-in inside the CLI`);
-  const baseUrl = provider.base_url ? "" : seed?.baseUrl;
+  if (provider.models && (entry || provider.model)) throw new Error(`${provider.interface}: declared models belong to a provider without a registry entry or model setup field`);
+  if (provider.endpoint && entry) throw new Error(`${provider.interface}: a registry entry already names its endpoint`);
+  const baseUrl = provider.base_url ? "" : seed?.baseUrl ?? provider.endpoint;
   if (!provider.base_url && !baseUrl) throw new Error(`${provider.interface}: no base URL`);
-  const rows = provider.model ? setupModel(provider) : registryModels(provider, seed);
+  const rows = provider.model ? setupModel(provider) : provider.models ? declaredModels(provider) : registryModels(provider, seed);
   const folder = path.join(interfaceRoot, provider.interface);
   const logos: { logo?: string; logo_dark?: string } = {};
   if (provider.icon && provider.logo) throw new Error(`${provider.interface}: a logo comes either from an OpenCodex icon or from the interface folder`);

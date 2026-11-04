@@ -63,6 +63,42 @@
       }
     },
     {
+      "interface": "world_provider_grok_cli",
+      "default_context_window": 500000,
+      "source_name": "grok_cli",
+      "adapter": "grok-cli",
+      "endpoint": "https://cli-chat-proxy.grok.com/v1",
+      "input_modalities": ["text"],
+      "name": "Grok CLI",
+      "developer": "xAI",
+      "description": "Grok models through the Grok CLI you are signed in to on this Mac.",
+      "icon": "grok.svg",
+      "icon_dark": ["#000000"],
+      "models": [
+        { "slug": "grok-4.7", "display_name": "Grok 4.7", "context_window": 500000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "medium" },
+        { "slug": "grok-4.7-build-fast", "display_name": "Grok 4.7 Build Fast", "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "medium" },
+        { "slug": "grok-4.6", "display_name": "Grok 4.6", "context_window": 500000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "medium" },
+        { "slug": "grok-4.5", "display_name": "Grok 4.5", "context_window": 500000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "medium" }
+      ],
+      "cli": {
+        "commands": [
+          "grok"
+        ],
+        "env": [
+          "HOME",
+          "USER",
+          "PATH",
+          "LANG"
+        ],
+        "home_read": [
+          ".grok"
+        ],
+        "home_write": [
+          ".grok"
+        ]
+      }
+    },
+    {
       "interface": "world_provider_gemini",
       "source_name": "gemini",
       "registry_entry": "google",

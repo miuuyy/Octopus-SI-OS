@@ -397,6 +397,72 @@ test("claude-cli turns run through the signed-in CLI with a scoped env and the b
   expect(listed.result.tools.map((tool) => tool.name).join(",")).toContain("exact_tool");
 });
 
+test("grok-cli turns run the signed-in Grok CLI in an isolated home and hand back the catalog calls it makes", async () => {
+  const home = mkdtempSync(join(tmpdir(), "octopus-grok-cli-"));
+  directories.push(home);
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  const calls = { type: "assistant", message: { stop_reason: "tool_use", usage: { input_tokens: 5, output_tokens: 6 }, content: [
+    { type: "thinking", thinking: "two calls" },
+    { type: "tool_use", id: "call_a", name: "use_tool", input: { tool_name: "opencodex__exact_tool", tool_input: { value: "a" } } },
+    { type: "tool_use", id: "call_b", name: "use_tool", input: { tool_name: "opencodex__exact_tool", tool_input: { value: "b" } } },
+  ] } };
+  writeFileSync(join(home, "frames"), JSON.stringify(calls) + "\n");
+  writeFileSync(join(bin, "grok"), [
+    "#!/bin/sh",
+    `printf "%s\\n" "$@" > "${home}/args"`,
+    `env > "${home}/env"`,
+    `cp "$HOME/.claude.json" "${home}/mcp.json"`,
+    `cp "$(dirname "$HOME")/catalog.json" "${home}/catalog.json"`,
+    'previous=""',
+    `for argument in "$@"; do if [ "$previous" = "--prompt-file" ]; then cp "$argument" "${home}/prompt"; fi; previous="$argument"; done`,
+    `cat "${home}/frames"`,
+    "sleep 30",
+  ].join("\n"), { mode: 0o755 });
+  const bridge = await spawnBridge(config("https://cli-chat-proxy.grok.com/v1", {
+    id: "world_provider_grok_cli",
+    adapter: "grok-cli",
+    models: ["grok-4.7"],
+    default_model: "grok-4.7",
+    api_key: undefined,
+    auth_header: undefined,
+    auth_value_prefix: undefined,
+    headers: {},
+    allow_private_network: false,
+  }), { HOME: home, USER: "octopus-test", PATH: `${bin}:/usr/bin:/bin`, TMPDIR: home, XAI_API_KEY: "must-not-reach-the-cli" });
+  const response = await fetch(`${bridge.origin}/v1/responses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "grok-4.7", stream: true, reasoning: { effort: "xhigh" }, input: [{ role: "user", content: [{ type: "input_text", text: "hello grok" }] }], tools: [exactTool] }),
+  });
+  expect(response.status).toBe(200);
+  const events = (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  expect(events.filter(event => event.type === "response.failed").map(event => event.response.error)).toEqual([]);
+  const completed = events.find(event => event.type === "response.completed").response.output.filter((item: { type: string }) => item.type === "function_call");
+  expect(completed.map((call: { call_id: string; name: string; arguments: string }) => [call.call_id, call.name, call.arguments])).toEqual([
+    ["call_a", "exact_tool", JSON.stringify({ value: "a" })],
+    ["call_b", "exact_tool", JSON.stringify({ value: "b" })],
+  ]);
+  const args = readFileSync(join(home, "args"), "utf8").split("\n");
+  expect(args).toEqual(expect.arrayContaining(["--prompt-file", "--agent", "-m", "grok-4.7", "--effort", "xhigh", "--max-turns", "1", "--tools", "use_tool", "--output-format", "streaming-messages-json"]));
+  const env = readFileSync(join(home, "env"), "utf8");
+  expect(env).toContain(`GROK_HOME=${join(home, ".grok")}`);
+  expect(env).not.toContain(`HOME=${home}\n`);
+  expect(env).not.toContain("XAI_API_KEY");
+  expect(readFileSync(join(home, "prompt"), "utf8")).toContain("hello grok");
+  const server = Object.values(JSON.parse(readFileSync(join(home, "mcp.json"), "utf8")).mcpServers)[0] as { command: string; args: string[] };
+  expect(server.command).toBe(bridgeBinary);
+  expect(server.args[0]).toBe("__grok-mcp");
+  const capture = Bun.spawn([bridgeBinary, "__grok-mcp", join(home, "catalog.json")], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.push(capture);
+  capture.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+  capture.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } })}\n`);
+  capture.stdin.end();
+  const replies = (await new Response(capture.stdout).text()).trim().split("\n").map(line => JSON.parse(line));
+  expect(replies[0].result.tools.map((tool: { name: string }) => tool.name)).toEqual(["exact_tool"]);
+  expect(replies[1].result.content[0].type).toBe("text");
+});
+
 test("provider descriptors match providers.json and the pinned OpenCodex registry", () => {
   const result = Bun.spawnSync([process.execPath, "run", "scripts/sync-providers.ts", "--check"], { cwd: resolve(import.meta.dir, "..") });
   expect(new TextDecoder().decode(result.stderr)).toBe("");
