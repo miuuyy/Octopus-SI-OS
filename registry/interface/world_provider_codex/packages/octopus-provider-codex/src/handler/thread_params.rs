@@ -7,6 +7,7 @@ pub(crate) fn isolated_thread_start_params(
 ) -> ThreadStartParams {
     ThreadStartParams {
         model,
+        base_instructions: Some(String::new()),
         developer_instructions: Some(bound_instructions),
         environments: Some(Vec::<TurnEnvironmentParams>::new()),
         sandbox: Some(SandboxMode::ReadOnly),

@@ -106,6 +106,7 @@ pub const SPAWN_ISOLATION_CONFIG_OVERRIDES: &[&str] = &[
     "sandbox_mode=read-only",
     "skills.include_instructions=false",
     "include_apps_instructions=false",
+    "include_permissions_instructions=false",
     "features.goals=false",
     "features.image_generation=false",
     "features.tool_search=false",
@@ -331,6 +332,7 @@ personality = \"none\"
 sandbox_mode = \"read-only\"
 web_search = \"disabled\"
 include_apps_instructions = false
+include_permissions_instructions = false
 cli_auth_credentials_store = \"file\"
 suppress_unstable_features_warning = true
 
@@ -1154,7 +1156,7 @@ pub(crate) fn build_curated_opencodex_home(
     std::fs::create_dir_all(&curated).map_err(CuratedHomeError::Io)?;
     std::fs::create_dir_all(curated.join(CURATED_CODEX_TMP_DIR)).map_err(CuratedHomeError::Io)?;
     let provider = format!(
-        "[model_providers.octopus_opencodex]\nname = \"Octopus OpenCodex\"\nbase_url = {base_url:?}\nwire_api = \"responses\"\nrequires_openai_auth = false\nrequest_max_retries = 0\nstream_max_retries = 0\nsupports_websockets = false\n"
+        "[model_providers.octopus_opencodex]\nname = \"Octopus OpenCodex\"\nbase_url = {base_url:?}\nwire_api = \"responses\"\nrequires_openai_auth = false\nrequest_max_retries = 4\nstream_max_retries = 5\nsupports_websockets = false\n"
     );
     let mut root = "model_provider = \"octopus_opencodex\"\n".to_string();
     if let Some(catalog) = model_catalog {
@@ -1420,6 +1422,10 @@ mod tests {
             "curated config must pin apps instructions off: {cfg}"
         );
         assert!(
+            cfg.contains("include_permissions_instructions = false"),
+            "curated config must pin Codex permissions instructions off: {cfg}"
+        );
+        assert!(
             cfg.contains("shell_snapshot = false"),
             "curated config must disable the native shell snapshot: {cfg}"
         );
@@ -1602,6 +1608,7 @@ mod tests {
             "sandbox_mode=read-only",
             "skills.include_instructions=false",
             "include_apps_instructions=false",
+            "include_permissions_instructions=false",
             "features.code_mode_host=true",
             "features.instant_interrupt=true",
         ] {

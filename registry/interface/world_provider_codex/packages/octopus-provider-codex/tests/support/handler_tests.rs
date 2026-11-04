@@ -4038,12 +4038,16 @@ while IFS= read -r _; do :; done
             Some(SandboxMode::ReadOnly),
             "the codex sandbox must be pinned read-only (no exec side effects outside the gate)"
         );
+        assert_eq!(
+            params.base_instructions.as_deref(),
+            Some(""),
+            "Codex's own base prompt never enters an Octopus thread; the bound role is the only behavior text"
+        );
 
         assert_eq!(
             params.developer_instructions.as_deref(),
             Some("You are the flash worker.")
         );
-        assert!(params.base_instructions.is_none());
     }
 
     #[test]

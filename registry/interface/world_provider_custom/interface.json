@@ -33,7 +33,11 @@
   },
   "interface_driver_config": {
     "supported_reasoning_efforts": [
-      "none"
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
     ],
     "private_config": {
       "instruction_artifacts": [],
@@ -2604,12 +2608,28 @@
             "text"
           ],
           "supports_tools": true,
-          "supports_reasoning": false,
+          "supports_reasoning": true,
           "default_reasoning_effort": "none",
           "supported_reasoning_efforts": [
             {
               "effort": "none",
               "description": "No reasoning"
+            },
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
             }
           ],
           "show_in_picker": true
@@ -2774,6 +2794,22 @@
                 {
                   "effort": "none",
                   "description": "No reasoning"
+                },
+                {
+                  "effort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "effort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "effort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "effort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
                 }
               ],
               "shell_type": "shell_command",
@@ -2781,7 +2817,7 @@
               "supported_in_api": true,
               "priority": 0,
               "base_instructions": "",
-              "supports_reasoning_summaries": false,
+              "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
               "support_verbosity": false,
               "truncation_policy": {
@@ -2789,6 +2825,7 @@
                 "limit": 10000
               },
               "supports_parallel_tool_calls": false,
+              "context_window": 400000,
               "effective_context_window_percent": 95,
               "experimental_supported_tools": [],
               "input_modalities": [
@@ -2867,6 +2904,7 @@
           "sandbox_mode=read-only",
           "skills.include_instructions=false",
           "include_apps_instructions=false",
+          "include_permissions_instructions=false",
           "features.goals=false",
           "features.image_generation=false",
           "features.tool_search=false",

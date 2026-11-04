@@ -2230,7 +2230,14 @@ fn read_interface_private_environment(
     ctx: &InterfaceLiftContext,
     declared_names: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, String>, String> {
-    let var_dir = ctx.interface_var_dir();
+    read_private_environment_document(&ctx.interface_var_dir(), ctx.interface.as_str(), declared_names)
+}
+
+pub fn read_private_environment_document(
+    var_dir: &Path,
+    interface: &str,
+    declared_names: &BTreeSet<String>,
+) -> Result<BTreeMap<String, String>, String> {
     let path = var_dir.join(INTERFACE_PRIVATE_ENVIRONMENT_FILE);
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
@@ -2240,49 +2247,49 @@ fn read_interface_private_environment(
         Err(error) => {
             return Err(format!(
                 "interface '{}' private environment cannot be inspected: {error}",
-                ctx.interface.as_str()
+                interface
             ));
         }
     };
-    let var_dir_metadata = std::fs::symlink_metadata(&var_dir).map_err(|error| {
+    let var_dir_metadata = std::fs::symlink_metadata(var_dir).map_err(|error| {
         format!(
             "interface '{}' private directory cannot be inspected: {error}",
-            ctx.interface.as_str()
+            interface
         )
     })?;
-    validate_private_environment_directory_metadata(&var_dir, &var_dir_metadata)?;
+    validate_private_environment_directory_metadata(var_dir, &var_dir_metadata)?;
     validate_private_environment_file_metadata(&path, &metadata)?;
     let bytes = std::fs::read(&path).map_err(|error| {
         format!(
             "interface '{}' private environment cannot be read: {error}",
-            ctx.interface.as_str()
+            interface
         )
     })?;
     let document: InterfacePrivateEnvironmentDocument =
         serde_json::from_slice(&bytes).map_err(|error| {
             format!(
                 "interface '{}' private environment is malformed: {error}",
-                ctx.interface.as_str()
+                interface
             )
         })?;
-    if document.schema_version != 1 || document.interface != ctx.interface.as_str() {
+    if document.schema_version != 1 || document.interface != interface {
         return Err(format!(
             "interface '{}' private environment has invalid identity or schema",
-            ctx.interface.as_str()
+            interface
         ));
     }
     for (name, value) in &document.values {
         if !declared_names.contains(name) {
             return Err(format!(
                 "interface '{}' private environment contains undeclared name '{}'",
-                ctx.interface.as_str(),
+                interface,
                 name
             ));
         }
         if value.is_empty() || value.contains('\0') {
             return Err(format!(
                 "interface '{}' private environment contains an invalid value for '{}'",
-                ctx.interface.as_str(),
+                interface,
                 name
             ));
         }

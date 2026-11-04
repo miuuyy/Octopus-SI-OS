@@ -203,6 +203,32 @@ test("chat tool calls come back as Responses function calls", async () => {
   expect(result.text).toContain("response.completed");
 });
 
+test("root schema alternatives become described fields and the upstream's own refusal reaches Codex", async () => {
+  const alternativeTool = {
+    type: "function",
+    name: "alternative_tool",
+    description: "Send",
+    parameters: {
+      type: "object",
+      properties: { interface: { type: "string" } },
+      required: ["interface"],
+      oneOf: [{ required: ["payload", "label"], properties: { label: { type: "string" } } }, { required: ["ref"], properties: { ref: { type: "string" } } }],
+      allOf: [{}],
+    },
+  };
+  const refusal = "tools.0.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level";
+  const result = await exchange({}, Response.json({
+    error: { message: "Provider returned error", code: 400, metadata: { raw: JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: refusal } }) } },
+  }, { status: 400 }), "test-model", [alternativeTool]);
+  const sent = (result.observed.body.tools as Array<{ function: { description: string; parameters: Record<string, unknown> } }>)[0].function;
+  expect(Object.keys(sent.parameters).filter(key => ["oneOf", "anyOf", "allOf"].includes(key))).toEqual([]);
+  expect(sent.parameters.required).toEqual(["interface"]);
+  expect(Object.keys(sent.parameters.properties as object).sort()).toEqual(["interface", "label", "ref"]);
+  expect(sent.description).toContain("exactly one of these field sets: (payload + label) | (ref)");
+  expect(result.status).toBe(400);
+  expect(result.text).toContain(refusal);
+});
+
 test("registry entry and model alias reach the upstream as the configured model", async () => {
   const result = await exchange({
     registry_entry: "ollama",

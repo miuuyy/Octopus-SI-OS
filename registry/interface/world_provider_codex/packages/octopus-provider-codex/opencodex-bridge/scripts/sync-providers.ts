@@ -23,7 +23,7 @@ type ProviderSpec = {
   headers?: Record<string, string>;
   key?: { env: string; label: string; header?: string; prefix?: string };
   base_url?: { env: string; label: string };
-  model?: { env: string; label: string; slug: string; display_name: string };
+  model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
   cli?: { commands: string[]; env: string[]; home_read: string[]; home_write: string[] };
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
@@ -157,7 +157,15 @@ function declaredModels(spec: ProviderSpec): ModelRow[] {
 }
 
 function setupModel(spec: ProviderSpec): ModelRow[] {
-  return [{ slug: spec.model!.slug, display_name: spec.model!.display_name, input_modalities: ["text"], efforts: [] }];
+  const declared = spec.model!.efforts ?? [];
+  if (declared.length && !declared.includes("none")) throw new Error(`${spec.interface}: a setup model's efforts must include none, its default`);
+  return [{
+    slug: spec.model!.slug,
+    display_name: spec.model!.display_name,
+    input_modalities: ["text"],
+    efforts: EFFORT_ORDER.filter((effort) => declared.includes(effort)),
+    ...(declared.length ? { default_effort: "none" as const } : {}),
+  }];
 }
 
 function selectableEfforts(row: ModelRow): Effort[] {
@@ -192,7 +200,8 @@ function codexModelInfo(row: ModelRow, priority: number, description: string, co
     support_verbosity: false,
     truncation_policy: { mode: "tokens", limit: 10000 },
     supports_parallel_tool_calls: false,
-    ...(row.context_window ? { context_window: Math.min(row.context_window, contextWindow), max_context_window: row.context_window } : {}),
+    context_window: row.context_window ? Math.min(row.context_window, contextWindow) : contextWindow,
+    ...(row.context_window ? { max_context_window: row.context_window } : {}),
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
     input_modalities: row.input_modalities.filter((value) => value === "text" || value === "image"),

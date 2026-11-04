@@ -13,6 +13,7 @@
     "src/lib/translator-budget.ts#createTranslatorBudget,isTranslatorBudgetExceededError,TranslatorBudget",
     "src/lib/destination-policy.ts#assertProviderDestinationAllowed,providerDestinationResolvedError",
     "src/lib/local-upstream.ts#isLocalUpstream",
+    "src/lib/redact.ts#redactSecretString",
     "src/lib/standalone.ts#isStandaloneBinary",
     "src/adapters/base.ts#IncomingMeta,ProviderAdapter",
     "src/adapters/run-turn-queue.ts#COALESCE_MAX_CHUNK_LENGTH,createAdapterEventQueue",

@@ -522,9 +522,32 @@ rewriting literal data.
 The native Codex/ChatGPT descriptors set `model_context_window=400000`.
 Generated OpenCodex catalogues default `context_window` to the smaller of
 the provider's `default_context_window` (400,000 when omitted) and the model's
-declared capacity. Claude Code and Anthropic declare 700,000 tokens;
+declared capacity; a model named in setup, whose capacity is unknown, takes the
+provider default. Claude Code and Anthropic declare 700,000 tokens;
 `max_context_window` retains each model's capacity. The curated OpenCodex home
 uses these per-model values without global context or compaction overrides.
+A setup model offers the reasoning efforts its `providers.json` entry declares,
+with `none` as the default; Custom offers `none` through `xhigh`, and `none`
+sends no reasoning effort upstream.
+
+The curated OpenCodex home keeps Codex's own retries at Codex's defaults. A
+dropped response stream is retried up to five times (`stream_max_retries = 5`):
+Codex samples the step again with the outputs of tools it already executed, so
+an upstream disconnect does not end the turn. A request that fails before its
+stream starts is retried up to four times (`request_max_retries = 4`). Every Codex-started descriptor also pins
+`include_permissions_instructions=false`, because Codex's sandbox and
+escalation instructions describe parameters Octopus tools do not have.
+Every Codex thread Octopus starts carries an empty base prompt: Codex's own
+product prompt never reaches the model, for native OpenAI models as for
+OpenCodex ones, and the bound role in the developer instructions is the only
+behavior text. A thread keeps the base it was started with when it resumes.
+
+A task-private copy of an OpenCodex provider reads the setup values its
+descriptor names (`auth_env_key`, `base_url_env`, `model_env`) from its
+credential owner's private environment, through the owner root that composition
+grants the copy; it is never handed copies of those values. A value also present
+in the launch environment must match. A copy composed without that grant keeps
+reading its launch environment.
 Context usage remains the provider's reported usable
 window; the client does not substitute a display-only limit.
 
@@ -533,7 +556,13 @@ upstream surface it reads; the build fails when its sources read anything the
 pin does not declare. Public destinations keep OpenCodex's 300-second stall
 clock, and a local one (loopback, private, `.local`, `.lan`) uses the
 interface's request timeout, so a silent local stream fails instead of
-hanging. The managed Codex CLI pin lists every app-server notification Octopus
+hanging. Before a request leaves the bridge, a tool schema whose root carries
+`oneOf`, `anyOf` or `allOf` becomes a plain object schema with every branch's
+fields, and the alternatives are stated in the tool's description; some
+upstreams refuse root combinators, and the tool's owner still validates the
+call against its declared schema. When an upstream answers with an error, the
+error Codex receives carries the upstream's own reason when the body names one
+(`error.metadata.raw`), not only the gateway's summary. The managed Codex CLI pin lists every app-server notification Octopus
 decodes and the ones it opts out of; installing a binary that sends any other
 notification fails closed and names it. The provider descriptor also pins
 which Codex features are on and which are off; a binary that reports a

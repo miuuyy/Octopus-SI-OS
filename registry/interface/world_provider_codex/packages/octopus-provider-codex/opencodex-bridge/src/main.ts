@@ -27,6 +27,7 @@ import {
   providerDestinationResolvedError,
 } from "../node_modules/@bitkyc08/opencodex/src/lib/destination-policy.ts";
 import { isLocalUpstream } from "../node_modules/@bitkyc08/opencodex/src/lib/local-upstream.ts";
+import { redactSecretString } from "../node_modules/@bitkyc08/opencodex/src/lib/redact.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
 import type {
   AdapterEvent,
@@ -535,6 +536,67 @@ function deliver(
   })();
 }
 
+function flattenRootSchemaAlternatives(parsed: OcxParsedRequest): void {
+  for (const tool of parsed.context.tools ?? []) {
+    const schema = tool.parameters;
+    if (!isObject(schema) || !("oneOf" in schema || "anyOf" in schema || "allOf" in schema)) continue;
+    const { oneOf, anyOf, allOf, ...rest } = schema;
+    const properties: Record<string, unknown> = isObject(rest.properties) ? { ...rest.properties } : {};
+    const required = new Set(stringList(rest.required));
+    const notes: string[] = [];
+    for (const branch of Array.isArray(allOf) ? allOf.filter(isObject) : []) {
+      mergeBranchProperties(properties, branch);
+      for (const name of stringList(branch.required)) required.add(name);
+    }
+    for (const [alternatives, quantity] of [[oneOf, "exactly one"], [anyOf, "at least one"]] as const) {
+      if (!Array.isArray(alternatives)) continue;
+      const shapes = alternatives.filter(isObject).map(branch => {
+        mergeBranchProperties(properties, branch);
+        const names = stringList(branch.required);
+        return names.length ? `(${names.join(" + ")})` : "(no further fields)";
+      });
+      notes.push(`Arguments must include ${quantity} of these field sets: ${shapes.join(" | ")}.`);
+    }
+    tool.parameters = { ...rest, type: "object", properties, ...(required.size ? { required: [...required] } : {}) };
+    if (notes.length) tool.description = [tool.description, ...notes].filter(Boolean).join("\n\n");
+  }
+}
+
+function mergeBranchProperties(properties: Record<string, unknown>, branch: Record<string, unknown>): void {
+  if (!isObject(branch.properties)) return;
+  for (const [name, value] of Object.entries(branch.properties)) {
+    if (!(name in properties)) properties[name] = value;
+  }
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function upstreamErrorReason(text: string, detail: string): string {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return detail;
+  }
+  const metadata = isObject(body) && isObject(body.error) && isObject(body.error.metadata) ? body.error.metadata : undefined;
+  const raw = typeof metadata?.raw === "string" ? metadata.raw.trim() : "";
+  if (!raw) return detail;
+  let reason = raw;
+  try {
+    const inner: unknown = JSON.parse(raw);
+    const message = isObject(inner) && isObject(inner.error) && typeof inner.error.message === "string"
+      ? inner.error.message
+      : isObject(inner) && typeof inner.message === "string" ? inner.message : undefined;
+    if (message) reason = message;
+  } catch {
+    reason = raw;
+  }
+  reason = redactSecretString(reason).slice(0, 600);
+  return detail && detail !== reason ? `${detail}: ${reason}` : reason;
+}
+
 async function responsesRequest(request: Request, config: BridgeConfig, adapter: ProviderAdapter): Promise<Response> {
   let raw: unknown;
   try {
@@ -558,6 +620,7 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
   try {
     parsed = parseRequest(modelId === responseModel ? raw : { ...raw, model: modelId });
     if (parsed.modelId !== modelId) throw new Error("parsed model disagrees with the exact interface model grant");
+    flattenRootSchemaAlternatives(parsed);
     maps = buildToolBridgeMaps(parsed, budget);
   } catch (error) {
     budget.dispose();
@@ -610,7 +673,7 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
   if (!upstream.ok) {
     try {
       const text = await boundedText(upstream, Math.min(config.limits.max_response_bytes, 1024 * 1024));
-      const detail = adapter.formatErrorBody?.(upstream.status, upstream.headers, text) ?? "";
+      const detail = upstreamErrorReason(text, adapter.formatErrorBody?.(upstream.status, upstream.headers, text) ?? "");
       return formatErrorResponse(upstream.status, "upstream_error", detail || `Provider error ${upstream.status}`, {
         retryAfter: upstream.headers.get("retry-after"),
       });

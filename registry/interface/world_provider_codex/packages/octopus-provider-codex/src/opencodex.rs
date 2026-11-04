@@ -22,7 +22,7 @@ use zeroize::Zeroize;
 use crate::config::{AppServerSource, build_curated_opencodex_home};
 use crate::handler::CodexAppServerInterfaceDriver;
 use crate::{AppServerClient, SpawnAppServerClient};
-use octopus_interface_transport::InterfaceLiftContext;
+use octopus_interface_transport::{InterfaceLiftContext, read_private_environment_document};
 
 const OPENCODEX_CONFIG_KEY: &str = "opencodex";
 const PROVIDER_SECRET_OWNER_ROOT_SLOT: &str = "provider_secret_owner_root";
@@ -319,10 +319,11 @@ pub(crate) async fn connect_interface_driver(
             "OpenCodex selected model '{selected_model}' is outside the freshly formed interface policy models"
         ));
     }
-    let model_aliases = resolve_model_aliases(config, &models)?;
-    let base_url = resolve_base_url(transport, config.allow_private_network)?;
+    let private_values = PrivateValues::resolve(ctx, descriptor, transport, config)?;
+    let model_aliases = resolve_model_aliases(config, &models, &private_values)?;
+    let base_url = resolve_base_url(transport, config.allow_private_network, &private_values)?;
     validate_static_headers(transport)?;
-    let api_key = resolve_api_key(ctx, descriptor, transport, config)?;
+    let api_key = resolve_api_key(ctx, descriptor, transport, config, &private_values)?;
     if let Some(name) = transport.auth_env_key.as_deref()
         && config.bridge_env_names.iter().any(|candidate| candidate == name)
     {
@@ -493,9 +494,104 @@ fn selected_model(descriptor: &InterfaceDescriptor) -> Result<String, String> {
         })
 }
 
+struct PrivateValues {
+    owner: Option<BTreeMap<String, String>>,
+}
+
+impl PrivateValues {
+    fn resolve(
+        ctx: &InterfaceLiftContext,
+        descriptor: &InterfaceDescriptor,
+        transport: &InterfaceTransportConfig,
+        config: &OpenCodexDescriptorConfig,
+    ) -> Result<Self, String> {
+        if config.credential_owner_interface == descriptor.id.as_str() {
+            return Ok(Self { owner: None });
+        }
+        let names: BTreeSet<String> = [
+            transport.auth_env_key.as_deref(),
+            transport.base_url_env.as_deref(),
+            config.model_env.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|name| valid_env_name(name))
+        .map(str::to_string)
+        .collect();
+        if names.is_empty() || !ctx.root_slots.contains_key(PROVIDER_SECRET_OWNER_ROOT_SLOT) {
+            return Ok(Self { owner: None });
+        }
+        let owner_root = credential_owner_root(ctx, descriptor, config)?;
+        let values = read_private_environment_document(
+            &owner_root,
+            config.credential_owner_interface.as_str(),
+            &names,
+        )
+        .map_err(|error| format!("OpenCodex credential owner private values: {error}"))?;
+        Ok(Self {
+            owner: Some(values),
+        })
+    }
+
+    fn get(&self, name: &str) -> Result<Option<String>, String> {
+        let ambient = std::env::var(name).ok();
+        let Some(owner) = &self.owner else {
+            return Ok(ambient);
+        };
+        match (ambient, owner.get(name)) {
+            (Some(ambient), Some(owned)) if &ambient != owned => Err(format!(
+                "OpenCodex value '{name}' differs between the launch environment and the credential owner"
+            )),
+            (Some(ambient), _) => Ok(Some(ambient)),
+            (None, owned) => Ok(owned.cloned()),
+        }
+    }
+}
+
+fn credential_owner_root(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    config: &OpenCodexDescriptorConfig,
+) -> Result<PathBuf, String> {
+    let root_slot = if config.credential_owner_interface == descriptor.id.as_str() {
+        "activation_secrets_home"
+    } else {
+        PROVIDER_SECRET_OWNER_ROOT_SLOT
+    };
+    let owner_root = ctx.root_slot(root_slot)?;
+    let owner_metadata = std::fs::symlink_metadata(owner_root).map_err(|error| {
+        format!(
+            "OpenCodex credential owner root '{}' cannot be inspected: {error}",
+            owner_root.display()
+        )
+    })?;
+    if owner_metadata.file_type().is_symlink() || !owner_metadata.is_dir() {
+        return Err(format!(
+            "OpenCodex credential owner root '{}' is not a regular directory",
+            owner_root.display()
+        ));
+    }
+    if owner_root.file_name().and_then(|name| name.to_str())
+        != Some(config.credential_owner_interface.as_str())
+    {
+        return Err(format!(
+            "OpenCodex credential owner root '{}' does not name exact interface '{}'",
+            owner_root.display(),
+            config.credential_owner_interface
+        ));
+    }
+    std::fs::canonicalize(owner_root).map_err(|error| {
+        format!(
+            "OpenCodex credential owner root '{}' cannot be resolved: {error}",
+            owner_root.display()
+        )
+    })
+}
+
 fn resolve_model_aliases(
     config: &OpenCodexDescriptorConfig,
     models: &[String],
+    private_values: &PrivateValues,
 ) -> Result<BTreeMap<String, String>, String> {
     let Some(name) = config.model_env.as_deref() else {
         return Ok(BTreeMap::new());
@@ -505,8 +601,8 @@ fn resolve_model_aliases(
             "OpenCodex model_env '{name}' requires exactly one declared model slug"
         ));
     };
-    let upstream = std::env::var(name)
-        .ok()
+    let upstream = private_values
+        .get(name)?
         .filter(|value| valid_text_atom(value))
         .ok_or_else(|| {
             format!(
@@ -519,14 +615,15 @@ fn resolve_model_aliases(
 fn resolve_base_url(
     transport: &InterfaceTransportConfig,
     allow_private_network: bool,
+    private_values: &PrivateValues,
 ) -> Result<String, String> {
     let base_url = match transport
         .base_url_env
         .as_deref()
         .filter(|name| valid_env_name(name))
     {
-        Some(name) => std::env::var(name)
-            .ok()
+        Some(name) => private_values
+            .get(name)?
             .filter(|value| valid_text_atom(value))
             .ok_or_else(|| {
                 format!("OpenCodex base URL is not configured: env var '{name}' is unset, empty or untrimmed")
@@ -583,6 +680,7 @@ fn resolve_api_key(
     descriptor: &InterfaceDescriptor,
     transport: &InterfaceTransportConfig,
     config: &OpenCodexDescriptorConfig,
+    private_values: &PrivateValues,
 ) -> Result<Option<String>, String> {
     let secret_ref = transport
         .auth_secret_ref
@@ -602,8 +700,8 @@ fn resolve_api_key(
         (Some(_), Some(_)) => Err(
             "OpenCodex transport cannot declare both auth_secret_ref and auth_env_key".to_string(),
         ),
-        (None, Some(name)) => std::env::var(name)
-            .ok()
+        (None, Some(name)) => private_values
+            .get(name)?
             .filter(|value| valid_text_atom(value))
             .map(Some)
             .ok_or_else(|| format!("OpenCodex API key is not configured: env var '{name}' is unset, empty or untrimmed")),
@@ -615,39 +713,7 @@ fn resolve_api_key(
                     config.credential_owner_interface
                 ));
             }
-            let root_slot = if config.credential_owner_interface == descriptor.id.as_str() {
-                "activation_secrets_home"
-            } else {
-                PROVIDER_SECRET_OWNER_ROOT_SLOT
-            };
-            let owner_root = ctx.root_slot(root_slot)?;
-            let owner_metadata = std::fs::symlink_metadata(owner_root).map_err(|error| {
-                format!(
-                    "OpenCodex credential owner root '{}' cannot be inspected: {error}",
-                    owner_root.display()
-                )
-            })?;
-            if owner_metadata.file_type().is_symlink() || !owner_metadata.is_dir() {
-                return Err(format!(
-                    "OpenCodex credential owner root '{}' is not a regular directory",
-                    owner_root.display()
-                ));
-            }
-            if owner_root.file_name().and_then(|name| name.to_str())
-                != Some(config.credential_owner_interface.as_str())
-            {
-                return Err(format!(
-                    "OpenCodex credential owner root '{}' does not name exact interface '{}'",
-                    owner_root.display(),
-                    config.credential_owner_interface
-                ));
-            }
-            let owner_root = std::fs::canonicalize(owner_root).map_err(|error| {
-                format!(
-                    "OpenCodex credential owner root '{}' cannot be resolved: {error}",
-                    owner_root.display()
-                )
-            })?;
+            let owner_root = credential_owner_root(ctx, descriptor, config)?;
             let keyring = owner_root.join("secrets").join("keyring");
             let manager = SecretsManager::new_with_keyring_store(
                 owner_root,

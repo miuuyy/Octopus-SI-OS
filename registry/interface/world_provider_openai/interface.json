@@ -4087,6 +4087,7 @@
           "sandbox_mode=read-only",
           "skills.include_instructions=false",
           "include_apps_instructions=false",
+          "include_permissions_instructions=false",
           "features.goals=false",
           "features.image_generation=false",
           "features.tool_search=false",

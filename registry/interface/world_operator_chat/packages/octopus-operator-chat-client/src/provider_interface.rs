@@ -317,11 +317,18 @@ pub(crate) fn configure_provider_secret_owner_root(
             "provider interface '{source_interface_id}' must own its OpenCodex credential boundary"
         ));
     }
+    let owner_private_env = opencodex
+        .get("model_env")
+        .is_some_and(|value| !value.is_null());
     let transport = driver_config
         .transport
         .as_ref()
         .ok_or_else(|| format!("provider interface '{source_interface_id}' has no transport"))?;
-    if transport.auth_secret_ref.is_none() {
+    if transport.auth_secret_ref.is_none()
+        && transport.auth_env_key.is_none()
+        && transport.base_url_env.is_none()
+        && !owner_private_env
+    {
         return Ok(false);
     }
     if target_interface_id == credential_owner {

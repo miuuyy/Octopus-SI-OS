@@ -2932,6 +2932,7 @@
                 "limit": 10000
               },
               "supports_parallel_tool_calls": false,
+              "context_window": 400000,
               "effective_context_window_percent": 95,
               "experimental_supported_tools": [],
               "input_modalities": [
@@ -2964,6 +2965,7 @@
                 "limit": 10000
               },
               "supports_parallel_tool_calls": false,
+              "context_window": 400000,
               "effective_context_window_percent": 95,
               "experimental_supported_tools": [],
               "input_modalities": [
@@ -3204,6 +3206,7 @@
           "sandbox_mode=read-only",
           "skills.include_instructions=false",
           "include_apps_instructions=false",
+          "include_permissions_instructions=false",
           "features.goals=false",
           "features.image_generation=false",
           "features.tool_search=false",

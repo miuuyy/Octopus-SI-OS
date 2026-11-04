@@ -545,7 +545,8 @@
         "env": "OCTOPUS_PROVIDER_CUSTOM_MODEL",
         "label": "Model id",
         "slug": "custom-model",
-        "display_name": "Custom model"
+        "display_name": "Custom model",
+        "efforts": ["none", "low", "medium", "high", "xhigh"]
       },
       "allow_private_network": true
     }
