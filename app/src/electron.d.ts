@@ -166,6 +166,8 @@ declare global {
       validateRuntimeEndpoint(request: OctopusRuntimeEndpointValidationRequest): Promise<OctopusRuntimeEndpointValidation>;
       projectionRead(request: OctopusProjectionReadRequest): Promise<unknown>;
       workspaceSetupState(): Promise<OctopusWorkspaceSetupState>;
+      saveSetupFile(request: { text: string; suggestedName: string }): Promise<{ saved: false } | { saved: true; name: string }>;
+      openSetupFile(): Promise<{ opened: false } | { opened: true; name: string; text: string }>;
       clientSetupRead(request: { operationId: string }): Promise<OctopusClientSetupState | null>;
       clientSetupReadCurrent(): Promise<OctopusClientSetupState | null>;
       clientSetupBegin(request: OctopusClientSetupBeginRequest): Promise<OctopusClientSetupState>;

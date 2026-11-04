@@ -149,6 +149,7 @@ async function main() {
     await verifyLinkedTaskRemoval(await fs.realpath(temporary));
     await verifyExistingRootAttachment(temporary);
     await verifyRootFirstSetup(temporary);
+    await verifySetupFile();
     await verifyFreshAgentRecipe(temporary);
     await verifyPreludeSnapshotSetup(temporary);
     await verifyMaintenanceSetup(temporary);
@@ -2720,6 +2721,86 @@ async function verifyProjectPolicies() {
   } finally { await fs.rm(home, { recursive: true, force: true }); }
 }
 
+async function verifySetupFile() {
+  const ts = require("typescript"), moduleApi = require("node:module");
+  const compile = async (relative, mocks = {}) => {
+    const filename = path.resolve(__dirname, relative), compiled = { exports: {} };
+    const code = ts.transpileModule(await fs.readFile(filename, "utf8"), { fileName: filename,
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const local = moduleApi.createRequire(filename);
+    Function("module", "exports", "require", code)(compiled, compiled.exports, (id) => id in mocks ? mocks[id] : local(id));
+    return compiled.exports;
+  };
+  const setup = await compile("../src/onboarding/workspaceSetup.ts");
+  const colors = await compile("../src/design-system/projectColors.ts");
+  const files = await compile("../src/onboarding/setupFile.ts", { "./workspaceSetup": setup, "../design-system/projectColors": colors });
+  let sequence = 0;
+  const ids = () => `setup_file_${++sequence}`;
+  const source = setup.createWorkspaceSetupDraft("founder", ids);
+  const [life, work, nested] = source.projects;
+  const catalog = [
+    { id: "codex", kind: "pack", name: "Codex Pack", included: true, projectSelectable: false },
+    { id: "world_email", kind: "application", name: "Email", included: false, projectSelectable: true },
+    { id: "driver.browser", kind: "driver", name: "Browser", included: false, projectSelectable: false },
+  ];
+  const provider = { models: [{ model: "fixture-model", displayName: "Fixture", description: "", defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high"], showInPicker: true, isDefault: true }] };
+  Object.assign(source, { providerModel: "fixture-model", reasoningEffort: "high", capabilities: [
+    { id: "codex", kind: "pack", selected: true, included: true, projectKeys: [] },
+    { id: "world_email", kind: "application", selected: true, included: false, projectKeys: [work.key, nested.key] },
+    { id: "driver.browser", kind: "driver", selected: false, included: false, projectKeys: [] },
+  ] });
+  const file = files.parseSetupFile(files.serializeSetupFile(files.setupFileFromDraft(source)));
+  assert.deepEqual(file.projects.map((project) => [project.id, project.parent]), [["life", null], ["work", null], ["project-1", "work"], ["project-2", "work"], ["project-3", "work"]]);
+  assert.deepEqual(file.capabilities, [{ kind: "application", id: "world_email", projects: ["project-1", "work"] }, { kind: "pack", id: "codex", projects: [] }]);
+  assert.deepEqual(file.model, { id: "fixture-model", reasoning_effort: "high" });
+  const base = setup.createWorkspaceSetupDraft("life", ids);
+  const imported = files.draftFromSetupFile(file, base, catalog, provider, ids);
+  assert.equal(imported.operationId, base.operationId);
+  assert.equal(imported.preset, "custom");
+  assert.deepEqual(imported.projects.map((project) => project.name), source.projects.map((project) => project.name));
+  const keyOf = (name) => imported.projects.find((project) => project.name === name).key;
+  const email = imported.capabilities.find((capability) => capability.id === "world_email");
+  assert.deepEqual(new Set(email.projectKeys), new Set([keyOf(work.name), keyOf(nested.name)]));
+  assert.equal(imported.capabilities.find((capability) => capability.id === "driver.browser").selected, false);
+  assert.equal(imported.providerModel, "fixture-model");
+  assert.equal(life.parentKey, null);
+  assert.throws(() => files.draftFromSetupFile({ ...file, capabilities: [...file.capabilities, { kind: "application", id: "world_telegram", projects: [] }] }, base, catalog, provider, ids),
+    /needs 'world_telegram', which this Octopus does not offer/);
+  assert.throws(() => files.draftFromSetupFile({ ...file, model: { id: "missing-model" } }, base, catalog, provider, ids), /model 'missing-model', which is not available here/);
+  assert.throws(() => files.parseSetupFile(JSON.stringify({ ...file, schema: "other" })), /not an Octopus setup file/);
+  assert.throws(() => files.parseSetupFile(JSON.stringify({ ...file, extra: true })), /fields Octopus does not read: extra/);
+  const home = files.setupFileFromHome({
+    scope: { status: "ready", root_ee_id: "ee_root", root_environment: { name: "Lab", goal: "Run experiments" }, projects: [
+      { ee_id: "ee_root", parent_ee_id: "", name: "Lab", goal: "Run experiments" },
+      { ee_id: "ee_b", parent_ee_id: "ee_a", name: "Beta", goal: "" },
+      { ee_id: "ee_a", parent_ee_id: "ee_root", name: "Alpha", goal: "Alpha goal" },
+    ], project_presentations: [{ ee_id: "ee_a", name: "Alpha", icon: "rocket", color: "purple" }] },
+    localPackages: { packs: [{ id: "codex", workspace_setup: { project_defaults: [{ package_id: "world_provider_codex" }], agent_presets: [] },
+      components: [
+        { package_id: "world_cron", selection: "recommended", product_kind: "application", installed: true, receipt_state: "valid" },
+        { package_id: "world_system_review", selection: "recommended", product_kind: "application", installed: false, receipt_state: "missing" },
+        { package_id: "world_provider_codex", selection: "included", product_kind: "application", installed: true, receipt_state: "valid" },
+      ], extensions: [{ extension_id: "builtin.repair" }] }] },
+    applications: { applications: [{ package_id: "world_provider_codex", project_states: [
+      { ee_id: "ee_root", is_root: true, policy_allowed: true }, { ee_id: "ee_a", policy_allowed: true }, { ee_id: "ee_b", policy_allowed: false },
+    ] }] },
+    drivers: { drivers: [] },
+    installedExtensionIds: new Set(["builtin.repair"]),
+  });
+  assert.deepEqual(home.space, { name: "Lab", goal: "Run experiments" });
+  assert.deepEqual(home.projects, [
+    { id: "alpha", parent: null, name: "Alpha", goal: "Alpha goal", icon: "rocket", color: "violet" },
+    { id: "beta", parent: "alpha", name: "Beta", goal: "Beta", icon: "briefcase", color: "black" },
+  ]);
+  assert.deepEqual(home.capabilities, [
+    { kind: "application", id: "world_cron", projects: [] },
+    { kind: "application", id: "world_provider_codex", projects: ["alpha"] },
+    { kind: "extension", id: "builtin.repair", projects: [] },
+    { kind: "pack", id: "codex", projects: [] },
+  ]);
+}
+
 const execution = process.argv[2] === "conditioned-recover"
   ? recoverWorkspaceTransactions({ octopusHomeRoot: process.argv[3], registryRoot: path.join(process.argv[3], "registry") })
   : process.argv[2] === "publication-recovery"
@@ -2743,6 +2824,8 @@ const execution = process.argv[2] === "conditioned-recover"
     try { await verifyLinkedTaskRemoval(await fs.realpath(temporary)); }
     finally { await fs.rm(temporary, { recursive: true, force: true }); }
   })
+  : process.argv[2] === "setup-file"
+  ? verifySetupFile()
   : process.argv[2] === "project-policy"
   ? verifyProjectPolicies()
   : process.argv[2] === "task-archive"

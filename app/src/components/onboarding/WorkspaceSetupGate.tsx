@@ -27,11 +27,13 @@ import {
 import {
   beginClientSetup,
   onClientSetupProgress,
+  openSetupFile,
   readProjection,
   readClientSetup,
   readCurrentClientSetup,
   readWorkspaceSetupState,
   resumeClientSetup,
+  saveSetupFile,
 } from "../../projectionClient";
 import { useProjectionStructureGeneration } from "../../projectionLive";
 import { useChatgptAccount } from "../../account/useChatgptAccount";
@@ -176,6 +178,8 @@ const AWAITING_SIGN_IN: WorkspaceSetupApplyState = {
   percent: null,
   error: "",
 };
+
+const SETUP_FILES = { open: openSetupFile, save: saveSetupFile };
 
 export function WorkspaceSetupGate({ accessProfile, runtimeHome, children }: Props) {
   if (accessProfile !== "live") return <>{children}</>;
@@ -603,6 +607,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
       onRetryCatalog={() => {
         void refresh(true).catch(() => {});
       }}
+      setupFiles={SETUP_FILES}
     />
   );
 }

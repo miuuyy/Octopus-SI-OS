@@ -332,7 +332,7 @@ test("provider validation waits for a successful registry read and leaves repair
     "../../clientPreferences": { useClientPreferences: () => ({ startupSurfaceId: "voice" }), useSetClientPreferences: () => () => {} },
     "../../design-system/components": {
       OcGroup: ({ children }) => children, OcCard: ({ children }) => children,
-      OcSettingsRow: ({ control }) => control, OcStatus: () => null, OcSwitch: () => null, OcSlider: () => null,
+      OcSettingsRow: ({ control }) => control, OcStatus: () => null, OcSwitch: () => null, OcSlider: () => null, OcButton: () => null,
       OcSelect: ({ label, value, options, error, disabled, onChange }) => React.createElement("select", { "aria-label": label, "data-error": error, disabled, value, onChange: (event) => onChange(event.target.value) }, options.map((option) => React.createElement("option", { key: option.value, value: option.value, disabled: option.disabled }, option.label))),
     },
     "../../toasts": { useAppErrorToast: (error) => { if (error) toasts.push(error); } },
@@ -342,6 +342,9 @@ test("provider validation waits for a successful registry read and leaves repair
     "./SettingsHeading": { SettingsHeading: () => null },
     "./NotificationSettingsSection": { MarkActivitySettingsRow: () => null, NotificationSoundSettingsRow: () => null },
     "./SettingsProviderState": { ProviderSummary: () => null, useDeclaredProviders: () => providerState },
+    "../../projectionClient": { readProjection: async () => null, saveSetupFile: async () => ({ saved: false }) },
+    "../../onboarding/setupFile": { serializeSetupFile: () => "", setupFileFromHome: () => null, setupFileName: () => "" },
+    "../../extensions/useClientExtensions": { useClientExtensions: () => ({ loading: false, extensions: [] }) },
   });
   const props = { accessProfile: "lab", surfaces: [] };
   const { host, root } = await mount(React.createElement(GeneralSection, props));

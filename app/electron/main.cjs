@@ -3799,6 +3799,54 @@ ipcMain.handle("octopus:projection-read", async (_event, token, request) => {
   return result;
 });
 
+const SETUP_FILE_MAX_BYTES = 256 * 1024;
+
+ipcMain.handle("octopus:setup-file-save", async (event, token, request) => {
+  getClientAccessController().requireSession(token, ["live"]);
+  if (!request || typeof request.text !== "string" || typeof request.suggestedName !== "string") {
+    throw new Error("Exporting a setup needs the file text and a name.");
+  }
+  if (Buffer.byteLength(request.text, "utf8") > SETUP_FILE_MAX_BYTES) throw new Error("This setup is larger than Octopus writes.");
+  const name = path.basename(request.suggestedName).replace(/[^A-Za-z0-9._-]+/g, "-") || "octopus.octopus-setup.json";
+  const selected = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender) ?? undefined, {
+    title: "Export setup",
+    defaultPath: path.join(app.getPath("documents"), name),
+    filters: [{ name: "Octopus setup", extensions: ["json"] }],
+  });
+  if (selected.canceled || !selected.filePath) return { saved: false };
+  const file = await fs.promises.open(
+    selected.filePath,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+    0o644,
+  );
+  try {
+    await file.writeFile(request.text, "utf8");
+  } finally {
+    await file.close();
+  }
+  return { saved: true, name: path.basename(selected.filePath) };
+});
+
+ipcMain.handle("octopus:setup-file-open", async (event, token) => {
+  getClientAccessController().requireSession(token, ["live"]);
+  const selected = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender) ?? undefined, {
+    title: "Import setup",
+    properties: ["openFile"],
+    filters: [{ name: "Octopus setup", extensions: ["json"] }],
+  });
+  if (selected.canceled || !selected.filePaths.length) return { opened: false };
+  const filePath = selected.filePaths[0];
+  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("Choose a setup file, not a folder.");
+    if (stat.size > SETUP_FILE_MAX_BYTES) throw new Error("This setup file is larger than Octopus accepts.");
+    return { opened: true, name: path.basename(filePath), text: await handle.readFile("utf8") };
+  } finally {
+    await handle.close();
+  }
+});
+
 ipcMain.handle("octopus:workspace-setup-state", async (_event, token) => {
   getClientAccessController().requireSession(token, ["live"]);
   const state = await inspectWorkspaceSetupState({

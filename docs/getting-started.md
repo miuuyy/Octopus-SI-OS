@@ -124,7 +124,10 @@ your machine:
 - The embedded launch terminal prepares a command ending in `octopus up`.
   Press Enter to run it and wait for the runtime's ready state.
 - Workspace setup asks for a starting structure, project names, and capabilities.
-  Review the choices and select **Set up Octopus**.
+  Review the choices and select **Set up Octopus**. **Import setup…** on the
+  first step fills every step from a setup file instead, and **Export setup…**
+  on the review step saves your choices as one. A running Home exports its own
+  setup from **Settings → General → Setup file**.
 
 ![Local client lock screen asking for the Administrator or Test password](images/client/client-lock.png)
 

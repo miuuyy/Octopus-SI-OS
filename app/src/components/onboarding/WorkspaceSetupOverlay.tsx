@@ -16,6 +16,13 @@ import {
 import { OcCheckbox } from "../../design-system/components";
 import { Glyph, type GlyphName } from "../IconGlyphs";
 import { OctopusLoadingLogo } from "../OctopusLoadingLogo";
+import {
+  draftFromSetupFile,
+  parseSetupFile,
+  serializeSetupFile,
+  setupFileFromDraft,
+  setupFileName,
+} from "../../onboarding/setupFile";
 
 export type WorkspaceSetupCatalogCapability = {
   id: string;
@@ -59,6 +66,12 @@ type Props = {
   onSignIn: () => Promise<void>;
   onChange: (draft: WorkspaceSetupDraft) => void;
   onRetryCatalog: () => void;
+  setupFiles: WorkspaceSetupFiles;
+};
+
+export type WorkspaceSetupFiles = {
+  open: () => Promise<{ opened: false } | { opened: true; name: string; text: string }>;
+  save: (request: { text: string; suggestedName: string }) => Promise<{ saved: false } | { saved: true; name: string }>;
 };
 
 const STEPS: Array<{ id: Exclude<WorkspaceSetupStep, "applying">; tag: string; title: string; body: string }> = [
@@ -100,6 +113,7 @@ export function WorkspaceSetupOverlay({
   onSignIn,
   onChange,
   onRetryCatalog,
+  setupFiles,
 }: Props) {
   const activeStep = draft.step === "applying" ? "review" : draft.step;
   const activeIndex = Math.max(0, STEPS.findIndex((step) => step.id === activeStep));
@@ -108,6 +122,30 @@ export function WorkspaceSetupOverlay({
   const model = provider?.models.find((candidate) => candidate.model === draft.providerModel && candidate.showInPicker);
   const canContinue = stepIsComplete(draft, activeStep, catalogLoading, catalog.length)
     && (!["capabilities", "review"].includes(activeStep) || Boolean(model && provider && providerServiceTierAvailable(provider, model.model, draft.serviceTier ?? "default")));
+  const [fileNotice, setFileNotice] = useState<SetupFileNotice | null>(null);
+
+  async function importSetup() {
+    setFileNotice(null);
+    try {
+      const picked = await setupFiles.open();
+      if (!picked.opened) return;
+      onChange(draftFromSetupFile(parseSetupFile(picked.text), draft, catalog, provider));
+      setFileNotice({ tone: "info", text: `Imported ${picked.name}. Check each step before setting up.` });
+    } catch (error) {
+      setFileNotice({ tone: "error", text: setupFileMessage(error) });
+    }
+  }
+
+  async function exportSetup() {
+    setFileNotice(null);
+    try {
+      const file = setupFileFromDraft(draft);
+      const saved = await setupFiles.save({ text: serializeSetupFile(file), suggestedName: setupFileName(file) });
+      if (saved.saved) setFileNotice({ tone: "info", text: `Saved ${saved.name}.` });
+    } catch (error) {
+      setFileNotice({ tone: "error", text: setupFileMessage(error) });
+    }
+  }
 
   useEffect(() => {
     if (draft.providerModel !== undefined || draft.step === "applying" || !provider) return;
@@ -122,6 +160,7 @@ export function WorkspaceSetupOverlay({
   }, [catalog, draft, onChange]);
 
   function move(next: WorkspaceSetupStep) {
+    setFileNotice(null);
     onChange({ ...draft, step: next, updatedAt: new Date().toISOString() });
   }
 
@@ -161,7 +200,16 @@ export function WorkspaceSetupOverlay({
             <h1 id="welcome-title" className="welcome-title">{step.title}</h1>
             <p className="welcome-body welcome-body-wide">{step.body}</p>
             {activeStep === "space" ? (
-              <SpaceStep draft={draft} onChange={onChange} />
+              <>
+                <SpaceStep draft={draft} onChange={onChange} />
+                <SetupFileAction
+                  disabled={catalogLoading || !catalog.length}
+                  glyph="file"
+                  label="Import setup…"
+                  notice={fileNotice}
+                  onClick={() => void importSetup()}
+                />
+              </>
             ) : activeStep === "projects" ? (
               <ProjectsStep draft={draft} onChange={onChange} />
             ) : activeStep === "capabilities" ? (
@@ -175,7 +223,16 @@ export function WorkspaceSetupOverlay({
                 provider={provider}
               />
             ) : (
-              <ReviewStep agentPresets={agentPresets} catalog={catalog} draft={draft} />
+              <>
+                <ReviewStep agentPresets={agentPresets} catalog={catalog} draft={draft} />
+                <SetupFileAction
+                  disabled={false}
+                  glyph="download"
+                  label="Export setup…"
+                  notice={fileNotice}
+                  onClick={() => void exportSetup()}
+                />
+              </>
             )}
           </section>
         )}
@@ -214,6 +271,41 @@ export function WorkspaceSetupOverlay({
       </footer>
     </main>
   );
+}
+
+type SetupFileNotice = { tone: "info" | "error"; text: string };
+
+function SetupFileAction({
+  disabled,
+  glyph,
+  label,
+  notice,
+  onClick,
+}: {
+  disabled: boolean;
+  glyph: GlyphName;
+  label: string;
+  notice: SetupFileNotice | null;
+  onClick: () => void;
+}) {
+  return (
+    <div className="setup-file-actions">
+      <button className="welcome-pill" disabled={disabled} onClick={onClick} type="button">
+        <Glyph name={glyph} size={14} />
+        {label}
+      </button>
+      {notice ? (
+        <span className="setup-file-note" data-tone={notice.tone} role={notice.tone === "error" ? "alert" : "status"}>
+          {notice.text}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function setupFileMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "") || "Octopus could not read or write the setup file.";
 }
 
 function SpaceStep({ draft, onChange }: { draft: WorkspaceSetupDraft; onChange: (draft: WorkspaceSetupDraft) => void }) {

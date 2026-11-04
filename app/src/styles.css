@@ -7173,6 +7173,30 @@ button.detail-row.is-clickable:hover {
   font-size: var(--ui-font-13, 13px);
 }
 
+.setup-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 36px;
+  margin-top: 22px;
+}
+
+.setup-file-actions .welcome-pill:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.setup-file-note {
+  min-width: 0;
+  color: var(--copy-dim);
+  font-size: var(--ui-font-13, 13px);
+  overflow-wrap: anywhere;
+}
+
+.setup-file-note[data-tone="error"] {
+  color: var(--color-token-error-foreground);
+}
+
 .setup-error {
   display: flex;
   flex-direction: column;

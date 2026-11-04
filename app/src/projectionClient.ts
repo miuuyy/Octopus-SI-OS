@@ -158,6 +158,18 @@ export async function mutateOctopusOsWorkspace(request: OctopusOsWorkspaceMutati
   return host.mutateOctopusOsWorkspace(request);
 }
 
+export async function saveSetupFile(request: { text: string; suggestedName: string }): Promise<{ saved: false } | { saved: true; name: string }> {
+  const host = window.octopusTransport;
+  if (!host?.saveSetupFile) throw new Error("Exporting a setup is available only in the live desktop client.");
+  return host.saveSetupFile(request);
+}
+
+export async function openSetupFile(): Promise<{ opened: false } | { opened: true; name: string; text: string }> {
+  const host = window.octopusTransport;
+  if (!host?.openSetupFile) throw new Error("Importing a setup is available only in the live desktop client.");
+  return host.openSetupFile();
+}
+
 export async function readWorkspaceSetupState(): Promise<OctopusWorkspaceSetupState> {
   const host = window.octopusTransport;
   if (!host?.workspaceSetupState) throw new Error("Workspace setup state is available only in the live desktop client.");

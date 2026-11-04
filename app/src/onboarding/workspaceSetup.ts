@@ -182,7 +182,7 @@ const PRESET_DEFINITIONS: Record<WorkspaceSetupPreset, PresetDefinition> = {
   },
 };
 
-const CAPABILITY_KINDS = new Set<WorkspaceSetupCapabilityKind>([
+export const CAPABILITY_KINDS: ReadonlySet<WorkspaceSetupCapabilityKind> = new Set<WorkspaceSetupCapabilityKind>([
   "application",
   "driver",
   "artifact",
@@ -190,10 +190,10 @@ const CAPABILITY_KINDS = new Set<WorkspaceSetupCapabilityKind>([
   "pack",
 ]);
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
+export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
 const SAFE_OPERATION_ID = /^[A-Za-z0-9_-]{8,96}$/;
-const PROJECT_ICONS = new Set(["briefcase", "folder", "code", "globe", "rocket", "palette", "storefront", "book"]);
-const PROJECT_COLORS = new Set(["violet", "indigo", "blue", "cyan", "teal", "green", "amber", "orange", "pink", "red"]);
+export const PROJECT_ICONS: ReadonlySet<string> = new Set(["briefcase", "folder", "code", "globe", "rocket", "palette", "storefront", "book"]);
+export const PROJECT_COLORS: ReadonlySet<string> = new Set(["black", "violet", "indigo", "blue", "cyan", "teal", "green", "amber", "orange", "pink", "red"]);
 
 export function createWorkspaceSetupDraft(
   preset: WorkspaceSetupPreset,

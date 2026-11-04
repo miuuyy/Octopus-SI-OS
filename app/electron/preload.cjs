@@ -464,6 +464,12 @@ contextBridge.exposeInMainWorld("octopusTransport", {
   workspaceSetupState() {
     return invokeAccess("octopus:workspace-setup-state");
   },
+  saveSetupFile(request) {
+    return invokeAccess("octopus:setup-file-save", request);
+  },
+  openSetupFile() {
+    return invokeAccess("octopus:setup-file-open");
+  },
   clientSetupRead(request) {
     return invokeAccess("octopus:client-setup-read", request);
   },

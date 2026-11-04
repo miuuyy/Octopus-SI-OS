@@ -87,6 +87,7 @@ export const SETTINGS_DESTINATIONS: readonly SettingsDestination[] = [
   destination("general.on-launch", "general", "On launch", "Restore the last active surface when the client opens.", "destination", ["startup"]),
   destination("general.open-at-login", "general", "Open at login", "Launch the packaged Octopus client after operating-system sign-in.", "setting", ["startup", "macos"]),
   destination("general.keep-awake", "general", "Keep awake", "Prevent the device from sleeping while a run is executing.", "setting", ["sleep", "run"]),
+  destination("general.export-setup", "general", "Export setup", "Save this Home's space, projects and capabilities as a setup file another Octopus can import.", "action", ["setup file", "import", "template", "share", "backup"], "live"),
   destination("notifications.mark-activity", "general", "Inbox notifications", "Notify about new messages, requests, and marks selected in Inbox.", "setting", ["notifications", "messages", "requests", "marks", "worker", "unfocused"]),
   destination("notifications.sound", "general", "Notification sound", "Choose the sound played with desktop notifications.", "setting", ["system", "silent", "activity"]),
 
