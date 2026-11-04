@@ -356,22 +356,20 @@ fn project_window(
     let mut evidence = Vec::new();
     let mut omitted = Vec::new();
     let mut refs = BTreeSet::new();
-    let mut last_seq = sequence;
     for entry in &entries[input_index..] {
         let seq = entry
             .source_movement_seq
             .ok_or("selected source context has no movement evidence")?;
-        if seq < last_seq
+        if seq < sequence
             || !refs.insert((
                 entry.source_artifact.id.clone(),
                 entry.source_artifact.content,
             ))
         {
             return Err(
-                "selected source context has conflicting order or duplicate evidence".into(),
+                "selected source context has evidence before its selected input or duplicate evidence".into(),
             );
         }
-        last_seq = seq;
         if let Some(rule) = config
             .evidence_rules
             .iter()

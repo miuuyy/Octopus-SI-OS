@@ -362,6 +362,27 @@ impl TurnSink<'_> {
         self.send_observation(output, false)
     }
 
+    pub(crate) fn send_awaiting_results_receipt(&self) -> Result<(), InterfaceDriverError> {
+        let awaiting_results = self
+            .continuity_snapshot()
+            .map(|continuity| continuity.outstanding().map(pending_request_key).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if awaiting_results.is_empty() {
+            return Ok(());
+        }
+        if !self.context_output_labels.contains(INTERFACE_CONTEXT_UPDATED_LABEL)
+            || !self.client_projection_output_labels.contains(INTERFACE_CONTEXT_UPDATED_LABEL)
+        {
+            return Err(InterfaceDriverError::FailedClosed(
+                "a result consumed while other calls remain outstanding requires the declared context output binding".into(),
+            ));
+        }
+        self.send(CodexTurnOutput::client(
+            INTERFACE_CONTEXT_UPDATED_LABEL,
+            serde_json::json!({"awaiting_results": awaiting_results, "source_movement_seq": self.source_movement_seq}),
+        ))
+    }
+
     pub(crate) fn send_progress(&self, output: CodexTurnOutput) -> Result<(), InterfaceDriverError> {
         if output.route != ProviderEmissionRoute::ClientProjection {
             return Err(InterfaceDriverError::FailedClosed(

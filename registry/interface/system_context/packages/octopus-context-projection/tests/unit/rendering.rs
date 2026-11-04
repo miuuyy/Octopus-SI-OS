@@ -85,3 +85,27 @@ fn dropping_trimmed_evidence_recomputes_the_remaining_field_omission() {
     let rendered: Value = serde_json::from_str(output["text"].as_str().unwrap().lines().last().unwrap()).unwrap();
     assert_eq!(rendered["omission"]["selected_fields_trimmed"], false);
 }
+
+#[test]
+fn an_input_consumed_after_later_outputs_keeps_its_window() {
+    let config: ContextProjectionConfig = serde_json::from_value(json!({
+        "schema_version":1,"observer_run":"observer","projection_run":"projection","source_run":"run",
+        "source_worker_interface":"worker","source_provider_interface":"provider","source_client_interface":"client",
+        "source_relay_interface":"relay","terminal_label":"interface.artifact.output","snapshot_labels":["interface.artifact.output"],
+        "input_rules":[{"labels":["operator.message"],"pointers":["/text"]}],"input_routes":[],
+        "evidence_rules":[{"labels":["email.event"],"pointers":["/message/subject"]}],"terminal_pointers":["/text"],
+        "collection_source":"memory","publication_tool":"memory.save","task":"Remember what matters.",
+        "bounds":{"ancestry":{"max_carriers":32,"max_entries":8192,"max_total_bytes":33554432},"max_field_bytes":32768,
+            "max_input_bytes":16777216,"max_output_bytes":131072,"max_projected_entries":64,"max_snapshot_entries":4096}})).unwrap();
+    let entry = |label: &str, seq: u64, payload: Value| SessionContextArtifact {label:label.into(),payload,
+        source_artifact:serde_json::from_value(json!({"id":format!("{label}:{seq}"),"content":vec![seq as u8;32]})).unwrap(),source_movement_seq:Some(seq)};
+    let carrier: ArtifactRef = serde_json::from_value(json!({"id":"interface.artifact.output:terminal","content":vec![9u8;32]})).unwrap();
+    let mut entries = vec![entry("operator.message",1,json!({"text":"look around"})),
+        entry("interface.artifact.output",111,json!({"text":"done"})),
+        entry("email.event",3,json!({"message":{"subject":"queued while the turn worked"}})),
+        entry("turn.agent_message",157,json!({"text":"read the letter"}))];
+    let projected = project_window(&config, "ee", &carrier, 160, &json!({"text":"read the letter"}), None, &entries).unwrap();
+    assert_eq!(projected["evidence"][0]["source_movement_seq"], 3);
+    entries.push(entries[2].clone());
+    assert!(project_window(&config, "ee", &carrier, 160, &json!({"text":"read the letter"}), None, &entries).is_err());
+}

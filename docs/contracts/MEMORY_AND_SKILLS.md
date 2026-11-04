@@ -82,6 +82,12 @@ Other context entries remain exact references in the omission record. The
 projection verifies their source evidence before selection and never trims
 publication proof to meet its output bound.
 
+A projection window starts at its selected input and follows the session's
+consumption order. An input admitted while the source turn was working is
+consumed after outputs that entered the ledger later, so evidence after the
+selected input may carry an earlier movement than its neighbour. The window
+refuses only evidence older than the selected input and duplicate references.
+
 An observer's final text is one JSON object. Malformed JSON produces an explicit
 `memory.capture.error` diagnostic with the original terminal artifact reference.
 That diagnostic has no capture-success mark. It settles its source so the

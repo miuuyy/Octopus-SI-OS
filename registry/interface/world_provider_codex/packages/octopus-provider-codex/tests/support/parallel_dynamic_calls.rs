@@ -135,8 +135,27 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
     let mut seq = 7;
     let mut durable = initial;
     let mut emitted = Vec::new();
+    async fn admitted_outputs(
+        mut outputs: tokio::sync::mpsc::UnboundedReceiver<ProviderStreamEmission>,
+    ) -> Vec<ProviderEmission> {
+        let mut admitted_outputs = Vec::new();
+        while let Some(output) = outputs.recv().await {
+            match output {
+                ProviderStreamEmission::Turn(emission) | ProviderStreamEmission::Progress(emission) => {
+                    admitted_outputs.push(emission);
+                }
+                ProviderStreamEmission::ContextBoundary { emissions, admitted } => {
+                    admitted_outputs.extend(emissions);
+                    admitted.send(Ok(())).unwrap();
+                }
+                _ => panic!("parallel calls emitted an unexpected provider output family"),
+            }
+        }
+        admitted_outputs
+    }
     for (index, answer) in [None, Some(("call-b", "b")), Some(("call-a", "a"))].into_iter().enumerate() {
-        let (emit, mut outputs) = ProviderOutputStream::channel();
+        let (emit, outputs) = ProviderOutputStream::channel();
+        let admitted = tokio::spawn(admitted_outputs(outputs));
         emit.continuity.lock().unwrap().continuity = Some(durable.clone());
         let sink = TurnSink {
             emit: &emit, output_root: root.path(), live_stream_root: &streams, provider_interface: &provider,
@@ -180,10 +199,7 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
         durable = sink.continuity_snapshot().unwrap();
         drop(sink);
         drop(emit);
-        while let Ok(output) = outputs.try_recv() {
-            let (ProviderStreamEmission::Turn(emission) | ProviderStreamEmission::Progress(emission)) = output else {
-                panic!("parallel calls emitted an unexpected provider output family")
-            };
+        for emission in admitted.await.unwrap() {
             let label = emission.artifact.read_manifest().unwrap().label;
             let value: serde_json::Value = serde_json::from_slice(&emission.artifact.read_payload_bytes().unwrap()).unwrap();
             if labels.contains(&label) {
@@ -207,6 +223,13 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
         let state: CodexContinuityState = serde_json::from_value(call[CODEX_CONTINUITY_FIELD].clone()).unwrap();
         assert_eq!(calls_of(&state), expected);
     }
+    let receipts = emitted.iter()
+        .filter(|(index, label, _)| *index == 1 && label == INTERFACE_CONTEXT_UPDATED_LABEL)
+        .collect::<Vec<_>>();
+    assert_eq!(receipts.len(), 1, "a result consumed while another call is outstanding hands one context receipt");
+    assert_eq!(receipts[0].2["awaiting_results"], json!(["tool:call-a"]));
+    let awaiting: CodexContinuityState = serde_json::from_value(receipts[0].2[CODEX_CONTINUITY_FIELD].clone()).unwrap();
+    assert_eq!(calls_of(&awaiting), vec!["call-a"]);
     let (_, _, answer) = emitted.iter()
         .find(|(index, label, value)| *index == 2 && label == INTERFACE_ARTIFACT_OUTPUT_LABEL && value["text"] == "both")
         .expect("the native turn answers once both results returned");

@@ -757,6 +757,7 @@ impl CodexAppServerInterfaceDriver {
         };
         self.remove_pending_request(context.scope, &pending).await?;
         context.sink.settle_pending(&pending.key);
+        context.sink.send_awaiting_results_receipt()?;
         context.control.publish(CodexTurnControlTarget::Draining {
             handle: request_handle,
             request_ids: self.next_request_id.clone(),

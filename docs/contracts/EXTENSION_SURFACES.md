@@ -435,6 +435,12 @@ declared context output, so the authored run advances with it before a later
 tool result is consumed. A queue-only input receipt with no continuity remains
 `turn.input.acknowledged` and does not claim a context change.
 
+A tool, operation or operator result that settles one of several outstanding
+calls of a native turn leaves the turn waiting for the rest. The provider then
+emits `interface.context.updated` naming the `awaiting_results` with the new
+continuity, so the run consumes that result and retires its result input before
+the next one arrives; the last result resumes the model.
+
 The provider declares conversational input formats in `private_config.input_messages`.
 Each label names the payload fields that carry its text, client observations,
 attachments and request identity. An admitted message uses the same decoder when
