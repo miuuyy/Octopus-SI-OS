@@ -131,14 +131,20 @@ pub(super) fn validate_transition(before: &RunRecord, after: &RunRecord, config:
     if prior == next { return Ok(()); }
     if !follows(&prior, &next) { return Err("replacement changed its exact predecessor".into()); }
     let old = output(&prior)?; let new = output(&next)?;
-    if reference(old)? == reference(new)? || old.artifact_label != new.artifact_label {
-        return Err("rejected final replacement must change bytes and retain its declared label".into());
+    if reference(old)? == reference(new)? {
+        return Err("rejected final replacement must change bytes".into());
     }
-    let mut expected_item = old.checkpoint.clone(); expected_item.id = new.checkpoint.id.clone();
-    if expected_item != new.checkpoint || !config.checkpoints.iter().any(|template|
+    let declared = |item: &PendingHandoffItem, verified: bool| config.checkpoints.iter().any(|template|
         template.role == RunAuthoringCheckpointRole::ProviderArtifactOutput && template.result_receiving.is_empty()
-        && pending_output_matches_template(old, template)) {
-        return Err("replacement changed its output contract or can dispatch a tool effect".into());
+        && template.required_verified_artifacts.is_empty() != verified && pending_output_matches_template(item, template));
+    if old.artifact_label == new.artifact_label {
+        let mut expected_item = old.checkpoint.clone(); expected_item.id = new.checkpoint.id.clone();
+        if expected_item != new.checkpoint || !(declared(old, true) || declared(old, false)) {
+            return Err("replacement changed its output contract or can dispatch a tool effect".into());
+        }
+    } else if new.checkpoint.epoch != old.checkpoint.epoch || new.checkpoint.artifact_bindings != old.checkpoint.artifact_bindings
+        || !declared(old, true) || !declared(new, false) {
+        return Err("a rejected final changes its label only from a verified output to a declared unverified diagnostic output".into());
     }
     let generation = optional_u64(&before.interface_state[provider], "authoring_generation")?.checked_add(1).ok_or("replacement generation overflow")?;
     let prefix = checkpoint_prefix(&before.id, &new.artifact_id, generation);
@@ -147,18 +153,44 @@ pub(super) fn validate_transition(before: &RunRecord, after: &RunRecord, config:
     raw_frontier_checkpoint_ids(&after.interface_state[provider])?;
     let old_frontier: Vec<String> = serde_json::from_value(before.interface_state[provider][FRONTIER_CHECKPOINT_IDS].clone()).map_err(|e| e.to_string())?;
     let new_frontier: Vec<String> = serde_json::from_value(after.interface_state[provider][FRONTIER_CHECKPOINT_IDS].clone()).map_err(|e| e.to_string())?;
-    if old_frontier.len() != new_frontier.len() { return Err("replacement changed its frontier contracts".into()); }
+    let relabeled = old.artifact_label != new.artifact_label;
+    if !relabeled && old_frontier.len() != new_frontier.len() { return Err("replacement changed its frontier contracts".into()); }
     let mut checkpoints = Vec::new();
-    for (old_id, new_id) in old_frontier.iter().zip(&new_frontier) {
-        let previous = before.checkpoint(&CheckpointId::new(old_id)).ok_or("replacement predecessor checkpoint missing")?;
+    let mut carried = BTreeSet::new();
+    for new_id in &new_frontier {
         let next = after.checkpoint(&CheckpointId::new(new_id)).ok_or("replacement successor checkpoint missing")?;
-        let mut expected = previous.clone(); expected.id = next.id.clone();
-        expected.trace = octopus_ledger::TraceId(format!("trace:{}:{}", before.id, next.id));
-        if expected != *next || old_id.strip_prefix(&previous_prefix).map(|suffix| format!("{prefix}{suffix}")).as_ref() != Some(new_id) {
-            let changes = json_patch::diff(&serde_json::to_value(&expected).map_err(|e| e.to_string())?, &serde_json::to_value(next).map_err(|e| e.to_string())?);
+        let output_route = relabeled && new_id == new.checkpoint.id.as_str();
+        let old_id = if output_route { old.checkpoint.id.as_str().to_owned() } else {
+            format!("{previous_prefix}{}", new_id.strip_prefix(&prefix).ok_or("replacement frontier left its generation")?)
+        };
+        if !old_frontier.contains(&old_id) || !carried.insert(old_id.clone())
+            || (relabeled && !output_route && old_id == old.checkpoint.id.as_str()) {
+            return Err("replacement changed its frontier contracts".into());
+        }
+        let previous = before.checkpoint(&CheckpointId::new(&old_id)).ok_or("replacement predecessor checkpoint missing")?;
+        let mut expected = serde_json::to_value(previous).map_err(|e| e.to_string())?;
+        expected["id"] = serde_json::json!(next.id);
+        expected["trace"] = serde_json::json!(format!("trace:{}:{}", before.id, next.id));
+        if output_route {
+            let item = serde_json::to_value(&new.checkpoint).map_err(|e| e.to_string())?;
+            for field in ["interface_binding", "outbound_interface_bindings", "required_verified_artifacts"] {
+                expected[field] = item[field].clone();
+            }
+        }
+        let actual = serde_json::to_value(next).map_err(|e| e.to_string())?;
+        if expected != actual {
+            let changes = json_patch::diff(&expected, &actual);
             return Err(format!("replacement changed frontier '{old_id}' -> '{new_id}': {}", changes.iter().map(|op|op.path().to_string()).collect::<Vec<_>>().join(",")));
         }
-        checkpoints.push(serde_json::to_value(next).map_err(|e| e.to_string())?);
+        checkpoints.push(actual);
+    }
+    for old_id in old_frontier.iter().filter(|id| !carried.contains(*id)) {
+        let previous = before.checkpoint(&CheckpointId::new(old_id)).ok_or("replacement predecessor checkpoint missing")?;
+        let admits_only_new = previous.interface_binding.as_ref().is_some_and(|binding| matches!(&binding.config.artifact_policy,
+            BindingArtifactPolicy::Allow { names, namespaces } if namespaces.is_empty() && *names == [new.artifact_label.clone()]));
+        if !relabeled || !old_id.contains("_standing_") || !admits_only_new || !previous.required_verified_artifacts.is_empty() {
+            return Err("replacement changed its frontier contracts".into());
+        }
     }
     let mut expected = serde_json::to_value(before).map_err(|e| e.to_string())?;
     replace_owned_frontier(expected.as_object_mut().unwrap(), &old_frontier.iter().cloned().collect(), checkpoints, &new_frontier)?;

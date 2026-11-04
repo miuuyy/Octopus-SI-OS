@@ -103,7 +103,10 @@ rewrites the model's decision. Well-formed outcomes still cross the declared
 capture verifier before any success mark is admitted. An outcome that verifier
 refuses is settled the same way: its replacement is a `memory.capture.error`
 diagnostic that keeps the model's decision and names the refusal movements, so a
-refused outcome is never resubmitted unchanged.
+refused outcome is never resubmitted unchanged. The diagnostic is an ordinary
+projection output, not part of the projection run's session snapshot. A refused
+final changes its label only this way: from a verified output to a declared
+output that requires no mark, with the refusal evidence as its proof.
 
 ## Remembering is one call
 

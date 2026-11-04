@@ -1270,9 +1270,9 @@ fn plan_projection_run(
     descriptor["interface_driver_config"]["private_config"]["run_authoring_profile"] = profile;
     descriptor["interface_driver_config"]["private_config"]["model_hidden_tools"] = json!([tool]);
     descriptor["interface_driver_config"]["private_config"]["context_output_labels"] =
-        json!([OUTCOME_LABEL, OUTCOME_ERROR_LABEL]);
+        json!([OUTCOME_LABEL]);
     descriptor["interface_driver_config"]["private_config"]["session_snapshot_labels"] =
-        json!([OUTCOME_LABEL, OUTCOME_ERROR_LABEL]);
+        json!([OUTCOME_LABEL]);
     descriptor["interface_driver_config"]["private_config"]["client_projection_output_labels"] =
         json!([OUTPUT_LABEL, OUTCOME_LABEL, OUTCOME_ERROR_LABEL]);
     descriptor["interface_driver_config"]["host_slots"]["run_records_root"] =
