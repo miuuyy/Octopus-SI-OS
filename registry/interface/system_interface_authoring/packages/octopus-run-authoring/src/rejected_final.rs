@@ -25,6 +25,12 @@ pub(super) struct Rejection {
 #[derive(Clone)]
 pub struct RejectedFinalOutput { proof: Rejection }
 
+impl RejectedFinalOutput {
+    pub fn refusal_movement_seqs(&self) -> Vec<u64> {
+        self.proof.refusals.iter().map(|row| row.seq).collect()
+    }
+}
+
 pub(super) fn follows(before: &PendingHandoff, after: &PendingHandoff) -> bool {
     after.replacement.as_ref().is_some_and(|proof| proof.predecessor == *before)
         && before.source_movement_seq == after.source_movement_seq && before.items != after.items

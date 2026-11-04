@@ -52,7 +52,7 @@ fn saved_projection_outcomes_fit_with_exact_publication_proof() {
         let mut reader=FileCheckedRunReader::open(&evidence,Some(seq-1)).unwrap();
         let movement=reader.admitted_movement(seq).unwrap().unwrap();let artifact=movement.artifact.as_ref().unwrap();
         let (_,payload)=reader.artifact(artifact).unwrap();
-        let (label,output)=project_outcome(&ctx,&config,outcome,artifact,&payload,&movement).unwrap();
+        let (label,output)=project_outcome(&ctx,&config,outcome,artifact,&payload,&movement,None).unwrap();
         assert_eq!(label,OUTCOME_LABEL);
         let bytes=projection_bytes(&output,config.bounds.max_output_bytes).unwrap();assert_eq!(bytes.len(),new_bytes);
         let terminal:Value=serde_json::from_slice(&payload).unwrap();

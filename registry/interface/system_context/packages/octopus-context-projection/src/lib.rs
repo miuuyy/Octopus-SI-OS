@@ -6,7 +6,7 @@ use octopus_interfaces::InterfaceArtifactFile;
 use octopus_ledger::ArtifactRef;
 use octopus_run_authoring::{
     ProviderEmission, ProviderEmissionRoute, ProviderHandoffOutcome, ProviderHandoffSession,
-    ProviderSourceRecovery, RunAuthoringResultIdentity, SessionContextArtifact,
+    ProviderSourceRecovery, RejectedFinalOutput, RunAuthoringResultIdentity, SessionContextArtifact,
     snapshot_projection::{
         SnapshotInputOrigin, SnapshotInputRoute, SnapshotSourceScope, SnapshotWindowBounds,
         resolve_session_snapshot_window, verify_selected_source_input, verify_source_bound_entry,
@@ -681,6 +681,7 @@ fn project_outcome(
     artifact: &ArtifactRef,
     payload_bytes: &[u8],
     movement: &octopus_ledger::Movement,
+    rejected: Option<&RejectedFinalOutput>,
 ) -> Result<(&'static str, Value), String> {
     let limits = ctx.required_host_io_limits()?;
     let scope = SnapshotSourceScope {
@@ -742,14 +743,17 @@ fn project_outcome(
         Ok(value) => (value, None),
         Err(error) => (Value::Null, Some(error)),
     };
-    let label = if decision_error.is_some() { OUTCOME_ERROR_LABEL } else { OUTCOME_LABEL };
-    let output = json!({"schema_version":1,"label":label,
+    let label = if decision_error.is_some() || rejected.is_some() { OUTCOME_ERROR_LABEL } else { OUTCOME_LABEL };
+    let mut output = json!({"schema_version":1,"label":label,
                 "source":{"run":config.source_run,"ee":observed_ee,"observer_run":config.observer_run,
                     "provider_interface":outcome.provider_interface,"terminal_artifact":artifact,
                     "terminal_source_movement_seq":source_seq},
                 "experience":{"source_artifact":selected.source_artifact,"source_movement_seq":selected.source_movement_seq},
                 "outcome":decision,"outcome_parse_error":decision_error,"evidence":evidence,
                 "omission":{"before_current_experience":true,"unselected_entries":omitted,"selected_evidence_trimmed":false}});
+    if let Some(rejected) = rejected {
+        output["outcome_refusal"] = json!({"refusal_movement_seqs":rejected.refusal_movement_seqs()});
+    }
     Ok((label, output))
 }
 
@@ -814,7 +818,7 @@ pub async fn process_admitted_input(
                 &outcome.relay_interface,
             ))
     }) {
-        project_outcome(ctx, config, outcome, &envelope.artifact, &captured.payload_bytes, movement)?
+        project_outcome(ctx, config, outcome, &envelope.artifact, &captured.payload_bytes, movement, rejected.as_ref())?
     } else {
         if movement.from
             != octopus_ledger::Endpoint::Interface(octopus_descriptors::InterfaceId::new(

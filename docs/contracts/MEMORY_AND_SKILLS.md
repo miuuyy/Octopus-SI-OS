@@ -100,7 +100,10 @@ An observer's final text is one JSON object. Malformed JSON produces an explicit
 That diagnostic has no capture-success mark. It settles its source so the
 projection can process the next observation; it never extracts fenced JSON or
 rewrites the model's decision. Well-formed outcomes still cross the declared
-capture verifier before any success mark is admitted.
+capture verifier before any success mark is admitted. An outcome that verifier
+refuses is settled the same way: its replacement is a `memory.capture.error`
+diagnostic that keeps the model's decision and names the refusal movements, so a
+refused outcome is never resubmitted unchanged.
 
 ## Remembering is one call
 
