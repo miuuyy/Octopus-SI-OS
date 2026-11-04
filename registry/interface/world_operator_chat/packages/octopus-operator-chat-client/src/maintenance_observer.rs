@@ -772,7 +772,12 @@ fn projection_contracts(
     let payload_labels = request
         .source_payload_input_labels
         .iter()
-        .filter(|label| !additional.contains(*label) && !labels.contains(label))
+        .filter(|label| {
+            !additional.iter().chain(&labels).any(|declared| {
+                label.as_str() == declared
+                    || label.strip_prefix(declared.as_str()).is_some_and(|rest| rest.starts_with('.'))
+            })
+        })
         .cloned()
         .collect::<Vec<_>>();
     if !labels.is_empty() {
