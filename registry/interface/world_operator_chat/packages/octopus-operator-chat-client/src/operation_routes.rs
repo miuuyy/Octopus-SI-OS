@@ -66,6 +66,20 @@ impl OperationRoutes {
         }
     }
 
+    pub(crate) fn standing_input_labels(&self, inputs: &[ExternalInputSeed]) -> Result<Vec<String>, String> {
+        let mut labels = BTreeSet::new();
+        for input in inputs {
+            if let Some(AuthoredInterfaceBinding {
+                config: InterfaceBindingConfig { artifact_policy: BindingArtifactPolicy::Allow { names, .. } },
+                ..
+            }) = self.standing_input(input)?
+            {
+                labels.extend(names);
+            }
+        }
+        Ok(labels.into_iter().collect())
+    }
+
     pub(crate) fn catalog_bindings(&self) -> impl Iterator<Item = ArtifactBindingSeed> + '_ {
         self.connected
             .values()

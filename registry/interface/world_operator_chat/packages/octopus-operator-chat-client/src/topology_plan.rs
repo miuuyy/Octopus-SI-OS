@@ -464,6 +464,7 @@ pub(crate) fn plan_operator_chat_topology_files_for_source(
             config: &config,
             identity: &identity,
             source_input_labels: vec![config.artifact_labels.message.clone()],
+            source_payload_input_labels: operations.standing_input_labels(&request.external_inputs)?,
             existing: request.existing_run_record.as_ref(),
             write_hash_algorithm: request.write_hash_algorithm,
         },

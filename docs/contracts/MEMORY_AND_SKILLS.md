@@ -88,6 +88,13 @@ consumed after outputs that entered the ledger later, so evidence after the
 selected input may carry an earlier movement than its neighbour. The window
 refuses only evidence older than the selected input and duplicate references.
 
+Any input that can start a turn of the observed run can be the selected input.
+An operator message gives its declared fields. An artifact admitted from one of
+the run's external inputs, such as mail or a sensor event, is selected whole:
+each top-level member except `session_context` becomes a field, because its
+shape belongs to the interface that produced it and the provider showed the
+model the same payload.
+
 An observer's final text is one JSON object. Malformed JSON produces an explicit
 `memory.capture.error` diagnostic with the original terminal artifact reference.
 That diagnostic has no capture-success mark. It settles its source so the

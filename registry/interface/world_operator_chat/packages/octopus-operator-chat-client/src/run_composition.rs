@@ -765,6 +765,7 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
             config: &config,
             identity: &identity,
             source_input_labels: vec![request.seed.label.clone(), config.artifact_labels.message.clone()],
+            source_payload_input_labels: operations.standing_input_labels(&request.external_inputs)?,
             existing: None,
             write_hash_algorithm: WriteHashAlgorithm::Blake3,
         },

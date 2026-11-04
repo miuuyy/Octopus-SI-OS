@@ -46,6 +46,8 @@ pub struct MaintenanceObserverRequest {
     pub source_provider_interface_id: String,
     pub source_client_interface_id: String,
     pub source_input_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_payload_input_labels: Vec<String>,
     pub config: MaintenanceObserverConfig,
     pub write_hash_algorithm: WriteHashAlgorithm,
 }
@@ -767,10 +769,25 @@ fn projection_contracts(
         .filter(|label| !additional.contains(*label))
         .cloned()
         .collect::<Vec<_>>();
+    let payload_labels = request
+        .source_payload_input_labels
+        .iter()
+        .filter(|label| !additional.contains(*label) && !labels.contains(label))
+        .cloned()
+        .collect::<Vec<_>>();
     if !labels.is_empty() {
         rules.push(ProjectionRule {
             labels,
             pointers: cfg.input_pointers.clone(),
+            whole_payload: false,
+            origin: None,
+        });
+    }
+    if !payload_labels.is_empty() {
+        rules.push(ProjectionRule {
+            labels: payload_labels,
+            pointers: Vec::new(),
+            whole_payload: true,
             origin: None,
         });
     }
@@ -878,6 +895,7 @@ fn projection_contracts(
             evidence.push(ProjectionRule {
                 labels: result_labels.into_iter().collect(),
                 pointers: cfg.tool_result_pointers.clone(),
+                whole_payload: false,
                 origin: None,
             });
         }

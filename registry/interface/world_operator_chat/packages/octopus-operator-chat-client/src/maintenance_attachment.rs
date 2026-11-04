@@ -19,6 +19,7 @@ pub(super) struct AttachmentRequest<'a> {
     pub config: &'a ClientConfig,
     pub identity: &'a PlannedIdentity,
     pub source_input_labels: Vec<String>,
+    pub source_payload_input_labels: Vec<String>,
     pub existing: Option<&'a Value>,
     pub write_hash_algorithm: WriteHashAlgorithm,
 }
@@ -86,6 +87,7 @@ pub(super) fn wire(
         source_provider_interface_id: identity.model_interface_id.clone(),
         source_client_interface_id: identity.chat_interface_id.clone(),
         source_input_labels,
+        source_payload_input_labels: request.source_payload_input_labels,
         config,
         write_hash_algorithm: request.write_hash_algorithm,
     }, &record, writes, request.capabilities)?;

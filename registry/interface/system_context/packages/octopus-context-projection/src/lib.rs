@@ -49,7 +49,10 @@ pub struct ProjectionBounds {
 #[serde(deny_unknown_fields)]
 pub struct ProjectionRule {
     pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole_payload: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SnapshotInputOrigin>,
 }
@@ -154,17 +157,22 @@ impl ContextProjectionConfig {
         if self.input_rules.is_empty() || self.input_routes.is_empty() {
             return Err("projection requires explicit source input rules and routes".into());
         }
-        for rule in self.input_rules.iter().chain(&self.evidence_rules) {
+        let input_rules = self.input_rules.iter().map(|rule| (rule, true));
+        for (rule, input) in input_rules.chain(self.evidence_rules.iter().map(|rule| (rule, false))) {
             if rule.labels.is_empty()
-                || rule.pointers.is_empty()
+                || rule.pointers.is_empty() != rule.whole_payload
+                || rule.whole_payload && (!input || rule.origin.is_some())
                 || rule
                     .labels
                     .iter()
                     .any(|label| !exact(label) || !labels.insert(label))
             {
                 return Err(
-                    "projection rules require disjoint exact labels and explicit fields".into(),
+                    "projection rules require disjoint exact labels and explicit fields; only an input without origin may select its whole payload".into(),
                 );
+            }
+            if rule.whole_payload {
+                continue;
             }
             validate_pointers(&rule.pointers)?;
             if let Some(origin) = &rule.origin {
@@ -220,6 +228,23 @@ fn validate_pointers(pointers: &[String]) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn input_pointers(rule: &ProjectionRule, payload: &Value) -> Result<Vec<String>, String> {
+    if !rule.whole_payload {
+        return Ok(rule.pointers.clone());
+    }
+    let pointers = payload
+        .as_object()
+        .ok_or("a whole-payload input must be a JSON object")?
+        .keys()
+        .filter(|key| key.as_str() != "session_context")
+        .map(|key| format!("/{}", key.replace('~', "~0").replace('/', "~1")))
+        .collect::<Vec<_>>();
+    if pointers.is_empty() {
+        return Err("a whole-payload input carries no members".into());
+    }
+    Ok(pointers)
 }
 
 fn fields(
@@ -347,9 +372,10 @@ fn project_window(
         .iter()
         .find(|rule| rule.labels.contains(&input.label))
         .ok_or("selected input has no declared fields")?;
+    let selected_pointers = input_pointers(input_rule, &input.payload)?;
     let (input_fields, input_trimmed) = fields(
         &input.payload,
-        &input_rule.pointers,
+        &selected_pointers,
         config.bounds.max_field_bytes,
         true,
     )?;
@@ -397,7 +423,7 @@ fn project_window(
             "omission":{"before_selected_input":true,"unselected_fields":true,"unselected_labels":true,
                 "selected_fields_trimmed":false,"selected_evidence_trimmed":trimmed_entries > 0,
                 "trimmed_evidence_entries":trimmed_entries,"unselected_entries":omitted,
-                "input_pointers":input_rule.pointers,"terminal_pointers":config.terminal_pointers,
+                "input_pointers":selected_pointers,"terminal_pointers":config.terminal_pointers,
                 "evidence_rules":config.evidence_rules},
         });
     if !input_trimmed.is_empty() { output["selected_input"]["trimmed_fields"] = json!(input_trimmed); }

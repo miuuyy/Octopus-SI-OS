@@ -109,3 +109,27 @@ fn an_input_consumed_after_later_outputs_keeps_its_window() {
     entries.push(entries[2].clone());
     assert!(project_window(&config, "ee", &carrier, 160, &json!({"text":"read the letter"}), None, &entries).is_err());
 }
+
+#[test]
+fn an_external_input_is_selected_whole() {
+    let mut config = json!({
+        "schema_version":1,"observer_run":"observer","projection_run":"projection","source_run":"run",
+        "source_worker_interface":"worker","source_provider_interface":"provider","source_client_interface":"client",
+        "source_relay_interface":"relay","terminal_label":"interface.artifact.output","snapshot_labels":["interface.artifact.output"],
+        "input_rules":[{"labels":["operator.message"],"pointers":["/text"]},{"labels":["watch.notice"],"whole_payload":true}],
+        "input_routes":[],"evidence_rules":[],"terminal_pointers":["/text"],
+        "collection_source":"memory","publication_tool":"memory.save","task":"Remember what matters.",
+        "bounds":{"ancestry":{"max_carriers":32,"max_entries":8192,"max_total_bytes":33554432},"max_field_bytes":32768,
+            "max_input_bytes":16777216,"max_output_bytes":131072,"max_projected_entries":64,"max_snapshot_entries":4096}});
+    let parsed: ContextProjectionConfig = serde_json::from_value(config.clone()).unwrap();
+    let entry = |label: &str, seq: u64, payload: Value| SessionContextArtifact {label:label.into(),payload,
+        source_artifact:serde_json::from_value(json!({"id":format!("{label}:{seq}"),"content":vec![seq as u8;32]})).unwrap(),source_movement_seq:Some(seq)};
+    let carrier: ArtifactRef = serde_json::from_value(json!({"id":"interface.artifact.output:terminal","content":vec![9u8;32]})).unwrap();
+    let entries = vec![entry("watch.notice",4,json!({"trigger":"fired","message/body":{"subject":"news"},"session_context":{"parent":null}})),
+        entry("turn.agent_message",5,json!({"text":"read it"}))];
+    let projected = project_window(&parsed, "ee", &carrier, 6, &json!({"text":"read it"}), None, &entries).unwrap();
+    assert_eq!(projected["selected_input"]["fields"], json!({"/trigger":"fired","/message~1body":{"subject":"news"}}));
+    config["input_rules"][1]["pointers"] = json!(["/trigger"]);
+    let mixed: ContextProjectionConfig = serde_json::from_value(config).unwrap();
+    assert!(mixed.validate().is_err());
+}
