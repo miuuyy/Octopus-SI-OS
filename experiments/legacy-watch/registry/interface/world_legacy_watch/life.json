@@ -1,0 +1,39 @@
+{
+  "processes": [
+    {
+      "bin": "python3",
+      "io_limits": {
+        "max_control_frame_bytes": 1048576,
+        "max_stderr_bytes": 262144,
+        "max_manifest_bytes": 1048576,
+        "max_payload_bytes": 268435456
+      },
+      "args": [
+        {"repository_file": "registry/interface/world_legacy_watch/legacy_watch_life.py"}
+      ],
+      "required_files": [
+        "registry/interface/world_legacy_watch/legacy_watch_life.py",
+        "registry/interface/world_legacy_watch/octopus_content_hash.py"
+      ],
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "inherit_env": ["PATH"],
+      "authority": {
+        "read_root_slots": [],
+        "write_root_slots": [],
+        "executable_root_slots": [],
+        "read_paths": [],
+        "write_paths": [],
+        "executable_paths": [],
+        "executable_commands": ["python3"],
+        "read_env_paths": [],
+        "write_env_paths": [],
+        "executable_env_paths": [],
+        "allow_network": false,
+        "allow_local_ipc": false
+      },
+      "read_handles": ["ledger", "blobs"]
+    }
+  ]
+}

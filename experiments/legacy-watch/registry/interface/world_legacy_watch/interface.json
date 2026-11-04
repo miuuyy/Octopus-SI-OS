@@ -1,0 +1,10 @@
+{
+  "id": "world_legacy_watch",
+  "interface_type": "world",
+  "role": "sensor",
+  "direction": "inbound",
+  "source_names": [
+    "legacy_watch"
+  ],
+  "interface_driver_ref": "legacy_watch_life"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "system_worker_legacy_relay",
+  "ceiling": {
+    "interfaces": [
+      "world_email",
+      "world_legacy_watch"
+    ],
+    "tools": [],
+    "wek": [],
+    "mark_outcomes": [],
+    "hard_blocked_tools": []
+  },
+  "role_artifacts": []
+}

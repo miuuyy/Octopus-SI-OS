@@ -1,0 +1,41 @@
+{
+  "schema": "octopus.setup",
+  "schema_version": 1,
+  "space": {
+    "name": "My space",
+    "goal": "Organize my work and life"
+  },
+  "projects": [],
+  "capabilities": [
+    {
+      "kind": "application",
+      "id": "world_cron",
+      "projects": []
+    },
+    {
+      "kind": "application",
+      "id": "world_memory_cron",
+      "projects": []
+    },
+    {
+      "kind": "application",
+      "id": "world_provider_chatgpt",
+      "projects": []
+    },
+    {
+      "kind": "application",
+      "id": "world_system_review",
+      "projects": []
+    },
+    {
+      "kind": "extension",
+      "id": "builtin.provider-credential-repair",
+      "projects": []
+    },
+    {
+      "kind": "pack",
+      "id": "codex",
+      "projects": []
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "system_worker_legacy_relay",
+  "interface_type": "system",
+  "role": "worker",
+  "direction": "bidirectional",
+  "source_names": [
+    "legacy_relay"
+  ]
+}
