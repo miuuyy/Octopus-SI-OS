@@ -124,10 +124,8 @@ your machine:
 - The embedded launch terminal prepares a command ending in `octopus up`.
   Press Enter to run it and wait for the runtime's ready state.
 - Workspace setup asks for a starting structure, project names, and capabilities.
-  Review the choices and select **Set up Octopus**. **Import setup…** on the
-  first step fills every step from a setup file instead, and **Export setup…**
-  on the review step saves your choices as one. A running Home exports its own
-  setup from **Settings → General → Setup file**.
+  Review the choices and select **Set up Octopus**. To start from someone
+  else's setup instead, see [Setup files](#setup-files).
 
 ![Local client lock screen asking for the Administrator or Test password](images/client/client-lock.png)
 
@@ -148,6 +146,50 @@ and how Applications and Drivers become available to a project.
 Model availability and usage limits belong to the provider account. Additional
 applications and voice capabilities can require their own credentials and macOS
 permissions.
+
+### Setup files
+
+A setup file (`<name>.octopus-setup.json`) is plain JSON with what the setup
+wizard asks for: the space, the projects, the capabilities and where each one
+is available, and optionally the model. It never carries keys, accounts, tasks,
+history or memory.
+
+- **Import:** **Import setup…** on the wizard's first step fills every step
+  from the file. Check the steps and select **Set up Octopus**, then connect
+  accounts in **Applications**. A file that needs a component or model this
+  Octopus does not offer is refused, with the reason under the button.
+- **Export:** **Export setup…** on the wizard's review step, or
+  **Settings → General → Setup file** in a running Home.
+
+<details>
+<summary><b>The format</b></summary>
+
+<br>
+
+```json
+{
+  "schema": "octopus.setup",
+  "schema_version": 1,
+  "space": { "name": "Founder", "goal": "Operate life and work" },
+  "projects": [
+    { "id": "work", "parent": null, "name": "Work", "goal": "Ship the product", "icon": "briefcase", "color": "indigo" },
+    { "id": "site", "parent": "work", "name": "Site", "goal": "Keep the site live", "icon": "globe", "color": "teal" }
+  ],
+  "capabilities": [
+    { "kind": "application", "id": "world_cron", "projects": [] },
+    { "kind": "driver", "id": "driver.browser_session", "projects": ["site"] },
+    { "kind": "pack", "id": "codex", "projects": [] }
+  ],
+  "model": { "id": "gpt-5.5", "reasoning_effort": "high" }
+}
+```
+
+Octopus reads exactly these fields. `parent` is another project's `id` or
+`null`. `projects` on a capability lists where it is offered, for the ones the
+wizard lets you limit to projects, such as drivers. `model` is optional. Icons
+and colors are the ones the project editor offers.
+
+</details>
 
 ## Codex CLI
 
