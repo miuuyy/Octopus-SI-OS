@@ -508,6 +508,12 @@ every reachable worker pin before any dependency or activation is published.
 A future route cannot enter the live topology with an unbound mandatory role and
 thereby invalidate the run's existing input or control checkpoints.
 
+A model amends its own run while its turn waits on that amendment call. The
+selection is planned against the frontier the turn will rearm, keeping the
+retained templates' static context order, and rebased onto the current record:
+the pending effect and its checkpoints stay exactly as admitted, and only the
+template change and the new routes are applied.
+
 Authored run previews and publication plans also validate the complete candidate
 against each bound provider's declared authoring profile. They use the provider
 owner's topology validator, including its frontier and future checkpoint

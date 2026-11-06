@@ -101,6 +101,51 @@ fn current_amendment_checks_future_routes_before_they_can_disable_control() {
     assert_eq!(std::fs::read(&composition.run_write.path).unwrap(), pending.as_bytes());
 }
 
+#[test]
+fn current_selection_amends_a_run_whose_turn_waits_on_a_tool_result() {
+    use octopus_operator_chat_client::{ExternalInputSeed, run_composition::current_run::*};
+    use octopus_run_authoring::capability_amendment::ProviderCapabilityBridge;
+    use octopus_ledger::ContentHash;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let request = support::client_fixture(&root);
+    enable_native_profile(&root);
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../registry/interface/world_cron/interface.json");
+    let mut trigger: Value = serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+    trigger["id"] = json!("world_test_pulse");
+    write(&root, "registry/interface/world_test_pulse/interface.json", trigger);
+    for (file, pointer) in [("registry/ee_template/existence/ee_template.json", "/allowed_interfaces"),
+        ("ee/ee_existence.json", "/policy_narrowing/allowed_interfaces"), ("registry/interface/system_worker_template/policy.json", "/ceiling/interfaces")] {
+        let mut value: Value = serde_json::from_slice(&std::fs::read(root.join(file)).unwrap()).unwrap();
+        value.pointer_mut(pointer).unwrap().as_array_mut().unwrap().push(json!("world_test_pulse"));
+        write(&root, file, value);
+    }
+    let composition = plan_run_composition(&request).unwrap();
+    for file in composition_candidate_writes(&composition) {
+        std::fs::create_dir_all(file.path.parent().unwrap()).unwrap();
+        std::fs::write(file.path, file.content).unwrap();
+    }
+    let initial: Value = serde_json::from_str(&composition.run_write.content).unwrap();
+    let pending = pending_tool_handoff(&request, &composition, &initial).to_string();
+    std::fs::write(&composition.run_write.path, &pending).unwrap();
+    let current = RunRecord::from_bytes(pending.as_bytes()).unwrap();
+    let provider: octopus_descriptors::InterfaceId = composition.provider_interface_id.clone().into();
+    let mut selection = current_selection(&request.roots, &current, &provider).unwrap().unwrap();
+    selection.external_inputs.push(ExternalInputSeed { checkpoint_id: "amended_trigger".into(), interface_id: "world_test_pulse".into(),
+        artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new() });
+    let door = composition.authoring.capability_doors["system_room"].clone();
+    let writer = composition.authoring.capability_tools["file.write"].clone();
+    let bridge = ProviderCapabilityBridge { tool: writer.clone(), correlation_id: "readback".into(),
+        arguments_hash: ContentHash::of_bytes(b"{}").to_hex(), return_interface: door.clone().into() };
+    let plan = plan_current_run_amendment(&request.roots, &current, &provider, CurrentRunRequest { change: None,
+        amendment_key: "mid-turn".into(), publications: vec![], selection: Some(selection), authored: None },
+        bridge, &[(writer, door.into())]).unwrap();
+    assert!(plan.validation.safe_to_apply, "{:?}", plan.validation.regressions);
+    let after = json!(plan.amendment.after);
+    assert_eq!(after["interface_state"][provider.as_str()]["pending_handoff"], json!(current)["interface_state"][provider.as_str()]["pending_handoff"]);
+    assert!(after["checkpoints"].as_array().unwrap().iter().any(|cp| cp["interface_binding"]["interface"] == "world_test_pulse"));
+}
+
 fn pending_tool_handoff(request: &RunCompositionRequest, plan: &RunCompositionPlan, before: &Value) -> Value {
     use octopus_interfaces::InterfaceArtifactFile;
     use octopus_ledger::ContentHash;

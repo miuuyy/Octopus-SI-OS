@@ -304,6 +304,37 @@ pub fn rebase_plan(current: &RunRecord, amendment: ProviderCapabilityAmendment) 
     prepare_plan(ProviderCapabilityAmendment {before, after, ..amendment})
 }
 
+pub fn rearmed_frontier_view(current: &RunRecord, provider: &InterfaceId, profile: &RunAuthoringProfile) -> Result<RunRecord, String> {
+    let topology = topology(current, provider)?;
+    let config = topology.config(profile);
+    let roles = current_mandatory_role_bindings(current, &config)?.into_iter()
+        .map(|binding| serde_json::to_value(binding).map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+    let state = current.interface_state.get(provider).ok_or("capability provider state absent")?;
+    let previous = raw_frontier_checkpoint_ids(state)?;
+    let mut rows = Vec::new();
+    let mut ids = Vec::new();
+    for template in topology.checkpoints.iter().filter(|template| matches!(template.role,
+        RunAuthoringCheckpointRole::ProviderArtifactOutput | RunAuthoringCheckpointRole::ProviderInterfaceOutput
+        | RunAuthoringCheckpointRole::ProviderToolOutput | RunAuthoringCheckpointRole::ProviderTransportDispatch
+        | RunAuthoringCheckpointRole::ProviderHandoffCompletion)
+        || (topology.writer_run.is_none() && matches!(template.role, RunAuthoringCheckpointRole::AuthoringCall | RunAuthoringCheckpointRole::AuthoringResult))) {
+        let id = format!("cp_rearmed_view_{}", template.name);
+        rows.push(materialize_checkpoint(template, &id, &current.id, &roles));
+        ids.push(id);
+    }
+    let mut value = json!(current);
+    let root = value.as_object_mut().ok_or("run is not an object")?;
+    root.insert("status".into(), json!("idle"));
+    replace_owned_frontier(root, &previous, rows, &ids)?;
+    let state = root.get_mut("interface_state").and_then(|states| states.get_mut(provider.as_str()))
+        .and_then(Value::as_object_mut).ok_or("capability provider state absent")?;
+    state.remove("pending_handoff");
+    state.insert(FRONTIER_CHECKPOINT_IDS.into(), json!(ids));
+    let view = record(&value)?;
+    validate_checkpoint_topology(&view, provider, &config.checkpoints, None)?;
+    Ok(view)
+}
+
 pub fn prospective_capability_record(amendment: &ProviderCapabilityAmendment) -> Result<RunRecord, String> {
     let mut future = record(&amendment.after)?;
     let topology = topology(&future, &amendment.provider_interface)?;

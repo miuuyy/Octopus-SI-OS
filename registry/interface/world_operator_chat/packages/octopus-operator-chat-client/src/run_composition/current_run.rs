@@ -393,8 +393,21 @@ fn current_selection_with_worker(roots: &CompositionRoots, current: &RunRecord, 
     }, (capabilities, worker))))
 }
 
+fn pending_turn(record: &RunRecord, provider: &InterfaceId) -> bool {
+    record.interface_state.get(provider).and_then(|state| state.get("pending_handoff")).is_some_and(|pending| !pending.is_null())
+}
+
 fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &InterfaceId, key: &str, selection: CurrentRunSelection,
     publications: Vec<octopus_context_collections::CollectionSelection>, native_metadata: Option<&InvocationMetadata>) -> Result<(AuthoredCurrentRun, Vec<crate::publication_selection::PublicationSelectionEvidence>), String> {
+    let idle;
+    let rebased = pending_turn(current, provider);
+    let current = if rebased {
+        let descriptor = load_interface_descriptor(&roots.registry_root.join("interface"), provider.as_str())?;
+        let profile = parse(descriptor.interface_driver_config.as_ref()
+            .and_then(|config| config.private_config.get("run_authoring_profile")).ok_or("current provider has no declared run authoring profile")?)?;
+        idle = octopus_run_authoring::capability_amendment::rearmed_frontier_view(current, provider, &profile)?;
+        &idle
+    } else { current };
     let (previous, selected_worker) = current_selection_with_worker(roots, current, provider)?.ok_or("this run has no client selection owner; supply its exact authored future record")?;
     let clients = current.interface_state.iter().filter(|(_, state)| state.get("provider_runtime_interface").and_then(Value::as_str) == Some(provider.as_str())
         && state.contains_key("client_surface_role")).collect::<Vec<_>>();
@@ -499,6 +512,16 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
             if current.active_checkpoints.contains(&cp.id) { active.push(json!(cp.id)); }
         }
     }
+    if rebased {
+        let prior = current_value["interface_state"][provider.as_str()]["run_authoring_binding"]["checkpoints"].as_array().ok_or("current templates absent")?;
+        for template in candidate["interface_state"][provider.as_str()]["run_authoring_binding"]["checkpoints"].as_array_mut().ok_or("planned templates absent")? {
+            let Some(old) = prior.iter().find(|old| old["name"] == template["name"]) else { continue; };
+            let (Some(old_ids), Some(new_ids)) = (old["static_artifact_bindings"].as_array(), template["static_artifact_bindings"].as_array()) else { continue; };
+            let mut ordered = old_ids.iter().filter(|id| new_ids.contains(id)).cloned().collect::<Vec<_>>();
+            ordered.extend(new_ids.iter().filter(|id| !old_ids.contains(id)).cloned());
+            template["static_artifact_bindings"] = json!(ordered);
+        }
+    }
     let provider_owner = roots.registry_root.join("interface").join(provider.as_str());
     let catalog_pin = private.pointer("/run_affordances/catalog_artifact").map(parse::<ArtifactRef>).transpose()?;
     let planned = plan.interface_writes.iter().chain(&plan.run_writes).collect::<Vec<_>>();
@@ -588,7 +611,7 @@ fn plan_current_run_amendment_with_source(roots: &CompositionRoots, current: &Ru
         return Err("authored current-run baseline requires an exact content hash".into());
     }
     let amendment = ProviderCapabilityAmendment { amendment_key: request.amendment_key, provider_interface: provider.clone(), before:authored.expected_before, after:authored.run_record, bridge, authoring_profile };
-    let amendment = if exact_authored { rebase_plan(current,amendment)? } else { prepare_plan(amendment)? };
+    let amendment = if exact_authored || pending_turn(current, provider) { rebase_plan(current,amendment)? } else { prepare_plan(amendment)? };
     let future = RunRecord::from_bytes(&serde_json::to_vec(&amendment.after).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let bridge_inputs = retained_tools.iter().map(|(tool, door)| Ok((
         prospective_bridge_inputs(current, provider, tool, door)?,
