@@ -163,6 +163,7 @@ fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, Box<dyn std:
 }
 
 fn run_up() -> Result<(), Box<dyn std::error::Error>> {
+    raise_open_file_limit()?;
     let restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -173,6 +174,37 @@ fn run_up() -> Result<(), Box<dyn std::error::Error>> {
     if restart.load(std::sync::atomic::Ordering::SeqCst) {
         return start_again();
     }
+    Ok(())
+}
+
+const OPEN_FILE_LIMIT: u64 = 10240;
+
+#[cfg(unix)]
+fn raise_open_file_limit() -> Result<(), Box<dyn std::error::Error>> {
+    use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
+    let limit = getrlimit(Resource::Nofile);
+    let wanted = limit.maximum.map_or(OPEN_FILE_LIMIT, |maximum| maximum.min(OPEN_FILE_LIMIT));
+    if limit.current.is_none_or(|current| current >= wanted) {
+        return Ok(());
+    }
+    setrlimit(
+        Resource::Nofile,
+        Rlimit {
+            current: Some(wanted),
+            maximum: limit.maximum,
+        },
+    )
+    .map_err(|error| -> Box<dyn std::error::Error> {
+        format!(
+            "the runtime could not raise its open-file limit from {} to {wanted}: {error}",
+            limit.current.unwrap_or_default()
+        )
+        .into()
+    })
+}
+
+#[cfg(not(unix))]
+fn raise_open_file_limit() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 

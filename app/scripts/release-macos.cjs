@@ -83,8 +83,9 @@ function writeDiskImage(options, name, version, bundleTree) {
     run("hdiutil", ["create", "-quiet", "-type", "SPARSE", "-fs", "APFS", "-volname", `Octopus ${version}`,
       "-size", `${imageMegabytes(bundleTree)}m`, sparse]);
     withMountedImage(sparse, path.join(stage, "mount"), false, (volume) => {
-      materializeDeduplicated(options.bundle, bundleTree, volume);
+      const applyModes = materializeDeduplicated(options.bundle, bundleTree, volume);
       run("xattr", ["-cr", path.join(volume, "Octopus.app")]);
+      applyModes();
       fs.symlinkSync("/Applications", path.join(volume, "Applications"));
     });
     run("hdiutil", ["convert", "-quiet", sparse, "-format", "ULMO", "-o", image]);
@@ -119,6 +120,7 @@ function materializeDeduplicated(bundle, bundleTree, volume) {
   const sourceParent = path.dirname(bundle);
   const written = new Map();
   const directories = [];
+  const files = [];
   const duplicates = [];
   for (const [relative, value] of bundleTree) {
     const entry = JSON.parse(value);
@@ -135,13 +137,17 @@ function materializeDeduplicated(bundle, bundleTree, volume) {
         continue;
       }
       fs.copyFileSync(path.join(sourceParent, ...relative.split("/")), destination, fs.constants.COPYFILE_EXCL);
-      fs.chmodSync(destination, entry.mode);
+      fs.chmodSync(destination, entry.mode | 0o200);
+      files.push({ destination, mode: entry.mode });
       written.set(entry.sha256, destination);
     }
   }
   cloneFiles(duplicates);
-  for (const { destination, mode } of duplicates) fs.chmodSync(destination, mode);
-  for (const [directory, mode] of directories.reverse()) fs.chmodSync(directory, mode);
+  for (const { destination, mode } of duplicates) fs.chmodSync(destination, mode | 0o200);
+  return () => {
+    for (const { destination, mode } of [...files, ...duplicates]) fs.chmodSync(destination, mode);
+    for (const [directory, mode] of directories.reverse()) fs.chmodSync(directory, mode);
+  };
 }
 
 function withMountedImage(image, mountRoot, readonly, use) {
