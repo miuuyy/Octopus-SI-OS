@@ -16,6 +16,11 @@ them.
 The descriptor binds `timezone_database_root` to the system timezone database
 through `interface_driver_config.host_slots`; copies keep that binding.
 
+A cron schedule steps through UTC minutes in its time zone. In a repeated
+fall-back hour a fixed time runs once, while wildcard minutes and hours keep
+firing through both occurrences; a fixed time skipped by a spring-forward jump
+runs at the first minute after the jump.
+
 An inactivity condition for user-facing tasks is:
 
 ```json
