@@ -1730,3 +1730,55 @@ fn observer_tool_results_keep_call_specific_verified_receiving() {
     std::fs::write(policy, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(plan_run_composition(&request).unwrap_err().contains("tool-result correspondence mark"));
 }
+
+#[test]
+fn amended_external_input_reaches_the_observer_projection_routes() {
+    use octopus_ledger::ContentHash;
+    use octopus_operator_chat_client::{ExternalInputSeed, run_composition::current_run::*};
+    use octopus_run_authoring::capability_amendment::ProviderCapabilityBridge;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let request = capture_fixture(&root);
+    let mut trigger = read(&source().join("registry/interface/world_cron/interface.json"));
+    trigger["id"] = json!("world_test_pulse");
+    support::write(&root, "registry/interface/world_test_pulse/interface.json", trigger);
+    for (file, pointer) in [
+        ("registry/ee_template/existence/ee_template.json", "/allowed_interfaces"),
+        ("ee/ee_existence.json", "/policy_narrowing/allowed_interfaces"),
+        ("registry/interface/system_worker_template/policy.json", "/ceiling/interfaces"),
+    ] {
+        let mut value = read(&root.join(file));
+        value.pointer_mut(pointer).unwrap().as_array_mut().unwrap().push(json!("world_test_pulse"));
+        support::write(&root, file, value);
+    }
+    let plan = plan_run_composition(&request).unwrap();
+    for write in composition_candidate_writes(&plan) {
+        std::fs::create_dir_all(write.path.parent().unwrap()).unwrap();
+        std::fs::write(write.path, write.content).unwrap();
+    }
+    let current = RunRecord::from_bytes(plan.run_write.content.as_bytes()).unwrap();
+    let provider: octopus_descriptors::InterfaceId = plan.provider_interface_id.clone().into();
+    let declaration = &json!(current)["interface_state"][provider.as_str()]["maintenance_observer"];
+    let projection = root.join("registry/interface").join(declaration["projection_interface"].as_str().unwrap()).join("interface.json");
+    let routes = |descriptor: &Value| descriptor["interface_driver_config"]["private_config"]["context_projection"]["input_routes"]
+        .as_array().unwrap().iter().map(|route| route["interface_binding"]["interface"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    assert!(!routes(&read(&projection)).contains(&"world_test_pulse".to_owned()));
+    let mut selection = current_selection(&request.roots, &current, &provider).unwrap().unwrap();
+    selection.external_inputs.push(ExternalInputSeed {
+        checkpoint_id: "amended_trigger".into(), interface_id: "world_test_pulse".into(),
+        artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new(),
+    });
+    let door = plan.authoring.capability_doors["system_room"].clone();
+    let writer = plan.authoring.capability_tools["file.write"].clone();
+    let bridge = ProviderCapabilityBridge { tool: writer.clone(), correlation_id: "readback".into(),
+        arguments_hash: ContentHash::of_bytes(b"{}").to_hex(), return_interface: door.clone().into() };
+    let amendment = plan_current_run_amendment(&request.roots, &current, &provider, CurrentRunRequest { change: None,
+        amendment_key: "observer-route".into(), selection: Some(selection), authored: None, publications: vec![] },
+        bridge, &[(writer, door.into())]).unwrap();
+    let write = amendment.dependency_writes.iter().chain(&amendment.activation_writes).find(|write| write.path == projection)
+        .expect("the amendment must carry the observer projection's new input route");
+    let descriptor: Value = serde_json::from_str(&write.content).unwrap();
+    assert!(routes(&descriptor).contains(&"world_test_pulse".to_owned()));
+    let rules = &descriptor["interface_driver_config"]["private_config"]["context_projection"]["input_rules"];
+    assert!(rules.as_array().unwrap().iter().any(|rule| rule["labels"] == json!(["cron.current_time"]) && rule["whole_payload"] == true));
+}

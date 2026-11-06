@@ -66,8 +66,11 @@ def verify(request):
             assert is_result and value.get("label") == entry["label"], "publication receipt label mismatch"
             assert correlation not in results, "duplicate publication result"
             body = value.get("body")
-            assert value.get("ok") is True and value.get("error") is None and isinstance(body, dict) and body.get("result") in ("memory_saved", "memory_already_saved"), "publication failed or has an uncertain effect"
             results[correlation] = key
+            error = value.get("error")
+            if value.get("ok") is False and body is None and isinstance(error, dict) and error.get("code") == "tool_process_failure":
+                continue
+            assert value.get("ok") is True and error is None and isinstance(body, dict) and body.get("result") in ("memory_saved", "memory_already_saved"), "publication failed or has an uncertain effect"
             if body["result"] == "memory_saved":
                 applied.add(key)
     assert calls.keys() == results.keys(), "publication call has no exact result or result has no call"

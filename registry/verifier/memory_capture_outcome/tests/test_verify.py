@@ -73,6 +73,18 @@ class CaptureOutcomeVerifierTests(unittest.TestCase):
             check([call, result, repeat, deduped], "published", True)
             check([call, result, repeat, deduped], "published", False, ("save-1", "save-2"))
             check([call, result], "noop", False)
+            refused_call = evidence(2, "tool.call", {"tool": WRITER, "correlation_id": "save-0", "arguments": {"note": "Prefers pnpm."}})
+            for code, passed in (("tool_process_failure", True), ("tool_effect_indeterminate", False)):
+                attempt = evidence(3, WRITER + ".result", {"label": WRITER + ".result", "tool": WRITER,
+                    "correlation_id": "save-0", "ok": False, "body": None, "error": {"code": code}})
+                retried = [refused_call, attempt, dict(call, source_movement_seq=4, source_artifact=reference("4")),
+                    dict(result, source_movement_seq=5, source_artifact=reference("5"))]
+                with self.subTest(failed_attempt=code):
+                    check(retried, "published", passed)
+                    check(retried[:2], "noop", passed)
+            check([refused_call, evidence(3, WRITER + ".result", {"label": WRITER + ".result", "tool": WRITER,
+                "correlation_id": "save-0", "ok": False, "body": None, "error": {"code": "tool_process_failure"}})],
+                "published", False, ("save-0",))
             for entries in ([call], [result], [repeat]):
                 with self.subTest(entries=[item["label"] for item in entries]):
                     check(entries, "published", False)

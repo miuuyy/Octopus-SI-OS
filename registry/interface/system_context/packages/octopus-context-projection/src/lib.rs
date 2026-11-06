@@ -632,7 +632,7 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
                 .consume_if_matches(&ctx, &session, &own.movement, &envelope, &manifest.label)
                 .await?
             {
-                process_admitted_input(&ctx, &session, &config, &envelope, &own.movement).await?;
+                settle_admitted_input(&ctx, &session, &config, &envelope, &own.movement).await?;
             }
             reader.commit_through(&own)?;
         }
@@ -764,6 +764,27 @@ pub async fn process_admitted_input(
     envelope: &octopus_interfaces::InterfaceInvocationEnvelope,
     movement: &octopus_ledger::Movement,
 ) -> Result<(), String> {
+    process(ctx, session, config, envelope, movement, false).await
+}
+
+pub async fn settle_admitted_input(
+    ctx: &InterfaceLiftContext,
+    session: &ProviderHandoffSession,
+    config: &ContextProjectionConfig,
+    envelope: &octopus_interfaces::InterfaceInvocationEnvelope,
+    movement: &octopus_ledger::Movement,
+) -> Result<(), String> {
+    process(ctx, session, config, envelope, movement, true).await
+}
+
+async fn process(
+    ctx: &InterfaceLiftContext,
+    session: &ProviderHandoffSession,
+    config: &ContextProjectionConfig,
+    envelope: &octopus_interfaces::InterfaceInvocationEnvelope,
+    movement: &octopus_ledger::Movement,
+    settle_unprojectable: bool,
+) -> Result<(), String> {
     config.validate()?;
     let descriptor = ctx.resolved_interface_descriptor()?;
     let limits = ctx.required_host_io_limits()?;
@@ -804,6 +825,43 @@ pub async fn process_admitted_input(
             );
         }
     } }
+    let (output_label, bytes) =
+        match project_source(ctx, config, envelope, movement, rejected.as_ref(), limits) {
+            Ok(projected) => projected,
+            Err(error) if !settle_unprojectable => return Err(error),
+            Err(error) => (
+                OUTCOME_ERROR_LABEL,
+                projection_bytes(
+                    &json!({"schema_version":1,"label":OUTCOME_ERROR_LABEL,
+                        "source":{"run":config.source_run,"projection_run":config.projection_run,
+                            "terminal_artifact":envelope.artifact,"projection_source_movement_seq":movement.seq.0},
+                        "projection_error":error}),
+                    config.bounds.max_output_bytes,
+                )?,
+            ),
+        };
+    let artifact =
+        InterfaceArtifactFile::write(ctx.var_dir.join("projected-context"), output_label, &bytes)
+            .map_err(|e| e.to_string())?;
+    let emission = ProviderEmission { artifact, route: ProviderEmissionRoute::ClientProjection };
+    let outcome = match rejected {
+        Some(rejected) => handoff.hand_replacement_final(&rejected, emission).await?,
+        None => handoff.hand_final(emission).await?,
+    };
+    if !matches!(outcome, ProviderHandoffOutcome::Admitted { .. }) {
+        return Err("projection final output was not admitted".into());
+    }
+    Ok(())
+}
+
+fn project_source(
+    ctx: &InterfaceLiftContext,
+    config: &ContextProjectionConfig,
+    envelope: &octopus_interfaces::InterfaceInvocationEnvelope,
+    movement: &octopus_ledger::Movement,
+    rejected: Option<&RejectedFinalOutput>,
+    limits: octopus_interface_transport::InterfaceHostIoLimits,
+) -> Result<(&'static str, Vec<u8>), String> {
     let captured = envelope
         .artifact_file
         .read_bounded(limits.max_manifest_bytes, config.bounds.max_input_bytes)
@@ -817,7 +875,7 @@ pub async fn process_admitted_input(
                 &outcome.relay_interface,
             ))
     }) {
-        project_outcome(ctx, config, outcome, &envelope.artifact, &captured.payload_bytes, movement, rejected.as_ref())?
+        project_outcome(ctx, config, outcome, &envelope.artifact, &captured.payload_bytes, movement, rejected)?
     } else {
         if movement.from
             != octopus_ledger::Endpoint::Interface(octopus_descriptors::InterfaceId::new(
@@ -926,17 +984,5 @@ pub async fn process_admitted_input(
         render_task(config, &mut output)?;
         (OUTPUT_LABEL, output)
     };
-    let bytes = projection_bytes(&output, config.bounds.max_output_bytes)?;
-    let artifact =
-        InterfaceArtifactFile::write(ctx.var_dir.join("projected-context"), output_label, &bytes)
-            .map_err(|e| e.to_string())?;
-    let emission = ProviderEmission { artifact, route: ProviderEmissionRoute::ClientProjection };
-    let outcome = match rejected {
-        Some(rejected) => handoff.hand_replacement_final(&rejected, emission).await?,
-        None => handoff.hand_final(emission).await?,
-    };
-    if !matches!(outcome, ProviderHandoffOutcome::Admitted { .. }) {
-        return Err("projection final output was not admitted".into());
-    }
-    Ok(())
+    Ok((output_label, projection_bytes(&output, config.bounds.max_output_bytes)?))
 }

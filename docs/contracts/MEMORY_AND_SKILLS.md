@@ -93,7 +93,10 @@ An operator message gives its declared fields. An artifact admitted from one of
 the run's external inputs, such as mail or a sensor event, is selected whole:
 each top-level member except `session_context` becomes a field, because its
 shape belongs to the interface that produced it and the provider showed the
-model the same payload.
+model the same payload. The observer's projection declares the source's input
+routes and rules; a current-run amendment that adds an input to the source
+re-forms them in the same transaction, so a trigger bound later is captured
+like one bound at creation.
 
 An observer's final text is one JSON object. Malformed JSON produces an explicit
 `memory.capture.error` diagnostic with the original terminal artifact reference.
@@ -107,6 +110,12 @@ refused outcome is never resubmitted unchanged. The diagnostic is an ordinary
 projection output, not part of the projection run's session snapshot. A refused
 final changes its label only this way: from a verified output to a declared
 output that requires no mark, with the refusal evidence as its proof.
+
+A terminal the projection cannot project — an input outside its declared
+routes, a missing required field, an exceeded bound — is settled the same way:
+the projection hands a `memory.capture.error` diagnostic naming the error and
+the terminal, the observer model is not woken, and the next observation is
+processed. One unprojectable source never stops the projection.
 
 ## Remembering is one call
 

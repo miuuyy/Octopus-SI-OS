@@ -745,6 +745,57 @@ fn admitted_label_family(inputs: &[&BoundCheckpointTemplate], label: &str) -> Ve
     family.into_iter().collect()
 }
 
+pub(crate) fn refresh_projection_contracts(
+    request: &MaintenanceObserverRequest,
+    source_run: &RunRecord,
+    declaration: &Value,
+    writes: &mut Vec<PlannedClientWrite>,
+) -> Result<(), String> {
+    let topology: BoundRunAuthoringTopology = serde_json::from_value(
+        source_run
+            .interface_state
+            .get(&InterfaceId::new(&request.source_provider_interface_id))
+            .and_then(|state| state.get("run_authoring_binding"))
+            .cloned()
+            .ok_or("maintenance source has no ordinary handoff topology")?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (input_rules, input_routes, evidence_rules) =
+        projection_contracts(request, &topology, writes)?;
+    let projection = declaration
+        .get("projection_interface")
+        .and_then(Value::as_str)
+        .ok_or("accepted maintenance declaration has no projection interface")?;
+    safe_segment(projection, "accepted maintenance projection")?;
+    let path = request
+        .roots
+        .registry_root
+        .join("interface")
+        .join(projection)
+        .join("interface.json");
+    let mut descriptor: Value =
+        serde_json::from_slice(&planned_bytes(writes, &path)?).map_err(|e| e.to_string())?;
+    let slot = descriptor
+        .pointer_mut("/interface_driver_config/private_config/context_projection")
+        .ok_or("accepted maintenance projection has no context projection declaration")?;
+    let mut config: ContextProjectionConfig =
+        serde_json::from_value(slot.clone()).map_err(|e| e.to_string())?;
+    if config.source_run != source_run.id.as_str()
+        || config.source_provider_interface != request.source_provider_interface_id
+    {
+        return Err("accepted maintenance projection observes another source".into());
+    }
+    config.input_rules = input_rules;
+    config.input_routes = input_routes;
+    config.evidence_rules = evidence_rules;
+    config.validate()?;
+    *slot = json!(config);
+    if writes.iter().any(|write| write.path == path) {
+        return replace(writes, &path, &descriptor);
+    }
+    push_json_write(path, pretty_json(&descriptor)?, format!("interface:{projection}"), writes)
+}
+
 fn projection_contracts(
     request: &MaintenanceObserverRequest,
     topology: &BoundRunAuthoringTopology,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::maintenance_observer::{MaintenanceObserverConfig, MaintenanceObserverRequest,
-    plan_maintenance_observer, wire_source_terminal_declaration, wire_source_terminal_output};
+    plan_maintenance_observer, refresh_projection_contracts, wire_source_terminal_declaration, wire_source_terminal_output};
 use crate::run_composition::CompositionRoots;
 use serde_json::Value;
 
@@ -41,16 +41,45 @@ pub(super) fn wire(
         let relay = validate_retained(existing, declaration, identity)?;
         retain_source_ceiling(&request, &relay, writes)?;
         let content = wire_source_terminal_declaration(&content, declaration)?;
+        if let Some(config) = selected_config(&request)? {
+            let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
+            refresh_projection_contracts(&observer_request(&request, config)?, &record, declaration, writes)?;
+        }
         required_interfaces.push(relay);
         required_interfaces.sort();
         required_interfaces.dedup();
         return Ok((content, Vec::new()));
     }
-    let Some(config) = request.config.run._rest.get("maintenance_observer") else {
+    let Some(config) = selected_config(&request)? else {
         return Ok((content, Vec::new()));
     };
+    let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
+    let observer = plan_maintenance_observer(&observer_request(&request, config)?, &record, writes, request.capabilities)?;
+    if !observer.source_required_artifact_bindings.is_empty() {
+        return Err("maintenance source requires artifact bindings absent from its authored context".into());
+    }
+    if observer.run_writes.iter().any(|write| write.expected_before_hash.is_some()) {
+        return Err("new maintenance attachment cannot replace an existing companion or writer run".into());
+    }
+    extend_source_ceiling(identity, &observer.source_required_interface_ids, None, writes)?;
+    let content = wire_source_terminal_output(&content, &observer)?;
+    required_interfaces.extend(observer.required_interface_ids);
+    required_interfaces.extend(observer.source_required_interface_ids);
+    required_interfaces.sort();
+    required_interfaces.dedup();
+    required_tools.extend(observer.required_tool_ids);
+    required_tools.sort();
+    required_tools.dedup();
+    writes.extend(observer.descriptor_writes);
+    Ok((content, observer.run_writes))
+}
+
+fn selected_config(request: &AttachmentRequest<'_>) -> Result<Option<MaintenanceObserverConfig>, String> {
+    let Some(config) = request.config.run._rest.get("maintenance_observer") else {
+        return Ok(None);
+    };
     if config.is_null() {
-        return Ok((content, Vec::new()));
+        return Ok(None);
     }
     let selection: Selection = serde_json::from_value(config.clone())
         .map_err(|e| format!("client maintenance_observer selection: {e}"))?;
@@ -69,6 +98,11 @@ pub(super) fn wire(
     if config.worker_template_interface_id != selection.template_interface_id {
         return Err("maintenance configuration belongs to a different selected worker template".into());
     }
+    Ok(Some(config))
+}
+
+fn observer_request(request: &AttachmentRequest<'_>, config: MaintenanceObserverConfig) -> Result<MaintenanceObserverRequest, String> {
+    let identity = request.identity;
     let roots = CompositionRoots {
         registry_root: request.capabilities.registry_root().to_path_buf(),
         ee_instances_root: request.ee_instances_root.to_path_buf(),
@@ -77,37 +111,19 @@ pub(super) fn wire(
         interface_private_state_root: request.interface_private_state_root
             .ok_or("maintenance attachment requires explicit interface_private_state_root")?.to_path_buf(),
     };
-    let mut source_input_labels = request.source_input_labels;
+    let mut source_input_labels = request.source_input_labels.clone();
     source_input_labels.sort();
     source_input_labels.dedup();
-    let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
-    let observer = plan_maintenance_observer(&MaintenanceObserverRequest {
+    Ok(MaintenanceObserverRequest {
         roots,
         source_provider_choice_interface_id: identity.provider_choice_interface.clone(),
         source_provider_interface_id: identity.model_interface_id.clone(),
         source_client_interface_id: identity.chat_interface_id.clone(),
         source_input_labels,
-        source_payload_input_labels: request.source_payload_input_labels,
+        source_payload_input_labels: request.source_payload_input_labels.clone(),
         config,
         write_hash_algorithm: request.write_hash_algorithm,
-    }, &record, writes, request.capabilities)?;
-    if !observer.source_required_artifact_bindings.is_empty() {
-        return Err("maintenance source requires artifact bindings absent from its authored context".into());
-    }
-    if observer.run_writes.iter().any(|write| write.expected_before_hash.is_some()) {
-        return Err("new maintenance attachment cannot replace an existing companion or writer run".into());
-    }
-    extend_source_ceiling(identity, &observer.source_required_interface_ids, None, writes)?;
-    let content = wire_source_terminal_output(&content, &observer)?;
-    required_interfaces.extend(observer.required_interface_ids);
-    required_interfaces.extend(observer.source_required_interface_ids);
-    required_interfaces.sort();
-    required_interfaces.dedup();
-    required_tools.extend(observer.required_tool_ids);
-    required_tools.sort();
-    required_tools.dedup();
-    writes.extend(observer.descriptor_writes);
-    Ok((content, observer.run_writes))
+    })
 }
 
 fn selection_component(value: &str, field: &str) -> Result<(), String> {

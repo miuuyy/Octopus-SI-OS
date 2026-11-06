@@ -71,7 +71,7 @@
     },
     {
       "labels": ["cron.current_time"],
-      "pointers": ["/task", "/last_activity"]
+      "whole_payload": true
     },
     {
       "labels": [
