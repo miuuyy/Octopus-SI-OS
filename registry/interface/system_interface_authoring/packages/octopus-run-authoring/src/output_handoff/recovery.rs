@@ -31,7 +31,7 @@ impl ProviderOutputHandoff {
         &self,
         record: &RunRecord,
         record_bytes: &[u8],
-    ) -> Result<Option<(u64, InterfaceFailureEnvelope)>, String> {
+    ) -> Result<Option<(u64, InterfaceFailureEnvelope, Vec<ArtifactRef>)>, String> {
         if self.config.writer_run.is_some() { return Ok(None); }
         let template = self
             .config
@@ -123,7 +123,7 @@ impl ProviderOutputHandoff {
         )? {
             return Ok(None);
         }
-        validate_authoring_failure_source(AuthoringFailureSourceValidation {
+        let validated = validate_authoring_failure_source(AuthoringFailureSourceValidation {
             ctx: &self.ctx,
             record,
             record_bytes,
@@ -132,7 +132,7 @@ impl ProviderOutputHandoff {
             failure_seq: evidence.seq,
             after_seq: Some(self.source_movement_seq),
         })?;
-        Ok(Some((evidence.seq, failure)))
+        Ok(Some((evidence.seq, failure, validated.rebase)))
     }
 
     pub(crate) fn authoring_success_evidence(
@@ -166,8 +166,22 @@ impl ProviderOutputHandoff {
                 .map(|recovery| (recovery, Vec::new()));
         }
         let mut state = self.state.lock().await;
-        if let Some(bridged) = self.bridge_result_input(&mut state).await? {
-            return Ok(bridged);
+        let deadline = self.live_record_deadline()?;
+        loop {
+            let retained = (*state).clone();
+            match self.recover_source_attempt(&mut state).await {
+                Ok(recovered) => return Ok(recovered),
+                Err(error) => self.adopt_live_record(&mut state, retained, error, deadline).await?,
+            }
+        }
+    }
+
+    async fn recover_source_attempt(
+        &self,
+        state: &mut HandoffState,
+    ) -> Result<(ProviderSourceRecovery, Vec<ProviderHandoffOutcome>), String> {
+        if self.rebase_result_input(state).await? {
+            return Ok((ProviderSourceRecovery::Process, Vec::new()));
         }
         let mut record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| {
             format!(
@@ -175,12 +189,13 @@ impl ProviderOutputHandoff {
                 self.config.run.as_str()
             )
         })?;
-        if let Some((failure_seq, failure)) =
+        if let Some((failure_seq, failure, rebase)) =
             self.recover_authoring_failure(&record, &state.run_record_bytes)?
         {
             if self.checked_settlement_output.is_some() {
                 return Err("checked settlement recovery cannot replace its closure with an authoring failure".into());
             }
+            self.apply_result_rebase(state, &rebase)?;
             hand_authoring_terminal_failure(
                 &self.ctx,
                 &self.session,
@@ -205,14 +220,14 @@ impl ProviderOutputHandoff {
                 } else if pending.source_movement_seq > self.source_movement_seq {
                     let recovered = self.recover_overtaken_source(&state.run_record_bytes, &pending)?;
                     if recovered.0 == ProviderSourceRecovery::Completed {
-                        self.restore_checked_context(&mut state, &record, &recovered.2)?;
+                        self.restore_checked_context(state, &record, &recovered.2)?;
                         Some((recovered.0, recovered.1))
                     } else { None }
                 } else {
                     None
                 };
                 if let Some(completed) = completed {
-                    self.restore_pending_context(&mut state, &record, &pending)?;
+                    self.restore_pending_context(state, &record, &pending)?;
                     state.consumed_input = false;
                     state.consumed_context_free_independent_input = None;
                     state.consumed_verified_input = false;
@@ -265,11 +280,16 @@ impl ProviderOutputHandoff {
                     ));
                 }
                 if prior.source_movement_seq == self.source_movement_seq && !withdrawing {
-                    self.restore_pending_context(&mut state, &record, &prior)?;
+                    self.restore_pending_context(state, &record, &prior)?;
                 }
             }
+            if attempt.authored.pending_handoff.source_movement_seq == self.source_movement_seq
+                && attempt.authored.pending_handoff.withdrawal.is_none()
+            {
+                self.apply_result_rebase(state, &attempt.authored.pending_handoff.rebase)?;
+            }
             match self
-                .install_authored_run(&mut state, &attempt.authored)
+                .install_authored_run(state, &attempt.authored)
                 .await?
             {
                 AuthoredRunInstallOutcome::Installed => {
@@ -309,7 +329,7 @@ impl ProviderOutputHandoff {
                 .find(|(_, admitted)| admitted.is_none())
             {
                 if self.unsubmitted_source_failure_before(&pending, self.source_movement_seq)? {
-                    self.restore_failed_context(&mut state, &[])?;
+                    self.restore_failed_context(state, &[])?;
                     return Ok((ProviderSourceRecovery::Process, Vec::new()));
                 }
                 return Err(format!(
@@ -319,30 +339,30 @@ impl ProviderOutputHandoff {
                     pending.source_movement_seq
                 ));
             }
-            let input_entries = take_unpublished_context_inputs(&mut state, self.source_movement_seq)?;
+            let input_entries = take_unpublished_context_inputs(state, self.source_movement_seq)?;
             if pending.context_publication.is_some() {
-                self.publish_admitted_context(&mut state).await?;
+                self.publish_admitted_context(state).await?;
             }
             let published = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
-            self.restore_pending_context(&mut state, &published, &pending)?;
-            restore_consumed_context_inputs(&mut state, input_entries)?;
+            self.restore_pending_context(state, &published, &pending)?;
+            restore_consumed_context_inputs(state, input_entries)?;
             if let Some(journal) = journal {
-                return self.recover_standing_journal(&mut state, journal).await;
+                return self.recover_standing_journal(state, journal).await;
             }
             return Ok((ProviderSourceRecovery::Process, Vec::new()));
         }
         if pending.source_movement_seq > self.source_movement_seq {
             let recovered = self.recover_overtaken_source(&state.run_record_bytes, &pending)?;
-            let input_entries = take_unpublished_context_inputs(&mut state, self.source_movement_seq)?;
+            let input_entries = take_unpublished_context_inputs(state, self.source_movement_seq)?;
             if pending.context_publication.is_some() {
                 let mut publisher = self.clone();
                 publisher.source_movement_seq = pending.source_movement_seq;
-                publisher.publish_admitted_context(&mut state).await?;
+                publisher.publish_admitted_context(state).await?;
             }
             let published = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
-            self.restore_checked_context(&mut state, &published, &recovered.2)?;
-            self.restore_pending_context(&mut state, &published, &pending)?;
-            restore_consumed_context_inputs(&mut state, input_entries)?;
+            self.restore_checked_context(state, &published, &recovered.2)?;
+            self.restore_pending_context(state, &published, &pending)?;
+            restore_consumed_context_inputs(state, input_entries)?;
             if recovered.0 != ProviderSourceRecovery::Process {
                 state.consumed_input = false;
                 state.consumed_context_free_independent_input = None;
@@ -363,9 +383,9 @@ impl ProviderOutputHandoff {
             ));
         }
         let outcomes = self.hand_pending_items(&pending, &state.run_record_bytes).await?;
-        self.publish_admitted_context(&mut state).await?;
+        self.publish_admitted_context(state).await?;
         let record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
-        self.restore_pending_context(&mut state, &record, &pending)?;
+        self.restore_pending_context(state, &record, &pending)?;
         state.consumed_input = false;
         state.consumed_context_free_independent_input = None;
         if pending.terminal {
@@ -381,7 +401,7 @@ impl ProviderOutputHandoff {
             &self.contributed_context_output_labels(),
         )?;
         if let Some(journal) = journal {
-            return self.recover_standing_journal(&mut state, journal).await;
+            return self.recover_standing_journal(state, journal).await;
         }
         Ok((
             ProviderSourceRecovery::Interrupted {

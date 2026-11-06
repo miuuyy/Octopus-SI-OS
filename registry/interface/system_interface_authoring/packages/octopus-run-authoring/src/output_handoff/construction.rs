@@ -504,60 +504,67 @@ impl ProviderOutputHandoff {
                 consumed_context_free_independent_input,
                 consumed_verified_input,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
         };
-        if let Some(target) = persisted_pending_handoff(&current_record, &handoff.config.provider_interface)?
-            .filter(|pending| pending.deferred_publication)
-            .map(|pending| handoff.pending_handoff_evidence(&pending).map(|evidence| (pending, evidence)))
-            .transpose()?
-            .filter(|(_, evidence)| evidence.iter().all(Option::is_some))
-            .and_then(|(pending, _)| pending.context_publication)
-        {
-            let mut state = handoff.state.try_lock()
-                .map_err(|_| "new handoff state is already borrowed".to_string())?;
-            for id in target { append_artifact(&mut state.context_artifacts, id); }
-        }
-        if !coauthor_chain.is_empty() && consumed_templates[0].role != RunAuthoringCheckpointRole::ResultInput {
-            let mut state = handoff.state.try_lock()
-                .map_err(|_| "new handoff state is already borrowed".to_string())?;
-            let publications = handoff.checked_context_publications(&coauthor_chain, &state.run_record_bytes)?;
-            let input_entries = take_unpublished_context_inputs(&mut state, source_movement_seq)?;
-            for transition in &coauthor_chain {
-                let authored = RunRecord::from_bytes(&transition.after).map_err(|error| error.to_string())?;
-                handoff.restore_published_context(&mut state, &current_record, &authored, &publications)?;
-            }
-            restore_consumed_context_inputs(&mut state, input_entries)?;
-        }
-        if retired_verified_input {
-            let pending =
-                persisted_pending_handoff(&current_record, &handoff.config.provider_interface)?
-                    .ok_or_else(|| {
-                        "retired verified input lost its terminal handoff".to_string()
-                    })?;
-            if handoff
-                .pending_handoff_evidence(&pending)?
-                .iter()
-                .any(Option::is_none)
+        let observed_record = handoff.state.try_lock()
+            .map_err(|_| "new handoff state is already borrowed".to_string())?
+            .run_record_bytes.clone();
+        stable_run_observation(&handoff.run_path, &observed_record, ctx.required_host_io_limits()?.max_payload_bytes, || {
+            if let Some(target) = persisted_pending_handoff(&current_record, &handoff.config.provider_interface)?
+                .filter(|pending| pending.deferred_publication)
+                .map(|pending| handoff.pending_handoff_evidence(&pending).map(|evidence| (pending, evidence)))
+                .transpose()?
+                .filter(|(_, evidence)| evidence.iter().all(Option::is_some))
+                .and_then(|(pending, _)| pending.context_publication)
             {
-                return Err(
-                    "queued tool result precedes the admitted provider decision handoff".into(),
-                );
+                let mut state = handoff.state.try_lock()
+                    .map_err(|_| "new handoff state is already borrowed".to_string())?;
+                for id in target { append_artifact(&mut state.context_artifacts, id); }
             }
-            let mut state = handoff
-                .state
-                .try_lock()
-                .map_err(|_| "new handoff state is already borrowed".to_string())?;
-            handoff.restore_pending_context(&mut state, &current_record, &pending)?;
-            if state.consumed_input {
-                append_artifact(&mut state.context_artifacts, input.artifact.id.clone());
+            if !coauthor_chain.is_empty() && consumed_templates[0].role != RunAuthoringCheckpointRole::ResultInput {
+                let mut state = handoff.state.try_lock()
+                    .map_err(|_| "new handoff state is already borrowed".to_string())?;
+                let publications = handoff.checked_context_publications(&coauthor_chain, &state.run_record_bytes)?;
+                let input_entries = take_unpublished_context_inputs(&mut state, source_movement_seq)?;
+                for transition in &coauthor_chain {
+                    let authored = RunRecord::from_bytes(&transition.after).map_err(|error| error.to_string())?;
+                    handoff.restore_published_context(&mut state, &current_record, &authored, &publications)?;
+                }
+                restore_consumed_context_inputs(&mut state, input_entries)?;
             }
-        }
-        if consumed_templates[0].role != RunAuthoringCheckpointRole::ResultInput {
-            let mut state = handoff.state.try_lock()
-                .map_err(|_| "new handoff state is already borrowed".to_string())?;
-            handoff.restore_failed_context(&mut state, &coauthor_chain)?;
-        }
+            if retired_verified_input {
+                let pending =
+                    persisted_pending_handoff(&current_record, &handoff.config.provider_interface)?
+                        .ok_or_else(|| {
+                            "retired verified input lost its terminal handoff".to_string()
+                        })?;
+                if handoff
+                    .pending_handoff_evidence(&pending)?
+                    .iter()
+                    .any(Option::is_none)
+                {
+                    return Err(
+                        "queued tool result precedes the admitted provider decision handoff".into(),
+                    );
+                }
+                let mut state = handoff
+                    .state
+                    .try_lock()
+                    .map_err(|_| "new handoff state is already borrowed".to_string())?;
+                handoff.restore_pending_context(&mut state, &current_record, &pending)?;
+                if state.consumed_input {
+                    append_artifact(&mut state.context_artifacts, input.artifact.id.clone());
+                }
+            }
+            if consumed_templates[0].role != RunAuthoringCheckpointRole::ResultInput {
+                let mut state = handoff.state.try_lock()
+                    .map_err(|_| "new handoff state is already borrowed".to_string())?;
+                handoff.restore_failed_context(&mut state, &coauthor_chain)?;
+            }
+            Ok(())
+        })?;
         Ok(handoff)
     }
 
@@ -566,24 +573,24 @@ impl ProviderOutputHandoff {
     }
 
     pub async fn recovered_failed_context_sources(&self) -> Result<Vec<u64>, String> {
-        let state = self.state.lock().await;
-        let recovered = self.checked_failed_source_contexts(&state.run_record_bytes, &[], None)?;
-        Self::restored_failed_context_sources(&state.session_context, recovered)
+        self.observe_live_record(|handoff, state| {
+            let recovered = handoff.checked_failed_source_contexts(&state.run_record_bytes, &[], None)?;
+            Self::restored_failed_context_sources(&state.session_context, recovered)
+        }).await
     }
 
     pub async fn recovered_failed_context_source(&self, sequence: u64) -> Result<bool, String> {
-        let state = self.state.lock().await;
-        let recovered = self.checked_failed_source_contexts(
-            &state.run_record_bytes, &[], Some(sequence),
-        )?;
-        Ok(Self::restored_failed_context_sources(&state.session_context, recovered)?.contains(&sequence))
+        self.observe_live_record(|handoff, state| {
+            let recovered = handoff.checked_failed_source_contexts(&state.run_record_bytes, &[], Some(sequence))?;
+            Ok(Self::restored_failed_context_sources(&state.session_context, recovered)?.contains(&sequence))
+        }).await
     }
 
     pub(crate) fn restored_failed_context_sources(
-        restored: &ResolvedSessionContext, recovered: BTreeMap<u64, ResolvedSessionContext>,
+        restored: &ResolvedSessionContext, recovered: BTreeMap<u64, (ResolvedSessionContext, Vec<ArtifactRef>)>,
     ) -> Result<Vec<u64>, String> {
         let mut sources = Vec::new();
-        for (source, context) in recovered {
+        for (source, (context, _)) in recovered {
             let mut previous = None;
             for entry in &context.artifacts {
                 let position = restored.artifacts.iter()

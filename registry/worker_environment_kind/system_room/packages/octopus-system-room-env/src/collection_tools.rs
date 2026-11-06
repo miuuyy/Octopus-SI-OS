@@ -2,7 +2,7 @@ use std::path::Path;
 
 use octopus_context_collections::{BoundCollection, CollectionSelection, ListRequest, ScopeContext, parse_entry};
 use octopus_interfaces::{ArtifactBindingPayload, InterfaceInvocationEnvelope};
-use octopus_ledger::ContentHash;
+use octopus_ledger::{ArtifactRef, ContentHash};
 use octopus_tool_handlers::{ToolCall, ToolHandlerError, ToolHandlerResult};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,7 +14,7 @@ mod tests;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DiscoverArguments {
-    source: Option<String>,
+    source: Option<ArtifactRef>,
     query: Option<String>,
     limit: Option<usize>,
     cursor: Option<Value>,
@@ -23,7 +23,7 @@ struct DiscoverArguments {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadArguments {
-    source: String,
+    source: ArtifactRef,
     entry_id: String,
     revision: String,
 }
@@ -31,7 +31,7 @@ struct ReadArguments {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrepareArguments {
-    source: String,
+    source: ArtifactRef,
     entry: Value,
     expected_revision: Option<String>,
 }
@@ -46,6 +46,16 @@ pub(crate) fn readable_source<'a>(input: &'a InterfaceInvocationEnvelope, id: &s
     if matches.next().is_some() || metadata.artifact_binding_refs.iter().filter(|reference| reference.id.as_str() == id).count() != 1
         || !metadata.artifact_binding_refs.contains(&source.artifact) {
         return Err("collection source has no unique exact admitted reference".into());
+    }
+    Ok(source)
+}
+
+fn exact_source<'a>(input: &'a InterfaceInvocationEnvelope, requested: &ArtifactRef) -> Result<&'a ArtifactBindingPayload, String> {
+    let source = readable_source(input, requested.id.as_str())?;
+    if source.artifact.content != requested.content {
+        return Err(format!(
+            "collection source '{}' is bound to this invocation with different content than requested; take its current source object from context.discover without arguments",
+            requested.id));
     }
     Ok(source)
 }
@@ -105,8 +115,8 @@ fn execute_inner(input: &InterfaceInvocationEnvelope, call: &ToolCall, root: Opt
     match operation {
         "collection_discover" => {
             let args: DiscoverArguments = serde_json::from_value(call.arguments.clone()).map_err(|error| error.to_string())?;
-            if let Some(id) = args.source {
-                let source = readable_source(input, &id)?;
+            if let Some(requested) = args.source {
+                let source = exact_source(input, &requested)?;
                 discover(root, source, runtime.ee.as_str(), runtime.worker.as_str(), args.query, args.limit, args.cursor)
             } else {
                 if args.query.is_some() || args.limit.is_some() || args.cursor.is_some() {
@@ -136,7 +146,7 @@ fn execute_inner(input: &InterfaceInvocationEnvelope, call: &ToolCall, root: Opt
         }
         "collection_read" => {
             let args: ReadArguments = serde_json::from_value(call.arguments.clone()).map_err(|error| error.to_string())?;
-            let source = readable_source(input, &args.source)?;
+            let source = exact_source(input, &args.source)?;
             read(root, source, runtime.ee.as_str(), runtime.worker.as_str(), &args.entry_id, &args.revision)
         }
         "collection_prepare" => {
@@ -144,7 +154,7 @@ fn execute_inner(input: &InterfaceInvocationEnvelope, call: &ToolCall, root: Opt
                 return Err("publication preparation requires expected_revision; null means a new entry".into());
             }
             let args: PrepareArguments = serde_json::from_value(call.arguments.clone()).map_err(|error| error.to_string())?;
-            let source = readable_source(input, &args.source)?;
+            let source = exact_source(input, &args.source)?;
             prepare(root, source, runtime.ee.as_str(), runtime.worker.as_str(), args.entry, args.expected_revision)
         }
         _ => Err("unsupported collection operation".into()),

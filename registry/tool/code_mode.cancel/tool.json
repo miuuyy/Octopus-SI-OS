@@ -24,7 +24,7 @@
   "supported_worker_environment_kinds": [
     "code_mode"
   ],
-  "description": "Terminate one live V8 cell and reject any unresolved nested-tool waits.",
+  "description": "Terminate one V8 cell and reject any unresolved nested-tool waits. Returns every frontier the cell still retains; a cell that already completed returns its output and error.",
   "args_schema": {
     "type": "object",
     "properties": {

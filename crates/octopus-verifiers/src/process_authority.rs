@@ -251,41 +251,52 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             .cloned()
             .collect::<BTreeSet<_>>();
         let mut roots = BTreeMap::new();
+        let mut unresolved = Vec::new();
         for slot in requested_slots {
-            let path = available_root_slots.get(&slot).ok_or_else(|| {
-                ProcessInvocationAuthorityError::Unavailable(format!(
-                    "process invocation authority requests unbound root slot '{slot}'"
-                ))
-            })?;
+            let Some(path) = available_root_slots.get(&slot) else {
+                unresolved.push(format!("'{slot}' is unbound"));
+                continue;
+            };
             let path = if writable_slots.contains(&slot) {
                 normalize_declared_exact_path(path.clone())
             } else {
                 normalize_existing_path(path.clone())
+            };
+            match path {
+                Ok(path) => {
+                    roots.insert(slot, path);
+                }
+                Err(error) => unresolved.push(format!("'{slot}': {error}")),
             }
-            .map_err(ProcessInvocationAuthorityError::Unavailable)?;
-            roots.insert(slot, path);
         }
+        let refused = |error: String| {
+            ProcessInvocationAuthorityError::Refused(if unresolved.is_empty() {
+                error
+            } else {
+                format!("{error}; unresolved candidate root slots: {}", unresolved.join("; "))
+            })
+        };
         let readable = resolve_argument_paths(
             "read_argument_paths",
             &self.read_argument_paths,
             arguments,
             &roots,
         )
-        .map_err(ProcessInvocationAuthorityError::Refused)?;
+        .map_err(refused)?;
         let writable = resolve_argument_paths(
             "write_argument_paths",
             &self.write_argument_paths,
             arguments,
             &roots,
         )
-        .map_err(ProcessInvocationAuthorityError::Refused)?;
+        .map_err(refused)?;
         let executable = resolve_argument_paths(
             "executable_argument_paths",
             &self.executable_argument_paths,
             arguments,
             &roots,
         )
-        .map_err(ProcessInvocationAuthorityError::Refused)?;
+        .map_err(refused)?;
         Ok(ResolvedInvocationPaths {
             readable,
             writable,
@@ -357,25 +368,19 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             .chain(&self.write_root_slots)
             .chain(&self.executable_root_slots)
             .chain(
-                self.read_argument_paths
-                    .iter()
-                    .flat_map(|binding| binding.within_root_slots.iter()),
-            )
-            .chain(
-                self.write_argument_paths
-                    .iter()
-                    .flat_map(|binding| binding.within_root_slots.iter()),
-            )
-            .chain(
-                self.executable_argument_paths
-                    .iter()
-                    .flat_map(|binding| binding.within_root_slots.iter()),
-            )
-            .chain(
                 self.executable_root_subpaths
                     .iter()
                     .map(|binding| &binding.root_slot),
             )
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let candidate_slots = self
+            .read_argument_paths
+            .iter()
+            .chain(&self.write_argument_paths)
+            .chain(&self.executable_argument_paths)
+            .flat_map(|binding| binding.within_root_slots.iter())
+            .filter(|slot| !requested_slots.contains(*slot))
             .cloned()
             .collect::<BTreeSet<_>>();
         let optional_requested_slots = self
@@ -407,6 +412,19 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
                 normalize_existing_path(path.clone())?
             };
             root_slots.insert(slot, path);
+        }
+        for slot in candidate_slots {
+            let Some(path) = available_root_slots.get(&slot) else {
+                continue;
+            };
+            let path = if writable_slots.contains(&slot) {
+                normalize_declared_exact_path(path.clone())
+            } else {
+                normalize_existing_path(path.clone())
+            };
+            if let Ok(path) = path {
+                root_slots.insert(slot, path);
+            }
         }
         for slot in optional_requested_slots {
             let Some(path) = available_root_slots.get(&slot) else {

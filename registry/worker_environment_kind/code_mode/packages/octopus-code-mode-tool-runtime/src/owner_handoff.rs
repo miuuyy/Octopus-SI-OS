@@ -14,7 +14,7 @@ use octopus_code_mode_room::continuation::{
 use octopus_descriptors::CheckpointId;
 use octopus_interfaces::InterfaceArtifactFile;
 use octopus_ledger::{ContentHash, Endpoint, Movement, MovementKind};
-use octopus_run_authoring::{CheckedRunEdit, CheckedRunEvidenceReader, RunAuthoringProfile};
+use octopus_run_authoring::{CheckedRunEdit, CheckedRunError, CheckedRunEvidenceReader, RunAuthoringProfile};
 use octopus_tool_door_runtime::notify::{RecursiveMode, Watcher};
 use octopus_tool_door_runtime::{
     DeliveryVerdict, InterfaceLiftContext, LedgerTailReader, ToolDoorOutputCallback,
@@ -51,7 +51,109 @@ enum NativeFailureOutput {
     Return(OwnerOutputAuthority),
 }
 
-enum OutputAuthorityRefresh { NativeInput, Recorded }
+enum NativeFailure {
+    Delivered(DeliveryVerdict),
+    Retained { config: CodeModeConfig, topology: CodeModeOwnerTopology, edge: OwnerCheckpoint, root: PathBuf },
+}
+
+struct RecordedFailure {
+    edge: OwnerCheckpoint,
+    failure: Option<ToolDoorOutputSource>,
+}
+
+enum OutputAuthorityRefresh { NativeInput, Recorded(RecordedFailure) }
+
+struct FailureReturn {
+    observation: FailureObservation,
+    refresh: OutputAuthorityRefresh,
+    authority: OwnerOutputAuthority,
+}
+
+struct FailureObservation {
+    reader: LedgerTailReader,
+    deadline: tokio::time::Instant,
+}
+
+struct FailureAdvance {
+    observed: String,
+    adopted: Option<String>,
+    error: &'static str,
+}
+
+enum OutputAttempt {
+    Delivered(DeliveryVerdict),
+    FailureAdvanced(FailureAdvance),
+}
+
+enum Installation { Installed, FailureAdvanced(FailureAdvance) }
+
+const AUTHORITY_ADVANCED: &str = "owner failure authority requires a fresh proof after checked advancement";
+const INSTALLATION_ADVANCED: &str = "owner failure installation requires a fresh proof after checked advancement";
+
+impl FailureObservation {
+    fn open(ctx: &InterfaceLiftContext, topology: &CodeModeOwnerTopology) -> Result<Self, String> {
+        let timeout = std::time::Duration::from_millis(OwnerHandoff::authoring_profile(ctx, topology)?.result_timeout_ms);
+        Ok(Self {
+            reader: LedgerTailReader::open_named(ctx, "code-mode-owner-output")?,
+            deadline: tokio::time::Instant::now().checked_add(timeout).ok_or("owner failure observation deadline overflow")?,
+        })
+    }
+
+    async fn settle<T>(
+        &mut self,
+        ctx: &InterfaceLiftContext,
+        mut observe: impl FnMut(&LedgerTailReader) -> Result<T, CheckedRunError> + Send,
+    ) -> Result<T, CheckedRunError> {
+        let cancel = ctx.owner_cancel();
+        loop {
+            if cancel.is_cancelled() { return Err("owner failure observation cancelled".into()); }
+            match observe(&self.reader) {
+                Err(waiting @ CheckedRunError::AwaitingResults { .. }) => {
+                    match tokio::time::timeout_at(self.deadline, self.reader.wait_for_change(&cancel)).await {
+                        Ok(changed) => changed?,
+                        Err(_) => return Err(waiting),
+                    }
+                }
+                observed => return observed,
+            }
+        }
+    }
+
+    fn extend(&mut self, queued: std::time::Duration) -> Result<(), String> {
+        self.deadline = self.deadline.checked_add(queued).ok_or("owner failure observation deadline overflow")?;
+        Ok(())
+    }
+
+    async fn adopt(
+        &mut self,
+        ctx: &InterfaceLiftContext,
+        root: &Path,
+        config: &CodeModeConfig,
+        topology: &CodeModeOwnerTopology,
+        advance: &FailureAdvance,
+    ) -> Result<(), String> {
+        let error = advance.error;
+        if ctx.owner_cancel().is_cancelled() || tokio::time::Instant::now() >= self.deadline {
+            return Err(error.into());
+        }
+        let path = ctx.owner_root_slot("run_records_root")?.canonicalize().map_err(|e| e.to_string())?
+            .join(format!("{}.json", topology.run));
+        let live = octopus_interfaces::read_artifact_carrier_file_bounded(&path, ctx.owner_io_limits()?.max_payload_bytes)
+            .map_err(|read| format!("{error}; current run record cannot be read: {read}"))?;
+        if ContentHash::of_bytes(&live).to_hex() == advance.observed {
+            return Err(match &advance.adopted {
+                Some(adopted) => format!("{error}; the run record still holds its proven bytes {} but the checked writer chain adopted {adopted}", advance.observed),
+                None => format!("{error}; the owner write was refused while the run record still held its proven bytes {}", advance.observed),
+            });
+        }
+        match self.settle(ctx, |_| continuation::reconcile_checked_provider_advance(ctx, root, config, None)).await {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(format!("{error}; the run advanced without checked writer evidence")),
+            Err(CheckedRunError::AwaitingResults { .. }) => Err(error.into()),
+            Err(reason) => Err(format!("{error}; the run advanced without checked writer evidence: {reason}")),
+        }
+    }
+}
 
 enum ApplicationChange {
     Request(PendingApplication),
@@ -153,20 +255,50 @@ impl OwnerHandoff {
         dispatch: ToolDoorOutputDispatch,
     ) -> Pin<Box<dyn Future<Output = Result<DeliveryVerdict, String>> + Send + 'a>> {
         Box::pin(async move {
-            let authority = match Self::prepare_native_failure_output(ctx, &mut source, &artifact)? {
-                Some(NativeFailureOutput::Closed(verdict)) => return Ok(verdict),
-                Some(NativeFailureOutput::Return(authority)) => Some(authority),
+            let failure = match Self::native_failure(ctx, &mut source, &artifact)? {
                 None => None,
+                Some(NativeFailure::Delivered(verdict)) => return Ok(verdict),
+                Some(NativeFailure::Retained { config, topology, edge, root }) => {
+                    let mut observation = FailureObservation::open(ctx, &topology)?;
+                    let emission = continuation::artifact_ref(&artifact)?.content.to_hex();
+                    let authority = observation.settle(ctx, |reader|
+                        Self::recorded_install_authority(ctx, reader, &root, &config, &source, &edge, &emission)).await?;
+                    Some(FailureReturn { observation, refresh: OutputAuthorityRefresh::NativeInput, authority })
+                }
             };
-            self.output_future(ctx, source, artifact, authority, dispatch, OutputAuthorityRefresh::NativeInput).await
+            self.output_future(ctx, source, artifact, failure, dispatch).await
         })
     }
 
-    fn prepare_native_failure_output(
+    async fn prove_failure_authority(
+        ctx: &InterfaceLiftContext,
+        observation: &mut FailureObservation,
+        refresh: &OutputAuthorityRefresh,
+        root: &Path,
+        config: &CodeModeConfig,
+        source: &ToolDoorOutputSource,
+        artifact: &InterfaceArtifactFile,
+    ) -> Result<NativeFailureOutput, String> {
+        let emission = continuation::artifact_ref(artifact)?.content.to_hex();
+        match refresh {
+            OutputAuthorityRefresh::NativeInput => match Self::native_failure(ctx, &mut source.clone(), artifact)? {
+                Some(NativeFailure::Delivered(verdict)) => Ok(NativeFailureOutput::Closed(verdict)),
+                Some(NativeFailure::Retained { config, edge, root, .. }) => observation.settle(ctx, |reader|
+                    Self::recorded_install_authority(ctx, reader, &root, &config, source, &edge, &emission)).await
+                    .map(NativeFailureOutput::Return).map_err(String::from),
+                None => Err("retained failure authority lost its exact native failure".into()),
+            },
+            OutputAuthorityRefresh::Recorded(recorded) => observation.settle(ctx, |reader|
+                Self::recorded_failure_authority(ctx, reader, root, config, source, recorded, &emission)).await
+                .map(NativeFailureOutput::Return).map_err(String::from),
+        }
+    }
+
+    fn native_failure(
         ctx: &InterfaceLiftContext,
         source: &mut ToolDoorOutputSource,
         artifact: &InterfaceArtifactFile,
-    ) -> Result<Option<NativeFailureOutput>, String> {
+    ) -> Result<Option<NativeFailure>, String> {
         let limits = ctx.owner_io_limits()?;
         let captured = artifact.read_bounded(limits.max_manifest_bytes, limits.max_payload_bytes)
             .map_err(|e| e.to_string())?;
@@ -185,7 +317,7 @@ impl OwnerHandoff {
                     let topology = config.resolve_owner_topology(&source.envelope)?;
                     let (edge, delivered) = Self::delivered_result(ctx, source, &topology, &result)?;
                     if let Some(delivered) = delivered {
-                        return Ok(Some(NativeFailureOutput::Closed(DeliveryVerdict::refused(octopus_interfaces::RefusedReason::CheckpointSpent,
+                        return Ok(Some(NativeFailure::Delivered(DeliveryVerdict::refused(octopus_interfaces::RefusedReason::CheckpointSpent,
                             json!({"source_movement_seq":source.movement.seq.0,
                                 "recorded_result_movement_seq":delivered.seq.0,"recorded_result_artifact":delivered.artifact})))));
                     }
@@ -194,10 +326,7 @@ impl OwnerHandoff {
                     }
                     let root = octopus_tool_door_runtime::tool_door_durable_state_dir(ctx,
                         &source.formation.as_ref().ok_or("native failure has no retained room")?.worker_environment_id)?;
-                    let reader = LedgerTailReader::open_named(ctx, "code-mode-owner-output")?;
-                    let emission = continuation::artifact_ref(artifact)?.content.to_hex();
-                    let authority = Self::recorded_install_authority(ctx, &reader, &root, &config, source, &edge, &emission)?;
-                    return Ok(Some(NativeFailureOutput::Return(authority)));
+                    return Ok(Some(NativeFailure::Retained { config, topology, edge, root }));
                 }
             }
         }
@@ -209,11 +338,10 @@ impl OwnerHandoff {
         ctx: &'a InterfaceLiftContext,
         source: ToolDoorOutputSource,
         artifact: InterfaceArtifactFile,
-        authority: Option<OwnerOutputAuthority>,
+        failure: Option<FailureReturn>,
         dispatch: ToolDoorOutputDispatch,
-        refresh: OutputAuthorityRefresh,
     ) -> Pin<Box<dyn Future<Output = Result<DeliveryVerdict, String>> + Send + 'a>> {
-        Box::pin(self.output_with_authority(ctx, source, artifact, authority, dispatch, refresh))
+        Box::pin(self.output_with_authority(ctx, source, artifact, failure, dispatch))
     }
 
     async fn output_with_authority(
@@ -221,9 +349,8 @@ impl OwnerHandoff {
         ctx: &InterfaceLiftContext,
         source: ToolDoorOutputSource,
         artifact: InterfaceArtifactFile,
-        authority: Option<OwnerOutputAuthority>,
+        failure: Option<FailureReturn>,
         dispatch: ToolDoorOutputDispatch,
-        refresh: OutputAuthorityRefresh,
     ) -> Result<DeliveryVerdict, String> {
         let config: CodeModeConfig = serde_json::from_slice(
             &octopus_interfaces::read_artifact_carrier_file_bounded(
@@ -247,16 +374,48 @@ impl OwnerHandoff {
             ctx,
             &formation.worker_environment_id,
         )?;
+        let Some(FailureReturn { mut observation, refresh, mut authority }) = failure else {
+            let mut states = self.states.lock().await;
+            let state = Self::owner_state(&mut states, &root, &config, &topology, &source)?;
+            return match self.output_attempt(ctx, &source, &artifact, &config, &topology, &root, formation,
+                state, None, &dispatch).await? {
+                OutputAttempt::Delivered(verdict) => Ok(verdict),
+                OutputAttempt::FailureAdvanced(advance) => Err(advance.error.into()),
+            };
+        };
+        loop {
+            let advance = {
+                let queued = tokio::time::Instant::now();
+                let mut states = self.states.lock().await;
+                observation.extend(queued.elapsed())?;
+                let state = Self::owner_state(&mut states, &root, &config, &topology, &source)?;
+                let retained = (state.authority.clone(), state.generated_artifacts.clone(), state.idle);
+                match self.output_attempt(ctx, &source, &artifact, &config, &topology, &root, formation,
+                    state, Some(authority), &dispatch).await? {
+                    OutputAttempt::Delivered(verdict) => return Ok(verdict),
+                    OutputAttempt::FailureAdvanced(advance) => {
+                        (state.authority, state.generated_artifacts, state.idle) = retained;
+                        advance
+                    }
+                }
+            };
+            observation.adopt(ctx, &root, &config, &topology, &advance).await?;
+            authority = match Self::prove_failure_authority(ctx, &mut observation, &refresh, &root, &config, &source, &artifact).await? {
+                NativeFailureOutput::Closed(verdict) => return Ok(verdict),
+                NativeFailureOutput::Return(authority) => authority,
+            };
+        }
+    }
+
+    fn owner_state<'s>(
+        states: &'s mut BTreeMap<PathBuf, OwnerState>,
+        root: &Path,
+        config: &CodeModeConfig,
+        topology: &CodeModeOwnerTopology,
+        source: &ToolDoorOutputSource,
+    ) -> Result<&'s mut OwnerState, String> {
         let runtime = source.envelope.runtime().map_err(|e| e.to_string())?;
-        let mut states = self.states.lock().await;
-        let authority = if authority.is_some() && matches!(refresh, OutputAuthorityRefresh::NativeInput) {
-            match Self::prepare_native_failure_output(ctx, &mut source.clone(), &artifact)? {
-                Some(NativeFailureOutput::Closed(verdict)) => return Ok(verdict),
-                Some(NativeFailureOutput::Return(authority)) => Some(authority),
-                None => return Err("retained failure authority lost its exact native failure".into()),
-            }
-        } else { authority };
-        let state = states.entry(root.clone()).or_insert_with(|| OwnerState {
+        let state = states.entry(root.to_path_buf()).or_insert_with(|| OwnerState {
             config: config.clone(),
             topology: topology.clone(),
             expected_hash: runtime.run_record_hash.clone().unwrap_or_default(),
@@ -265,29 +424,55 @@ impl OwnerHandoff {
             idle: false,
             generated_artifacts: Vec::new(),
         });
-        if state.config != config || state.topology != topology {
+        if state.config != *config || state.topology != *topology {
             return Err("code mode output changed its admitted owner topology".into());
         }
+        Ok(state)
+    }
+
+    async fn output_attempt(
+        &self,
+        ctx: &InterfaceLiftContext,
+        source: &ToolDoorOutputSource,
+        artifact: &InterfaceArtifactFile,
+        config: &CodeModeConfig,
+        topology: &CodeModeOwnerTopology,
+        root: &Path,
+        formation: &octopus_worker_env::WorkerEnvironmentFormation,
+        state: &mut OwnerState,
+        authority: Option<OwnerOutputAuthority>,
+        dispatch: &ToolDoorOutputDispatch,
+    ) -> Result<OutputAttempt, String> {
+        let runtime = source.envelope.runtime().map_err(|e| e.to_string())?;
         let installed_output = authority.as_ref().and_then(|authority| authority.installed_output.clone());
         let failure_run_hash = authority.as_ref().map(|authority| authority.observed_run_hash.clone());
         if let Some(authority) = authority {
+            let observed = authority.observed_run_hash;
             let authority = authority.source;
             let current = authority.envelope.runtime().map_err(|e| e.to_string())?;
             if authority.formation != source.formation || current.run != runtime.run
                 || current.ee != runtime.ee || current.worker != runtime.worker
                 || authority.movement.to != Endpoint::Interface(ctx.owner_interface().clone())
-                || config.resolve_owner_topology(&authority.envelope)? != topology {
+                || config.resolve_owner_topology(&authority.envelope)? != *topology {
                 return Err("owner output authority changed its exact admitted scope".into());
             }
-            continuation::validate_admitted_coauthor(ctx, &authority.envelope, &topology)?;
-            Self::reconcile_provider_advance(ctx, &root, &config, Some(&authority.envelope)).await?;
+            continuation::validate_admitted_coauthor(ctx, &authority.envelope, topology)?;
+            for input in [None, Some(&authority.envelope)] {
+                match continuation::reconcile_checked_provider_advance(ctx, root, config, input) {
+                    Ok(Some(installed)) => state.expected_hash = installed.after_hash,
+                    Ok(None) => {}
+                    Err(CheckedRunError::AwaitingResults { .. }) => return Ok(OutputAttempt::FailureAdvanced(
+                        FailureAdvance { observed, adopted: None, error: AUTHORITY_ADVANCED })),
+                    Err(error) => return Err(error.into()),
+                }
+                if state.expected_hash != observed {
+                    return Ok(OutputAttempt::FailureAdvanced(FailureAdvance {
+                        observed, adopted: Some(state.expected_hash.clone()), error: AUTHORITY_ADVANCED }));
+                }
+            }
             state.authority = authority;
-        }
-        if let Some(installed) = Self::reconcile_provider_advance(ctx,&root,&config,None).await? {
+        } else if let Some(installed) = Self::reconcile_provider_advance(ctx, root, config, None).await? {
             state.expected_hash = installed.after_hash;
-        }
-        if failure_run_hash.as_ref().is_some_and(|hash| hash != &state.expected_hash) {
-            return Err("owner failure authority requires a fresh proof after checked advancement".into());
         }
         let source_hash = runtime
             .run_record_hash
@@ -324,7 +509,7 @@ impl OwnerHandoff {
             let edge = state.topology.receipt.clone();
             self.install(ctx,&root,state,&edge,&artifact_ref.content.to_hex(),&captured.manifest.label,None,None).await?;
             continuation::record_internal_receipt(&root,&artifact_ref,source.movement.seq.0)?;
-            return dispatch(ctx.clone(), artifact).await;
+            return dispatch(ctx.clone(), artifact.clone()).await.map(OutputAttempt::Delivered);
         }
         if captured.manifest.label == "code_mode.application_boundary" {
             let body: Value =
@@ -343,7 +528,7 @@ impl OwnerHandoff {
                 .get("phase")
                 .and_then(Value::as_str)
                 .ok_or("application boundary has no phase")?;
-            return match phase {
+            return (match phase {
                 "request" => {
                     if application.request_artifact != source.envelope.artifact {
                         return Err(
@@ -388,7 +573,7 @@ impl OwnerHandoff {
                     dispatch(ctx.clone(), receipt).await
                 }
                 _ => Err("unknown application boundary phase".into()),
-            };
+            }).map(OutputAttempt::Delivered);
         }
         let mut terminal = false;
         let delivered_artifact = artifact.clone();
@@ -473,8 +658,9 @@ impl OwnerHandoff {
                 || !current.get("active_checkpoints").and_then(Value::as_array).is_some_and(|active| active.contains(id)) {
                 return Err("recorded owner output changed its installed checkpoint".into());
             }
-        } else {
-            self.install(ctx, &root, state, &edge, &artifact_ref.content.to_hex(), &captured.manifest.label, None, failure_run_hash.as_deref()).await?;
+        } else if let Installation::FailureAdvanced(advance) = self.install(ctx, &root, state, &edge,
+            &artifact_ref.content.to_hex(), &captured.manifest.label, None, failure_run_hash.as_deref()).await? {
+            return Ok(OutputAttempt::FailureAdvanced(advance));
         }
         let verdict = dispatch(ctx.clone(), delivered_artifact).await?;
         if terminal && matches!(verdict, DeliveryVerdict::Admitted { .. }) {
@@ -493,7 +679,7 @@ impl OwnerHandoff {
             state.idle = true;
             self.changed.notify_one();
         }
-        Ok(verdict)
+        Ok(OutputAttempt::Delivered(verdict))
     }
 
     async fn install(
@@ -506,34 +692,26 @@ impl OwnerHandoff {
         artifact_label: &str,
         application_change: Option<ApplicationChange>,
         failure_run_hash: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Installation, String> {
         loop {
         if ctx.owner_cancel().is_cancelled() { return Err("code mode authoring cancelled".into()); }
-        let reconciled = Self::reconcile_provider_advance(ctx,root,&state.config,None).await?;
+        let reconciled = match failure_run_hash {
+            Some(observed) => match continuation::reconcile_checked_provider_advance(ctx, root, &state.config, None) {
+                Ok(reconciled) => reconciled,
+                Err(CheckedRunError::AwaitingResults { .. }) => return Ok(Installation::FailureAdvanced(FailureAdvance {
+                    observed: observed.to_owned(), adopted: None, error: INSTALLATION_ADVANCED })),
+                Err(error) => return Err(error.into()),
+            },
+            None => Self::reconcile_provider_advance(ctx, root, &state.config, None).await?,
+        };
         if let Some(installed) = &reconciled {
             state.expected_hash = installed.after_hash.clone();
         }
-        if failure_run_hash.is_some_and(|hash| hash != state.expected_hash) {
-            return Err("owner failure installation requires a fresh proof after checked advancement".into());
+        if let Some(observed) = failure_run_hash.filter(|hash| *hash != state.expected_hash) {
+            return Ok(Installation::FailureAdvanced(FailureAdvance {
+                observed: observed.to_owned(), adopted: Some(state.expected_hash.clone()), error: INSTALLATION_ADVANCED }));
         }
-        let descriptor = ctx.owner_descriptor()?;
-        let private = &descriptor
-            .interface_driver_config
-            .as_ref()
-            .ok_or("code mode door has no private config")?
-            .private_config;
-        let profile: RunAuthoringProfile = serde_json::from_value(
-            private
-                .get("run_authoring_profile")
-                .cloned()
-                .ok_or("code mode door has no independent checked authoring profile")?,
-        )
-        .map_err(|e| e.to_string())?;
-        if profile.file_write_tool != state.topology.file_write_tool
-            || profile.result_timeout_ms == 0
-        {
-            return Err("owner profile differs from admitted topology".into());
-        }
+        let profile = Self::authoring_profile(ctx, &state.topology)?;
         let run = &state.topology.run;
         if Path::new(run).components().count() != 1 || run == "." || run == ".." {
             return Err("malformed owner run id".into());
@@ -1015,6 +1193,10 @@ impl OwnerHandoff {
         .await
         .map_err(|_| "code mode checked authoring result timed out".to_string())??;
         let Some(result) = result else {
+            if let Some(observed) = failure_run_hash {
+                return Ok(Installation::FailureAdvanced(FailureAdvance {
+                    observed: observed.to_owned(), adopted: None, error: INSTALLATION_ADVANCED }));
+            }
             let advanced = Self::reconcile_provider_advance(ctx, root, &state.config, None).await?
                 .ok_or("rejected authoring has no independent checked advance")?;
             if advanced.after_hash == edit.before_hash || advanced.after_hash == edit.after_hash {
@@ -1091,7 +1273,7 @@ impl OwnerHandoff {
             envelope: result.1,
             formation: state.authority.formation.clone(),
         };
-        return Ok(());
+        return Ok(Installation::Installed);
         }
     }
 
@@ -1101,6 +1283,50 @@ impl OwnerHandoff {
         ).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         config.validate(ctx.owner_interface().as_str())?;
         Ok(config)
+    }
+
+    fn authoring_profile(ctx: &InterfaceLiftContext, topology: &CodeModeOwnerTopology) -> Result<RunAuthoringProfile, String> {
+        let descriptor = ctx.owner_descriptor()?;
+        let private = &descriptor.interface_driver_config.as_ref()
+            .ok_or("code mode door has no private config")?.private_config;
+        let profile: RunAuthoringProfile = serde_json::from_value(private.get("run_authoring_profile").cloned()
+            .ok_or("code mode door has no independent checked authoring profile")?).map_err(|e| e.to_string())?;
+        if profile.file_write_tool != topology.file_write_tool || profile.result_timeout_ms == 0 {
+            return Err("owner profile differs from admitted topology".into());
+        }
+        Ok(profile)
+    }
+
+    fn recorded_failure_authority(
+        ctx: &InterfaceLiftContext,
+        reader: &LedgerTailReader,
+        root: &Path,
+        config: &CodeModeConfig,
+        source: &ToolDoorOutputSource,
+        recorded: &RecordedFailure,
+        emission: &str,
+    ) -> Result<OwnerOutputAuthority, CheckedRunError> {
+        let topology = config.resolve_owner_topology(&source.envelope)?;
+        let authority = match &recorded.failure {
+            Some(failure) => return Self::observed_failure_authority(ctx, reader, root, &topology, &recorded.edge, failure, emission),
+            None => Self::recorded_install_authority(ctx, reader, root, config, source, &recorded.edge, emission)?,
+        };
+        if authority.installed_output.is_some() { return Ok(authority); }
+        Self::observed_failure_authority(ctx, reader, root, &topology, &recorded.edge, &authority.source, emission)
+    }
+
+    fn observed_failure_authority(
+        ctx: &InterfaceLiftContext,
+        reader: &LedgerTailReader,
+        root: &Path,
+        topology: &CodeModeOwnerTopology,
+        edge: &OwnerCheckpoint,
+        failure: &ToolDoorOutputSource,
+        emission: &str,
+    ) -> Result<OwnerOutputAuthority, CheckedRunError> {
+        let (installed, current) = Self::installed_failure_authority(ctx, reader, root, topology, edge, failure, emission)?;
+        Ok(installed.unwrap_or_else(|| OwnerOutputAuthority { source: failure.clone(), installed_output: None,
+            observed_run_hash: ContentHash::of_bytes(&current).to_hex() }))
     }
 
     fn delivered_result(
@@ -1184,21 +1410,17 @@ impl OwnerHandoff {
         source: &ToolDoorOutputSource,
         output_edge: &OwnerCheckpoint,
         emission: &str,
-    ) -> Result<OwnerOutputAuthority, String> {
-        continuation::reconcile_checked_provider_advance(ctx, root, config, None)?;
+    ) -> Result<OwnerOutputAuthority, CheckedRunError> {
         let topology = config.resolve_owner_topology(&source.envelope)?;
-        let (installed, observed_hash) = Self::installed_failure_authority(ctx, reader, root, &topology, output_edge, source, emission)?;
+        let limits = ctx.owner_io_limits()?;
+        let path = ctx.owner_root_slot("run_records_root")?.canonicalize().map_err(|e| e.to_string())?
+            .join(format!("{}.json", topology.run));
+        continuation::reconcile_checked_provider_advance(ctx, root, config, None)?;
+        let (installed, current) = Self::installed_failure_authority(ctx, reader, root, &topology, output_edge, source, emission)?;
         if let Some(installed) = installed {
             return Ok(installed);
         }
         let runtime = source.envelope.runtime().map_err(|e| e.to_string())?;
-        let limits = ctx.owner_io_limits()?;
-        let path = ctx.owner_root_slot("run_records_root")?.canonicalize().map_err(|e| e.to_string())?
-            .join(format!("{}.json", topology.run));
-        let current = octopus_interfaces::read_artifact_carrier_file_bounded(&path, limits.max_payload_bytes).map_err(|e| e.to_string())?;
-        if ContentHash::of_bytes(&current).to_hex() != observed_hash {
-            return Err("owner failure selection requires a fresh proof after checked advancement".into());
-        }
         let hash = runtime.run_record_hash.as_deref().ok_or("recorded failure source lost its Run snapshot")?;
         let pinned = octopus_interfaces::read_artifact_carrier_file_bounded(&ctx.owner_blobs_dir().join(hash), limits.max_payload_bytes)
             .map_err(|e| e.to_string())?;
@@ -1582,7 +1804,7 @@ impl OwnerHandoff {
         edge: &OwnerCheckpoint,
         failure: &ToolDoorOutputSource,
         emission: &str,
-    ) -> Result<(Option<OwnerOutputAuthority>, String), String> {
+    ) -> Result<(Option<OwnerOutputAuthority>, Vec<u8>), CheckedRunError> {
         use octopus_run_authoring::{CheckedRunInstall, ConsentEvidenceRef};
         let runtime = failure.envelope.runtime().map_err(|e| e.to_string())?;
         let limits = ctx.owner_io_limits()?;
@@ -1694,10 +1916,10 @@ impl OwnerHandoff {
                 observed_run_hash: ContentHash::of_bytes(current).to_hex(),
             }).is_some() { return Err("recorded owner failure has ambiguous installed outputs".into()); }
         }
-        Ok((selected, ContentHash::of_bytes(current).to_hex()))
+        Ok((selected, current.to_vec()))
             },
             || cancellation.is_cancelled(),
-        ).map_err(String::from)
+        )
     }
 
     pub(crate) fn reconcile_failure<'a>(
@@ -1757,6 +1979,7 @@ impl OwnerHandoff {
             if refused || delivered.artifact.as_ref() == Some(reference) { return Ok(()); }
             return Err("recorded owner failure conflicts with an already delivered result".into());
         }
+        let mut observation = FailureObservation::open(ctx, &topology)?;
         if refused {
             let hash = failed_runtime.run_record_hash.as_deref().ok_or("recorded refusal lost its observed Run hash")?;
             let original_hash = output_source.envelope.runtime().map_err(|error| error.to_string())?
@@ -1768,18 +1991,8 @@ impl OwnerHandoff {
             }
             let path = ctx.owner_root_slot("run_records_root")?.canonicalize().map_err(|error| error.to_string())?
                 .join(format!("{}.json", topology.run));
-            let cancel = ctx.owner_cancel();
-            let bytes = loop {
-                if cancel.is_cancelled() { return Err("recorded failure proof was cancelled".into()); }
-                match octopus_run_authoring::checked_declared_run_snapshot(&evidence, &path,
-                    &original, source_seq, hash, failure.seq.0, topology.coauthor.iter().cloned().collect()) {
-                    Ok(bytes) => break bytes,
-                    Err(octopus_run_authoring::CheckedRunError::AwaitingResults { .. }) => {
-                        reader.wait_for_change(&cancel).await?;
-                    }
-                    Err(error) => return Err(String::from(error)),
-                }
-            };
+            let bytes = observation.settle(ctx, |_| octopus_run_authoring::checked_declared_run_snapshot(&evidence, &path,
+                &original, source_seq, hash, failure.seq.0, topology.coauthor.iter().cloned().collect())).await?;
             if ContentHash::of_bytes(&bytes).to_hex() != hash { return Err("recorded refusal Run integrity mismatch".into()); }
             let record: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             let checkpoint = record.get("checkpoints").and_then(Value::as_array).and_then(|checkpoints|
@@ -1794,28 +2007,22 @@ impl OwnerHandoff {
         let formation = Self::retained_failure_formation(ctx, &config, &output_source)?;
         output_source.formation = Some(formation.clone());
         let root = octopus_tool_door_runtime::tool_door_durable_state_dir(ctx, &formation.worker_environment_id)?;
-        let mut authority = if refused {
-            Self::recorded_install_authority(ctx, reader, &root, &config, &output_source, &edge, &reference.content.to_hex())?
-        } else {
-            OwnerOutputAuthority {
-                source: ToolDoorOutputSource { movement: failure.clone(), envelope: reader.envelope_for_movement(failure)?, formation: Some(formation) },
-                installed_output: None,
-                observed_run_hash: failed_runtime.run_record_hash.clone().ok_or("recorded failure has no admitted Run hash")?,
-            }
-        };
+        let recorded = RecordedFailure { edge, failure: if refused { None } else {
+            failed_runtime.run_record_hash.as_ref().ok_or("recorded failure has no admitted Run hash")?;
+            Some(ToolDoorOutputSource { movement: failure.clone(), envelope: reader.envelope_for_movement(failure)?, formation: Some(formation) })
+        } };
+        let emission = reference.content.to_hex();
+        let authority = observation.settle(ctx, |reader|
+            Self::recorded_failure_authority(ctx, reader, &root, &config, &output_source, &recorded, &emission)).await?;
         let artifact = InterfaceArtifactFile::store_manifest_bounded(ctx.interface_var_dir().join("failure-artifacts"),
             &captured.manifest_bytes, limits.max_manifest_bytes, limits.max_payload_bytes).map_err(|e| e.to_string())?;
         if continuation::artifact_ref(&artifact)? != *reference
             || artifact.read_payload_bytes_bounded(limits.max_payload_bytes).map_err(|e| e.to_string())? != captured.payload_bytes {
             return Err("recorded owner failure changed during private output materialization".into());
         }
-        if authority.installed_output.is_none() {
-            let (installed, current_hash) = Self::installed_failure_authority(ctx, reader, &root, &topology, &edge, &authority.source, &reference.content.to_hex())?;
-            if let Some(installed) = installed { authority = installed; }
-            else { authority.observed_run_hash = current_hash; }
-        }
         let dispatch: ToolDoorOutputDispatch = Arc::new(|ctx, artifact| Box::pin(async move { ctx.owner_hand_arrival(artifact).await }));
-        match self.output_future(ctx, output_source, artifact, Some(authority), dispatch, OutputAuthorityRefresh::Recorded).await? {
+        let failure = FailureReturn { observation, refresh: OutputAuthorityRefresh::Recorded(recorded), authority };
+        match self.output_future(ctx, output_source, artifact, Some(failure), dispatch).await? {
             DeliveryVerdict::Admitted { .. } => Ok(()),
             refused => Err(format!("recorded owner failure return was refused: {refused:?}")),
         }

@@ -10,7 +10,10 @@
   "host": {
     "native_program": "desktop_session/packages/octopus-system-gui-env/native/bin/octopus-desktop-native",
     "state_directory": "desktop-host",
-    "device_lock_path": "/tmp/octopus-desktop-device.lock",
+    "device_lock": {
+      "root_slot": "desktop_device_lock_root",
+      "file_name": "desktop-device.lock"
+    },
     "connection_file": "desktop-host/connection.json",
     "native_sandbox_profile": "desktop_session/packages/octopus-system-gui-env/native/desktop.sb",
     "application_behavior": {

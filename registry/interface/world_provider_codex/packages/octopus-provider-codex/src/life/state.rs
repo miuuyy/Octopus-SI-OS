@@ -28,12 +28,10 @@ pub(crate) struct CodexTurnScope<'a> {
 pub(crate) struct ForwardedProviderEmissions {
     pub(crate) outputs: usize,
     pub(crate) dispatches: usize,
-    pub(crate) bridged: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum InterruptedResultAdmission {
-    Bridged,
     Admitted(usize),
 }
 

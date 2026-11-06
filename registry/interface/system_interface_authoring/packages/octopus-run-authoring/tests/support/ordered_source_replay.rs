@@ -484,6 +484,22 @@ async fn exercise_interrupted_source_order(
     hot.reconcile_checked_run_state(&mut hot_state).await.unwrap();
     assert_eq!(hot_state.static_context_artifacts, vec![input.artifact.id.clone(),b.id.clone()]);
     assert_eq!(hot_state.context_artifacts, hot_state.static_context_artifacts, "snapshot seed preserves current payload and non-payload static context");
+    let mut stale = payload.clone(); stale.session = ProviderHandoffSession::new(&stale.ctx).unwrap();
+    let mut stale_state = stale.state.lock().await.clone(); stale_state.run_record_bytes = authored.content.as_bytes().to_vec();
+    stale_state.run_record_evidence_seq = Some(after_seq); stale_state.session_context.artifacts.clear();
+    stale_state.static_context_artifacts = vec![a.id.clone(),input.artifact.id.clone()];
+    stale_state.context_artifacts = stale_state.static_context_artifacts.clone();
+    stale.state = Arc::new(tokio::sync::Mutex::new(stale_state.clone()));
+    let limit = stale.ctx.required_host_io_limits().unwrap().max_payload_bytes;
+    let observe = |handoff: &ProviderOutputHandoff, state: &mut HandoffState| stable_run_observation(
+        &handoff.run_path, &state.run_record_bytes, limit, || Ok(state.run_record_bytes.clone())).map_err(String::from);
+    assert_eq!(stale.observe_live_record(observe).await.unwrap(), next.content.as_bytes());
+    assert_eq!(stale.state.lock().await.static_context_artifacts, hot_state.static_context_artifacts);
+    std::fs::write(&payload.run_path, [next.content.as_bytes(), b" "].concat()).unwrap();
+    stale.state = Arc::new(tokio::sync::Mutex::new(stale_state));
+    assert!(stale.observe_live_record(observe).await.unwrap_err().contains("run changed during evidence collection"));
+    assert_eq!(stale.state.lock().await.run_record_bytes, authored.content.as_bytes());
+    std::fs::write(&payload.run_path, next.content.as_bytes()).unwrap();
     let mut changed = chain[0].clone(); changed.writer.tool = "file.write.foreign".into();
     assert!(validate_checked_provider_transition(&changed).is_err());
     for field in ["source_movement_seq", "terminal"] {

@@ -91,7 +91,7 @@ fn current_amendment_checks_future_routes_before_they_can_disable_control() {
         expected_before_hash:Some(ContentHash::of_bytes(&caller_before).to_hex()) };
     let door = composition.authoring.capability_doors["system_room"].clone();
     let reader = composition.authoring.capability_tools["file.write"].clone();
-    let error = plan_current_run_amendment(&request.roots, &current, &provider.into(), CurrentRunRequest {
+    let error = plan_current_run_amendment(&request.roots, &current, &provider.into(), CurrentRunRequest { change: None,
         amendment_key:"missing-future-role".into(), publications:vec![], selection:None,
         authored:Some(AuthoredCurrentRun { expected_before_hash:ContentHash::of_bytes(pending.as_bytes()).to_hex(),
             expected_before:json!(current), run_record:after, writes:vec![activation] }),
@@ -202,10 +202,10 @@ fn current_default_tool_selection_preserves_provider_life_while_attaching() {
             if blocked {value["ceiling"]["hard_blocked_tools"]=json!(["file.peek"]);}
             else {value["ceiling"]["tools"].as_array_mut().unwrap().retain(|tool|tool!="file.peek");}
         });
-        assert!(plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest {publications:vec![],amendment_key:"denied".into(),selection:Some(selection.clone()),authored:None},bridge.clone(),&retained).unwrap_err().contains("outside the formed worker/EE grant"));
+        assert!(plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest { change: None,publications:vec![],amendment_key:"denied".into(),selection:Some(selection.clone()),authored:None},bridge.clone(),&retained).unwrap_err().contains("outside the formed worker/EE grant"));
         std::fs::write(root.join(&worker_policy),&allowed).unwrap();
     }
-    let plan=plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest {publications:vec![],amendment_key:"attach".into(),selection:Some(selection),authored:None},bridge.clone(),&retained).unwrap();
+    let plan=plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest { change: None,publications:vec![],amendment_key:"attach".into(),selection:Some(selection),authored:None},bridge.clone(),&retained).unwrap();
     assert!(plan.validation.safe_to_apply,"{:?}",plan.validation.regressions);
     let owner=request.roots.registry_root.join("interface").join(provider.as_str());
     assert!(plan.dependency_writes.iter().chain(&plan.activation_writes).all(|write|!write.path.starts_with(&owner)));
@@ -224,7 +224,7 @@ fn current_default_tool_selection_preserves_provider_life_while_attaching() {
     for new_file in [false,true] {
         if new_file {writes=vec![RegistryCandidateWrite {path:owner.join("new.json"),content:"{}".into(),expected_before_hash:None}];}
         let authored=AuthoredCurrentRun {expected_before_hash:ContentHash::of_bytes(composition.run_write.content.as_bytes()).to_hex(),expected_before:json!(current),run_record:json!(current),writes:writes.clone()};
-        assert!(plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest {publications:vec![],amendment_key:"unsafe".into(),selection:None,authored:Some(authored)},bridge.clone(),&retained).unwrap_err().contains("in-flight provider"));
+        assert!(plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest { change: None,publications:vec![],amendment_key:"unsafe".into(),selection:None,authored:Some(authored)},bridge.clone(),&retained).unwrap_err().contains("in-flight provider"));
     }
     assert_eq!(std::fs::read(&composition.run_write.path).unwrap(),composition.run_write.content.as_bytes());
     for write in plan.dependency_writes.iter().chain(&plan.activation_writes) {
@@ -235,7 +235,7 @@ fn current_default_tool_selection_preserves_provider_life_while_attaching() {
     let next_selection=current_selection(&request.roots,&next,&provider).unwrap().unwrap();
     assert_eq!(next_selection.selected_tools.len(),4);
     assert!(next_selection.selected_tools.iter().any(|tool|tool.tool=="file.peek" && tool.interface=="system_extra_room"));
-    let repeated=plan_current_run_amendment(&request.roots,&next,&provider,CurrentRunRequest {publications:vec![],amendment_key:"repeat".into(),selection:Some(next_selection.clone()),authored:None},bridge,&retained).unwrap();
+    let repeated=plan_current_run_amendment(&request.roots,&next,&provider,CurrentRunRequest { change: None,publications:vec![],amendment_key:"repeat".into(),selection:Some(next_selection.clone()),authored:None},bridge,&retained).unwrap();
     assert!(repeated.validation.safe_to_apply,"{:?}",repeated.validation.regressions);
     assert!(repeated.dependency_writes.is_empty(),"existing private IDs must be reused");
     let owner=&composition.authoring.capability_doors["system_room"];
@@ -1137,4 +1137,32 @@ async fn input_revision_cli_preserves_payload_intent_and_requires_checked_writer
         let call_count = b.log.read_from(Seq(0)).iter().filter(|row| row.kind == MovementKind::InterfaceOutbound && row.from == Endpoint::Interface(b.author.clone()) && row.to == Endpoint::Interface(door.clone())).count();
         assert_eq!(call_count,b.writes);
     }
+}
+
+#[test]
+fn current_run_change_adds_and_removes_exact_entries_and_refuses_what_it_cannot_apply() {
+    use octopus_operator_chat_client::run_composition::current_run::{CurrentRunChange, CurrentRunSelection, apply_current_run_change};
+    use octopus_operator_chat_client::SelectedToolSeed;
+    let tool = |name: &str| SelectedToolSeed { tool: name.into(), interface: "system_room".into(), worker_environment_kind: "system_room".into() };
+    let current: CurrentRunSelection = serde_json::from_value(json!({
+        "selected_tools": [tool("file.read")],
+        "selected_worker_environment_kinds": ["system_room"],
+        "door_host_slots": {"system_room": {"workspace_root": "/work"}},
+        "external_inputs": [], "external_relays": [], "model_outputs": [],
+        "context_artifact_bindings": [], "payload_artifact_bindings": []
+    })).unwrap();
+    let change: CurrentRunChange = serde_json::from_value(json!({
+        "add": {"selected_tools": [tool("file.write")], "door_host_slots": {"system_room": {"repo_root": "/repo"}}},
+        "remove": {"selected_tools": [tool("file.read")]}
+    })).unwrap();
+    let changed = apply_current_run_change(current.clone(), change).unwrap();
+    assert_eq!(changed.selected_tools, vec![tool("file.write")]);
+    assert_eq!(changed.selected_worker_environment_kinds, current.selected_worker_environment_kinds);
+    assert_eq!(changed.door_host_slots["system_room"].len(), 2);
+
+    let absent: CurrentRunChange = serde_json::from_value(json!({"remove": {"selected_tools": [tool("browser.click")]}})).unwrap();
+    assert!(apply_current_run_change(current.clone(), absent).unwrap_err().contains("does not hold"));
+    let present: CurrentRunChange = serde_json::from_value(json!({"add": {"selected_worker_environment_kinds": ["system_room"]}})).unwrap();
+    assert!(apply_current_run_change(current.clone(), present).unwrap_err().contains("already holds"));
+    assert!(apply_current_run_change(current, CurrentRunChange::default()).unwrap_err().contains("nothing"));
 }

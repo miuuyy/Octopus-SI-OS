@@ -55,8 +55,8 @@ function sidebarChrome(ui) {
 function schedule(index, status = "enabled") {
   return {
     interface_id: `world_task_${index}`, display_name: `Task ${index}`, status, valid: status !== "invalid", activation_digest: String(index % 10).repeat(64),
-    schedule: { type: "cron", cron: "0 13 * * *" }, timezone: "UTC", fire_on_start: false, instructions: `Review task ${index}.`, clone_eligible: status !== "invalid",
-    run_template: { run_id: `run_task_${index}`, ee_id: "ee_project", worker_interface_id: "system_worker_flash", checkpoint_count: 2, outbound_interface_ids: ["world_delivery"], artifact_binding_count: 1 },
+    schedule: { type: "cron", cron: "0 13 * * *" }, timezone: "UTC", fire_on_start: false, instructions: `Review task ${index}.`,
+    targets: [{ run_id: `run_task_${index}`, chat_interface_id: `world_operator_chat_task_${index}`, title: `Task ${index}` }],
     next_run_at_ms: Date.now() + (index + 1) * 60_000, next_run_source: "driver_state", error: status === "invalid" ? "Invalid fixture configuration" : "",
   };
 }
@@ -279,10 +279,11 @@ test("one-shot timestamps validate calendar dates and preserve nanosecond deadli
 
 test("an installed inactivity template opens a chat draft, reports honest state and undoes a journaled run", async () => {
   const inactivity = { seconds: 3600, interface_match: { interface_type: "world", role: "user", interface_driver_ref: "app_server" } };
-  const template = { ...schedule(0), interface_id: "world_system_review", display_name: "System review", status: "template", template: true, clone_eligible: true, schedule: { type: "inactivity", ...inactivity }, next_run_at_ms: null, next_run_source: "" };
-  const journal = { digest: "a".repeat(64), outcome: "changed", summary: "Saved the export procedure as a skill.", undoable: true, undone: false, checks: [{ check: "doctor", result: "passed", evidence: "seq 9" }],
+  const template = { ...schedule(0), interface_id: "world_system_review", display_name: "System review", status: "template", template: true, targets: [], schedule: { type: "inactivity", ...inactivity }, next_run_at_ms: null, next_run_source: "" };
+  const journal = { digest: "a".repeat(64), firing: "1790000000000", outcome: "changed", summary: "Saved the export procedure as a skill.", undoable: true, undone: false, checks: [{ check: "doctor", result: "passed", evidence: "seq 9" }],
     changes: [{ kind: "file", path: "/home/registry/artifact/a/artifact.json", action: "created", reason: "repeated", status: "applied", restorable: true, unrestorable_reason: "" }] };
   const trigger = { ...template, interface_id: "world_quiet_review", display_name: "Quiet review", status: "enabled", template: false, schedule: { type: "inactivity", ...inactivity, within_ee: "ee_project" },
+    targets: [{ run_id: "run_review_1", chat_interface_id: "world_operator_chat_review", title: "Quiet review" }],
     inactivity_state: { status: "waiting", current: true, last_activity_at_ms: Date.now() }, next_run_at_ms: Date.now() + 3_600_000, next_run_source: "driver_state",
     deliveries: [{ seq: 12, at_ms: Date.now() - 60_000, run_id: "run_review_1", chat_interface_id: "world_operator_chat_review", journal }] };
   const f = fixture([template]);
@@ -304,7 +305,7 @@ test("an installed inactivity template opens a chat draft, reports honest state 
   await click(button(run, "Run actions")); await click(menuItem("Undo changes…"));
   assert.match(document.querySelector("[data-scheduled-journal]").textContent, /created · \/home\/registry\/artifact\/a\/artifact\.json/);
   await click(button(document, "Undo changes"));
-  assert.deepEqual(f.writes[0], { action: "undo_changes", runId: "run_review_1", expectedJournalDigest: "a".repeat(64) });
+  assert.deepEqual(f.writes[0], { action: "undo_changes", runId: "run_review_1", firing: "1790000000000", expectedJournalDigest: "a".repeat(64) });
 });
 
 test("a change journal undoes only files still holding the recorded result", async () => {
@@ -316,7 +317,7 @@ test("a change journal undoes only files still holding the recorded result", asy
   const registry = path.join(home, "registry");
   const modified = path.join(registry, "interface", "world_a", "interface.json");
   const created = path.join(registry, "artifact", "artifact-new", "artifact.json");
-  const journalRoot = path.join(home, "state", "change-journals", "run_review");
+  const journalRoot = path.join(home, "state", "change-journals", "run_review", "1790000000000");
   for (const file of [modified, created, path.join(journalRoot, "before", "0")]) fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(modified, "after\n"); fs.writeFileSync(created, "new\n"); fs.writeFileSync(path.join(journalRoot, "before", "0"), "before\n");
   const journal = { schema_version: 1, run: "run_review", outcome: "changed", summary: "s", changes: [
@@ -327,14 +328,14 @@ test("a change journal undoes only files still holding the recorded result", asy
   const plans = [];
   const hooks = { commitClientAuthoring: async (plan) => { plans.push(plan); } };
   fs.writeFileSync(created, "edited later\n");
-  await assert.rejects(mutateScheduledInterface(registry, home, { action: "undo_changes", runId: "run_review", expectedJournalDigest: digest }, hooks), /artifact.json is changed/);
+  await assert.rejects(mutateScheduledInterface(registry, home, { action: "undo_changes", runId: "run_review", firing: "1790000000000", expectedJournalDigest: digest }, hooks), /artifact.json is changed/);
   fs.writeFileSync(created, "new\n");
-  await mutateScheduledInterface(registry, home, { action: "undo_changes", runId: "run_review", expectedJournalDigest: digest }, hooks);
+  await mutateScheduledInterface(registry, home, { action: "undo_changes", runId: "run_review", firing: "1790000000000", expectedJournalDigest: digest }, hooks);
   assert.deepEqual(plans[0].writes.map((write) => [write.file, write.beforeDigest, write.content ?? write.next]), [[modified, sha("after\n"), "before\n"], [created, sha("new\n"), null]]);
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test("setup arms each selected pack trigger once through the template clone", async () => {
+test("setup arms each selected pack trigger once as a template copy bound into its own task", async () => {
   const { setupTriggerEntries, setupTriggerProof, armSetupTriggers } = require("../electron/projection.cjs");
   const os = require("node:os");
   const repoRegistry = path.join(appRoot, "..", "registry");
@@ -355,19 +356,32 @@ test("setup arms each selected pack trigger once through the template clone", as
   const entries = setupTriggerEntries(pack, ["world_system_review"]);
   assert.deepEqual(entries.map((entry) => [entry.interface_id, entry.quiet_period_seconds]), [["world_self_improvement", 3600]]);
   const labels = [];
-  const hooks = { commitClientAuthoring: async (plan) => {
-    labels.push(plan.label);
-    for (const write of plan.writes) {
-      fs.mkdirSync(path.dirname(write.file), { recursive: true });
-      fs.writeFileSync(write.file, `${JSON.stringify(write.next, null, 2)}\n`);
-    }
-  } };
+  const planned = [];
+  const runPath = path.join(home, "state", "runs", "run_trigger_task.json");
+  const hooks = {
+    commitClientAuthoring: async (plan) => {
+      labels.push(plan.label);
+      for (const write of plan.writes) {
+        fs.mkdirSync(path.dirname(write.file), { recursive: true });
+        fs.writeFileSync(write.file, write.content ?? `${JSON.stringify(write.next, null, 2)}\n`);
+      }
+    },
+    planTriggerTask: async (entry, input) => {
+      planned.push([entry.task.worker_interface_id, input]);
+      assert.ok(fs.existsSync(path.join(registry, "interface", input.interfaceId, "interface.json")), "the trigger folder exists before its task is planned");
+      const run = { id: "run_trigger_task", checkpoints: [{ id: input.checkpointId, interface_binding: { interface: input.interfaceId } }] };
+      return { runId: run.id, writes: [{ file: runPath, beforeDigest: null, content: `${JSON.stringify(run)}\n` }] };
+    },
+  };
   assert.equal(await setupTriggerProof(registry, home, entries), null);
   await armSetupTriggers(registry, home, entries, hooks);
   await armSetupTriggers(registry, home, entries, hooks);
-  assert.deepEqual(labels, ["create scheduled interface world_self_improvement"]);
+  assert.deepEqual(labels, ["create trigger world_self_improvement", "create the task of trigger world_self_improvement"]);
+  assert.deepEqual(planned, [["system_worker_system_review", { checkpointId: "cp_world_self_improvement", interfaceId: "world_self_improvement", artifactNames: ["cron.current_time"] }]]);
   const [proof] = await setupTriggerProof(registry, home, entries);
-  assert.equal(proof.run_id, "run_world_self_improvement");
+  assert.deepEqual(proof.run_ids, ["run_trigger_task"]);
+  const descriptor = JSON.parse(fs.readFileSync(path.join(registry, "interface", "world_self_improvement", "interface.json"), "utf8"));
+  assert.equal(descriptor.copy_of, "world_cron");
   const read = (id) => JSON.parse(fs.readFileSync(path.join(registry, "interface", id, "activation.json"), "utf8")).activations[0];
   const armed = read("world_self_improvement");
   const template = read("world_system_review");
@@ -376,6 +390,6 @@ test("setup arms each selected pack trigger once through the template clone", as
   assert.equal(armed.config.schedule.inactivity.seconds, 3600);
   assert.deepEqual(armed.config.schedule.inactivity.exclude_interface_match, template.config.schedule.inactivity.exclude_interface_match);
   assert.equal(armed.config.schedule.reminder_default, template.config.schedule.reminder_default);
-  assert.ok(fs.existsSync(path.join(home, "state", "runs", "run_world_self_improvement.json")));
+  assert.deepEqual(Object.keys(armed.config), ["schedule"]);
   fs.rmSync(home, { recursive: true, force: true });
 });

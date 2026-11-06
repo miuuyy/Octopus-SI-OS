@@ -123,7 +123,6 @@ pub(crate) async fn hand_control_result(
             &pinned_run_record,
         ).await?;
         match handoff.recover_source().await? {
-            ProviderSourceRecovery::Bridged { .. } => return Ok(true),
             ProviderSourceRecovery::Completed => {}
             ProviderSourceRecovery::Interrupted {
                 last_artifact_label,

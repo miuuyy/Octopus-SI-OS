@@ -725,14 +725,14 @@ function taskSearchSnippet(value, normalizedIndex, needleLength) {
   return `${start ? "…" : ""}${compact.slice(start, end)}${end < compact.length ? "…" : ""}`;
 }
 
-async function readChangeJournal(projection, runId) {
+async function readChangeJournal(projection, runId, firing) {
   try {
-    const plan = await changeJournalPlan(projection.octopusHome, projection.registryRoot, runId);
+    const plan = await changeJournalPlan(projection.octopusHome, projection.registryRoot, runId, firing);
     if (!plan) return null;
     const { writes, ...journal } = plan;
     return journal;
   } catch (error) {
-    return { run_id: runId, error: String(error?.message ?? error) };
+    return { run_id: runId, firing, error: String(error?.message ?? error) };
   }
 }
 

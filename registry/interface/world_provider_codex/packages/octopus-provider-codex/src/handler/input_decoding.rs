@@ -34,33 +34,6 @@ pub(crate) fn admitted_payload_context(
     Ok((context, selected))
 }
 
-pub(crate) fn continuity_input_sources(
-    record: &octopus_run_record::RunRecord,
-    input: &InterfaceInvocationEnvelope,
-) -> Result<Vec<ArtifactRef>, InterfaceDriverError> {
-    let metadata = input.metadata()?;
-    let runtime = invocation_runtime_metadata(input)?;
-    let mut sources = vec![input.artifact.clone()];
-    if let Some(source) = octopus_run_authoring::input_artifacts::result_source(record, &runtime.interface, &runtime.checkpoint)
-        .map_err(InterfaceDriverError::FailedClosed)? {
-        let bound = input.artifact_binding_payloads.iter().find(|bound| bound.artifact == source)
-            .ok_or_else(|| InterfaceDriverError::FailedClosed("result invocation lost its admitted source payload".into()))?;
-        if !metadata.artifact_binding_refs.contains(&source)
-            || metadata.grant.artifact_access.get(source.id.as_str()) != Some(&octopus_runtime::ArtifactAccess::read_only()) {
-            return Err(InterfaceDriverError::FailedClosed("result invocation lost its exact source read grant".into()));
-        }
-        let original: serde_json::Value = serde_json::from_slice(&bound.read_bytes().map_err(|error| InterfaceDriverError::FailedClosed(error.to_string()))?)
-            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
-        let incoming: serde_json::Value = serde_json::from_slice(&input.read_artifact_payload()?)
-            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
-        if original != incoming {
-            return Err(InterfaceDriverError::FailedClosed("result invocation changed its admitted source payload".into()));
-        }
-        sources.push(source);
-    }
-    Ok(sources)
-}
-
 pub(crate) fn continuity_context_payloads(
     record: &octopus_run_record::RunRecord,
     input: &InterfaceInvocationEnvelope,

@@ -26,7 +26,7 @@
     }
   },
   "supported_worker_environment_kinds": ["filesystem_workspace"],
-  "description": "Write UTF-8 bytes to an opaque workspace.exec process or poll it with an empty chars value, then return exact ordered output evidence. Empty chars also drains output after exit. Follow continuation_available until false, then inspect completed, exit_code, timed_out and failure; completed need not become true after a timeout or failure. Draining a closed process releases its slot. A retired-process refusal is not successful completion and must not trigger a command replay.",
+  "description": "Write UTF-8 bytes to an opaque workspace.exec process, or poll it with empty chars, and return its next ordered output. After the process exits, empty chars reads the output that is still unread; while continuation_available is true some output remains. Raise max_output_bytes (up to 1048576) to read a large output in fewer polls. Then inspect completed, exit_code, timed_out and failure; completed need not become true after a timeout or failure. Reading a closed process to the end releases its slot. A retired-process refusal is not successful completion and must not trigger a command replay.",
   "args_schema": {
     "type": "object",
     "properties": {

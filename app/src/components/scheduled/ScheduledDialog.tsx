@@ -105,7 +105,6 @@ export function ScheduledDialog({
                 <ScheduleSection draft={draft} onChange={setDraft} onEditRule={() => setRuleOpen(true)} scopeOptions={scopeOptions} />
                 <AdvancedSection creating={creating} draft={draft} onChange={setDraft} onChooseTemplate={chooseTemplate} source={source} templates={templates} />
                 {visibleError ? <p className="m-0 text-sm text-danger select-none" role="alert">{visibleError}</p> : null}
-                {creating && !source.cloneEligible ? <p className="m-0 text-sm text-danger select-none" role="alert">This template has no outbound interface binding and cannot create useful work.</p> : null}
               </div>
             </fieldset>
           </div>
@@ -236,7 +235,6 @@ function AdvancedSection({ creating, draft, onChange, onChooseTemplate, source, 
   const [expanded, setExpanded] = useState(false);
   const timeBased = draft.type === "cron" || draft.type === "interval";
   const templateOptions = useMemo(() => templates.map((template) => ({ id: template.interfaceId, label: template.displayName })), [templates]);
-  const topology = source.runTemplate;
   return (
     <div className="flex flex-col">
       <button
@@ -281,13 +279,7 @@ function AdvancedSection({ creating, draft, onChange, onChooseTemplate, source, 
               ) : null}
               {timeBased ? <ScheduleFormRow control={<RepeatSwitch checked={draft.fireOnStart} label="Run once on start" onChange={(fireOnStart) => onChange({ ...draft, fireOnStart })} />} label="Run once on start" labelSizing="content" /> : null}
               <div className="flex flex-col [&>*:not(:last-child)]:relative [&>*:not(:last-child)]:after:pointer-events-none [&>*:not(:last-child)]:after:absolute [&>*:not(:last-child)]:after:inset-x-5 [&>*:not(:last-child)]:after:bottom-0 [&>*:not(:last-child)]:after:h-px [&>*:not(:last-child)]:after:bg-[var(--color-border-subtle)] [&>*:not(:last-child)]:after:content-['']">
-                {topology ? <>
-                  <ScheduleFormRow control={<ScheduleFormValue>{topology.eeId}</ScheduleFormValue>} label="Runs in" />
-                  <ScheduleFormRow control={<ScheduleFormValue>{topology.workerInterfaceId}</ScheduleFormValue>} label="Worker" />
-                  <ScheduleFormRow control={<ScheduleFormValue>{topology.outboundInterfaceIds.length ? topology.outboundInterfaceIds.join(", ") : "None"}</ScheduleFormValue>} label="Delivers to" />
-                  <ScheduleFormRow control={<ScheduleFormValue>{`${topology.artifactBindingCount} artifacts · ${topology.checkpointCount} checkpoints`}</ScheduleFormValue>} label="Bindings" />
-                  <ScheduleFormRow control={<ScheduleFormValue>{topology.runId}</ScheduleFormValue>} label="Run" />
-                </> : <ScheduleFormRow control={<ScheduleFormValue>Not projectable</ScheduleFormValue>} label="Run template" />}
+                <ScheduleFormRow control={<ScheduleFormValue>{source.targets.length ? source.targets.map((target) => target.title).join(", ") : "No task yet"}</ScheduleFormValue>} label="Sends to" />
                 {source.reminderEnv ? <ScheduleFormRow control={<ScheduleFormValue>{source.reminderEnv}</ScheduleFormValue>} label="Environment override" /> : null}
               </div>
             </div>

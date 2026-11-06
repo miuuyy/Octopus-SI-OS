@@ -36,7 +36,7 @@
     }
   },
   "supported_worker_environment_kinds": ["filesystem_workspace"],
-  "description": "Start one bounded persistent command from the direct workspace or an additional filesystem root explicitly granted to this task, with exact ordered stdout/stderr/PTY chunks and an opaque process id for continuation or control. A command can exit while unread output still occupies a process slot. If continuation_available is true, poll the same process with workspace.write_stdin and empty chars until it is false; exited, closed or an exit_code alone does not mean all output was read. At the process limit, use workspace.process.list and drain closed processes before starting more. Do not replay commands to fetch their output.",
+  "description": "Start one bounded persistent command from the direct workspace or an additional filesystem root explicitly granted to this task, with exact ordered stdout/stderr/PTY chunks and an opaque process id for continuation or control. A command can exit while unread output still occupies a process slot. If continuation_available is true, output remains: read it with workspace.write_stdin and empty chars, raising max_output_bytes for a large output; exited, closed or an exit_code alone does not mean all output was read. At the process limit, use workspace.process.list and drain closed processes before starting more. Do not replay commands to fetch their output.",
   "args_schema": {
     "type": "object",
     "properties": {

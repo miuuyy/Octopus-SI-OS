@@ -6,7 +6,7 @@ impl ProviderOutputHandoff {
         current: &[u8],
         observed_chain: &[CheckedRunTransition],
         requested: Option<u64>,
-    ) -> Result<BTreeMap<u64, ResolvedSessionContext>, String> {
+    ) -> Result<BTreeMap<u64, (ResolvedSessionContext, Vec<ArtifactRef>)>, String> {
         if self.failed_source || !self.source_carries_context { return Ok(BTreeMap::new()); }
         let limits = self.ctx.required_host_io_limits()?;
         stable_run_observation(&self.run_path, current, limits.max_payload_bytes, || {
@@ -150,10 +150,10 @@ impl ProviderOutputHandoff {
                     &evidence, &self.run_path, &chain, &config.provider_interface, &source,
                 )?;
                 let (context, _, _) = recover_source_session_context_with_static_correction(
-                    &self.ctx.blobs_dir, limits, &self.session, &original, &config, sequence,
+                    &self.ctx.blobs_dir, limits, &self.session, &original, &config, sequence, &pending.rebase,
                     &self.context_output_labels, &self.session_snapshot_labels, correction.as_ref(),
                 )?;
-                recovered.insert(sequence, context);
+                recovered.insert(sequence, (context, pending.rebase.clone()));
             }
             Ok(recovered)
         }).map_err(Into::into)
@@ -165,8 +165,8 @@ impl ProviderOutputHandoff {
         let recovered = self.checked_failed_source_contexts(&state.run_record_bytes, chain, None)?;
         if recovered.is_empty() { return Ok(()); }
         let mut next = state.clone();
-        for (sequence, context) in recovered {
-            let merged = merge_failed_source_context(&next.session_context.artifacts, &context.artifacts, sequence, Some(self.source_movement_seq))?;
+        for (sequence, (context, rebase)) in recovered {
+            let merged = merge_failed_source_context(&next.session_context.artifacts, &context.artifacts, sequence, Some(self.source_movement_seq), &rebase)?;
             next.session_context.artifacts = merged;
             reconcile_resolved_session_snapshot_head(&next.session_context, &mut next.session_snapshot_head)?;
         }
@@ -186,14 +186,42 @@ impl ProviderOutputHandoff {
         &self, state: &mut HandoffState, current: &RunRecord, chain: &[CheckedRunTransition],
     ) -> Result<(), String> {
         if self.result_input_template()?.is_some() {
-            let current = self.published_context_artifacts(current, &self.config)?;
-            return reattach_unpublished_context_inputs(state, self.source_movement_seq, current);
+            let published = self.published_context_artifacts(current, &self.config)?;
+            reattach_unpublished_context_inputs(state, self.source_movement_seq, published)?;
+            return self.extend_result_rebase(state, current);
         }
         let mut next = state.clone();
         self.restore_replayed_context(&mut next, current, chain)?;
         self.restore_failed_context(&mut next, chain)?;
         *state = next;
         Ok(())
+    }
+
+    fn extend_result_rebase(&self, state: &mut HandoffState, current: &RunRecord) -> Result<(), String> {
+        if !result_inputs::retains_invocation(self, current) {
+            return Ok(());
+        }
+        let Some(recorded) = state.result_rebase.clone() else {
+            return Ok(());
+        };
+        let runtime = self.invocation_metadata.runtime.as_ref().ok_or("result source coordinate absent")?;
+        let row = current.checkpoint(&runtime.checkpoint).ok_or("result rebase lost its receiving row")?;
+        let config = attempt_config(current, &self.config)?;
+        let templates = config.checkpoints.iter().filter(|template| {
+            template.role == RunAuthoringCheckpointRole::ResultInput
+                && checkpoint_record_matches_template(row, template, &current.id)
+        }).collect::<Vec<_>>();
+        let [template] = templates.as_slice() else {
+            return Err("result rebase has no unique receiving contract".into());
+        };
+        let extended = result_inputs::result_rebase(current, &config, template, row)?;
+        if !extended.starts_with(&recorded) {
+            return Err("an advance before the consuming write changed the recorded result rebase".into());
+        }
+        if extended == recorded {
+            return Ok(());
+        }
+        self.apply_result_rebase(state, &extended)
     }
 
     pub(crate) fn checked_context_publications(
@@ -227,7 +255,7 @@ impl ProviderOutputHandoff {
                 &authored, &authored_config, &pending, &mut sources, &mut publications,
             )?;
         }
-        for (_, context) in self.checked_failed_source_contexts(current, chain, None)? {
+        for (_, (context, _)) in self.checked_failed_source_contexts(current, chain, None)? {
             for entry in context.artifacts {
                 let sequence = entry.source_movement_seq.ok_or("recovered failed context has no admitted movement")?;
                 self.record_context_publication(&mut publications, &entry.source_artifact, sequence)?;
@@ -247,7 +275,7 @@ impl ProviderOutputHandoff {
         {
             let (context, _) = recover_source_session_context(
                 &self.ctx, &self.session, record, config,
-                pending.source_movement_seq, &self.context_output_labels,
+                pending.source_movement_seq, &pending.rebase, &self.context_output_labels,
                 &self.session_snapshot_labels,
             )?;
             for entry in context.artifacts {
@@ -374,6 +402,9 @@ impl ProviderOutputHandoff {
             state.context_artifacts = self.published_context_artifacts(record, &self.config)?;
             restore_consumed_context_inputs(state, inputs)?;
             return Ok(());
+        }
+        if pending.source_movement_seq == self.source_movement_seq {
+            self.apply_result_rebase(state, &pending.rebase)?;
         }
         let mut context = state.session_context.clone();
         let mut snapshot_head = state.session_snapshot_head.clone();

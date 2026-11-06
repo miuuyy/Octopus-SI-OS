@@ -8,13 +8,11 @@
   ],
   "interface_driver_ref": "cron_life",
   "interface_driver_config": {
-    "private_config": {
-      "task_planner_executable": "target/debug/octopus-world-cron-task-plan"
-    },
     "host_slots": {
       "timezone_database_root": {
         "path": "/usr/share/zoneinfo"
       }
     }
-  }
+  },
+  "copy_of": "world_cron"
 }

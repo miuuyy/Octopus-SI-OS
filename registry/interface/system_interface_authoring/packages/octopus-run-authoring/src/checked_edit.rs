@@ -182,12 +182,14 @@ pub(crate) fn validate_file_write_evidence(
     after: &str,
     bytes: usize,
 ) -> Result<(), String> {
-    if result.label != profile.file_write_result_label
-        || result.tool != profile.file_write_tool
-        || !result.ok
-        || result.error.is_some()
-    {
-        return Err("checked file.write returned a failed result or another tool".into());
+    if result.label != profile.file_write_result_label || result.tool != profile.file_write_tool {
+        return Err(format!("checked file.write returned another tool's result: {} / {}", result.tool, result.label));
+    }
+    if let Some(error) = result.error.as_ref() {
+        return Err(format!("checked file.write failed: {}: {}", error.code, error.message));
+    }
+    if !result.ok {
+        return Err("checked file.write returned a failed result without an error".into());
     }
     let body: FileWriteResultBody =
         serde_json::from_value(result.body.ok_or("checked file.write result has no body")?)

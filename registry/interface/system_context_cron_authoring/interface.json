@@ -1,8 +1,0 @@
-{
-  "id": "system_context_cron_authoring",
-  "interface_type": "system",
-  "role": "system",
-  "direction": "bidirectional",
-  "source_names": ["context"],
-  "interface_driver_ref": "system_room"
-}

@@ -562,6 +562,11 @@ pub(crate) fn validate_authoring_failure_source(
     Ok(ValidatedAuthoringFailureSource {
         provider_source_movement_seq: attempt.provider_source_movement_seq,
         correlation_id: attempt.authored.correlation_id,
+        rebase: if attempt.authored.pending_handoff.source_movement_seq == attempt.provider_source_movement_seq {
+            attempt.authored.pending_handoff.rebase
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -608,6 +613,7 @@ pub(crate) async fn hand_validated_authoring_failure(
         record,
         config,
         validated.provider_source_movement_seq,
+        &validated.rebase,
         context_output_labels,
         session_snapshot_labels,
     )?;
@@ -721,8 +727,7 @@ pub(crate) fn validate_authoring_attempt_source(
     let after_hash = ContentHash::of_bytes(content.as_bytes()).to_hex();
     Ok(ValidatedAuthoringAttempt {
         manifest_path,
-        provider_source_movement_seq: result_inputs::definition_source(record, &candidate, config)?
-            .unwrap_or(pending.source_movement_seq),
+        provider_source_movement_seq: pending.source_movement_seq,
         authored: AuthoredRun {
             json_format: call.arguments.json_format,
             content,

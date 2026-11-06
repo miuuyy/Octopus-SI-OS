@@ -139,7 +139,7 @@ function validateConfig(config) {
   }
   if (config.host != null) {
     exactKeys(config.host, ['native_program', 'native_sandbox_mode', 'native_sandbox_profile',
-      'state_directory', 'device_lock_path', 'connection_file', 'application_behavior',
+      'state_directory', 'device_lock', 'connection_file', 'application_behavior',
       'application_policy', 'application_preferences'], 'Desktop native host');
     validateApplicationBehavior(config.host.application_behavior);
     if (config.host.application_policy != null) validateApplicationPolicy(config.host.application_policy);
@@ -150,7 +150,10 @@ function validateConfig(config) {
     }
     if (Object.hasOwn(config.host, 'native_sandbox_mode')) requireValue(['enforced', 'disabled'].includes(config.host.native_sandbox_mode), 'Desktop native sandbox mode is invalid');
     requireValue(relative(config.host.native_program) && relative(config.host.native_sandbox_profile), 'Desktop native files must be declared package members');
-    requireValue(typeof config.host.device_lock_path === 'string' && path.isAbsolute(config.host.device_lock_path), 'Desktop device lock must be absolute');
+    exactKeys(config.host.device_lock, ['root_slot', 'file_name'], 'Desktop device lock');
+    const lock = config.host.device_lock;
+    requireValue(typeof lock.root_slot === 'string' && /^[A-Za-z0-9_]+$/.test(lock.root_slot) && lock.root_slot.length <= 128, 'Desktop device lock requires an explicit root slot');
+    requireValue(typeof lock.file_name === 'string' && lock.file_name.length > 0 && lock.file_name.length <= 255 && path.posix.basename(lock.file_name) === lock.file_name && !['.', '..'].includes(lock.file_name) && !lock.file_name.includes('\0'), 'Desktop device lock file_name must be one plain file name inside its root slot');
     requireValue(config.host.connection_file === CONNECTION && config.host.state_directory === 'desktop-host', 'Desktop native private paths disagree');
     requireValue(config.action_url === 'http://127.0.0.1:0/v1/action' && config.viewer_url === 'http://127.0.0.1:0/view', 'Desktop native host requires port-zero placeholders');
     requireValue(config.auth_env_key == null && header === 'Authorization' && prefix === 'Bearer ' && Object.keys(config.headers ?? {}).length === 0, 'Desktop native authentication belongs to its private manifest');

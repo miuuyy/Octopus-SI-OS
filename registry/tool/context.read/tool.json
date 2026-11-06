@@ -27,14 +27,34 @@
   "handler_config": {
     "operation": "collection_read"
   },
-  "description": "Read one exact discovered publication revision from a bound collection. Returns its authored content, evidence and capability selection; external references are not followed and no execution rights are granted. Use the returned publication reference for checked run authoring.",
+  "description": "Read one exact discovered publication revision from a bound collection. Pass a pin from context.discover or context.read verbatim as the arguments. Returns its authored content, evidence and capability selection; external references are not followed and no execution rights are granted. Use the returned publication reference for checked run authoring.",
   "args_schema": {
     "type": "object",
     "properties": {
       "source": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Exact readable context.collection artifact id already bound to this invocation."
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "content"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "content": {
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          }
+        },
+        "description": "Exact readable context.collection source object {id, content} already bound to this invocation, copied verbatim from a context.* result: a source listed by context.discover without arguments, a page's source, or a pin's source."
       },
       "entry_id": {
         "type": "string",

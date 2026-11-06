@@ -72,7 +72,7 @@ impl ToolProcessHandler for FileWriteProcess {
                 &invocation.envelope,
                 &call.arguments,
                 &room_kinds,
-                &self.root_slots,
+                &write_roots(&invocation.descriptor.process.authority, &self.root_slots),
                 &self.effect_root,
                 self.max_payload_bytes,
             ) {
@@ -193,6 +193,30 @@ struct DecodedToolCall {
     correlation_id: Option<String>,
 }
 
+fn declared_roots(
+    slots: std::collections::BTreeSet<&String>,
+    exposed: &BTreeMap<String, PathBuf>,
+) -> BTreeMap<String, PathBuf> {
+    slots
+        .into_iter()
+        .filter_map(|slot| exposed.get(slot).map(|path| (slot.clone(), path.clone())))
+        .collect()
+}
+
+pub(crate) fn read_roots(
+    authority: &octopus_descriptors::ProcessAuthoritySpec,
+    exposed: &BTreeMap<String, PathBuf>,
+) -> BTreeMap<String, PathBuf> {
+    declared_roots(authority.declared_read_root_slots(), exposed)
+}
+
+pub(crate) fn write_roots(
+    authority: &octopus_descriptors::ProcessAuthoritySpec,
+    exposed: &BTreeMap<String, PathBuf>,
+) -> BTreeMap<String, PathBuf> {
+    declared_roots(authority.declared_write_root_slots(), exposed)
+}
+
 pub async fn run_file_write_tool_process() -> Result<(), String> {
     let environment = ToolProcessEnvironment::from_env()?;
     let effect_root = environment
@@ -267,15 +291,25 @@ mod tests {
 
     #[test]
     fn registered_exact_clone_executes_the_single_file_write_operation() {
-        let descriptor = load_tool_descriptor_from_dir(
-            &repository_root().join("registry/tool"),
-            "file.write.cron_authoring",
+        let root = tempfile::tempdir().unwrap();
+        let tools = root.path().join("tool");
+        let mut clone: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(repository_root().join("registry/tool/file.write/tool.json")).unwrap(),
         )
-        .unwrap()
         .unwrap();
+        clone["id"] = serde_json::json!("file.write.private");
+        clone["copy_of"] = serde_json::json!("file.write");
+        std::fs::create_dir_all(tools.join("file.write.private")).unwrap();
+        std::fs::write(
+            tools.join("file.write.private/tool.json"),
+            serde_json::to_vec_pretty(&clone).unwrap(),
+        )
+        .unwrap();
+        let descriptor = load_tool_descriptor_from_dir(&tools, "file.write.private")
+            .unwrap()
+            .unwrap();
         assert!(descriptor.handler_config.is_null());
 
-        let root = tempfile::tempdir().unwrap();
         let target = root.path().join("writes/result.json");
         let payload = serde_json::to_vec(&serde_json::json!({
             "tool": descriptor.id.as_str(),
@@ -304,7 +338,7 @@ mod tests {
             })),
         };
         let call = decode_invocation(&descriptor, &envelope).unwrap();
-        assert_eq!(call.tool, "file.write.cron_authoring");
+        assert_eq!(call.tool, "file.write.private");
         let room_kinds = descriptor
             .supported_worker_environment_kinds
             .iter()

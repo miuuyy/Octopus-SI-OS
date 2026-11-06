@@ -58,6 +58,142 @@ async fn refused_failure_returns_exactly_once_from_the_retained_install() {
 }
 
 #[tokio::test]
+async fn failure_return_adopts_a_checked_advance_and_refuses_an_unproven_one() {
+    tokio::time::timeout(std::time::Duration::from_secs(60),
+        run_local_fixture(routed_frontiers_use_actual_runtime_and_file_write(FrontierCase::AdvancedFailure)))
+        .await.unwrap();
+}
+
+pub(super) fn actual_advanced_failure_return<'a>(
+    admission: &'a std::sync::Arc<FrontierAdmission>,
+    handoff: &'a std::sync::Arc<actual_owner_handoff::OwnerHandoff>, formation: &'a WorkerEnvironmentFormation,
+    config: &'a super::super::config::CodeModeConfig,
+    initial: &'a (u64, ToolCallArtifact, InterfaceInvocationEnvelope), durable: &'a Path,
+) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        use octopus_tool_door_runtime::owner_contract_tests::hand_owned_output;
+        let ctx = admission.door.lock().await.context.clone();
+        super::super::continuation::ContinuationContext::create(durable, formation, config,
+            &config.resolve_context(&initial.2).unwrap(), &initial.2,
+            super::super::continuation::OriginalRun::from_envelope(&initial.2, initial.0).unwrap()).unwrap();
+        let records = octopus_worker_env::WorkerEnvironmentRecordStore::new(ctx.interface_var_dir());
+        records.activate(formation, initial.0).unwrap();
+        let failure_file = |input: &(u64, ToolCallArtifact, InterfaceInvocationEnvelope)| {
+            let result = ToolResultArtifact::failure(&input.1.tool, input.1.correlation_id.clone(),
+                ToolResultError::new("tool_effect_indeterminate", "native result ended while the run advanced")
+                    .with_details(serde_json::Map::from_iter([("source_movement_seq".into(), json!(input.0))])));
+            InterfaceArtifactFile::write(ctx.interface_var_dir().join("failure-artifacts"),
+                &result.label, &serde_json::to_vec(&result).unwrap()).unwrap()
+        };
+        let returned = |file: &InterfaceArtifactFile| admission.deliveries.lock().unwrap().iter().filter(|row|
+            row.from.as_str() == DOOR && row.to.as_str() == "world_provider_test"
+            && row.file.read_payload_bytes().unwrap() == file.read_payload_bytes().unwrap()).count();
+        let rejected_writes = || admission.deliveries.lock().unwrap().iter().filter(|row|
+            row.from.as_str() == "system_file_test"
+            && serde_json::from_slice::<ToolResultArtifact>(&row.file.read_payload_bytes().unwrap()).is_ok_and(|result| !result.ok)).count();
+
+        let source = admission.door.lock().await.output_source(initial.0, &initial.2, formation).unwrap();
+        let first = ToolResultArtifact::success(&initial.1.tool, initial.1.correlation_id.clone(),
+            json!({"state":"completed","output":[{"type":"input_text","text":"settled"}]}));
+        let first_file = InterfaceArtifactFile::write(ctx.interface_var_dir().join("failure-artifacts"),
+            &first.label, &serde_json::to_vec(&first).unwrap()).unwrap();
+        assert!(matches!(hand_owned_output(&ctx, &source, &handoff.callback(), first_file.clone()).await.unwrap(),
+            DeliveryVerdict::Admitted { .. }));
+        assert_eq!(returned(&first_file), 1);
+        let called = |sequence: u64| {
+            let admission = admission.clone();
+            async move {
+                let call = envelope(&admission.root, sequence, "code_mode.run", json!({"script":"text('MUST_NOT_EXECUTE');", "yield_time_ms":20}));
+                admission.model_call(&call.artifact_file).await.unwrap();
+                let call = admission.next().await.unwrap();
+                octopus_worker_env::WorkerEnvironmentRecordStore::new(admission.door.lock().await.context.interface_var_dir())
+                    .activate(formation, call.0).unwrap();
+                let source = admission.door.lock().await.output_source(call.0, &call.2, formation).unwrap();
+                let mut retained = source.clone();
+                retained.formation = None;
+                (call, source, retained)
+            }
+        };
+
+        let (next, _, next_source) = called(9001).await;
+        let file = failure_file(&next);
+        let rejected = rejected_writes();
+        admission.conflict_next.store(true, Ordering::SeqCst);
+        let verdict = hand_owned_output(&ctx, &next_source, &handoff.callback(), file.clone()).await.unwrap();
+        assert!(matches!(verdict, DeliveryVerdict::Admitted { .. }), "{verdict:?}");
+        assert!(!admission.conflict_next.load(Ordering::SeqCst));
+        assert_eq!(rejected_writes(), rejected + 1, "the checked advance did not land between observation and return");
+        assert_eq!(returned(&file), 1);
+        assert!(matches!(hand_owned_output(&ctx, &next_source, &actual_owner_handoff::OwnerHandoff::new().callback(), file.clone()).await.unwrap(),
+            DeliveryVerdict::Refused { reason: octopus_interfaces::RefusedReason::CheckpointSpent, .. }));
+        assert_eq!(returned(&file), 1);
+
+        for (sequence, pending_result) in [(9003, false), (9005, true)] {
+            let (held, held_source, held_retained) = called(sequence).await;
+            let held_file = failure_file(&held);
+            let notification = InterfaceArtifactFile::write(ctx.interface_var_dir().join("failure-artifacts"), "code_mode.notification",
+                &serde_json::to_vec(&json!({"schema_version":1,"context_generation":super::super::continuation::context_generation(durable).unwrap(),
+                    "cell_id":"held","call_id":held.1.correlation_id,"notification_id":sequence,"text":"held"})).unwrap()).unwrap();
+            let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+            let release = std::sync::Arc::new(tokio::sync::Notify::new());
+            let dispatch: octopus_tool_door_runtime::ToolDoorOutputDispatch = {
+                let (entered, release) = (entered.clone(), release.clone());
+                std::sync::Arc::new(move |ctx: octopus_tool_door_runtime::InterfaceLiftContext, artifact| {
+                    let (entered, release) = (entered.clone(), release.clone());
+                    Box::pin(async move {
+                        let verdict = ctx.owner_hand_arrival(artifact).await;
+                        entered.notify_one();
+                        release.notified().await;
+                        verdict
+                    })
+                })
+            };
+            let notified = tokio::spawn(handoff.callback().output(ctx.clone(), held_source, notification, dispatch));
+            entered.notified().await;
+            let rejected = rejected_writes();
+            let callback = handoff.callback();
+            let held_return = hand_owned_output(&ctx, &held_retained, &callback, held_file.clone());
+            tokio::pin!(held_return);
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(100), &mut held_return).await.is_err());
+            admission.probe_unsubmitted_output.store(pending_result, Ordering::SeqCst);
+            let peer = admission.clone();
+            let progress = tokio::spawn(async move { peer.provider_progress(sequence + 1).await });
+            let progress = if pending_result {
+                admission.peer_write_applied.notified().await;
+                Some(progress)
+            } else {
+                progress.await.unwrap().unwrap();
+                None
+            };
+            release.notify_one();
+            assert!(matches!(notified.await.unwrap().unwrap(), DeliveryVerdict::Admitted { .. }));
+            if pending_result {
+                assert!(tokio::time::timeout(std::time::Duration::from_millis(200), &mut held_return).await.is_err(),
+                    "the failure return did not wait for the pending checked provider result");
+                assert_eq!(returned(&held_file), 0);
+                admission.provider_result_release.notify_one();
+                progress.unwrap().await.unwrap().unwrap();
+                admission.probe_unsubmitted_output.store(false, Ordering::SeqCst);
+            }
+            let verdict = held_return.await.unwrap();
+            assert!(matches!(verdict, DeliveryVerdict::Admitted { .. }), "{verdict:?}");
+            assert_eq!(rejected_writes(), rejected, "the advance after the proof reached the owner write instead of the authority check");
+            assert_eq!(returned(&held_file), 1);
+        }
+
+        let (unproven, _, unproven_source) = called(9007).await;
+        let unproven_file = failure_file(&unproven);
+        admission.unproven_conflict_next.store(true, Ordering::SeqCst);
+        let refused = hand_owned_output(&ctx, &unproven_source, &actual_owner_handoff::OwnerHandoff::new().callback(), unproven_file.clone())
+            .await.unwrap_err();
+        assert!(refused.starts_with("owner failure installation requires a fresh proof after checked advancement; the run advanced without checked writer evidence: "),
+            "{refused}");
+        assert!(!admission.unproven_conflict_next.load(Ordering::SeqCst));
+        assert_eq!(returned(&unproven_file), 0);
+    })
+}
+
+#[tokio::test]
 async fn nested_failure_retains_its_admitted_carrier_across_cold_and_delivered_replay() {
     tokio::time::timeout(std::time::Duration::from_secs(75),
         run_local_fixture(routed_frontiers_use_actual_runtime_and_file_write(FrontierCase::NestedFailure)))

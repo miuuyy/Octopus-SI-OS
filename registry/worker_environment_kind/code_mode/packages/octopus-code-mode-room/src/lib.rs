@@ -909,6 +909,10 @@ async fn cancel_script(
         .terminate(cell_id.clone())
         .await
         .map_err(|error| format!("code mode cancel failed: {error}"))?;
+    let retained = take_all_retained_frontiers(state, &cell_id)?;
+    if let (WaitOutcome::MissingCell(_), Some(body)) = (&response, &retained) {
+        return Ok(body.clone());
+    }
     let response = require_live_wait("cancel", response)?;
     let body = frontier_body(
         &cell_id,
@@ -916,6 +920,10 @@ async fn cancel_script(
         Vec::new(),
         state.delegate.pending_ids(&cell_id),
     );
+    let body = match retained {
+        Some(retained) => merge_frontiers(vec![retained, body])?,
+        None => body,
+    };
     enforce_output(config, &body)?;
     Ok(body)
 }
@@ -1084,11 +1092,7 @@ fn take_retained_frontier(state: &RoomState, cell_id: &CellId) -> Result<Option<
         .get_mut(cell_id.as_str())
         .and_then(VecDeque::pop_front);
     if let Some(body) = &body {
-        let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?.len();
-        retained.bytes = retained
-            .bytes
-            .checked_sub(bytes)
-            .ok_or("code mode retained frontier accounting changed")?;
+        release_retained_bytes(&mut retained, body)?;
     }
     if retained
         .cells
@@ -1098,6 +1102,56 @@ fn take_retained_frontier(state: &RoomState, cell_id: &CellId) -> Result<Option<
         retained.cells.remove(cell_id.as_str());
     }
     Ok(body)
+}
+
+fn take_all_retained_frontiers(state: &RoomState, cell_id: &CellId) -> Result<Option<Value>, String> {
+    let mut retained = state
+        .frontiers
+        .lock()
+        .map_err(|_| "code mode frontier buffer is poisoned")?;
+    let Some(bodies) = retained.cells.remove(cell_id.as_str()) else {
+        return Ok(None);
+    };
+    for body in &bodies {
+        release_retained_bytes(&mut retained, body)?;
+    }
+    drop(retained);
+    merge_frontiers(bodies.into()).map(Some)
+}
+
+fn release_retained_bytes(retained: &mut RetainedFrontiers, body: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?.len();
+    retained.bytes = retained
+        .bytes
+        .checked_sub(bytes)
+        .ok_or("code mode retained frontier accounting changed")?;
+    Ok(())
+}
+
+fn merge_frontiers(bodies: Vec<Value>) -> Result<Value, String> {
+    let mut output = Vec::new();
+    let mut emissions = Vec::new();
+    let mut newest = None;
+    for body in bodies {
+        let object = body
+            .as_object()
+            .ok_or("code mode retained frontier is not an object")?;
+        for (field, into) in [("output", &mut output), ("emissions", &mut emissions)] {
+            into.extend(
+                object
+                    .get(field)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| format!("code mode retained frontier has no {field} list"))?
+                    .iter()
+                    .cloned(),
+            );
+        }
+        newest = Some(body);
+    }
+    let mut merged = newest.ok_or("code mode retained frontier list is empty")?;
+    merged["output"] = Value::Array(output);
+    merged["emissions"] = Value::Array(emissions);
+    Ok(merged)
 }
 
 async fn observe_with_notifications<T>(

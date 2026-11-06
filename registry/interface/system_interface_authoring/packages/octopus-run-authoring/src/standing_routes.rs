@@ -508,6 +508,7 @@ impl ProviderOutputHandoff {
             withdrawal: None,
             replacement: None,
             standing: Vec::new(),
+            rebase: Vec::new(),
         }
     }
 

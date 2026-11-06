@@ -119,7 +119,7 @@ pub(crate) fn recover_provider_result_continuity(
     let payloads = resolve_instruction_context(input.metadata()?, &payloads)
         .map_err(InterfaceDriverError::FailedClosed)?.remaining_payloads;
     let contexts = CodexAppServerInterfaceDriver::resolve_bound_session_contexts(&payloads, &runtime.interface, &snapshots, snapshot)?;
-    let sources = continuity_input_sources(&record, input)?;
+    let sources = vec![input.artifact.clone()];
     let continuity_payloads = continuity_context_payloads(&record, input, &payloads)?;
     let bound = recover_codex_continuity_resolved(&continuity_payloads, &contexts, &runtime.interface, run.as_str(), &labels, &snapshots, &sources)?;
     let current = recover_codex_continuity_from_current_session(current_session, &sources, &runtime.interface, run.as_str(), &labels)?;

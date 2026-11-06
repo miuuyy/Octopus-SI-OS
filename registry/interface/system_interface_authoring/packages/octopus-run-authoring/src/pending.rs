@@ -201,6 +201,9 @@ pub(crate) fn persisted_pending_handoff(
                     ));
                 }
             }
+            result_inputs::validate_structure(&pending).map_err(|error| {
+                format!("provider run '{}' {error}", record.id.as_str())
+            })?;
             Ok(pending)
         })
         .transpose()

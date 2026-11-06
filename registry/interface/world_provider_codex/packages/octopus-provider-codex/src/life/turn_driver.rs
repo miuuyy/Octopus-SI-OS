@@ -34,7 +34,7 @@ pub(crate) async fn drive_turn_with_retries_inner(
     let pinned_run_record = match ctx.pinned_run_record_bytes(&turn.envelope) {
         Ok(record) => record,
         Err(error) => {
-            record_invalid_provider_context(ctx, descriptor, handoff_session, run, &turn, error)
+            fail_source_closed(ctx, descriptor, handoff_session, run, &turn, driver, error)
                 .await?;
             control.finish();
             return Ok(());
@@ -65,7 +65,7 @@ pub(crate) async fn drive_turn_with_retries_inner(
                 control.finish();
                 return Ok(());
             }
-            record_invalid_provider_context(ctx, descriptor, handoff_session, run, &turn, error)
+            fail_source_closed(ctx, descriptor, handoff_session, run, &turn, driver, error)
                 .await?;
             control.finish();
             return Ok(());
@@ -76,15 +76,11 @@ pub(crate) async fn drive_turn_with_retries_inner(
         Ok(recovered) => recovered,
         Err(error) if ctx.cancel.is_cancelled() => return Err(error),
         Err(error) => {
-            record_invalid_provider_context(ctx, descriptor, handoff_session, run, &turn, error).await?;
+            fail_source_closed(ctx, descriptor, handoff_session, run, &turn, driver, error).await?;
             control.finish();
             return Ok(());
         }
     };
-    if matches!(source_recovery, ProviderSourceRecovery::Bridged { .. }) {
-        control.finish();
-        return Ok(());
-    }
     if try_settle_completed_interrupted_result(ctx, descriptor, run, &turn, &handoff, interrupted_effects).await? {
         control.finish();
         return Ok(());
@@ -128,10 +124,6 @@ pub(crate) async fn drive_turn_with_retries_inner(
             &codex_context_output_labels(descriptor).map_err(|error| error.to_string())?, None)?)
     } else { durable_interrupted_continuity };
     let (mut interrupted_after_artifact, mut recovered_handoff_artifacts) = match source_recovery {
-        ProviderSourceRecovery::Bridged { .. } => {
-            control.finish();
-            return Ok(());
-        }
         ProviderSourceRecovery::Process => {
             if !recovered_outcomes.is_empty() {
                 return Err(format!(
@@ -157,8 +149,8 @@ pub(crate) async fn drive_turn_with_retries_inner(
     };
     let output_labels = codex_projection_output_labels(descriptor).map_err(|error| error.to_string())?;
     if let Err(error) = handoff.validate_client_output_routes(&output_labels) {
-        record_invalid_provider_context(
-            ctx, descriptor, handoff_session, run, &turn,
+        fail_source_closed(
+            ctx, descriptor, handoff_session, run, &turn, driver,
             format!("provider output topology is invalid before dispatch: {error}"),
         ).await?;
         control.finish();
@@ -251,6 +243,10 @@ pub(crate) async fn drive_turn_with_retries_inner(
             control.finish();
             return Ok(());
         }
+    }
+    if close_sealed_terminal_error(ctx, descriptor, handoff_session, run, &turn, &handoff).await? {
+        control.finish();
+        return Ok(());
     }
     let DispatchAdmission { callable_tool_names, max_attempts } = match admit_dispatch(descriptor, &turn.envelope, &handoff)? {
         Ok(admission) => admission,
@@ -407,7 +403,6 @@ pub(crate) async fn drive_turn_with_retries_inner(
                 result = &mut receive => (result, forwarder.await),
                 forwarded = &mut forwarder => {
                     match forwarded {
-                        Ok(forwarded) if forwarded.bridged => (Ok(()), Ok(forwarded)),
                         Ok(forwarded) => (receive.await, Ok(forwarded)),
                         Err(error) => {
                             handoff_barrier.finish(Err(error.clone()));
@@ -420,7 +415,6 @@ pub(crate) async fn drive_turn_with_retries_inner(
         handoff_barrier.finish(forwarded.as_ref().map(|_| ()).map_err(Clone::clone));
         let forwarded = forwarded?;
         drop(live);
-        if forwarded.bridged { return Ok(()); }
 
         if resolving_interrupted_result {
             if interrupted_effects.reconciled_source(run, turn.seq).await? {
@@ -436,15 +430,12 @@ pub(crate) async fn drive_turn_with_retries_inner(
         match result {
             Ok(()) if forwarded.outputs == 0 => {
                 control.finish();
+                let error = match shutdown_driver(ctx, driver).await {
+                    Ok(()) => "codex transport completed a turn without emitting an artifact".to_string(),
+                    Err(shutdown_error) => format!("codex transport completed a turn without emitting an artifact; {shutdown_error}"),
+                };
                 return emit_terminal_turn_error(
-                    ctx,
-                    descriptor,
-                    handoff_session,
-                    run,
-                    &turn,
-                    &handoff,
-                    attempt,
-                    "codex transport completed a turn without emitting an artifact",
+                    ctx, descriptor, handoff_session, run, &turn, &handoff, attempt, &error,
                 )
                 .await;
             }
@@ -480,10 +471,6 @@ pub(crate) async fn drive_turn_with_retries_inner(
                 let (source_recovery, recovered_outcomes) =
                     handoff.recover_source_with_outcomes().await?;
                 (interrupted_after_artifact, recovered_handoff_artifacts) = match source_recovery {
-                    ProviderSourceRecovery::Bridged { .. } => {
-                        control.finish();
-                        return Ok(());
-                    }
                     ProviderSourceRecovery::Process => {
                         if !recovered_outcomes.is_empty() {
                             return Err(format!(

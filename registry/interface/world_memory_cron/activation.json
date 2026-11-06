@@ -1,141 +1,31 @@
 {
- "schema_version": 1,
- "interface": "world_memory_cron",
- "activations": [
-  {
-   "enabled": false,
-   "activation_driver_ref": "cron_life",
-   "config": {
-    "run_template": {
-     "id": "run_memory_consolidation",
-     "ee": "ee_existence",
-     "worker": "system_worker_cron",
-     "trace": "trace:run_memory_consolidation",
-     "status": "idle",
-     "interface_state": {
-      "world_memory_cron": {
-       "authoring_generation": 0,
-       "frontier_checkpoint_ids": [
-        "cp_memory_consolidation_in",
-        "cp_memory_consolidation_authoring_call",
-        "cp_memory_consolidation_authoring_result"
-       ]
-      }
-     },
-     "checkpoints": [
-      {
-       "id": "cp_memory_consolidation_in",
-       "run": "run_memory_consolidation",
-       "epoch": 0,
-       "interface_binding": {
-        "interface": "world_memory_cron",
-        "config": {
-         "artifact_policy": {
-          "mode": "all"
-         }
+  "schema_version": 1,
+  "interface": "world_memory_cron",
+  "activations": [
+    {
+      "enabled": false,
+      "activation_driver_ref": "cron_life",
+      "config": {
+        "schedule": {
+          "interval_seconds": null,
+          "cron": null,
+          "inactivity": {
+            "seconds": 10800,
+            "interface_match": {
+              "interface_type": "world",
+              "role": "user",
+              "interface_driver_ref": "app_server"
+            },
+            "exclude_interface_match": {
+              "interface_driver_ref": "cron_life"
+            }
+          },
+          "fire_on_start": false,
+          "timezone": "UTC",
+          "reminder_env": "",
+          "reminder_default": "Consolidate memory. Merge notes that say the same thing, settle contradictions in favour of the newer note, and fold stale notes nobody uses into what is still true. Keep the collection small and useful. If nothing needs to change, change nothing."
         }
-       },
-       "outbound_interface_bindings": [],
-       "artifact_bindings": [],
-       "required_verified_artifacts": [],
-       "trace": "trace:run_memory_consolidation:cp_memory_consolidation_in"
-      },
-      {
-       "id": "cp_memory_consolidation_authoring_call",
-       "run": "run_memory_consolidation",
-       "epoch": 0,
-       "interface_binding": {
-        "interface": "system_interface_authoring_cron",
-        "config": {
-         "artifact_policy": {
-          "mode": "all"
-         }
-        }
-       },
-       "outbound_interface_bindings": [
-        {
-         "interface": "system_context_cron_authoring",
-         "config": {
-          "artifact_policy": {
-           "mode": "all"
-          }
-         }
-        }
-       ],
-       "artifact_bindings": [],
-       "required_verified_artifacts": [],
-       "trace": "trace:run_memory_consolidation:cp_memory_consolidation_authoring_call"
-      },
-      {
-       "id": "cp_memory_consolidation_authoring_result",
-       "run": "run_memory_consolidation",
-       "epoch": 0,
-       "interface_binding": {
-        "interface": "system_context_cron_authoring",
-        "config": {
-         "artifact_policy": {
-          "mode": "all"
-         }
-        }
-       },
-       "outbound_interface_bindings": [],
-       "artifact_bindings": [],
-       "required_verified_artifacts": [],
-       "trace": "trace:run_memory_consolidation:cp_memory_consolidation_authoring_result"
       }
-     ],
-     "active_checkpoints": [
-      "cp_memory_consolidation_in",
-      "cp_memory_consolidation_authoring_call",
-      "cp_memory_consolidation_authoring_result"
-     ]
-    },
-    "authoring": {
-     "source_interface": "system_interface_authoring_cron",
-     "environment_interface": "system_context_cron_authoring",
-     "file_write_tool": "file.write.cron_authoring",
-     "file_write_label": "tool.call",
-     "result_timeout_ms": 120000,
-     "max_files_per_call": 8
-    },
-    "target": {
-     "mode": "new_run",
-     "ee_id": "ee_existence",
-     "worker_interface_id": "system_worker_memory_consolidation",
-     "provider_interface_id": "world_provider_codex",
-     "reasoning_effort": "medium",
-     "client_surface_role": "task",
-     "id_prefix": "memory_consolidation",
-     "door_host_slots": {},
-     "selected_worker_environment_kinds": [
-      "system_room"
-     ],
-     "context_artifact_bindings": [
-      {
-       "id": "artifact-role-memory-consolidation"
-      }
-     ]
-    },
-    "schedule": {
-     "interval_seconds": null,
-     "cron": null,
-     "inactivity": {
-      "seconds": 10800,
-      "interface_match": {
-       "interface_type": "world",
-       "role": "user",
-       "interface_driver_ref": "app_server"
-      },
-      "exclude_interface_match": {
-       "interface_driver_ref": "cron_life"
-      }
-     },
-     "fire_on_start": false,
-     "timezone": "UTC",
-     "reminder_env": "",
-     "reminder_default": "Consolidate memory. Merge notes that say the same thing, settle contradictions in favour of the newer note, and fold stale notes nobody uses into what is still true. Keep the collection small and useful. If nothing needs to change, change nothing."
     }
-   }
-  }
- ]
+  ]
 }

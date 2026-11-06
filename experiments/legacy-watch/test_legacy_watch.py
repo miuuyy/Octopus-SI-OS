@@ -73,7 +73,7 @@ class FakeRuntime:
         return digest
 
     def noise(self):
-        return self.append({"kind": "InterfaceArrival", "from": {"Interface": "world_cron"}, "to": {"Interface": "system_worker_cron"}, "artifact": {"id": "cron.tick:x", "content": "0" * 64}, "invocation_metadata": {}})
+        return self.append({"kind": "InterfaceArrival", "from": {"Interface": "world_cron"}, "to": {"Interface": "system_worker_operator_task"}, "artifact": {"id": "cron.tick:x", "content": "0" * 64}, "invocation_metadata": {}})
 
     def letter(self, subject, body, as_list=False, received_at=AFTER_ARMING):
         self.uid += 1

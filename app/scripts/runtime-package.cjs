@@ -106,7 +106,6 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
     "octopus-operator-chat-artifact",
     "octopus-operator-chat-topology",
     "octopus-secret-store",
-    "octopus-world-cron-task-plan",
   ]);
 
   function collectBundledBinaries(source) {

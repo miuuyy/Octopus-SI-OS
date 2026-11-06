@@ -172,7 +172,7 @@ async fn hand_tool_process_output(
     artifact: InterfaceArtifactFile,
 ) -> Result<DeliveryVerdict, String> {
     let dispatch: ToolDoorOutputDispatch = Arc::new(|ctx, artifact| {
-        Box::pin(async move { ctx.hand_arrival(artifact, Vec::new()).await })
+        Box::pin(async move { hand_arrival_at_current_source(&ctx, artifact).await })
     });
     hand_tool_process_output_with_dispatch(ctx, source, callback, artifact, dispatch).await
 }
@@ -370,7 +370,7 @@ impl ToolProcessEnvironment {
                 )
             })?;
         let root_slots = serde_json::from_str(
-            &std::env::var("OCTOPUS_ROOT_SLOTS_JSON").unwrap_or_else(|_| "{}".to_string()),
+            &std::env::var("OCTOPUS_ROOT_SLOTS_JSON").map_err(|_| "OCTOPUS_ROOT_SLOTS_JSON is required by the process env contract".to_string())?,
         )
         .map_err(|error| format!("OCTOPUS_ROOT_SLOTS_JSON is malformed: {error}"))?;
         let var_dir = required_env_path("OCTOPUS_VAR_DIR")?;
@@ -2461,11 +2461,6 @@ impl ToolProcessClient {
         .map_err(ToolProcessInvokeError::Unavailable)?;
         let mut exposed_root_slots = resolved.root_slots;
         exposed_root_slots.retain(|slot, _| ctx.root_slots.contains_key(slot));
-        exposed_root_slots.insert(
-            "interface_life_install_root".to_string(),
-            ctx.installation_root()
-                .map_err(ToolProcessInvokeError::Unavailable)?,
-        );
         if let Some(path) = interface_local_ipc_root {
             exposed_root_slots.insert(INTERFACE_LOCAL_IPC_ROOT_SLOT.to_string(), path);
         }
@@ -8416,7 +8411,7 @@ async fn execute_worker_environment_release(
                     .await;
                 }
             };
-            match ctx.hand_arrival(artifact, Vec::new()).await? {
+            match hand_arrival_at_current_source(ctx, artifact).await? {
                 DeliveryVerdict::Admitted { .. } => Ok(ToolDoorJournalState::Completed),
                 DeliveryVerdict::Refused { .. } => Ok(ToolDoorJournalState::Refused),
             }
@@ -8595,7 +8590,7 @@ async fn hand_arrival_at_current_source(
         }
         tokio::select! {
             _ = ctx.cancel.cancelled() => {
-                return Err("tool failure result remains undelivered while admission is cancelled".into());
+                return Err("tool door output remains undelivered while admission is cancelled".into());
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
         }
@@ -8664,9 +8659,16 @@ fn bounded_tool_failure_error(
             retained_chars /= 2;
         }
     }
+    let reason = details.get("error").and_then(serde_json::Value::as_str)
+        .and_then(|error| error.lines().map(str::trim).find(|line| !line.is_empty()))
+        .map(|line| {
+            let short = line.chars().take(300).collect::<String>();
+            if short.chars().count() < line.chars().count() { format!(": {short}…") } else { format!(": {short}") }
+        })
+        .unwrap_or_default();
     Ok(octopus_tool_handlers::ToolResultError::new(
         failure_class,
-        format!("tool process failed with class '{failure_class}'"),
+        format!("tool process failed with class '{failure_class}'{reason}"),
     )
     .with_details(error_details))
 }
@@ -8699,6 +8701,7 @@ fn oversized_tool_failures_preserve_recovery_evidence() {
     }
     let details = serde_json::json!({"error": "permission denied", "tool": "test.write"});
     let error = bounded_tool_failure_error(43, "tool_process_failure", &details).unwrap();
+    assert_eq!(error.message, "tool process failed with class 'tool_process_failure': permission denied");
     assert_eq!(error.details.unwrap()["failure_details"], details);
 }
 
@@ -9335,38 +9338,75 @@ mod tool_process_private_boundary_tests {
                 mode: "selected", calls: Arc::clone(&calls), proofs: Arc::new(AtomicU64::new(0)), unsubmitted: false,
             });
             let mut receipt = completed_output::CompletedOutputs::retain(&ctx, &input, &completion).unwrap();
+            let pending = || -> Result<octopus_ledger::ArtifactDelivery, String> { Ok(octopus_ledger::ArtifactDelivery::Pending { scope_seq: 7 }) };
             let mut pinned = None;
-            for attempt in 0..5 {
+            for (recover, replies) in [
+                (false, vec![pending(), Err("scope corruption after partial admission".to_string())]),
+                (true, vec![
+                    Ok(octopus_ledger::ArtifactDelivery::Complete { verdict: DeliveryVerdict::refused(RefusedReason::RegistryUnstable, serde_json::json!({})) }),
+                    pending(),
+                    Ok(octopus_ledger::ArtifactDelivery::Complete { verdict: DeliveryVerdict::Admitted { seq: 9 } }),
+                ]),
+            ] {
                 {
-                let delivery = receipt.deliver(&ctx, &input, Some(&callback), attempt != 0); tokio::pin!(delivery);
-                let arrival = tokio::select! { arrival = arrivals.recv() => arrival.unwrap(), result = &mut delivery => panic!("missing retained handoff: {result:?}") };
-                assert!(arrival.verdict_tx.is_none());
-                let retained = arrival.retained.unwrap();
-                let identity = (retained.id.clone(), arrival.artifact.manifest_path().to_path_buf());
-                assert_ne!(identity.1, original);
-                assert_eq!(arrival.artifact.read_payload_bytes().unwrap(), b"transformed result");
-                if let Some(prior) = &pinned { assert_eq!(prior, &identity); } else { pinned = Some(identity); }
-                retained.reply.send(match attempt {
-                    1 => Err("scope corruption after partial admission".into()),
-                    2 => Ok(octopus_ledger::ArtifactDelivery::Complete { verdict: DeliveryVerdict::refused(RefusedReason::RegistryUnstable, serde_json::json!({})) }),
-                    4 => Ok(octopus_ledger::ArtifactDelivery::Complete { verdict: DeliveryVerdict::Admitted { seq: 9 } }),
-                    _ => Ok(octopus_ledger::ArtifactDelivery::Pending { scope_seq: 7 }),
-                }).unwrap();
-                if attempt < 4 {
-                    let error = delivery.await.unwrap_err();
-                    assert!(error.contains(match attempt { 1 => "scope corruption after partial admission", 2 => "current source is unresolved", _ => "unresolved edges" }));
+                let delivery = receipt.deliver(&ctx, &input, Some(&callback), recover); tokio::pin!(delivery);
+                for reply in replies {
+                    let arrival = tokio::select! { arrival = arrivals.recv() => arrival.unwrap(), result = &mut delivery => panic!("missing retained handoff: {result:?}") };
+                    assert!(arrival.verdict_tx.is_none());
+                    let retained = arrival.retained.unwrap();
+                    let identity = (retained.id.clone(), arrival.artifact.manifest_path().to_path_buf());
+                    assert_ne!(identity.1, original);
+                    assert_eq!(arrival.artifact.read_payload_bytes().unwrap(), b"transformed result");
+                    if let Some(prior) = &pinned { assert_eq!(prior, &identity); } else { pinned = Some(identity); }
+                    retained.reply.send(reply).unwrap();
+                }
+                if recover { assert!(matches!(delivery.await.unwrap(), ToolProcessBrokerResult::Completed)); } else {
+                    assert!(delivery.await.unwrap_err().contains("scope corruption after partial admission"));
                     assert_eq!(calls.load(Ordering::SeqCst), 1);
                     let saved = serde_json::to_value(completed_output::CompletedOutputs::load(&ctx, 0).unwrap().unwrap()).unwrap();
                     assert_eq!(saved["schema_version"], 4);
                     assert_eq!(saved["outputs"][0]["admission"], serde_json::json!({"state":"retained", "scope_seq":7}));
                     assert_eq!(saved["outputs"][0]["callback_completed"], false);
-                } else { assert!(matches!(delivery.await.unwrap(), ToolProcessBrokerResult::Completed)); }
+                }
                 }
                 receipt = completed_output::CompletedOutputs::load(&ctx, 0).unwrap().unwrap();
             }
             assert_eq!(calls.load(Ordering::SeqCst), 2);
             assert!(arrivals.try_recv().is_err());
             assert_eq!(std::fs::read(root.join("effects")).unwrap(), b"effect");
+        }
+
+        #[tokio::test]
+        async fn retained_pending_scope_and_unstable_registry_settle_within_one_hand_in() {
+            let root = tempfile::tempdir().unwrap(); let root = root.path().canonicalize().unwrap();
+            let (ctx, input, completion, mut arrivals, _) = completed_fixture(&root, 1).await;
+            let calls = Arc::new(AtomicU64::new(0));
+            let callback: ToolDoorOutputCallback = Arc::new(CompletedOutputOwner {
+                mode: "selected", calls: Arc::clone(&calls), proofs: Arc::new(AtomicU64::new(0)), unsubmitted: false,
+            });
+            let mut receipt = completed_output::CompletedOutputs::retain(&ctx, &input, &completion).unwrap();
+            let delivery = receipt.deliver(&ctx, &input, Some(&callback), false); tokio::pin!(delivery);
+            let mut handed = Vec::new();
+            for reply in [
+                octopus_ledger::ArtifactDelivery::Pending { scope_seq: 7 },
+                octopus_ledger::ArtifactDelivery::Pending { scope_seq: 7 },
+                octopus_ledger::ArtifactDelivery::Complete { verdict: DeliveryVerdict::refused(RefusedReason::RegistryUnstable, serde_json::json!({})) },
+                octopus_ledger::ArtifactDelivery::Complete { verdict: DeliveryVerdict::Admitted { seq: 9 } },
+            ] {
+                let arrival = tokio::select! { arrival = arrivals.recv() => arrival.unwrap(), result = &mut delivery => panic!("hand-in ended before its retained scope settled: {result:?}") };
+                let retained = arrival.retained.unwrap();
+                handed.push((retained.id.clone(), arrival.artifact.manifest_path().to_path_buf(), arrival.artifact.read_payload_bytes().unwrap()));
+                retained.reply.send(Ok(reply)).unwrap();
+            }
+            assert!(matches!(delivery.await.unwrap(), ToolProcessBrokerResult::Completed));
+            assert!(handed.windows(2).all(|pair| pair[0] == pair[1]));
+            assert_eq!(handed[0].2, b"transformed result");
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert!(arrivals.try_recv().is_err());
+            assert_eq!(std::fs::read(root.join("effects")).unwrap(), b"effect");
+            let saved = serde_json::to_value(completed_output::CompletedOutputs::load(&ctx, 0).unwrap().unwrap()).unwrap();
+            assert_eq!(saved["outputs"][0]["admission"], serde_json::json!({"state":"settled", "verdict":{"admitted":{"seq":9}}}));
+            assert_eq!(saved["outputs"][0]["callback_completed"], true);
         }
 
         #[tokio::test]

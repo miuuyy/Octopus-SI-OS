@@ -25,7 +25,7 @@ fn repo_registry_root() -> PathBuf {
     repo_root().join("registry")
 }
 
-const CRON_RUN: &str = "run_cron_existence";
+const CRON_RUN: &str = "run_cron_probe_task";
 
 fn private_life_stderr(var_dir: &Path) -> String {
     let Ok(entries) = std::fs::read_dir(var_dir) else {
@@ -57,7 +57,7 @@ fn private_life_stderr(var_dir: &Path) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cron_interface_folder_lifts_and_emits_a_time_artifact_into_a_run() {
+async fn a_time_interface_sends_each_tick_into_the_standing_route_of_the_run_that_pins_it() {
     let dir = tempfile::tempdir().expect("temp root");
     let durable_root = dir.path().join("durable");
     std::fs::create_dir_all(durable_root.join("blobs")).expect("durable blobs dir");
@@ -93,6 +93,7 @@ async fn a_cron_interface_folder_lifts_and_emits_a_time_artifact_into_a_run() {
     activation["activations"][0]["enabled"] = serde_json::json!(true);
     activation["activations"][0]["config"]["schedule"]["timezone"] =
         serde_json::json!("Europe/Kyiv");
+    activation["activations"][0]["config"]["schedule"]["interval_seconds"] = serde_json::json!(1);
     std::fs::write(
         interface_dir.join("activation.json"),
         serde_json::to_vec_pretty(&activation).expect("enabled cron activation encodes"),
@@ -118,6 +119,33 @@ async fn a_cron_interface_folder_lifts_and_emits_a_time_artifact_into_a_run() {
         .expect("bootstrap EE encodes"),
     )
     .expect("bootstrap EE writes");
+    let worker_policy: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(registry_root.join("interface/system_worker_operator_task/policy.json"))
+            .expect("task worker policy reads"),
+    )
+    .expect("task worker policy parses");
+    let role_bindings = worker_policy["role_artifacts"]
+        .as_array()
+        .expect("task worker declares its roles")
+        .iter()
+        .map(|id| serde_json::json!({"id": id}))
+        .collect::<Vec<_>>();
+    let run = serde_json::json!({
+        "id": CRON_RUN, "ee": "ee_existence", "worker": "system_worker_operator_task",
+        "trace": format!("trace:{CRON_RUN}"), "status": "running",
+        "active_checkpoints": ["cp_time"],
+        "checkpoints": [{
+            "id": "cp_time", "run": CRON_RUN, "epoch": 0,
+            "interface_binding": {"interface": "world_cron",
+                "config": {"artifact_policy": {"mode": "allow", "names": ["cron.current_time"], "namespaces": []}}},
+            "outbound_interface_bindings": [], "artifact_bindings": role_bindings,
+            "required_verified_artifacts": [], "trace": format!("trace:{CRON_RUN}:cp_time"),
+        }],
+    });
+    let run_bytes = serde_json::to_vec_pretty(&run).expect("task run encodes");
+    octopus_run_record::RunRecord::from_bytes(&run_bytes).expect("the task run parses through the canonical run contract");
+    std::fs::write(runs_dir.join(format!("{CRON_RUN}.json")), &run_bytes)
+        .expect("task run pinning the time interface writes");
     let embedded = build_embedded_spine(SpineRootConfig {
         registry_root: registry_root.clone(),
         run: RunId::new("run_cron_probe"),
@@ -134,12 +162,6 @@ async fn a_cron_interface_folder_lifts_and_emits_a_time_artifact_into_a_run() {
         .expect("the life.json parses")
         .expect("the python cron folder declares a spawn life");
 
-    let run_template = activation["activations"][0]["config"]["run_template"].clone();
-    std::fs::write(
-        runs_dir.join(format!("{CRON_RUN}.json")),
-        serde_json::to_vec_pretty(&run_template).expect("cron run template encodes"),
-    )
-    .expect("operator-authored cron run writes");
 
     std::env::set_current_dir(repo_root()).expect("cwd to repo root for the relative spawn bin");
     let (tx, mut rx) = tokio::sync::mpsc::channel::<InterfaceActivationArrival>(4);
@@ -154,105 +176,85 @@ async fn a_cron_interface_folder_lifts_and_emits_a_time_artifact_into_a_run() {
         durable_root.join("ledger-index.sqlite"),
         std::collections::BTreeMap::from([
             ("interface_life_install_root".to_string(), repo_root()),
-            ("repo_root".to_string(), repo_root()),
             ("run_records_root".to_string(), runs_dir.clone()),
             ("ee_instances_root".to_string(), ee_instances_dir),
             (
                 "registry_interface_root".to_string(),
                 registry_root.join("interface"),
             ),
-            (
-                "registry_ee_template_root".to_string(),
-                registry_root.join("ee_template"),
-            ),
-            ("registry_tool_root".to_string(), registry_root.join("tool")),
-            (
-                "registry_worker_environment_kind_root".to_string(),
-                registry_root.join("worker_environment_kind"),
-            ),
             ("timezone_database_root".to_string(), timezone_database_root),
-            (
-                "app_server_control_root".to_string(),
-                dir.path().join("home/app-server-control"),
-            ),
-            (
-                "interface_hand_in_root".to_string(),
-                dir.path().join("home/interface-hand-in"),
-            ),
         ]),
         tx,
         cancel.child_token(),
     );
     let mut life = tokio::spawn(spawn_process_life(ctx, config));
 
-    let tick = tokio::time::timeout(Duration::from_secs(20), async {
-        tokio::select! {
-            arrival = rx.recv() => arrival.ok_or_else(|| {
-                let stderr = private_life_stderr(
-                    &dir.path().join("home/interfaces/world_cron"),
-                );
-                format!("the cron arrival intake closed: {stderr}")
-            }),
-            result = &mut life => Err(format!("the cron life exited before emitting: {result:?}")),
-        }
-    })
-    .await
-    .expect("the lifted python cron process must emit a tick within the timeout")
-    .expect("the cron life remains available until its tick");
-    cancel.cancel();
-
-    assert_eq!(tick.interface.as_str(), "world_cron");
-    let authored = octopus_run_record::RunRecord::from_bytes(
-        &std::fs::read(runs_dir.join(format!("{CRON_RUN}.json")))
-            .expect("the operator-authored cron run remains readable after the tick"),
-    )
-    .expect("the operator-authored run record parses through the canonical run contract");
-    assert_eq!(authored.id, RunId::new(CRON_RUN));
-    assert_eq!(authored.worker.as_str(), "system_worker_cron");
-    let manifest = tick.artifact.read_manifest().expect("tick manifest reads");
-    assert_eq!(manifest.label, "cron.current_time");
-    let payload = tick
-        .artifact
-        .read_payload_bytes()
-        .expect("tick payload reads");
-    let tick_json: serde_json::Value =
-        serde_json::from_slice(&payload).expect("the cron tick is JSON");
-    assert_eq!(tick_json["source"], "cron");
-    assert!(
-        tick_json["now_unix_ms"].as_i64().is_some_and(|ms| ms > 0),
-        "the tick carries a real current-time stamp: {tick_json}"
-    );
-    assert!(
-        tick_json.get("now_iso").and_then(|v| v.as_str()).is_some(),
-        "the tick carries an ISO current-time string: {tick_json}"
-    );
-
     let mut log =
         DurableLog::open(durable_root.join("movements.jsonl")).expect("durable log opens");
     let mut arrival_blobs = SharedBlobHandle::new(blobs.clone());
+    for tick_index in 0..2 {
+        let mut tick = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::select! {
+                arrival = rx.recv() => arrival.ok_or_else(|| {
+                    let stderr = private_life_stderr(
+                        &dir.path().join("home/interfaces/world_cron"),
+                    );
+                    format!("the cron arrival intake closed: {stderr}")
+                }),
+                result = &mut life => Err(format!("the cron life exited before emitting: {result:?}")),
+            }
+        })
+        .await
+        .expect("the lifted python cron process must emit a tick within the timeout")
+        .expect("the cron life remains available until its tick");
+        assert_eq!(tick.interface.as_str(), "world_cron");
+        let manifest = tick.artifact.read_manifest().expect("tick manifest reads");
+        assert_eq!(manifest.label, "cron.current_time");
+        let tick_json: serde_json::Value = serde_json::from_slice(
+            &tick.artifact.read_payload_bytes().expect("tick payload reads"),
+        )
+        .expect("the cron tick is JSON");
+        assert_eq!(tick_json["source"], "cron");
+        assert!(
+            tick_json["now_unix_ms"].as_i64().is_some_and(|ms| ms > 0),
+            "the tick carries a real current-time stamp: {tick_json}"
+        );
+        admit_interface_artifact_arrival(
+            &embedded,
+            &mut log,
+            &mut arrival_blobs,
+            &tick.artifact,
+            &InterfaceId::new("world_cron"),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("tick {tick_index} routes into the pinning run: {error}"));
+        let seq = octopus_ledger::MovementLog::read_from(&log, octopus_ledger::Seq(0))
+            .into_iter()
+            .filter(|m| m.kind == MovementKind::InterfaceArrival)
+            .last()
+            .expect("the tick arrival is recorded")
+            .seq
+            .0;
+        if let Some(verdict) = tick.verdict_tx.take() {
+            let _ = verdict.send(octopus_interfaces::DeliveryVerdict::Admitted { seq });
+        }
+    }
+    cancel.cancel();
 
-    admit_interface_artifact_arrival(
-        &embedded,
-        &mut log,
-        &mut arrival_blobs,
-        &tick.artifact,
-        &InterfaceId::new("world_cron"),
-    )
-    .await
-    .expect("the cron time-artifact routes through the run to its inbox");
-
-    let arrival_into_run = octopus_ledger::MovementLog::read_from(&log, octopus_ledger::Seq(0))
+    let arrivals = octopus_ledger::MovementLog::read_from(&log, octopus_ledger::Seq(0))
         .into_iter()
-        .find(|m| {
+        .filter(|m| {
             m.kind == MovementKind::InterfaceArrival
                 && m.run().is_some_and(|run| run.as_str() == CRON_RUN)
-                && m.runtime().is_some_and(|runtime| m.to == Endpoint::Interface(runtime.worker.clone()))
+                && m.artifact.is_some()
                 && matches!(&m.from, Endpoint::Interface(i) if i.as_str() == "world_cron")
         })
-        .expect("an InterfaceArrival movement carries the cron tick into the run's inbox");
-    assert!(
-        arrival_into_run.artifact.is_some(),
-        "the arrival movement carries the time artifact"
+        .count();
+    assert_eq!(arrivals, 2, "both ticks enter the same standing checkpoint");
+    assert_eq!(
+        std::fs::read(runs_dir.join(format!("{CRON_RUN}.json"))).expect("task run reads"),
+        run_bytes,
+        "the time interface never edits the run that pins it"
     );
 
     let _ = tokio::time::timeout(Duration::from_secs(10), life).await;

@@ -315,6 +315,7 @@ impl ProviderHandoffSession {
                 consumed_context_free_independent_input,
                 consumed_verified_input,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             config,
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),

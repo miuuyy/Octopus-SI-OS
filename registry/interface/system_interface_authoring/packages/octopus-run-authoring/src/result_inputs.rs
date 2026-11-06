@@ -1,8 +1,7 @@
 use super::*;
 
-mod invocation;
-pub(super) use invocation::{bound_source, definition_source, source_was_bridged};
-pub(super) use invocation::rebased_value as rebased_invocation_value;
+mod continuity;
+pub(crate) use continuity::{result_rebase, seal_pending, validate_continuity, validate_structure};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -11,8 +10,6 @@ struct Correspondence {
     tool: String,
     correlation_id: String,
     params: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    invocation: Option<invocation::ResultInvocation>,
 }
 
 #[derive(serde::Deserialize)]
@@ -128,7 +125,7 @@ fn pending_inputs<'a>(config: &'a RunAuthoringConfig, pending: &PendingHandoff) 
     for template in config.checkpoints.iter().filter(|template| template.role == RunAuthoringCheckpointRole::ResultInput) {
         let call = correspondence(template)?;
         let Some(item) = pending.items.iter().find(|item|item.artifact_id == call.call_artifact.id) else { continue; };
-        if call.invocation.is_some() || item.artifact_content_hash != call.call_artifact.content.to_hex()
+        if item.artifact_content_hash != call.call_artifact.content.to_hex()
             || !item.checkpoint.outbound_interface_bindings.iter().map(|binding|&binding.interface).eq([template.interface()]) {
             return Err("withdrawal result input differs from its exact unsubmitted call".into());
         }
@@ -348,9 +345,6 @@ fn definition_transition_between(
     after: &[u8],
     writer: &CheckedRunWriter,
 ) -> Result<bool, String> {
-    if invocation::definition(before, after, writer)?.is_some() {
-        return Ok(true);
-    }
     let original = before;
     let replacement = after;
     let before = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
@@ -502,7 +496,6 @@ pub(super) fn validate_source_advance(
     handoff: &ProviderOutputHandoff,
     before: &RunRecord,
     after: &RunRecord,
-    after_bytes: &[u8],
 ) -> Result<(), String> {
     if !retains_invocation(handoff, before) {
         return Ok(());
@@ -521,14 +514,6 @@ pub(super) fn validate_source_advance(
         .is_some_and(|pending| pending.source_movement_seq == handoff.source_movement_seq)
         && after.checkpoint(&runtime.checkpoint).is_none();
     if !consumed {
-        if source_was_bridged(
-            &handoff.completed_source_chain(after_bytes)?,
-            handoff.source_movement_seq,
-        )?
-        .is_some()
-        {
-            return Ok(());
-        }
         return Err("result source was explicitly retired or revised; its admitted generation cannot continue".into());
     }
     Ok(())
@@ -548,9 +533,6 @@ fn correspondence(template: &RunAuthoringCheckpoint) -> Result<Correspondence, S
     non_empty_string(&value.correlation_id, "result input correlation")?;
     if !value.params.is_object() {
         return Err("result input verifier params must be an object".into());
-    }
-    if let Some(invocation) = &value.invocation {
-        invocation.validate()?;
     }
     Ok(value)
 }
@@ -642,12 +624,10 @@ pub(super) fn validate_template(
             "result input must carry its captured context through one provider edge".into(),
         );
     }
-    let call = correspondence(template)?;
-    if (template.interface() == &config.authoring_source_interface) != call.invocation.is_some() {
-        return Err(
-            "result invocation bridge must use its exact authoring-source interface".into(),
-        );
+    if template.interface() == &config.authoring_source_interface {
+        return Err("result input cannot receive through the authoring-source interface".into());
     }
+    let call = correspondence(template)?;
     let required = &template.required_verified_artifacts[0];
     let declared = config.checkpoints.iter().any(|output| {
         output.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput
@@ -707,7 +687,6 @@ fn template_for_call(
         tool: subject,
         correlation_id,
         params: contract.params.clone(),
-        invocation: None,
     })
     .map_err(|error| error.to_string())?;
     let binding = |interface| AuthoredInterfaceBinding {
@@ -993,10 +972,10 @@ pub(super) fn validate_saved(
     config: &RunAuthoringConfig,
 ) -> Result<(), String> {
     if saved_definition_transition(before, after, config)? {
-        invocation::validate_saved(ctx, before, after, config)?;
         return Ok(());
     }
     validate_transition(before, after, config)?;
+    validate_continuity(before, after, config)?;
     let old = attempt_config(before, config)?;
     let next = attempt_config(after, config)?;
     let pending = persisted_pending_handoff(after, &config.provider_interface)?;
@@ -1068,25 +1047,6 @@ pub(super) fn validate_invocation(
         return Ok(());
     }
     let call = correspondence(template)?;
-    if let Some(invocation) = &call.invocation {
-        let metadata = input.metadata().map_err(|error| error.to_string())?;
-        if input.artifact != invocation.artifact
-            || metadata
-                .artifact_binding_refs
-                .iter()
-                .filter(|reference| reference.id == invocation.source.artifact.id)
-                .ne(std::iter::once(&invocation.source.artifact))
-            || !metadata
-                .grant
-                .artifact_access
-                .get(invocation.source.artifact.id.as_str())
-                .is_some_and(|access| {
-                    access.read && !access.change && !access.create && !access.delete
-                })
-        {
-            return Err("result invocation differs from its exact checked bridge".into());
-        }
-    }
     let originals = input
         .artifact_binding_payloads
         .iter()
@@ -1117,7 +1077,6 @@ pub(super) fn validate_checked(
     transition: &CheckedRunTransition,
 ) -> Result<(), String> {
     if definition_transition(transition)? {
-        invocation::validate_checked(reader, transition)?;
         return Ok(());
     }
     let before = RunRecord::from_bytes(&transition.before).map_err(|error| error.to_string())?;
@@ -1138,6 +1097,7 @@ pub(super) fn validate_checked(
         result_timeout_ms: 1,
     });
     validate_transition(&before, &after, &config)?;
+    validate_continuity(&before, &after, &config)?;
     let next = attempt_config(&after, &config)?;
     let pending = persisted_pending_handoff(&after, &transition.writer.owner)?;
     for template in next.checkpoints.iter().filter(|template| {
@@ -1471,13 +1431,6 @@ fn validate_result_source(
         return Err("result retirement did not consume its exact admitted source".into());
     }
     let call = correspondence(template)?;
-    if call
-        .invocation
-        .as_ref()
-        .is_some_and(|invocation| invocation.artifact != binding.artifact)
-    {
-        return Err("result source differs from its exact invocation bridge".into());
-    }
     if checkpoint
         .artifact_bindings
         .iter()
@@ -1577,9 +1530,6 @@ pub(super) fn checked_topology_advance(
         return Ok(true);
     }
     if !after.checkpoints.contains(consumed) {
-        if source_was_bridged(chain, source)?.is_some() {
-            return Ok(true);
-        }
         let pending = persisted_pending_handoff(current, &before.provider_interface)?
             .ok_or("retired result invocation has no checked handoff")?;
         if pending.source_movement_seq != source || !consumed_by_own_write() {

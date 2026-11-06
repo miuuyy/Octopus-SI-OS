@@ -513,6 +513,7 @@ impl ProviderOutputHandoff {
             active.attach_source_withdrawal(&state.run_record_bytes, &mut authored, proof)?;
             state.validated_withdrawal_output = Some(source_withdrawal::closure_ref(&authored.pending_handoff)?);
         }
+        active.seal_authored_run(&state.run_record_bytes, &mut authored, Some(state.result_rebase.as_deref().unwrap_or_default()))?;
         let pending = authored.pending_handoff.clone();
         match active.install_authored_run(&mut state, &authored).await? {
             AuthoredRunInstallOutcome::Installed => {}
@@ -550,63 +551,123 @@ impl ProviderOutputHandoff {
     }
 
     pub(crate) async fn reconcile_checked_run_state(&self, state: &mut HandoffState) -> Result<(), String> {
+        let limit = self.ctx.required_host_io_limits()?.max_payload_bytes;
         let has_owner = self
             .config
             .checkpoints
             .iter()
             .any(|cp| cp.owner_authoring.is_some());
         if !has_owner && self.config.payload_artifact_bindings.is_empty() && !result_inputs::enabled(&self.config) {
-            let current = octopus_interfaces::read_artifact_carrier_file_bounded(
-                &self.run_path, self.ctx.required_host_io_limits()?.max_payload_bytes,
-            ).map_err(|error| error.to_string())?;
-            let current = RunRecord::from_bytes(&current).map_err(|error| error.to_string())?;
-            if payload_artifact_bindings(&current, &self.config.provider_interface)?.is_empty() {
+            let current = octopus_interfaces::read_artifact_carrier_file_bounded(&self.run_path, limit)
+                .map_err(|error| error.to_string())?;
+            if current == state.run_record_bytes
+                && payload_artifact_bindings(&RunRecord::from_bytes(&current).map_err(|error| error.to_string())?, &self.config.provider_interface)?.is_empty()
+            {
                 return Ok(());
             }
         }
-        {
-            let after_seq = state
-                .run_record_evidence_seq
-                .ok_or("selected provider lost its admitted run snapshot provenance")?;
-            let (current, chain) =
-                await_checked_evidence(&self.ctx, self.config.result_timeout_ms, || {
-                    checked_live_run_advance(
-                        &self.ctx,
-                        &self.run_path,
-                        &state.run_record_bytes,
-                        after_seq,
-                        &self.config,
-                    )
-                })
-                .await?;
-            if current != state.run_record_bytes {
-                let record = RunRecord::from_bytes(&current).map_err(|error| error.to_string())?;
-                let mut advanced = state.clone();
-                let before = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
-                result_inputs::validate_source_advance(self, &before, &record, &current)?;
-                let selected = payload_artifact_bindings(&record, &self.config.provider_interface)?;
-                let classified = payload_artifact_bindings(&before, &self.config.provider_interface)?.into_iter()
-                    .chain(selected.iter().cloned())
-                    .map(|reference| reference.id).collect::<BTreeSet<_>>();
-                if !classified.is_empty() {
-                    let readable = provider_context_bindings(&record, &self.config.provider_interface)?.into_iter()
-                        .filter(|binding| binding.access.read).map(|binding| binding.id).collect::<BTreeSet<_>>();
-                    // Attachment classification is not a future read grant. Keep
-                    // non-payload static sources and the original invocation intact.
-                    advanced.static_context_artifacts.retain(|id| !classified.contains(id) || readable.contains(id));
-                    advanced.context_artifacts.retain(|id| !classified.contains(id) || readable.contains(id));
-                    for reference in selected.iter().filter(|reference| readable.contains(&reference.id)) {
-                        append_artifact(&mut advanced.static_context_artifacts, reference.id.clone());
-                        append_artifact(&mut advanced.context_artifacts, reference.id.clone());
-                    }
-                }
-                if let Some(last) = chain.last() {
-                    advanced.run_record_evidence_seq = Some(last.call.seq.0);
-                }
-                advanced.run_record_bytes = current;
-                self.restore_checked_context(&mut advanced, &record, &chain)?;
-                *state = advanced;
+        let after_seq = state
+            .run_record_evidence_seq
+            .ok_or("selected provider lost its admitted run snapshot provenance")?;
+        let observed: &HandoffState = state;
+        let advanced = await_checked_evidence(&self.ctx, self.config.result_timeout_ms, || {
+            let (current, chain) = checked_live_run_advance(
+                &self.ctx,
+                &self.run_path,
+                &observed.run_record_bytes,
+                after_seq,
+                &self.config,
+            )?;
+            if current == observed.run_record_bytes {
+                return Ok(None);
             }
+            stable_run_observation(&self.run_path, &current, limit, || {
+                self.advanced_checked_state(observed, &current, &chain).map(Some).map_err(CheckedRunError::from)
+            })
+        })
+        .await?;
+        if let Some(advanced) = advanced {
+            *state = advanced;
+        }
+        Ok(())
+    }
+
+    fn advanced_checked_state(
+        &self,
+        state: &HandoffState,
+        current: &[u8],
+        chain: &[CheckedRunTransition],
+    ) -> Result<HandoffState, String> {
+        let record = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
+        let mut advanced = state.clone();
+        let before = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
+        result_inputs::validate_source_advance(self, &before, &record)?;
+        let selected = payload_artifact_bindings(&record, &self.config.provider_interface)?;
+        let classified = payload_artifact_bindings(&before, &self.config.provider_interface)?.into_iter()
+            .chain(selected.iter().cloned())
+            .map(|reference| reference.id).collect::<BTreeSet<_>>();
+        if !classified.is_empty() {
+            let readable = provider_context_bindings(&record, &self.config.provider_interface)?.into_iter()
+                .filter(|binding| binding.access.read).map(|binding| binding.id).collect::<BTreeSet<_>>();
+            // Attachment classification is not a future read grant. Keep
+            // non-payload static sources and the original invocation intact.
+            advanced.static_context_artifacts.retain(|id| !classified.contains(id) || readable.contains(id));
+            advanced.context_artifacts.retain(|id| !classified.contains(id) || readable.contains(id));
+            for reference in selected.iter().filter(|reference| readable.contains(&reference.id)) {
+                append_artifact(&mut advanced.static_context_artifacts, reference.id.clone());
+                append_artifact(&mut advanced.context_artifacts, reference.id.clone());
+            }
+        }
+        if let Some(last) = chain.last() {
+            advanced.run_record_evidence_seq = Some(last.call.seq.0);
+        }
+        advanced.run_record_bytes = current.to_vec();
+        self.restore_checked_context(&mut advanced, &record, chain)?;
+        Ok(advanced)
+    }
+
+    pub(crate) async fn observe_live_record<T>(
+        &self,
+        mut observe: impl FnMut(&Self, &mut HandoffState) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut state = self.state.lock().await;
+        let deadline = self.live_record_deadline()?;
+        loop {
+            let retained = (*state).clone();
+            match observe(self, &mut state) {
+                Ok(value) => return Ok(value),
+                Err(error) => self.adopt_live_record(&mut state, retained, error, deadline).await?,
+            }
+        }
+    }
+
+    pub(crate) fn live_record_deadline(&self) -> Result<Instant, String> {
+        Instant::now()
+            .checked_add(Duration::from_millis(self.config.result_timeout_ms))
+            .ok_or_else(|| "checked run observation deadline overflow".to_string())
+    }
+
+    pub(crate) async fn adopt_live_record(
+        &self,
+        state: &mut HandoffState,
+        retained: HandoffState,
+        error: String,
+        deadline: Instant,
+    ) -> Result<(), String> {
+        let live = octopus_interfaces::read_artifact_carrier_file_bounded(
+            &self.run_path, self.ctx.required_host_io_limits()?.max_payload_bytes,
+        ).map_err(|read| format!("{error}; current run record cannot be read: {read}"))?;
+        if live == state.run_record_bytes || self.ctx.cancel.is_cancelled() || Instant::now() >= deadline {
+            return Err(error);
+        }
+        *state = retained;
+        let observed = state.run_record_bytes.clone();
+        tokio::time::timeout_at(deadline.into(), self.reconcile_checked_run_state(state))
+            .await
+            .map_err(|_| format!("{error}; the run was still advancing at its result timeout"))?
+            .map_err(|reconcile| format!("{error}; the run advanced without checked evidence: {reconcile}"))?;
+        if state.run_record_bytes == observed {
+            return Err(error);
         }
         Ok(())
     }

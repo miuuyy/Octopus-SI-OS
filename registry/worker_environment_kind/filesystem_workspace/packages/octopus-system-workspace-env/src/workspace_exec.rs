@@ -388,7 +388,7 @@ pub(crate) fn persistent_poll_result(
         .chunks
         .iter()
         .map(|chunk| {
-            serde_json::json!({
+            let mut row = serde_json::json!({
                 "source_seq": chunk.seq,
                 "stream": match chunk.stream {
                     octopus_workspace_substrate::ExecOutputStream::Stdout => "stdout",
@@ -398,8 +398,11 @@ pub(crate) fn persistent_poll_result(
                 "byte_offset": chunk.byte_offset,
                 "end_of_event": chunk.end_of_event,
                 "content": retained_stream_evidence(&chunk.bytes),
-                "preview": model_text_preview(&chunk.bytes),
-            })
+            });
+            if std::str::from_utf8(&chunk.bytes).is_err() {
+                row["preview"] = model_text_preview(&chunk.bytes);
+            }
+            row
         })
         .collect::<Vec<_>>();
     let body = serde_json::json!({

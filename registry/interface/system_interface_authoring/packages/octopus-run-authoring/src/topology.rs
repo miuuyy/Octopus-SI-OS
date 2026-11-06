@@ -485,9 +485,8 @@ pub(crate) fn validate_checkpoint_topology(
                 checkpoint_id.as_str()
             )
         })?;
-        if (checkpoint.inbound_interface() == Some(authoring_call.interface())
+        if checkpoint.inbound_interface() == Some(authoring_call.interface())
             || checkpoint.inbound_interface() == Some(authoring_result.interface())
-        ) && result_inputs::bound_source(record, provider, &checkpoint.id)?.is_none()
         {
             return Err(format!(
                 "provider run '{}' active checkpoint '{}' shares a provider-owned authoring interface outside the frontier",

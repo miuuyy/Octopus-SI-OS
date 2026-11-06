@@ -179,7 +179,7 @@ Task environment panels can expose files, a terminal, changes, a browser,
 desktop, or connection details. The available panels come from the task's
 actual environment. **Triggers** and **Archived** are views within Tasks.
 Triggers are presented by the client over declared runtime interfaces: a time,
-an interval, or a quiet period in your work, each starting an ordinary run. A
+an interval, or a quiet period in your work, each waking the tasks bound to it. A
 connected application that receives events, such as Email, Telegram or Slack,
 appears there too: each incoming message it admits starts a turn in the tasks
 connected to it.

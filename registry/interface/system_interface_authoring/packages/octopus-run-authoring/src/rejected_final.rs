@@ -332,6 +332,7 @@ impl ProviderOutputHandoff {
                 authored.content = String::from_utf8(authored.json_format.unwrap_or(JsonFormat::Compact).encode(&value)?).map_err(|e| e.to_string())?;
                 authored.after_hash = ContentHash::of_bytes(authored.content.as_bytes()).to_hex();
                 authored.patch = json_patch::diff(&serde_json::from_slice(&state.run_record_bytes).map_err(|e| e.to_string())?, &value);
+                self.seal_authored_run(&state.run_record_bytes, &mut authored, None)?;
                 validate_transition(&record, &RunRecord::from_bytes(authored.content.as_bytes()).map_err(|e| e.to_string())?, &self.config)?;
                 Some(authored)
             }

@@ -439,7 +439,18 @@ A tool, operation or operator result that settles one of several outstanding
 calls of a native turn leaves the turn waiting for the rest. The provider then
 emits `interface.context.updated` naming the `awaiting_results` with the new
 continuity, so the run consumes that result and retires its result input before
-the next one arrives; the last result resumes the model.
+the next one arrives; the last result resumes the model. A waiting result is
+always consumed through its own admitted movement, in one write. Whatever checked
+writer changed the run's context while the call waited — sibling calls and
+results of the same turn, a steer, a control receipt, an earlier turn's
+publication, an owner write — the consuming write records the context added
+since the receiving checkpoint, in record order, as its rebase. Every checked
+validator recomputes that rebase from the record before the write, and every
+reader rebuilds the result's session context as its admitted context, then the
+rebase, then the result. Instructions and role artifacts are not part of it; the
+native turn refreshes them. Context that left the run while the call waited, or
+a change without checked writer evidence, fails closed. A result is never
+delivered twice.
 
 The provider declares conversational input formats in `private_config.input_messages`.
 Each label names the payload fields that carry its text, client observations,
@@ -680,11 +691,15 @@ the same admitted source, receiving checkpoint and original contract. The
 concurrent-edit checks still protect unrelated context, pending work and peer
 state; a later record never substitutes for an earlier attempt's preimage.
 
-When checked run authoring forwards a tool result through a new carrier, its
-exact admitted source remains the same incoming result. The provider excludes
-both carriers from evidence that would close that result's own pending native
-request; their appearance in context does not prove native consumption. The
-result wait also binds its exact original call as read-only evidence. Provider
+A provider handoff reads its run through the record it last proved. Execution
+is concurrent: when another declared writer advances the record while the
+handoff observes it, the observation is not a verdict. The handoff adopts the
+advance through the checked writer chain and observes again within its result
+timeout; a waiting result's rebase grows by the context that advance added. An
+advance without checked writer evidence, or a record still moving at the
+timeout, fails closed with the original error.
+
+The result wait binds its exact original call as read-only evidence. Provider
 continuity reads that call independently of model-context filtering. An older
 conversation context may be superseded only by the newer pending state in
 that admitted call, with matching provider, run and transport coordinates.
@@ -741,7 +756,18 @@ executed under the replacement context. Requests without that exact proof still
 fail closed. Terminal error and control receipts count ledger-admitted standing
 context generations as well as the last authored record. A protocol failure
 closes its private transport before returning control, so an abandoned model
-turn cannot keep issuing requests after its task has failed.
+turn cannot keep issuing requests after its task has failed. A source that fails closed for any
+other reason retires its native turn the same way before its `turn.error` is
+handed, so later results of that turn reach no live model turn. A terminal error
+that cannot be handed closes its source through the declared failure route
+instead of ending the provider life. A failed source with neither a failed-source
+handoff nor a proven standing route is recorded as the interface's admitted
+failure of that movement, and the life keeps serving its other sources. A
+stream sealed with another terminal, or for another source, is not the terminal
+a recovery looks for; an unsealed terminal boundary still fails. A source whose stream was already sealed with
+its `turn.error` is never dispatched again: on restart the provider hands that
+exact retained error, or closes the source through the failure route when it
+cannot be handed.
 
 An explicit Resume on a context-free control route recovers its native thread
 from the provider's delivered stopping receipt. Its run, provider and context
@@ -819,24 +845,37 @@ See [registry/worker_environment_kind/GUIDE.md](../../registry/worker_environmen
 
 ## Time and inactivity triggers
 
+A trigger is an interface folder with its own condition: when the condition
+holds it sends an artifact, and every run whose checkpoint pins the folder
+receives it. A requirement-free checkpoint is a standing route, so one binding
+receives every firing and nothing re-authors the run. A time trigger is a copy
+of the clock interface `world_cron`: its descriptor declares `copy_of`, and its
+activation holds only the schedule — an interval, a cron expression, a due time
+or a quiet period — after which it sends `cron.current_time`. The interface never
+edits a run and never creates one.
+
 The clock interface supports inactivity: selected runs' artifact movements
-restart a declared quiet period, after which one artifact wakes an ordinary
-run. Selection is a descriptor match, optionally narrowed to one EE subtree;
-a second match excludes runs bound to or fed by matching interfaces, which is
-how a time trigger declares that other triggers' runs are not the user's work.
-Its own target runs are excluded, a due period fires exactly once, and
-admission evidence survives restart. A trigger that starts a new task per
-firing names each firing under `cron.current_time` with its own suffix, and the
-task it creates admits only that name, so later firings never reach earlier
-tasks. Selection, timing and cursor state belong
-to the interface package; the client projects these activations as Triggers.
-A disabled activation that no run binds is a template, shipped by a package:
-The package's clone operation supplies private copies of its controller interfaces
-and authoring tool, bound to its own controller run. An Application
-Pack's `workspace_setup.triggers` names templates that setup arms through the
-same clone, each with its own interface id and quiet period, only when its
-package was selected; a retried setup finds the armed trigger and creates
-nothing.
+restart a declared quiet period, after which one artifact wakes the runs that
+pin the trigger. Selection is a descriptor match, optionally narrowed to one EE
+subtree; a second match excludes runs bound to or fed by matching interfaces,
+which is how a time trigger declares that other triggers' runs are not the
+user's work. Runs that bind this trigger or received its artifact are excluded,
+a due period fires exactly once, and admission evidence survives restart.
+Selection, timing and cursor state belong to the interface package; the client
+projects these activations as Triggers, with the tasks that pin each one. A
+disabled time folder that no run binds is a template, shipped by a package.
+An Application Pack's `workspace_setup.triggers` names templates that setup
+arms only when its package was selected: setup copies the template folder under
+its own interface id and quiet period, then creates the entry's `task` — worker,
+context artifacts, rooms and door slots, with the provider and model chosen for
+Home — whose standing input pins that folder. A retried setup finds the armed
+trigger and its task and creates nothing. Deleting a trigger deletes its folder;
+the tasks that pinned it remain ordinary tasks.
+
+A review task that a trigger wakes keeps one change journal per firing, under
+`state/change-journals/<run>/<now_unix_ms of the firing>/journal.json`, so
+Triggers lists each review with its changes and undoes one while the files still
+hold what it wrote.
 
 Triggers also lists World event sources with active inbound run bindings: sensor
 interfaces, and applications whose `private_config.task_input_labels` declares

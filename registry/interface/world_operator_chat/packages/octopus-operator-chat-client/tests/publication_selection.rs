@@ -512,7 +512,7 @@ fn native_amendment_and_continuation_preserve_accepted_capabilities_and_publicat
     let selected = current_selection(&roots, &current, &provider)
         .unwrap()
         .unwrap();
-    let amendment = CurrentRunRequest {
+    let amendment = CurrentRunRequest { change: None,
         amendment_key: "publication".into(),
         publications: vec![additional],
         selection: Some(selected.clone()),

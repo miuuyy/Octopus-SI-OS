@@ -32,6 +32,36 @@ impl ApplicationPreferences {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceLock {
+    pub root_slot: String,
+    pub file_name: String,
+}
+
+impl DeviceLock {
+    pub fn resolve(&self, roots: &BTreeMap<String, std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
+        if self.root_slot.is_empty() || self.root_slot.len() > 128
+            || !self.root_slot.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+            return Err("desktop device lock requires an explicit root slot".into());
+        }
+        let name = std::path::Path::new(&self.file_name);
+        if self.file_name.len() > 255 || self.file_name.contains('\0')
+            || !matches!(name.components().collect::<Vec<_>>().as_slice(), [std::path::Component::Normal(part)] if *part == name.as_os_str()) {
+            return Err("desktop device lock file_name must be one plain file name inside its root slot".into());
+        }
+        let root = roots.get(&self.root_slot).ok_or_else(|| format!(
+            "desktop device lock root slot '{}' was not declared to this desktop host; declare it in host.json root_refs and in the host process authority",
+            self.root_slot
+        ))?;
+        crate::native_connection::validate_directory(root).map_err(|error| format!(
+            "desktop device lock root slot '{}' at '{}' is unusable: {error}",
+            self.root_slot, root.display()
+        ))?;
+        Ok(root.join(name))
+    }
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesktopConfig {
@@ -300,6 +330,49 @@ mod tests {
             &["http", "https", "ws", "wss"]
         )
         .is_err());
+    }
+
+    #[test]
+    fn device_locks_stay_inside_their_declared_roots_and_refuse_missing_or_unusable_roots() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::{Path, PathBuf};
+        let lock = super::DeviceLock { root_slot: "desktop_device_lock_root".into(), file_name: "desktop-device.lock".into() };
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().canonicalize().unwrap();
+        let private_root = |name: &str| {
+            let path = parent.join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            path
+        };
+        let roots = |root: &Path| std::collections::BTreeMap::from([(lock.root_slot.clone(), root.to_path_buf())]);
+        let (first, second) = (private_root("first-user"), private_root("second-user"));
+        let first_lock: PathBuf = lock.resolve(&roots(&first)).unwrap();
+        let second_lock = lock.resolve(&roots(&second)).unwrap();
+        assert_eq!(first_lock, first.join("desktop-device.lock"));
+        assert_ne!(first_lock, second_lock);
+        let exclusive = |file: &std::fs::File| unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+        let first_holder = crate::backend::open_device_file(&first_lock).unwrap();
+        let second_holder = crate::backend::open_device_file(&second_lock).unwrap();
+        assert!(exclusive(&first_holder));
+        assert!(exclusive(&second_holder));
+        assert!(!exclusive(&crate::backend::open_device_file(&first_lock).unwrap()));
+
+        let undeclared = lock.resolve(&std::collections::BTreeMap::new()).unwrap_err();
+        assert!(undeclared.contains("root slot 'desktop_device_lock_root' was not declared"), "{undeclared}");
+        let absent = lock.resolve(&roots(&parent.join("absent"))).unwrap_err();
+        assert!(absent.contains("desktop_device_lock_root") && absent.contains("is unusable"), "{absent}");
+        let read_only = private_root("read-only");
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let unwritable = lock.resolve(&roots(&read_only)).unwrap_err();
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(unwritable.contains("is unusable"), "{unwritable}");
+        assert!(!read_only.join("desktop-device.lock").exists());
+        for file_name in ["", ".", "..", "../escape.lock", "nested/desktop-device.lock", "desktop-device.lock/"] {
+            let escaped = super::DeviceLock { root_slot: lock.root_slot.clone(), file_name: file_name.into() };
+            assert!(escaped.resolve(&roots(&first)).unwrap_err().contains("one plain file name"), "{file_name}");
+        }
     }
 }
 

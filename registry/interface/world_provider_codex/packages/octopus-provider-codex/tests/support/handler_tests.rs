@@ -1625,7 +1625,7 @@
         assert_eq!(recovered_failed_result_source(&descriptor, &operator, &bound, &recovered_context, &[71]).unwrap(), Some(71));
         let restored_model_context = resumed_model_context(&recovered_context, &operator.artifact, &settled, ModelResultProjection { max_tokens: 1000 }).unwrap().unwrap();
         assert!(restored_model_context.contains("completed-result") && restored_model_context.contains("call-7"));
-        let native_context = native_turn_context(Some(restored_model_context), None);
+        let native_context = native_turn_context(Some(restored_model_context), None, None);
         assert!(matches!(native_context["octopus_bound_context"].kind, AdditionalContextKind::Untrusted));
         let settled_error: SessionContextArtifact = serde_json::from_value(session_artifact(
             "settled-error", TURN_ERROR_LABEL, serde_json::json!({"label":TURN_ERROR_LABEL,"message":"provider stopped",CODEX_CONTINUITY_FIELD:settled}), 72,
@@ -4173,7 +4173,7 @@ while IFS= read -r _; do :; done
             Some(ReasoningEffort::XHigh),
             None,
             ReasoningSummary::Detailed,
-            native_turn_context(Some("context".repeat(200_000)), Some("grant".into())),
+            native_turn_context(Some("context".repeat(200_000)), Some("grant".into()), None),
             TURN_TRIGGER_INPUT,
         );
 

@@ -799,7 +799,7 @@ fn spawned_context_from_env(
         optional_spawned_env_path("OCTOPUS_BLOBS_DIR"),
         optional_spawned_env_path("OCTOPUS_LEDGER_INDEX_SQLITE"),
         serde_json::from_str(
-            &std::env::var("OCTOPUS_ROOT_SLOTS_JSON").unwrap_or_else(|_| "{}".to_string()),
+            &std::env::var("OCTOPUS_ROOT_SLOTS_JSON").map_err(|_| "OCTOPUS_ROOT_SLOTS_JSON is required by the process env contract".to_string())?,
         )
         .map_err(|error| format!("OCTOPUS_ROOT_SLOTS_JSON is malformed: {error}"))?,
         arrivals,

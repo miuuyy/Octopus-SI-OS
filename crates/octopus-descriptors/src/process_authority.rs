@@ -83,6 +83,24 @@ pub struct ProcessAuthoritySpec {
     pub allow_process_signals: bool,
 }
 
+impl ProcessAuthoritySpec {
+    pub fn declared_read_root_slots(&self) -> BTreeSet<&String> {
+        self.read_root_slots
+            .iter()
+            .chain(&self.optional_read_root_slots)
+            .chain(self.read_argument_paths.iter().flat_map(|binding| &binding.within_root_slots))
+            .collect()
+    }
+
+    pub fn declared_write_root_slots(&self) -> BTreeSet<&String> {
+        self.write_root_slots
+            .iter()
+            .chain(&self.optional_write_root_slots)
+            .chain(self.write_argument_paths.iter().flat_map(|binding| &binding.within_root_slots))
+            .collect()
+    }
+}
+
 #[derive(
     Clone,
     Debug,

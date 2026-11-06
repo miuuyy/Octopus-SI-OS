@@ -175,7 +175,8 @@ fn rejects_old_movement(movement: &Movement, record: &RunRecord, proof: &Withdra
 fn validate_replaced_context(reader: &mut impl CheckedRunEvidenceReader, record: &RunRecord, provider: &InterfaceId, proof: &Withdrawal) -> Result<(), String> {
     for (reference, seq) in &proof.replaced_context {
         let row = reader.admitted_movement(*seq)?.ok_or("withdrawal dynamic context has no movement")?;
-        if *seq > proof.predecessor.source_movement_seq || row.seq.0 != *seq || row.artifact.as_ref() != Some(reference)
+        if (*seq > proof.predecessor.source_movement_seq && !proof.predecessor.rebase.contains(reference))
+            || row.seq.0 != *seq || row.artifact.as_ref() != Some(reference)
             || row.run() != Some(&record.id)
             || !((row.kind == MovementKind::InterfaceOutbound && row.to == Endpoint::Interface(provider.clone()))
                 || (row.kind == MovementKind::InterfaceArrival && row.from == Endpoint::Interface(provider.clone())))
@@ -187,7 +188,7 @@ fn validate_replaced_context(reader: &mut impl CheckedRunEvidenceReader, record:
 
 pub(super) fn source_snapshot_from_evidence(
     evidence: &CheckedRunEvidence<'_>, ctx: Option<&InterfaceLiftContext>, record: &RunRecord,
-    config: &RunAuthoringConfig, source: u64,
+    config: &RunAuthoringConfig, source: u64, rebase: &[ArtifactRef],
 ) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
     let limits = InterfaceHostIoLimits { max_control_frame_bytes: evidence.max_control_frame_bytes,
         max_stderr_bytes: evidence.max_control_frame_bytes, max_manifest_bytes: evidence.max_manifest_bytes,
@@ -196,7 +197,7 @@ pub(super) fn source_snapshot_from_evidence(
         writer_history: Arc::new(Mutex::new(BTreeMap::new())), writer_call_generations: Arc::new(Mutex::new(writer_run::WriterCallIndex::default())),
         evidence: Arc::new(Mutex::new(ProviderLedgerEvidenceIndex::with_spotlight(config.provider_interface.clone(),
             evidence.movements_path.to_path_buf(), evidence.max_control_frame_bytes, evidence.ledger_index_path))) };
-    session.index()?.through_seq = Some(source);
+    session.index()?.through_seq = rebase.is_empty().then_some(source);
     let (_, admitted) = session.index()?.exact_provider_source_outbound(&record.id, &record.worker, &config.provider_interface, source)?;
     let (outputs, snapshots) = if let Some(ctx) = ctx.filter(|ctx| ctx.interface == config.provider_interface) {
         provider_context_label_sets(ctx.descriptor_snapshot.as_ref().ok_or("withdrawal has no declared context contract")?)?
@@ -216,6 +217,7 @@ pub(super) fn source_snapshot_from_evidence(
         let [template] = templates.as_slice() else { return Err("withdrawal source has no unique context contract".into()); };
         let (payloads, static_ids) = source_context_payloads_from_cache(evidence.blobs_dir, limits, &pinned, &source_config, checkpoint, template, &admitted)?;
         let mut pending = payloads.into_iter().filter(|bound| !static_ids.contains(&bound.artifact.id)).map(|bound| bound.artifact).collect::<Vec<_>>();
+        pending.extend(rebase.iter().cloned());
         let mut seen = BTreeSet::new();
         while let Some(reference) = pending.pop() {
             if !seen.insert(artifact_ref_key(&reference)) { continue; }
@@ -238,7 +240,7 @@ pub(super) fn source_snapshot_from_evidence(
         (outputs, snapshots)
     };
     let (context, head, mut protected) = recover_source_session_context_from_cache(evidence.blobs_dir, limits, &session,
-        record, config, source, &outputs, &snapshots)?;
+        record, config, source, rebase, &outputs, &snapshots)?;
     protected.extend(current_mandatory_role_artifacts(record, config)?);
     protected.extend(config.payload_artifact_bindings.iter().map(|reference| reference.id.clone()));
     protected.extend(config.checkpoints.iter().flat_map(|template| template.static_artifact_bindings.iter().cloned()));
@@ -255,7 +257,7 @@ pub(super) fn source_snapshot_from_evidence(
 
 fn validate_snapshot_evidence(reader: &mut impl CheckedRunEvidenceReader, record: &RunRecord, config: &RunAuthoringConfig, pending: &PendingHandoff) -> Result<(), String> {
     let proof = pending.withdrawal.as_ref().ok_or("withdrawal has no snapshot evidence")?;
-    let (expected, replaced) = reader.source_context_snapshot(record, config, proof.predecessor.source_movement_seq)?;
+    let (expected, replaced) = reader.source_context_snapshot(record, config, proof.predecessor.source_movement_seq, &proof.predecessor.rebase)?;
     if proof.parent != serde_json::from_value(expected.get("parent").cloned().unwrap_or(serde_json::Value::Null)).map_err(|error| error.to_string())?
         || proof.replaced_context != replaced {
         return Err("withdrawal changed the exact predecessor snapshot parent or complete dynamic replacement set".into());

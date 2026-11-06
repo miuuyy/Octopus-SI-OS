@@ -46,9 +46,6 @@ fn render_model_context_block_with_visible_tools(
     if let Some(grant) = render_grant(metadata, visible_tools) {
         sections.push(grant);
     }
-    if let Some(bindings) = render_checkpoint_bindings(metadata) {
-        sections.push(bindings);
-    }
     if let Some(failure) = &metadata.verification_failure {
         sections.push(format!(
             "VERIFICATION FAILURE — evidence to inspect before repairing or repeating an effect:\n{}",
@@ -141,21 +138,10 @@ fn render_grant(metadata: &InvocationMetadata, visible_tools: &[String]) -> Opti
         out.push_str("\n- ");
         out.push_str(&line);
     }
-    out.push_str(
-        "\n\nTool effects belong to their declared worker environments. The provider transport's \
-         cwd, workspace roots and sandbox permissions are not tool path authority and do not set \
-         a tool's working directory. Use the target tool's declared path scope and explicit paths \
-         from bound context or tool results. This metadata supplies root-slot names, not resolved \
-         filesystem paths. Read the bound authoring/workspace coordinate artifact and the exact \
-         tool and door declarations when available. A registry installation root is not evidence \
-         of a writable source workspace. If a required path or execution capability is absent, \
-         identify that missing declaration and use an authorized binding to request or configure \
-         it; do not infer access from a project name or the provider's working directory.",
-    );
     Some(out)
 }
 
-fn render_checkpoint_bindings(metadata: &InvocationMetadata) -> Option<String> {
+pub fn render_checkpoint_bindings_block(metadata: &InvocationMetadata) -> Option<String> {
     let snapshot = metadata.checkpoint_binding_policy.as_ref()?;
     let allowed = |interface: &str| metadata.grant.interfaces.iter().any(|id| id == interface);
     let inbound = std::iter::once(&snapshot.inbound).filter(|binding| allowed(binding.interface.as_str())).collect::<Vec<_>>();
@@ -352,8 +338,6 @@ mod tests {
         assert!(!block.contains("surface_client"));
         assert!(!block.contains("system_coder_env"));
         assert!(block.contains("EE root-slot ceiling (each tool may be narrower; slot names are not filesystem paths): workspace_root"));
-        assert!(block.contains("provider transport's cwd, workspace roots and sandbox permissions are not tool path authority"));
-        assert!(block.contains("This metadata supplies root-slot names, not resolved filesystem paths."));
         assert!(!block.contains("/workspace_root"));
     }
 

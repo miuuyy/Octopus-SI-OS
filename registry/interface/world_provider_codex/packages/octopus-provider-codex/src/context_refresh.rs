@@ -147,6 +147,7 @@ pub(super) struct CurrentNativeContext<'a> {
     pub static_fingerprint: &'a str,
     pub conversation: Option<&'a str>,
     pub obligations: Option<&'a str>,
+    pub checkpoint_bindings: Option<&'a str>,
     pub session_available: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub reasoning_summary: ReasoningSummary,
@@ -1312,6 +1313,7 @@ impl CodexAppServerInterfaceDriver {
         let mut additional = native_turn_context(
             current.conversation.map(str::to_owned),
             current.obligations.map(str::to_owned),
+            current.checkpoint_bindings.map(str::to_owned),
         );
         additional.insert("completed_effect".into(), AdditionalContextEntry { kind: AdditionalContextKind::Untrusted, value: serde_json::to_string(&serde_json::json!({
             "source_artifact": refresh.result_artifact, "source_movement_seq": refresh.result_movement,
@@ -1583,6 +1585,7 @@ pub(super) struct ResolvedModelContext {
     pub bound_instructions: String,
     pub conversation_block: Option<String>,
     pub obligations_grant_block: Option<String>,
+    pub checkpoint_bindings_block: Option<String>,
 }
 
 impl CodexAppServerInterfaceDriver {
@@ -1630,6 +1633,7 @@ impl CodexAppServerInterfaceDriver {
             .then(|| assembled_context.conversation.join("\n\n"));
 
         let obligations_grant_block = input.metadata.as_ref().and_then(render_model_context_block);
+        let checkpoint_bindings_block = input.metadata.as_ref().and_then(render_checkpoint_bindings_block);
 
         Ok(ResolvedModelContext {
             model,
@@ -1639,6 +1643,7 @@ impl CodexAppServerInterfaceDriver {
             bound_instructions,
             conversation_block,
             obligations_grant_block,
+            checkpoint_bindings_block,
         })
     }
 }

@@ -46,7 +46,10 @@ fn failed_run_write_evidence(
         if result.tool != writer.tool || result.label != writer.result_label { return Err("failed write result changed its exact tool or label".into()); }
         if result.ok { return Ok(None); }
         if result.body.is_some() || result.error.as_ref().is_none_or(|error| error.code != "tool_execution_failed" || error.details.is_some()) {
-            return Err("write failure does not prove an ordinary rejected file effect".into());
+            return Err(match result.error.as_ref() {
+                Some(error) => format!("write failure does not prove an ordinary rejected file effect: {}: {}", error.code, error.message),
+                None => "write failure does not prove an ordinary rejected file effect: it carries no error".to_string(),
+            }.into());
         }
         let runtime = movement.runtime().ok_or("failed write result has no run coordinate")?;
         if runtime.worker != intended.worker { return Err("failed write result changed its run worker".into()); }
@@ -635,7 +638,10 @@ pub(super) fn validate_rejected_result(
             .as_ref()
             .is_none_or(|error| error.details.is_some())
     {
-        return Err("provider rejected result changed its ordinary failed-write contract".into());
+        return Err(match result.error.as_ref() {
+            Some(error) => format!("provider rejected result changed its ordinary failed-write contract ({}: {})", error.code, error.message),
+            None => "provider rejected result changed its ordinary failed-write contract".into(),
+        });
     }
     let correlation = result
         .correlation_id
@@ -764,7 +770,6 @@ pub(super) fn rebase_authored_run(
     {
         return Err("authoring retry changed run identity or provider-owned state".into());
     }
-    let result_invocation = result_inputs::rebased_invocation_value(before, protected, authored.content.as_bytes(), config)?;
     let mut before: serde_json::Value =
         serde_json::from_slice(before).map_err(|error| error.to_string())?;
     let mut planned: serde_json::Value =
@@ -839,9 +844,6 @@ pub(super) fn rebase_authored_run(
         planned.as_object().unwrap(),
         merged.as_object_mut().unwrap(),
     )?;
-    if let Some(invocation) = result_invocation {
-        merged = invocation;
-    }
     let mut declared_config = if extension.is_some() {
         attempt_config(&observed, config)?
     } else {

@@ -13,7 +13,6 @@
     "skill.upsert",
     "artifact.send",
     "file.write",
-    "file.write.cron_authoring",
     "memory.search",
     "memory.read",
     "memory.list",
@@ -58,10 +57,7 @@
     "system_worker_memory_consolidation",
     "system_room",
     "system_worker_memory_observer",
-    "system_context_memory_projection",
-    "system_worker_cron",
-    "system_interface_authoring_cron",
-    "system_context_cron_authoring"
+    "system_context_memory_projection"
   ],
   "allowed_worker_environment_kinds": [
     "system_room"

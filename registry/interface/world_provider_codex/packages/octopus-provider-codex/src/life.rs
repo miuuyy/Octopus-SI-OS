@@ -23,7 +23,7 @@ use crate::handler::{
     CodexTurnControlBroker, CodexTurnControlDisposition, CodexTurnControlEffectIntent,
     CodexTurnControlResult, ControlOutputError, PROVIDER_TRANSPORT_DISPATCH_LABEL,
     ProviderHandoffBarrier, ProviderOutputStream, ProviderStreamEmission,
-    TURN_INTERRUPTED_RESULT_LABEL, codex_continuity_incompatibility,
+    TURN_ERROR_LABEL, TURN_INTERRUPTED_RESULT_LABEL, codex_continuity_incompatibility,
     codex_continuity_successor_is_settled, codex_continuity_waits_for_result, codex_continuity_has_interrupted_pending,
     codex_session_snapshot_labels, codex_context_output_labels, decode_inflight_turn_control,
     exact_interrupted_control_continuity, exact_interrupted_result_source, exact_interrupted_result_payload,

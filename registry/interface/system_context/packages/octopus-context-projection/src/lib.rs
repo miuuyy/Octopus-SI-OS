@@ -793,7 +793,6 @@ pub async fn process_admitted_input(
     }
     let rejected = handoff.rejected_final_output().await?;
     if rejected.is_none() { match handoff.recover_source().await? {
-        ProviderSourceRecovery::Bridged { .. } => return Ok(()),
         ProviderSourceRecovery::Completed => {
             return Ok(());
         }

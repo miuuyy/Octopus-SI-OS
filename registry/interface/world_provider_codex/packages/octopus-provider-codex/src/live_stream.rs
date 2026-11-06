@@ -860,6 +860,59 @@ pub(crate) fn seal_source_turn_stream(
     }).collect()
 }
 
+pub(crate) fn sealed_source_terminals(
+    root: &Path,
+    rules: &LiveStreamRules,
+    provider_interface: &str,
+    run: &str,
+    source_movement_seq: u64,
+) -> Result<Vec<(String, String)>, String> {
+    if !rules.enabled {
+        return Ok(Vec::new());
+    }
+    let run_root = root.join(identity_hash(&[provider_interface, run]));
+    let entries = match std::fs::read_dir(&run_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Codex live stream run directory '{}' could not be read: {error}", run_root.display())),
+    };
+    let mut terminals = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Codex live stream directory failed: {error}"))?;
+        let manifest_path = entry.path().join("turn-stream.artifact.json");
+        if !manifest_path.try_exists().map_err(|error| error.to_string())? {
+            continue;
+        }
+        let manifest = InterfaceArtifactFile::new(manifest_path).map_err(|error| error.to_string())?
+            .read_manifest().map_err(|error| error.to_string())?;
+        if manifest.label != rules.artifact_label || manifest.payload_path != entry.path().join("turn-stream.body.jsonl") {
+            return Err("Codex stream directory differs from its exact turn manifest".into());
+        }
+        let Some(expected_hash) = manifest.payload_content_hash else { continue };
+        let identity = read_stream_header(&manifest.payload_path)?;
+        if identity.provider_interface != provider_interface || identity.run != run || entry.path() != stream_turn_root(root, &identity) {
+            return Err("Codex stream directory differs from its exact provider/run/turn identity".into());
+        }
+        let bytes = octopus_interfaces::read_artifact_carrier_file_bounded(&manifest.payload_path, MAX_RECOVERY_BODY_BYTES)
+            .map_err(|error| error.to_string())?;
+        if bytes.last() != Some(&b'\n') || blake3::hash(&bytes).to_hex().as_str() != expected_hash {
+            return Err("sealed stream failed its immutable body hash".into());
+        }
+        let last: serde_json::Value = serde_json::from_slice(bytes.split(|byte| *byte == b'\n')
+            .rfind(|line| !line.is_empty()).ok_or("sealed stream has no rows")?)
+            .map_err(|error| error.to_string())?;
+        if last["type"] != "seal" || last["source_movement_seq"].as_u64() != Some(source_movement_seq) {
+            continue;
+        }
+        let (_, terminal, _, _) = validate_complete_rows(&bytes, &identity, source_movement_seq)?;
+        let terminal = terminal.ok_or("sealed stream has a seal without its terminal boundary")?;
+        terminals.push((terminal.label, terminal.artifact_payload_blake3));
+    }
+    terminals.sort();
+    terminals.dedup();
+    Ok(terminals)
+}
+
 pub(crate) fn recover_sealed_terminal_stream(
     root: &Path,
     rules: &LiveStreamRules,
@@ -892,10 +945,11 @@ pub(crate) fn recover_sealed_terminal_stream(
     let last: serde_json::Value = serde_json::from_slice(bytes.split(|byte| *byte == b'\n')
         .rfind(|line| !line.is_empty()).ok_or("sealed stream recovery has no rows")?)
         .map_err(|error| error.to_string())?;
-    if terminal.label != terminal_label || last["type"] != "seal"
-        || last["source_movement_seq"].as_u64() != Some(source_movement_seq)
-    {
-        return Err("sealed stream recovery differs from its exact terminal source".into());
+    if last["type"] != "seal" {
+        return Err("sealed stream recovery has a terminal boundary without its seal".into());
+    }
+    if terminal.label != terminal_label || last["source_movement_seq"].as_u64() != Some(source_movement_seq) {
+        return Ok(None);
     }
     let artifact = if expected_hash.is_none() {
         LiveTurnStream::open(root, rules, identity.clone(), source_movement_seq)?
@@ -1295,6 +1349,24 @@ mod tests {
             let mut row = rows[1].clone(); row["seq"] = serde_json::json!(2); row
         });
         assert!(validate_complete_rows(duplicate.as_bytes(), &identity(), 9).is_err());
+    }
+
+    #[test]
+    fn a_stream_sealed_by_another_terminal_is_not_recovered_as_this_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut stream = LiveTurnStream::open(temp.path(), &rules(), identity(), 9).unwrap();
+        stream.append_event(9, "agent.message.delta", &serde_json::json!({"text":"a"})).unwrap();
+        stream.seal_terminal(9, "turn.error", &"a".repeat(64)).unwrap();
+        drop(stream);
+        let recover = |seq, label| recover_sealed_terminal_stream(temp.path(), &rules(), &identity(), seq, label);
+        assert!(recover(9, "turn.interrupted.result").unwrap().is_none());
+        assert!(recover(10, "turn.error").unwrap().is_none());
+        let (_, hash) = recover(9, "turn.error").unwrap().unwrap();
+        assert_eq!(hash, "a".repeat(64));
+        let id = identity();
+        let sealed = |seq| sealed_source_terminals(temp.path(), &rules(), &id.provider_interface, &id.run, seq).unwrap();
+        assert_eq!(sealed(9), vec![("turn.error".to_string(), "a".repeat(64))]);
+        assert!(sealed(10).is_empty());
     }
 
     #[test]

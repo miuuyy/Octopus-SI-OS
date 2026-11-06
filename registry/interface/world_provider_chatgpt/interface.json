@@ -70,7 +70,7 @@
       "run_affordance_profile": {
         "catalog": {
           "label": "context.reference",
-          "text": "These operations compose ordinary Octopus runs through checked file effects. create_run starts a task in one call from the installation defaults. followup_task, send_message and interrupt_run reach a connected run; list_runs shows this run and its connected runs; wait_for_runs waits for their communication. To attach tools, rooms, context or routes to this run, use preview_current_run and then amend_current_run with the same amendment_key and an explicit complete selection; inspect_authoring shows the current one. preview_run, preview_revision and revise_run work with exact authored files. A new run forms its authority from its own worker ceiling and EE chain; a descriptor on disk alone grants nothing.",
+          "text": "These operations compose ordinary Octopus runs through checked file effects. create_run starts a task in one call from the installation defaults. followup_task, send_message and interrupt_run reach a connected run; list_runs shows this run and its connected runs; wait_for_runs waits for their communication. To attach tools, rooms, context or routes to this run, use preview_current_run and then amend_current_run with the same amendment_key and either a change (entries to add or remove) or an explicit complete selection; inspect_authoring shows the current one. preview_run, preview_revision and revise_run work with exact authored files. A new run forms its authority from its own worker ceiling and EE chain; a descriptor on disk alone grants nothing.",
           "operations": [
             {
               "name": "inspect_authoring",
@@ -463,6 +463,517 @@
                         "description": "The complete observed run record before the proposed edit. Its hash and checked history must be proved before any effect."
                       }
                     }
+                  },
+                  "change": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Entries to add to and remove from the current selection that inspect_authoring shows. Every removed entry must be present and every added one absent; the result is planned as the complete selection.",
+                    "properties": {
+                      "add": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "selected_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "tool",
+                                "interface",
+                                "worker_environment_kind"
+                              ],
+                              "properties": {
+                                "tool": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "worker_environment_kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "selected_worker_environment_kinds": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "door_host_slots": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          },
+                          "external_inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "artifact_names": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "external_relays": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "outbound_interface_ids"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "outbound_interface_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "model_outputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "required_verified_artifact"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "required_verified_artifact": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "mark",
+                                    "artifact_label",
+                                    "verifier"
+                                  ],
+                                  "properties": {
+                                    "mark": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "artifact_label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "verifier": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "params": {}
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "context_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "payload_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id",
+                                "content"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "content": {
+                                  "type": "array",
+                                  "minItems": 32,
+                                  "maxItems": 32,
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 255
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "description": "Entries to add or remove; omitted fields name no entries."
+                      },
+                      "remove": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "selected_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "tool",
+                                "interface",
+                                "worker_environment_kind"
+                              ],
+                              "properties": {
+                                "tool": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "worker_environment_kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "selected_worker_environment_kinds": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "door_host_slots": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          },
+                          "external_inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "artifact_names": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "external_relays": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "outbound_interface_ids"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "outbound_interface_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "model_outputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "required_verified_artifact"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "required_verified_artifact": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "mark",
+                                    "artifact_label",
+                                    "verifier"
+                                  ],
+                                  "properties": {
+                                    "mark": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "artifact_label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "verifier": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "params": {}
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "context_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "payload_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id",
+                                "content"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "content": {
+                                  "type": "array",
+                                  "minItems": 32,
+                                  "maxItems": 32,
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 255
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "description": "Entries to add or remove; omitted fields name no entries."
+                      }
+                    }
                   }
                 },
                 "oneOf": [
@@ -471,8 +982,36 @@
                       "selection"
                     ],
                     "not": {
-                      "required": [
-                        "authored"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "change"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "authored"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "change"
+                    ],
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "selection"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "authored"
+                          ]
+                        }
                       ]
                     }
                   },
@@ -481,8 +1020,17 @@
                       "authored"
                     ],
                     "not": {
-                      "required": [
-                        "selection"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "selection"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "change"
+                          ]
+                        }
                       ]
                     }
                   }
@@ -870,6 +1418,517 @@
                         "description": "The complete observed run record before the proposed edit. Its hash and checked history must be proved before any effect."
                       }
                     }
+                  },
+                  "change": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Entries to add to and remove from the current selection that inspect_authoring shows. Every removed entry must be present and every added one absent; the result is planned as the complete selection.",
+                    "properties": {
+                      "add": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "selected_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "tool",
+                                "interface",
+                                "worker_environment_kind"
+                              ],
+                              "properties": {
+                                "tool": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "worker_environment_kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "selected_worker_environment_kinds": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "door_host_slots": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          },
+                          "external_inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "artifact_names": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "external_relays": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "outbound_interface_ids"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "outbound_interface_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "model_outputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "required_verified_artifact"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "required_verified_artifact": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "mark",
+                                    "artifact_label",
+                                    "verifier"
+                                  ],
+                                  "properties": {
+                                    "mark": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "artifact_label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "verifier": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "params": {}
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "context_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "payload_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id",
+                                "content"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "content": {
+                                  "type": "array",
+                                  "minItems": 32,
+                                  "maxItems": 32,
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 255
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "description": "Entries to add or remove; omitted fields name no entries."
+                      },
+                      "remove": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "selected_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "tool",
+                                "interface",
+                                "worker_environment_kind"
+                              ],
+                              "properties": {
+                                "tool": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "worker_environment_kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "selected_worker_environment_kinds": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "door_host_slots": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          },
+                          "external_inputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "artifact_names": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "external_relays": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "outbound_interface_ids"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "outbound_interface_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required_verified_artifacts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": [
+                                      "mark",
+                                      "artifact_label",
+                                      "verifier"
+                                    ],
+                                    "properties": {
+                                      "mark": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "artifact_label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "verifier": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "params": {}
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "model_outputs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "checkpoint_id",
+                                "interface_id",
+                                "required_verified_artifact"
+                              ],
+                              "properties": {
+                                "checkpoint_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "interface_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "required_verified_artifact": {
+                                  "type": "object",
+                                  "additionalProperties": false,
+                                  "required": [
+                                    "mark",
+                                    "artifact_label",
+                                    "verifier"
+                                  ],
+                                  "properties": {
+                                    "mark": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "artifact_label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "verifier": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "params": {}
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "context_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            }
+                          },
+                          "payload_artifact_bindings": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "id",
+                                "content"
+                              ],
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "content": {
+                                  "type": "array",
+                                  "minItems": 32,
+                                  "maxItems": 32,
+                                  "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 255
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "description": "Entries to add or remove; omitted fields name no entries."
+                      }
+                    }
                   }
                 },
                 "oneOf": [
@@ -878,8 +1937,36 @@
                       "selection"
                     ],
                     "not": {
-                      "required": [
-                        "authored"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "change"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "authored"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "change"
+                    ],
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "selection"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "authored"
+                          ]
+                        }
                       ]
                     }
                   },
@@ -888,8 +1975,17 @@
                       "authored"
                     ],
                     "not": {
-                      "required": [
-                        "selection"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "selection"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "change"
+                          ]
+                        }
                       ]
                     }
                   }
@@ -3056,8 +4152,7 @@
         ],
         "active_turn_stream_labels": [
           "provider.account.rate_limits.updated",
-          "account.rate_limits",
-          "turn.token_usage"
+          "account.rate_limits"
         ],
         "phase_rules": [
           {

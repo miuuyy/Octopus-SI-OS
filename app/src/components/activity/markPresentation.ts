@@ -34,7 +34,6 @@ const sourcePresentations: Record<string, string> = {
   system_worker_memory_consolidation: "Memory",
   system_worker_operator_home: "Home",
   system_worker_operator_task: "Task",
-  system_worker_cron: "Triggers",
   system_worker_computer_use: "Computer Use",
 };
 

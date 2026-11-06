@@ -127,7 +127,75 @@ pub(crate) async fn emit_terminal_error_message(
             }
         }
     }
-    handoff.hand_final(terminal).await.map(|_| ())
+    if let Err(error) = handoff.hand_final(terminal).await {
+        if ctx.cancel.is_cancelled() {
+            return Err(error);
+        }
+        return record_invalid_provider_context(
+            ctx, descriptor, handoff_session, run, turn,
+            format!("{message}; its terminal error could not be handed: {error}"),
+        ).await;
+    }
+    Ok(())
+}
+
+pub(crate) async fn close_sealed_terminal_error(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    handoff_session: &ProviderHandoffSession,
+    run: &RunId,
+    turn: &QueuedTurn,
+    handoff: &ProviderOutputHandoff,
+) -> Result<bool, String> {
+    let private_config = &descriptor.interface_driver_config.as_ref()
+        .ok_or("sealed terminal recovery has no declared provider config")?.private_config;
+    let rules = LiveStreamRules::from_private_config_or_disabled(private_config)
+        .map_err(|error| error.to_string())?;
+    let terminals = crate::live_stream::sealed_source_terminals(
+        &ctx.interface_var_dir().join("streams"), &rules, descriptor.id.as_str(), run.as_str(), turn.seq,
+    )?;
+    let payload_hash = match terminals.as_slice() {
+        [] => return Ok(false),
+        [(label, payload_hash)] if label == TURN_ERROR_LABEL => payload_hash,
+        [_] => return Ok(false),
+        _ => return Err(format!("source {} has streams sealed with different terminals", turn.seq)),
+    };
+    let terminal = sealed_terminal_artifact(ctx, TURN_ERROR_LABEL, payload_hash)?;
+    if let Err(error) = handoff.hand_final(ProviderEmission {
+        artifact: terminal,
+        route: ProviderEmissionRoute::ClientProjection,
+    }).await {
+        if ctx.cancel.is_cancelled() {
+            return Err(error);
+        }
+        record_invalid_provider_context(
+            ctx, descriptor, handoff_session, run, turn,
+            format!("the terminal error sealed for movement {} could not be handed: {error}", turn.seq),
+        ).await?;
+    }
+    Ok(true)
+}
+
+fn sealed_terminal_artifact(
+    ctx: &InterfaceLiftContext,
+    label: &str,
+    payload_hash: &str,
+) -> Result<octopus_interfaces::InterfaceArtifactFile, String> {
+    let output_root = ctx.interface_var_dir().join("emitted").canonicalize()
+        .map_err(|error| error.to_string())?;
+    let slug = label.replace('.', "_");
+    let manifest = octopus_interfaces::InterfaceArtifactManifest {
+        label: label.to_string(),
+        payload_path: output_root.join(format!("{slug}-{payload_hash}.payload")),
+        payload_content_hash: Some(payload_hash.to_string()),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    let manifest_hash = ContentHash::of_bytes(&manifest_bytes).to_hex();
+    let path = output_root.join(format!("{slug}-{manifest_hash}.artifact.json"));
+    if std::fs::read(&path).map_err(|error| error.to_string())? != manifest_bytes {
+        return Err(format!("sealed terminal '{label}' changed its exact manifest"));
+    }
+    octopus_interfaces::InterfaceArtifactFile::new(path).map_err(|error| error.to_string())
 }
 
 pub(crate) async fn recover_interrupted_result_without_context(
@@ -177,19 +245,7 @@ pub(crate) fn recover_sealed_interrupted_result(
     )? else { return Ok(None); };
     let output_root = ctx.interface_var_dir().join("emitted").canonicalize()
         .map_err(|error| error.to_string())?;
-    let slug = TURN_INTERRUPTED_RESULT_LABEL.replace('.', "_");
-    let manifest = octopus_interfaces::InterfaceArtifactManifest {
-        label: TURN_INTERRUPTED_RESULT_LABEL.to_string(),
-        payload_path: output_root.join(format!("{slug}-{payload_hash}.payload")),
-        payload_content_hash: Some(payload_hash),
-    };
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
-    let manifest_hash = ContentHash::of_bytes(&manifest_bytes).to_hex();
-    let path = output_root.join(format!("{slug}-{manifest_hash}.artifact.json"));
-    if std::fs::read(&path).map_err(|error| error.to_string())? != manifest_bytes {
-        return Err("sealed interruption recovery changed its terminal manifest".into());
-    }
-    let terminal = octopus_interfaces::InterfaceArtifactFile::new(path).map_err(|error| error.to_string())?;
+    let terminal = sealed_terminal_artifact(ctx, TURN_INTERRUPTED_RESULT_LABEL, &payload_hash)?;
     let closure = if crate::handler::codex_continuity_has_interrupted_pending(continuity) {
         interrupted_result_closure_ref(&terminal, continuity, &turn.envelope.artifact, &codex_context_output_labels(descriptor).map_err(|error| error.to_string())?)?
     } else {
@@ -325,12 +381,7 @@ pub(crate) async fn admit_interrupted_result(
     ).map_err(|error| error.to_string())?;
     let native = expected_payload.get("native_terminal_status").is_some();
     let native_recovery = if native {
-        let recovered = handoff.recover_source_with_outcomes().await?;
-        if matches!(recovered.0, ProviderSourceRecovery::Bridged { .. }) {
-            control.finish();
-            return Ok(InterruptedResultAdmission::Bridged);
-        }
-        Some(recovered)
+        Some(handoff.recover_source_with_outcomes().await?)
     } else { None };
     if let Some(interrupted_effects) = interrupted_effects {
         interrupted_effects.begin_closing(run, source_movement_seq, closure.clone()).await?;

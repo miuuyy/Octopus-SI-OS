@@ -11,7 +11,7 @@ pub struct CheckedRunEvidence<'a> {
 
 pub trait CheckedRunEvidenceReader {
     fn max_payload_bytes(&self) -> u64;
-    fn source_context_snapshot(&mut self, _record: &RunRecord, _config: &RunAuthoringConfig, _source: u64) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
+    fn source_context_snapshot(&mut self, _record: &RunRecord, _config: &RunAuthoringConfig, _source: u64, _rebase: &[ArtifactRef]) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
         Err("checked reader does not provide exact source context evidence".into())
     }
     fn pending_output_payload(&mut self, provider: &InterfaceId, reference: &ArtifactRef, relative: &Path) -> Result<Vec<u8>, String> {
@@ -215,8 +215,8 @@ impl<'a> FileCheckedRunReader<'a> {
 
 impl CheckedRunEvidenceReader for FileCheckedRunReader<'_> {
     fn max_payload_bytes(&self) -> u64 { self.evidence.max_payload_bytes }
-    fn source_context_snapshot(&mut self, record: &RunRecord, config: &RunAuthoringConfig, source: u64) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
-        source_withdrawal::source_snapshot_from_evidence(self.evidence, self.provider_context.as_ref(), record, config, source)
+    fn source_context_snapshot(&mut self, record: &RunRecord, config: &RunAuthoringConfig, source: u64, rebase: &[ArtifactRef]) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
+        source_withdrawal::source_snapshot_from_evidence(self.evidence, self.provider_context.as_ref(), record, config, source, rebase)
     }
     fn pending_output_payload(&mut self, provider: &InterfaceId, reference: &ArtifactRef, relative: &Path) -> Result<Vec<u8>, String> {
         if self.evidence.blobs_dir.join(reference.content.to_hex()).try_exists().map_err(|error| error.to_string())? {
@@ -1125,6 +1125,7 @@ pub fn validate_checked_provider_transition(transition: &CheckedRunTransition) -
         file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
     })?;
     rejected_final::validate_transition(&before, &after, &replacement_config)?;
+    result_inputs::validate_continuity(&before, &after, &replacement_config)?;
     if capability_amendment::validate_transition(transition)? { return Ok(()); }
     let read = |record: &RunRecord| -> Result<BoundRunAuthoringTopology, String> {
         let state = record.interface_state.get(provider).ok_or("checked provider lost its state")?;

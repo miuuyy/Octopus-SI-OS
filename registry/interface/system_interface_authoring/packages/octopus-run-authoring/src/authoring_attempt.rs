@@ -464,11 +464,12 @@ pub(crate) fn recover_source_session_context(
     record: &RunRecord,
     config: &RunAuthoringConfig,
     source_movement_seq: u64,
+    rebase: &[ArtifactRef],
     context_output_labels: &BTreeSet<String>,
     session_snapshot_labels: &BTreeSet<String>,
 ) -> Result<(ResolvedSessionContext, Option<SessionSnapshotHead>), String> {
     let (context, head, _) = recover_source_session_context_from_cache(
-        &ctx.blobs_dir, ctx.required_host_io_limits()?, session, record, config, source_movement_seq, context_output_labels, session_snapshot_labels,
+        &ctx.blobs_dir, ctx.required_host_io_limits()?, session, record, config, source_movement_seq, rebase, context_output_labels, session_snapshot_labels,
     )?;
     Ok((context, head))
 }
@@ -480,11 +481,12 @@ pub(crate) fn recover_source_session_context_from_cache(
     record: &RunRecord,
     config: &RunAuthoringConfig,
     source_movement_seq: u64,
+    rebase: &[ArtifactRef],
     context_output_labels: &BTreeSet<String>,
     session_snapshot_labels: &BTreeSet<String>,
 ) -> Result<(ResolvedSessionContext, Option<SessionSnapshotHead>, Vec<ArtifactId>), String> {
     recover_source_session_context_with_static_correction(
-        blobs_dir, limits, session, record, config, source_movement_seq,
+        blobs_dir, limits, session, record, config, source_movement_seq, rebase,
         context_output_labels, session_snapshot_labels, None,
     )
 }
@@ -496,6 +498,7 @@ pub(crate) fn recover_source_session_context_with_static_correction(
     record: &RunRecord,
     config: &RunAuthoringConfig,
     source_movement_seq: u64,
+    rebase: &[ArtifactRef],
     context_output_labels: &BTreeSet<String>,
     session_snapshot_labels: &BTreeSet<String>,
     correction: Option<&input_revision::FailedSourceStaticContext>,
@@ -606,6 +609,27 @@ pub(crate) fn recover_source_session_context_with_static_correction(
                 .get(&artifact_ref_key(artifact))
                 .cloned()
                 .unwrap_or_default(),
+            session_snapshot_labels,
+            &config.provider_interface,
+        )?;
+    }
+    let rebase_provenance = session.index()?.bound_provenance(&record.id, &config.provider_interface, rebase.iter())?;
+    for reference in rebase {
+        if session_context.artifacts.iter().any(|entry| &entry.source_artifact == reference) {
+            continue;
+        }
+        let (manifest, payload) = read_pinned_artifact_from_cache(blobs_dir, limits, reference)?;
+        if session_snapshot_labels.contains(&manifest.label) {
+            return Err("a recorded result rebase cannot carry a session snapshot".into());
+        }
+        collect_bound_context_from_cache(
+            blobs_dir, limits,
+            &mut static_context_artifacts,
+            &mut session_context,
+            &mut session_snapshot_head,
+            reference,
+            &payload,
+            rebase_provenance.get(&artifact_ref_key(reference)).cloned().unwrap_or_default(),
             session_snapshot_labels,
             &config.provider_interface,
         )?;
@@ -834,10 +858,19 @@ pub(crate) async fn await_checked_evidence<T>(
             Ok(value) => return Ok(value),
             Err(error @ CheckedRunError::Invalid(_)) => return Err(error),
             Err(changed @ CheckedRunError::ChangedDuringRead { .. }) => {
-                if Instant::now() >= deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
                     return Err(changed);
                 }
-                tokio::task::yield_now().await;
+                if watcher.is_none() {
+                    watcher = Some(LedgerTailReader::open_named(ctx, "checked-input-evidence")?);
+                }
+                tokio::time::timeout(
+                    remaining,
+                    watcher.as_mut().unwrap().wait_for_change(&ctx.cancel),
+                )
+                .await
+                .map_err(|_| changed)??;
             }
             Err(waiting @ CheckedRunError::AwaitingResults { .. }) => {
                 let remaining = deadline.saturating_duration_since(Instant::now());

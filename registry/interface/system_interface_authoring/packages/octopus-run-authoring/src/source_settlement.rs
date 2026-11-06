@@ -334,7 +334,13 @@ impl ProviderOutputHandoff {
     pub async fn pending_source_settlement(
         &self,
     ) -> Result<Option<PendingSourceSettlement>, String> {
-        let state = self.state.lock().await;
+        self.observe_live_record(|handoff, state| handoff.pending_source_settlement_in(state)).await
+    }
+
+    fn pending_source_settlement_in(
+        &self,
+        state: &HandoffState,
+    ) -> Result<Option<PendingSourceSettlement>, String> {
         let current =
             RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
         let chain = self.completed_source_chain(&state.run_record_bytes)?;
@@ -475,7 +481,12 @@ impl ProviderOutputHandoff {
     pub async fn completed_source_settlement_predecessor(
         &self, closure: &ArtifactRef,
     ) -> Result<(Vec<u8>, Vec<ProviderHandoffOutcome>), String> {
-        let state = self.state.lock().await;
+        self.observe_live_record(|handoff, state| handoff.completed_source_settlement_predecessor_in(state, closure)).await
+    }
+
+    fn completed_source_settlement_predecessor_in(
+        &self, state: &HandoffState, closure: &ArtifactRef,
+    ) -> Result<(Vec<u8>, Vec<ProviderHandoffOutcome>), String> {
         let chain = self.completed_source_chain(&state.run_record_bytes)?;
         let mut evidence = None;
         let mut selected: Option<PendingHandoff> = None;
@@ -600,18 +611,17 @@ impl ProviderOutputHandoff {
     pub async fn recover_completed_source_with_outcomes(
         &self,
     ) -> Result<(ProviderSourceRecovery, Vec<ProviderHandoffOutcome>), String> {
-        {
-            let mut state = self.state.lock().await;
+        self.observe_live_record(|handoff, state| {
             let current = RunRecord::from_bytes(&state.run_record_bytes)
                 .map_err(|error| error.to_string())?;
-            let pending = persisted_pending_handoff(&current, &self.config.provider_interface)?
+            let pending = persisted_pending_handoff(&current, &handoff.config.provider_interface)?
                 .ok_or("completed source lost its pending handoff")?;
-            if !pending.terminal || pending.source_movement_seq != self.source_movement_seq {
+            if !pending.terminal || pending.source_movement_seq != handoff.source_movement_seq {
                 return Err("completed source changed its checked terminal coordinate".into());
             }
-            let chain = self.completed_source_chain(&state.run_record_bytes)?;
-            self.restore_checked_context(&mut state, &current, &chain)?;
-        }
+            let chain = handoff.completed_source_chain(&state.run_record_bytes)?;
+            handoff.restore_checked_context(state, &current, &chain)
+        }).await?;
         self.recover_source_with_outcomes().await
     }
 

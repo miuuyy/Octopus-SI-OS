@@ -130,9 +130,8 @@ function triggerLine(trigger, nowMs) {
   if (trigger?.status === "disabled") parts.push("paused");
   if (Number(trigger?.next_run_at_ms) > 0) parts.push(`next ${until(trigger.next_run_at_ms, nowMs)}`);
   if (Number(trigger?.last_run_at_ms) > 0) parts.push(`last ${age(trigger.last_run_at_ms, nowMs)}`);
-  const mode = text(trigger?.target?.mode);
-  if (mode === "new_run") parts.push("starts a new task");
-  else if (text(trigger?.run_template?.run_id)) parts.push(`wakes ${trigger.run_template.run_id}`);
+  const targets = Array.isArray(trigger?.targets) ? trigger.targets.map((target) => text(target?.title) || text(target?.run_id)).filter(Boolean) : [];
+  if (targets.length) parts.push(`wakes ${targets.join(", ")}`);
   if (text(trigger?.instructions)) parts.push(`prompt ${quote(trigger.instructions, INSTRUCTION_CHARS)}`);
   return parts.join(" · ");
 }

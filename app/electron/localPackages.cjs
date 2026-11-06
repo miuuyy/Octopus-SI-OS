@@ -828,6 +828,11 @@ function validatePackWorkspaceSetup(pack, packageById) {
       throw new Error(`Application Pack '${pack.id}' trigger '${trigger.interface_id}' must name a new interface once`);
     }
     triggerIds.add(trigger.interface_id);
+    if (!interfaceOwners.has(trigger.task.worker_interface_id)
+        || trigger.task.context_artifact_bindings.some((binding) => !artifactOwners.has(binding.id))
+        || trigger.task.selected_worker_environment_kinds.some((kind) => !driverNames.has(kind))) {
+      throw new Error(`Application Pack '${pack.id}' trigger '${trigger.interface_id}' task is outside its component closure`);
+    }
   }
   const presetIds = new Set();
   for (const preset of pack.workspace_setup.agent_presets ?? []) {

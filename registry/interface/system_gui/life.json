@@ -59,19 +59,19 @@
       "authority": {
         "read_root_slots": [
           "registry_worker_environment_kind_root",
-          "desktop_app_preferences_root"
+          "desktop_app_preferences_root",
+          "desktop_device_lock_root"
         ],
         "write_root_slots": [
-          "desktop_app_preferences_root"
+          "desktop_app_preferences_root",
+          "desktop_device_lock_root"
         ],
         "executable_root_slots": [],
         "read_paths": [
           "/System/Library",
           "/usr/lib"
         ],
-        "write_paths": [
-          "/tmp/octopus-desktop-device.lock"
-        ],
+        "write_paths": [],
         "executable_paths": [],
         "executable_root_subpaths": [
           {
@@ -89,7 +89,8 @@
       },
       "coordinate_root_slots": [
         "registry_worker_environment_kind_root",
-        "desktop_app_preferences_root"
+        "desktop_app_preferences_root",
+        "desktop_device_lock_root"
       ],
       "read_handles": []
     }

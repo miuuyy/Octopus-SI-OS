@@ -8,7 +8,7 @@ fn current_run_catalogs_match_the_typed_authoring_request() {
         "status":"running","checkpoints":[],"active_checkpoints":[],
     });
     let requests = [
-        CurrentRunRequest {
+        CurrentRunRequest { change: None,
             publications:vec![],
             amendment_key:"attach".into(), authored:None,
             selection:Some(CurrentRunSelection {
@@ -23,7 +23,7 @@ fn current_run_catalogs_match_the_typed_authoring_request() {
                 model_outputs:vec![], context_artifact_bindings:vec![], payload_artifact_bindings:vec![],
             }),
         },
-        CurrentRunRequest {
+        CurrentRunRequest { change: None,
             publications:vec![],
             amendment_key:"attach".into(), selection:None,
             authored:Some(AuthoredCurrentRun {
@@ -60,6 +60,13 @@ fn current_run_catalogs_match_the_typed_authoring_request() {
                 ambiguous[other] = serde_json::json!({});
                 assert!(validator.validate(&ambiguous).is_err());
             }
+            let change = serde_json::json!({"amendment_key":"attach","publications":[],
+                "change":{"remove":{"selected_tools":[{"tool":"file.read","interface":"system_room","worker_environment_kind":"system_room"}]}}});
+            validator.validate(&change).unwrap();
+            assert!(serde_json::from_value::<CurrentRunRequest>(change.clone()).unwrap().change.is_some());
+            let mut ambiguous = change;
+            ambiguous["selection"] = serde_json::to_value(&requests[0]).unwrap()["selection"].clone();
+            assert!(validator.validate(&ambiguous).is_err(), "{owner} {operation} permits a change beside a selection");
         }
     }
 }

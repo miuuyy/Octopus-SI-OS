@@ -3,7 +3,6 @@ module.exports = { operatorChatListProjection };
 const path = require("node:path");
 const { projectHomeVoiceContext } = require("../homeVoiceProjection.cjs");
 const { operatorActivityRows } = require("../operatorActivity.cjs");
-const { readChangeJournalDocument } = require("./changeJournal.cjs");
 const { activationDriverRef, scheduledInterfaceDisplayName } = require("./cronActivation.cjs");
 const { cachedOperatorChatArtifactText } = require("./operatorChatCache.cjs");
 const { ARTIFACT_PAYLOAD_READ_CONCURRENCY } = require("./constants.cjs");
@@ -42,19 +41,13 @@ function operatorChatListProjection(store) {
       if (text) return text;
     }
     if (entry.surfaceRole === "task") {
-      try {
-        const journal = await readChangeJournalDocument(projection.octopusHome, entry.runId);
-        if (stringValue(journal?.document.summary)) return journal.document.summary;
-      } catch {
-        return "Run journal is unreadable";
-      }
       for (const movement of entry.activity) {
         if (movement.kind !== "InterfaceArrival" || !store.artifactLabelMatches(ledgerArtifactLabel(movement), "cron.current_time", true)) continue;
         const interfaceId = movementBoundaryInterface(movement, "from");
         const descriptor = projection.descriptorIndexes?.interface?.get(interfaceId);
         const activation = arrayValue(arrayValue(descriptor?.activation_sidecars)[0]?.activations)
           .find((row) => activationDriverRef(row) === "cron_life");
-        if (activation) return scheduledInterfaceDisplayName(interfaceId, stringValue(activation.config?.run_template?.id));
+        if (activation) return scheduledInterfaceDisplayName(interfaceId);
       }
     }
     return entry.runId;

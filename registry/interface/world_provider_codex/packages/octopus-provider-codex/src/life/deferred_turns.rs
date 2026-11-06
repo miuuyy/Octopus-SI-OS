@@ -436,10 +436,11 @@ pub(crate) async fn wait_for_provider_handoff(
         if ctx.cancel.is_cancelled() { return Err("provider input preparation was cancelled".into()); }
         match session.from_invocation_when_ready(ctx, descriptor, run, input, source_movement_seq, pinned).await {
             Ok(handoff) => return Ok(handoff),
-            Err(error @ (CheckedRunError::AwaitingResults { .. } | CheckedRunError::ChangedDuringRead { .. })) => {
+            Err(error @ CheckedRunError::AwaitingResults { .. }) => {
                 tracing::warn!(interface = ctx.interface.as_str(), run = run.as_str(), seq = source_movement_seq,
                     error = %error, "provider source still awaits checked run evidence");
             }
+            Err(error @ CheckedRunError::ChangedDuringRead { .. }) => return Err(error.to_string()),
             Err(CheckedRunError::Invalid(error)) => return Err(error),
         }
     }

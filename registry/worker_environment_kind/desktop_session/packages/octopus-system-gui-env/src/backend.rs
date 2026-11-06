@@ -1475,7 +1475,7 @@ pub struct HostConfig {
     pub native_sandbox_mode: octopus_descriptors::ProcessSandboxMode,
     pub native_sandbox_profile: String,
     pub state_directory: String,
-    pub device_lock_path: PathBuf,
+    pub device_lock: crate::config::DeviceLock,
     pub connection_file: String,
 }
 
@@ -1502,6 +1502,7 @@ pub async fn run_desktop_host() -> Result<(), String> {
         crate::native_connection::validate_directory(path)?;
         Ok::<PathBuf, String>(path.clone())
     }).transpose()?;
+    let device_lock = host.device_lock.resolve(&roots)?;
     let native = resolve_member(kinds, &host.native_program)?;
     let instructions = host.application_behavior.instruction_resource.read(kinds)?;
     let private = PathBuf::from(
@@ -1528,7 +1529,7 @@ pub async fn run_desktop_host() -> Result<(), String> {
     .await
     .map_err(|e| format!("desktop host bind failed: {e}"))?;
     let address = listener.local_addr().map_err(|_| "desktop native bound address unavailable")?;
-    let device_file = Arc::new(open_device_file(&host.device_lock_path)?);
+    let device_file = Arc::new(open_device_file(&device_lock)?);
     let host = Arc::new(
         DesktopHost::with_device_file(
             Arc::new({
@@ -1721,7 +1722,7 @@ pub fn open_device_file(path: &Path) -> Result<std::fs::File, String> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
-        .map_err(|e| format!("desktop device lock unavailable: {e}"))?;
+        .map_err(|e| format!("desktop device lock '{}' unavailable: {e}", path.display()))?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file()
         || metadata.uid() != unsafe { libc::geteuid() }

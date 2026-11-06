@@ -566,6 +566,7 @@ fn invocation_granted_wek(input: &InterfaceInvocationEnvelope) -> Result<Vec<Str
 
 fn configured_write_roots(values: &[PathBuf]) -> Result<Vec<AbsPath>, String> {
     let mut roots = Vec::with_capacity(values.len());
+    let mut unresolved = Vec::new();
     for path in values {
         if !path.is_absolute() {
             return Err(format!(
@@ -573,12 +574,16 @@ fn configured_write_roots(values: &[PathBuf]) -> Result<Vec<AbsPath>, String> {
                 path.display()
             ));
         }
-        roots.push(canonicalize_declared_path(path).map_err(|error| {
-            format!(
-                "file.write configured root '{}' failed closed: {error}",
-                path.display()
-            )
-        })?);
+        match canonicalize_declared_path(path) {
+            Ok(root) => roots.push(root),
+            Err(error) => unresolved.push(format!("'{}': {error}", path.display())),
+        }
+    }
+    if roots.is_empty() && !unresolved.is_empty() {
+        return Err(format!(
+            "file.write refused closed: no declared write root resolves ({})",
+            unresolved.join("; ")
+        ));
     }
     if roots.is_empty() {
         return Err(

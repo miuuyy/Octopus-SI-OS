@@ -856,13 +856,6 @@
     ],
     "query_arguments": []
   },
-  "file.write.cron_authoring": {
-    "kind": "tool",
-    "conversation_visible": false,
-    "label": "Trigger authoring",
-    "target_arguments": [],
-    "query_arguments": []
-  },
   "gui.app_click": {
     "kind": "tool",
     "conversation_visible": true,

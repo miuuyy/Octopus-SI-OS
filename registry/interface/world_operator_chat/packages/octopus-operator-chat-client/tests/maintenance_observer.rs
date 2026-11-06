@@ -797,20 +797,11 @@ mod movement_gate {
             id: &str,
             run: &str,
         ) -> (octopus_run_authoring::ProviderOutputHandoff, u64) {
-            let receipt = self.handoff(file, id, run);
-            let (recovery, outcomes) = self.drive(receipt.recover_source_with_outcomes()).await;
-            let ProviderSourceRecovery::Bridged { invocation_movement_seq } = recovery else {
-                panic!("raw result did not create its checked invocation: {recovery:?}");
-            };
-            let [ProviderHandoffOutcome::Admitted { seq, artifact }] = outcomes.as_slice() else {
-                panic!("result bridge has no exact admitted invocation: {outcomes:?}");
-            };
-            assert_eq!(*seq, invocation_movement_seq);
-            let (next, admitted) = self.handoff_at(id, run, *seq);
-            assert_eq!(&admitted, artifact);
+            let (row, _) = self.input_in_run(file, id, Some(run));
+            let (next, _) = self.handoff_at(id, run, row.seq.0);
             assert_eq!(self.drive(next.recover_source_with_outcomes()).await,
                 (ProviderSourceRecovery::Process, Vec::new()));
-            (next, *seq)
+            (next, row.seq.0)
         }
         async fn stable_result_handoff(
             &mut self,

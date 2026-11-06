@@ -285,10 +285,12 @@ pub(crate) fn validate_native_service_tier_response(
 pub(crate) fn native_turn_context(
     conversation: Option<String>,
     grant: Option<String>,
+    checkpoint_bindings: Option<String>,
 ) -> BTreeMap<String, AdditionalContextEntry> {
     [
         ("octopus_bound_context", conversation, AdditionalContextKind::Untrusted),
         ("octopus_formed_policy", grant, AdditionalContextKind::Application),
+        ("octopus_checkpoint_bindings", checkpoint_bindings, AdditionalContextKind::Application),
     ]
     .into_iter()
     .filter_map(|(name, value, kind)| {

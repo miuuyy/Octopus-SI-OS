@@ -691,7 +691,8 @@ function createFixtureProjectionStore(options = {}) {
       outcome = { action, interfaceId: row.interface_id, deleted: true };
     } else if (action === "undo_changes") {
       const runId = requiredString(request.runId, "runId");
-      const delivery = rows.flatMap((row) => row.deliveries).find((candidate) => candidate.run_id === runId && candidate.journal);
+      const firing = requiredString(request.firing, "firing");
+      const delivery = rows.flatMap((row) => row.deliveries).find((candidate) => candidate.run_id === runId && candidate.journal?.firing === firing);
       if (!delivery || delivery.journal.digest !== request.expectedJournalDigest) throw new Error("This change journal changed since it was opened.");
       delivery.journal = {
         ...delivery.journal,
@@ -1360,15 +1361,7 @@ function labScheduledRow(row) {
     fire_on_start: activation.fire_on_start,
     instructions: row.instructions,
     reminder_env: "",
-    run_template: {
-      run_id: `lab_run_template_${row.interface_id}`,
-      ee_id: row.ee_id,
-      worker_interface_id: fixtureEnvironmentWorker(row.ee_id),
-      checkpoint_count: 3,
-      outbound_interface_ids: [],
-      artifact_binding_count: 0,
-    },
-    clone_eligible: true,
+    targets: [{ run_id: `lab_run_trigger_${row.interface_id}`, chat_interface_id: "", title: row.display_name ?? row.interface_id }],
     last_run_at_ms: deliveries[0]?.at_ms ?? null,
     last_movement_seq: deliveries[0]?.seq ?? null,
     next_run_at_ms: row.status === "enabled" ? row.next_run_at_ms : null,

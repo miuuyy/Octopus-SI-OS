@@ -216,13 +216,48 @@
         "package_id": "world_system_review",
         "template_interface_id": "world_system_review",
         "interface_id": "world_self_improvement",
-        "quiet_period_seconds": 3600
+        "quiet_period_seconds": 3600,
+        "task": {
+          "worker_interface_id": "system_worker_system_review",
+          "context_artifact_bindings": [
+            {
+              "id": "artifact-system-review-role"
+            },
+            {
+              "id": "artifact-system-library"
+            }
+          ],
+          "selected_worker_environment_kinds": [
+            "browser_session",
+            "code_mode",
+            "desktop_session",
+            "filesystem_workspace",
+            "system_room"
+          ],
+          "door_host_slots": {
+            "system_workspace_env": {
+              "workspace_root": "/",
+              "host_filesystem_root": "/"
+            }
+          }
+        }
       },
       {
         "package_id": "world_memory_cron",
         "template_interface_id": "world_memory_cron",
         "interface_id": "world_memory_consolidation",
-        "quiet_period_seconds": 10800
+        "quiet_period_seconds": 10800,
+        "task": {
+          "worker_interface_id": "system_worker_memory_consolidation",
+          "context_artifact_bindings": [
+            {
+              "id": "artifact-role-memory-consolidation"
+            }
+          ],
+          "selected_worker_environment_kinds": [
+            "system_room"
+          ]
+        }
       }
     ],
     "agent_presets": [

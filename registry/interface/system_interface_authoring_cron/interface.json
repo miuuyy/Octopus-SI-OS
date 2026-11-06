@@ -1,8 +1,0 @@
-{
-  "id": "system_interface_authoring_cron",
-  "interface_type": "system",
-  "role": "system",
-  "direction": "bidirectional",
-  "source_names": ["interface_authoring"],
-  "interface_driver_ref": "app_server"
-}

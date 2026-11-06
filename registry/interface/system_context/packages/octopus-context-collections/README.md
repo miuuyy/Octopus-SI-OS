@@ -80,9 +80,14 @@ that cursor, while every operation still checks the complete bounded source.
 
 `CollectionSelection` is `{source: ArtifactRef, entry_id, revision: ContentHash}`.
 Revision and cursor snapshot serialize as lowercase hexadecimal; `ArtifactRef`
-uses its existing native serialization. `EntryRead.entry` preserves exact
-validated JSON so its canonical hash matches the selection pin. List/metadata
-results omit content. Hidden or withdrawn selections are refused before
+uses its existing native serialization. That native `{id, content}` object is
+the one representation of a collection source: every `context.*` result shows
+it (discovered sources, page sources, pins) and every `context.*` tool accepts
+it as `source`, so a pin passes to `context.read` or run authoring verbatim.
+The room resolves the source by id among the invocation's admitted bindings
+and refuses a source whose content differs from the bound one.
+`EntryRead.entry` preserves exact validated JSON so its canonical hash matches
+the selection pin. List/metadata results omit content. Hidden or withdrawn selections are refused before
 reporting a revision mismatch. Failed entry integrity exposes a generic
 `SourceUnavailable`, without private filenames or metadata excerpts.
 

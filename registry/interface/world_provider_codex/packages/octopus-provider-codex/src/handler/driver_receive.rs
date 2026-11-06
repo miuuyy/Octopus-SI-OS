@@ -212,7 +212,7 @@ impl CodexAppServerInterfaceDriver {
         let admitted_record = octopus_run_record::RunRecord::from_bytes(admitted_run_record)
             .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
         let (context_payloads, payload_selection) = admitted_payload_context(&admitted_record, &input)?;
-        let continuity_sources = continuity_input_sources(&admitted_record, &input)?;
+        let continuity_sources = vec![input.artifact.clone()];
         let complete_context_payloads = context_payloads;
         let instructions = resolve_instruction_context(input.metadata()?, &complete_context_payloads)
             .map_err(InterfaceDriverError::FailedClosed)?;
@@ -500,6 +500,7 @@ impl CodexAppServerInterfaceDriver {
                     model: &model_context.model, instructions: &model_context.bound_instructions, tools: &native_catalog.specs,
                     static_fingerprint: &model_context.static_context_fingerprint,
                     conversation: model_context.conversation_block.as_deref(), obligations: model_context.obligations_grant_block.as_deref(),
+                    checkpoint_bindings: model_context.checkpoint_bindings_block.as_deref(),
                     session_available: assembled_context.session_context_available,
                     reasoning_effort: model_context.reasoning_effort.clone(), reasoning_summary: model_context.reasoning_summary.clone(),
                     recovered_dispatches: &recovered_turn_start_dispatches,
@@ -597,7 +598,7 @@ impl CodexAppServerInterfaceDriver {
         } = continuations;
 
         let context_refresh::ResolvedModelContext { model, reasoning_effort, reasoning_summary,
-            static_context_fingerprint, bound_instructions, conversation_block, obligations_grant_block } = match early_model_context {
+            static_context_fingerprint, bound_instructions, conversation_block, obligations_grant_block, checkpoint_bindings_block } = match early_model_context {
                 Some(context) => context,
                 None => self.resolve_model_context(&input, &assembled_context).await?,
             };
@@ -769,11 +770,11 @@ impl CodexAppServerInterfaceDriver {
         let additional_context = if let Some(context) = resumed_additional_context {
             context
         } else if let Some(cut) = cut_turn_continuation.as_ref() {
-            native_turn_context(Some(cut.context.clone()), obligations_grant_block)
+            native_turn_context(Some(cut.context.clone()), obligations_grant_block, checkpoint_bindings_block)
         } else if recovered_tool_continuation.is_some() || resume_control_id.is_some() {
             BTreeMap::new()
         } else {
-            native_turn_context(if cold_thread { conversation_block } else { recovered_result_context }, obligations_grant_block)
+            native_turn_context(if cold_thread { conversation_block } else { recovered_result_context }, obligations_grant_block, checkpoint_bindings_block)
         };
         let arrival_opens_turn = !lifecycle_start_decided
             && !lifecycle_resume_boundary

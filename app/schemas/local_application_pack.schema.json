@@ -218,12 +218,23 @@
           "uniqueItems": true,
           "items": {
             "type": "object",
-            "required": ["package_id", "template_interface_id", "interface_id", "quiet_period_seconds"],
+            "required": ["package_id", "template_interface_id", "interface_id", "quiet_period_seconds", "task"],
             "properties": {
               "package_id": { "$ref": "#/$defs/id" },
               "template_interface_id": { "$ref": "#/$defs/id" },
               "interface_id": { "$ref": "#/$defs/id" },
-              "quiet_period_seconds": { "type": "integer", "minimum": 60, "maximum": 31536000 }
+              "quiet_period_seconds": { "type": "integer", "minimum": 60, "maximum": 31536000 },
+              "task": {
+                "type": "object",
+                "required": ["worker_interface_id", "context_artifact_bindings", "selected_worker_environment_kinds"],
+                "properties": {
+                  "worker_interface_id": { "$ref": "#/$defs/id" },
+                  "context_artifact_bindings": { "$ref": "#/properties/workspace_setup/properties/home/properties/context_artifact_bindings" },
+                  "selected_worker_environment_kinds": { "$ref": "#/properties/workspace_setup/properties/home/properties/selected_worker_environment_kinds" },
+                  "door_host_slots": { "$ref": "#/properties/workspace_setup/properties/home/properties/door_host_slots" }
+                },
+                "additionalProperties": false
+              }
             },
             "additionalProperties": false
           }

@@ -116,6 +116,9 @@ fn validate_result_outputs(
     else {
         return Ok(Vec::new());
     };
+    if let Some(error) = result.error.as_ref().filter(|_| !result.ok) {
+        return Err(format!("generated artifact result failed: {}: {}", error.code, error.message));
+    }
     if !result.ok || result_movement.kind != MovementKind::InterfaceOutbound {
         return Err("generated artifact result is not an admitted success".into());
     }

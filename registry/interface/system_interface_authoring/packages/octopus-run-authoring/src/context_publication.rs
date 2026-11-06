@@ -14,6 +14,7 @@ pub(super) fn is_publication_completion(before: &PendingHandoff, after: &Pending
         && before.withdrawal == after.withdrawal
         && before.replacement == after.replacement
         && before.standing == after.standing
+        && before.rebase == after.rebase
 }
 
 impl ProviderOutputHandoff {
@@ -107,13 +108,15 @@ impl ProviderOutputHandoff {
         let after_hash = ContentHash::of_bytes(content.as_bytes()).to_hex();
         let patch = json_patch::diff(&before, &value);
         if apply_run_json_patch(current, &patch, &after_hash, Some(JsonFormat::Compact))? != content { return Err("provider publication patch changed its bytes".into()); }
-        Ok(AuthoredRun {
+        let mut authored = AuthoredRun {
             json_format: Some(JsonFormat::Compact),
             before_hash: ContentHash::of_bytes(current).to_hex(), after_hash, content, patch,
             correlation_id: format!("provider-run-authoring:{}:{generation}", record.id),
             authoring_result_checkpoint: match result_id { Some(id) => id, None if config.writer_run.is_some() => CheckpointId::new(format!("{prefix}_writer_result")), None => return Err("provider publication has no authoring result".into()) },
             authoring_result_interface: config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult)?.interface().clone(),
             pending_handoff: published,
-        })
+        };
+        self.seal_authored_run(current, &mut authored, None)?;
+        Ok(authored)
     }
 }

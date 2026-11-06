@@ -24,7 +24,7 @@ function projectionTruthChange(filename) {
     return segments.length === 3 && segments[2].endsWith(".json") ? "runs" : null;
   }
   if (segments[0] === "state" && segments[1] === "change-journals") {
-    return segments.length === 4 && segments[3] === "journal.json" ? "runs" : null;
+    return segments.length === 5 && segments[4] === "journal.json" ? "runs" : null;
   }
   if (segments[0] === "state" && segments[1] === "ee_instances") {
     return segments.length === 3 && segments[2].endsWith(".json") ? "policy" : null;

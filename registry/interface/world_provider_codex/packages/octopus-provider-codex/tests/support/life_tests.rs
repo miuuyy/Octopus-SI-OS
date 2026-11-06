@@ -1073,12 +1073,13 @@
             assert_eq!(recovered[0].artifact.read_payload_bytes().unwrap(), stream.artifact.read_payload_bytes().unwrap());
             assert_eq!(recovered[1].artifact.read_payload_bytes().unwrap(), first_closure_bytes);
             replay.seq += 1;
-            assert!(recover_sealed_interrupted_result(&ctx, &descriptor, &replay, &interrupted).is_err());
+            assert!(recover_sealed_interrupted_result(&ctx, &descriptor, &replay, &interrupted).unwrap().is_none(),
+                "a stream sealed for another source is not this source's terminal");
             let failed_context_session = ProviderHandoffSession::new(&ctx).unwrap();
             let replay_control = CodexTurnControlBroker::new(Some(result_seq));
-            assert!(recover_interrupted_result_without_context(
+            assert!(!recover_interrupted_result_without_context(
                 &ctx, &descriptor, &failed_context_session, &resolving_restart, &replay_control, &run, &replay,
-            ).await.is_err());
+            ).await.unwrap());
             assert!(!recover_interrupted_result_without_context(
                 &ctx, &descriptor, &failed_context_session, &resolving_restart, &replay_control, &run,
                 &QueuedTurn { envelope: message_envelope.clone(), seq: result_seq + 1 },

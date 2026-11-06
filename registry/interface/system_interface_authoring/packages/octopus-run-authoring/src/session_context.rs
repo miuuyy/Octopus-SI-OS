@@ -769,7 +769,7 @@ pub(crate) fn reconcile_session_context_order(
 
 pub(crate) fn merge_failed_source_context(
     existing: &[SessionContextArtifact], recovered: &[SessionContextArtifact], source: u64,
-    invocation_source: Option<u64>,
+    invocation_source: Option<u64>, rebase: &[ArtifactRef],
 ) -> Result<Vec<SessionContextArtifact>, String> {
     let input_successor = invocation_source.filter(|sequence| *sequence != source).and_then(|sequence| {
         existing.iter().position(|entry| entry.source_movement_seq == Some(sequence))
@@ -783,7 +783,9 @@ pub(crate) fn merge_failed_source_context(
         .ok_or("recovered failed context has no exact original source entry")?.source_artifact.clone();
     let publications = recovered.iter().map(|entry| {
         let sequence = entry.source_movement_seq.ok_or("recovered failed history has no exact movement")?;
-        if sequence > source { return Err("recovered failed history follows its source".to_string()); }
+        if sequence > source && !rebase.contains(&entry.source_artifact) {
+            return Err("recovered failed history follows its source".to_string());
+        }
         Ok((artifact_ref_key(&entry.source_artifact), BTreeSet::from([sequence])))
     }).collect::<Result<BTreeMap<_, _>, String>>()?;
     if publications.len() != recovered.len() { return Err("recovered failed history repeats an artifact".into()); }

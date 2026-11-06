@@ -222,10 +222,6 @@ pub(crate) async fn forward_provider_emissions(
                 .await?
                 {
                     InterruptedResultAdmission::Admitted(count) => forwarded.outputs += count,
-                    InterruptedResultAdmission::Bridged => {
-                        forwarded.bridged = true;
-                        return Ok(forwarded);
-                    }
                 }
                 interrupted_closure = Some(closure_ref);
                 terminal_group_handed = true;

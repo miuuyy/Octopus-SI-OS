@@ -5,7 +5,14 @@ impl ProviderOutputHandoff {
         &self,
         artifact: &ArtifactRef,
     ) -> Result<Option<u64>, String> {
-        let state = self.state.lock().await;
+        self.observe_live_record(|handoff, state| handoff.completed_input_artifact_source_in(state, artifact)).await
+    }
+
+    fn completed_input_artifact_source_in(
+        &self,
+        state: &HandoffState,
+        artifact: &ArtifactRef,
+    ) -> Result<Option<u64>, String> {
         let key = artifact_ref_key(artifact);
         let inputs = self.session.index()?.session_evidence(&self.config.run, &self.config.provider_interface,
             std::iter::once(key.clone()))?;

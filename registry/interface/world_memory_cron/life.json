@@ -1,65 +1,39 @@
 {
-  "processes": [
-    {
-      "bin": "python3",
-      "io_limits": {
-        "max_control_frame_bytes": 1048576,
-        "max_stderr_bytes": 262144,
-        "max_manifest_bytes": 1048576,
-        "max_payload_bytes": 268435456
-      },
-      "args": [
-        {
-          "repository_file": "registry/interface/world_cron/cron_life.py"
-        }
-      ],
-      "required_files": [
-        "registry/interface/world_cron/cron_life.py",
-        "registry/interface/world_cron/octopus_content_hash.py"
-      ],
-      "inherit_env": [
-        "OCTOPUS_CRON_REMINDER",
-        "PATH"
-      ],
-      "authority": {
-        "read_root_slots": [
-          "run_records_root",
-          "timezone_database_root",
-          "ee_instances_root",
-          "registry_interface_root",
-          "registry_artifact_root",
-          "registry_mark_root",
-          "registry_verifier_root",
-          "registry_ee_template_root",
-          "registry_tool_root",
-          "registry_worker_environment_kind_root"
-        ],
-        "write_root_slots": [
-          "interface_hand_in_root"
-        ],
-        "executable_root_slots": [
-          "interface_life_install_root"
-        ],
-        "read_paths": [],
-        "write_paths": [],
-        "executable_paths": [],
-        "executable_commands": [
-          "python3"
-        ],
-        "read_env_paths": [],
-        "write_env_paths": [],
-        "executable_env_paths": [],
-        "allow_network": false,
-        "allow_local_ipc": true
-      },
-      "coordinate_root_slots": [
+  "processes": [{
+    "bin": "python3",
+    "io_limits": {
+      "max_control_frame_bytes": 1048576,
+      "max_stderr_bytes": 262144,
+      "max_manifest_bytes": 1048576,
+      "max_payload_bytes": 268435456
+    },
+    "args": [
+      {"repository_file": "registry/interface/world_cron/cron_life.py"}
+    ],
+    "required_files": [
+      "registry/interface/world_cron/cron_life.py",
+      "registry/interface/world_cron/octopus_content_hash.py"
+    ],
+    "inherit_env": ["OCTOPUS_CRON_REMINDER", "PATH"],
+    "authority": {
+      "read_root_slots": [
         "run_records_root",
-        "app_server_control_root"
+        "timezone_database_root",
+        "ee_instances_root",
+        "registry_interface_root"
       ],
-      "read_handles": [
-        "ledger",
-        "ledger_index"
-      ]
-    }
-  ]
+      "write_root_slots": [],
+      "executable_root_slots": [],
+      "read_paths": [],
+      "write_paths": [],
+      "executable_paths": [],
+      "executable_commands": ["python3"],
+      "read_env_paths": [],
+      "write_env_paths": [],
+      "executable_env_paths": [],
+      "allow_network": false,
+      "allow_local_ipc": false
+    },
+    "read_handles": ["ledger", "ledger_index"]
+  }]
 }

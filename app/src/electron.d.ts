@@ -1535,6 +1535,7 @@ export type OctopusScheduledMutationRequest =
   | {
       action: "undo_changes";
       runId: string;
+      firing: string;
       expectedJournalDigest: string;
     };
 

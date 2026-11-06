@@ -49,8 +49,8 @@ Memory is written in two ways:
    when every save it names is scoped to the environment the evidence shows for
    the observed turn and landed in the collection. After a quiet period, the **Memory consolidation**
    trigger (recommended in the Codex pack, armed by setup with a three-hour
-   quiet period) starts an ordinary task in
-   Home's environment: it lists the notes with their usage, merges duplicates,
+   quiet period) wakes its consolidation task, which setup created and bound to
+   the trigger in Home's environment: it lists the notes with their usage, merges duplicates,
    settles contradictions using their sources and the user's latest applicable
    decisions, and folds stale, unused notes into what is still true. A newer
    note is not automatically stronger evidence. Both are ordinary runs started by

@@ -1054,13 +1054,14 @@ async function verifyTranscriptLayout() {
     assert.throws(() => events.traceReadArtifactReference(artifactMessage, artifactPresentation, { ...artifactResponse, run_id: "another-run" }), /coordinates/);
     assert.throws(() => events.traceReadArtifactReference(artifactMessage, artifactPresentation, { ...artifactResponse, base64: Buffer.from(JSON.stringify({ ...readResult, body: { ...readResult.body, id: "different-artifact" } })).toString("base64") }), /target/);
     const entry = { id: "guide", content: { text: "Retained instructions" } }, revision = "b".repeat(64);
-    const contextMessage = { ...artifactMessage, eventData: { ...artifactMessage.eventData, tool: `context.read__${workspaceToolSuffix}`, arguments: { source: "library", entry_id: entry.id, revision } } };
+    const contextSource = { id: "library", content: Array(32).fill(1) };
+    const contextMessage = { ...artifactMessage, eventData: { ...artifactMessage.eventData, tool: `context.read__${workspaceToolSuffix}`, arguments: { source: contextSource, entry_id: entry.id, revision } } };
     const contextPresentation = toolPresentation.dynamicToolPresentation(contextMessage, {});
-    const contextResult = { ...readResult, tool: contextMessage.eventData.tool, body: { entry, pin: { source: { id: "library", content: Array(32).fill(1) }, entry_id: entry.id, revision } } };
+    const contextResult = { ...readResult, tool: contextMessage.eventData.tool, body: { entry, pin: { source: contextSource, entry_id: entry.id, revision } } };
     const contextBytes = value => ({ ...artifactResponse, base64: Buffer.from(JSON.stringify(value)).toString("base64") });
     assert.deepEqual(JSON.parse(events.traceReadArtifactReference(contextMessage, contextPresentation, contextBytes(contextResult)).inlinePayload), entry);
     assert.throws(() => events.traceReadArtifactReference(contextMessage, contextPresentation, contextBytes({ ...contextResult, correlation_id: "another-call" })), /target/);
-    for (const changed of [{ revision: "c".repeat(64) }, { source: { id: "another-library" } }, { entry_id: "another-entry" }]) {
+    for (const changed of [{ revision: "c".repeat(64) }, { source: { id: "another-library", content: contextSource.content } }, { source: { ...contextSource, content: Array(32).fill(2) } }, { entry_id: "another-entry" }]) {
       assert.throws(() => events.traceReadArtifactReference(contextMessage, contextPresentation, contextBytes({ ...contextResult, body: { ...contextResult.body, pin: { ...contextResult.body.pin, ...changed } } })), /source and revision/);
     }
     const navigation = message("navigate", "dynamic_tool", "", {

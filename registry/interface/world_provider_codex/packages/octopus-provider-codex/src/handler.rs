@@ -34,7 +34,7 @@ use octopus_interfaces::{
 use octopus_ledger::{ArtifactRef, InvocationMetadata, RequiredVerifiedArtifact};
 use octopus_login::AuthManager;
 use octopus_model_context_render::{
-    model_hidden_tool_names, model_tool_exclusions, model_visible_affordances, render_model_context_block,
+    model_hidden_tool_names, model_tool_exclusions, model_visible_affordances, render_checkpoint_bindings_block, render_model_context_block,
     resolve_instruction_context,
 };
 use octopus_protocol::config_types::{ReasoningSummary, WebSearchMode};

@@ -52,6 +52,14 @@ async fn declared_host_signals_life_readiness_only_after_native_status_admission
         std::fs::create_dir(&private).unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
         let private = private.canonicalize().unwrap();
+        let preferences = root.path().join("preferences");
+        std::fs::create_dir(&preferences).unwrap();
+        std::fs::set_permissions(&preferences, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let preferences = preferences.canonicalize().unwrap();
+        let device_lock_root = root.path().join("device-lock");
+        std::fs::create_dir(&device_lock_root).unwrap();
+        std::fs::set_permissions(&device_lock_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let device_lock_root = device_lock_root.canonicalize().unwrap();
         let program = root.path().join("native-fixture");
         let status = if valid_status {
             json!({"permissions":{"screen_capture":false,"accessibility":false},"screens":[]})
@@ -81,14 +89,14 @@ async fn declared_host_signals_life_readiness_only_after_native_status_admission
                 "native_sandbox_profile":"fixture.sb",
                 "application_behavior":behavior,"application_policy":policy,
                 "connection_file":"desktop-host/connection.json",
-                "device_lock_path":root.path().join("lock")}
+                "device_lock":{"root_slot":"desktop_device_lock_root","file_name":"desktop-device.lock"}}
         })).unwrap()).unwrap();
         let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_octopus-desktop-host"))
             .env_clear()
             .env("OCTOPUS_INTERFACE_DIR", root.path())
             .env("OCTOPUS_VAR_DIR", &private)
             .env("OCTOPUS_INTERFACE_ID", "system_gui_fixture")
-            .env("OCTOPUS_ROOT_SLOTS_JSON", json!({"registry_worker_environment_kind_root":root.path()}).to_string())
+            .env("OCTOPUS_ROOT_SLOTS_JSON", json!({"registry_worker_environment_kind_root":root.path(),"desktop_app_preferences_root":preferences,"desktop_device_lock_root":device_lock_root}).to_string())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

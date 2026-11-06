@@ -30,6 +30,7 @@
             consumed_context_free_independent_input: None,
             consumed_verified_input: false,
             deferred_context_generations: 0,
+            result_rebase: None,
         };
         reattach_unpublished_context_inputs(&mut state, 10, vec![ArtifactId::new("operator.message:3")]).unwrap();
         assert_eq!(state.session_context.artifacts.iter().map(|entry| entry.source_movement_seq.unwrap()).collect::<Vec<_>>(), vec![3, 10, 12, 14]);
@@ -919,6 +920,7 @@
                 consumed_context_free_independent_input: None,
                 consumed_verified_input: false,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
         };
@@ -1206,6 +1208,7 @@
                 consumed_context_free_independent_input: None,
                 consumed_verified_input: false,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
         };
@@ -1413,41 +1416,41 @@
         full.push(result.clone());
         let mut bound = prior.clone();
         bound.extend([entry("continuity", 80), entry("later.input", 98)]);
-        let restored = merge_failed_source_context(&bound, &full, 68, Some(98)).unwrap();
+        let restored = merge_failed_source_context(&bound, &full, 68, Some(98), &[]).unwrap();
         assert_eq!(session_artifacts_fingerprint(&restored[..full.len()]).unwrap(), session_artifacts_fingerprint(&full).unwrap());
         assert_eq!(session_artifacts_fingerprint(&restored[full.len()..]).unwrap(), session_artifacts_fingerprint(&bound[prior.len()..]).unwrap());
         assert_eq!(restored.iter().filter(|item| item.source_artifact == result.source_artifact).count(), 1);
         let mut published = restored.clone();
         let result_position = published.iter().position(|item| item.source_artifact == result.source_artifact).unwrap();
         published.insert(result_position, entry("provider.tool.call", 67));
-        let retained_publication = merge_failed_source_context(&published, &full, 68, Some(98)).unwrap();
+        let retained_publication = merge_failed_source_context(&published, &full, 68, Some(98), &[]).unwrap();
         assert_eq!(session_artifacts_fingerprint(&retained_publication).unwrap(), session_artifacts_fingerprint(&published).unwrap());
-        assert_eq!(session_artifacts_fingerprint(&merge_failed_source_context(&restored, &full, 68, Some(98)).unwrap()).unwrap(), session_artifacts_fingerprint(&restored).unwrap());
+        assert_eq!(session_artifacts_fingerprint(&merge_failed_source_context(&restored, &full, 68, Some(98), &[]).unwrap()).unwrap(), session_artifacts_fingerprint(&restored).unwrap());
         let mut conflicting = bound.clone();
         conflicting[1].payload = serde_json::json!({"wrong":true});
-        assert!(merge_failed_source_context(&conflicting, &full, 68, Some(98)).is_err());
+        assert!(merge_failed_source_context(&conflicting, &full, 68, Some(98), &[]).is_err());
         let mut reversed = full.clone();
         reversed.swap(0, 1);
-        assert!(merge_failed_source_context(&bound, &reversed, 68, Some(98)).is_err());
+        assert!(merge_failed_source_context(&bound, &reversed, 68, Some(98), &[]).is_err());
         let mut unproven = full.clone();
         unproven[3].source_movement_seq = None;
-        assert!(merge_failed_source_context(&bound, &unproven, 68, Some(98)).is_err());
+        assert!(merge_failed_source_context(&bound, &unproven, 68, Some(98), &[]).is_err());
         let mut early_input = bound.clone();
         early_input.last_mut().unwrap().source_movement_seq = Some(60);
-        let late_result = merge_failed_source_context(&early_input, &full, 68, Some(60)).unwrap();
+        let late_result = merge_failed_source_context(&early_input, &full, 68, Some(60), &[]).unwrap();
         assert_eq!(session_artifacts_fingerprint(&late_result[..full.len()]).unwrap(), session_artifacts_fingerprint(&full).unwrap());
         assert_eq!(late_result.last().unwrap().source_movement_seq, Some(60));
         for (mut completed, input) in [(restored.clone(), 98), (late_result, 60)] {
             completed.push(entry("current.reply", 100));
-            let replayed = merge_failed_source_context(&completed, &full, 68, Some(input)).unwrap();
+            let replayed = merge_failed_source_context(&completed, &full, 68, Some(input), &[]).unwrap();
             assert_eq!(session_artifacts_fingerprint(&replayed).unwrap(), session_artifacts_fingerprint(&completed).unwrap());
         }
         let mut queued = bound.clone();
         queued.insert(queued.len() - 1, entry("previous.queued.input", 60));
-        let merged = merge_failed_source_context(&queued, &full, 68, Some(98)).unwrap();
+        let merged = merge_failed_source_context(&queued, &full, 68, Some(98), &[]).unwrap();
         assert_eq!(session_artifacts_fingerprint(&merged[full.len()..]).unwrap(), session_artifacts_fingerprint(&queued[prior.len()..]).unwrap());
         queued.insert(prior.len(), entry("previous.result", 66));
-        let merged = merge_failed_source_context(&queued, &full, 68, Some(98)).unwrap();
+        let merged = merge_failed_source_context(&queued, &full, 68, Some(98), &[]).unwrap();
         let position = |label| merged.iter().position(|item| item.label == label).unwrap();
         assert!(position("previous.result") < position("completed.result"));
         assert!(position("completed.result") < position("continuity"));
@@ -1775,6 +1778,7 @@
             dispatch_fenced: true,
             withdrawal: None, replacement: None,
             standing: Vec::new(),
+            rebase: Vec::new(),
             items: vec![PendingHandoffItem {
                 artifact_id: source.id.clone(),
                 artifact_content_hash: source.content.to_hex(),
@@ -4950,6 +4954,7 @@
                 consumed_context_free_independent_input: None,
                 consumed_verified_input: false,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
         };
@@ -5142,6 +5147,7 @@
                 consumed_context_free_independent_input: None,
                 consumed_verified_input: false,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
         };
@@ -5253,6 +5259,7 @@
             dispatch_fenced: true,
             withdrawal: None, replacement: None,
             standing: Vec::new(),
+            rebase: Vec::new(),
             items: vec![PendingHandoffItem {
                 artifact_id: identity.artifact.id.clone(),
                 artifact_content_hash: identity.artifact.content.to_hex(),
@@ -5427,6 +5434,7 @@
                 consumed_context_free_independent_input: None,
                 consumed_verified_input: false,
                 deferred_context_generations: 0,
+                result_rebase: None,
             })),
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
         };
@@ -5601,6 +5609,7 @@
             consumed_context_free_independent_input: None,
             consumed_verified_input: false,
             deferred_context_generations: 0,
+            result_rebase: None,
         }));
         assert_eq!(
             rearmed_handoff.recover_source().await.unwrap(),
@@ -5618,6 +5627,7 @@
             value["interface_state"]["world_provider_test"]["pending_handoff"]["terminal"] =
                 serde_json::Value::Bool(false);
             state.run_record_bytes = serde_json::to_vec(&value).unwrap();
+            std::fs::write(&handoff.run_path, &state.run_record_bytes).unwrap();
             state.session_context.artifacts = vec![SessionContextArtifact {
                 label: identity.label.clone(),
                 payload: serde_json::json!({"text": "already handed"}),

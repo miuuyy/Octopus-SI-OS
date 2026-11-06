@@ -3,6 +3,7 @@
   "interface": "system_mcp",
   "process": {
     "bin": "target/debug/octopus-mcp-stdio-room-tool",
+    "coordinate_root_slots": ["interface_life_install_root"],
     "inherit_env": ["PATH"],
     "inherit_env_from_interface": ["/interface_driver_config/private_config/process_env_keys"],
     "authority": {

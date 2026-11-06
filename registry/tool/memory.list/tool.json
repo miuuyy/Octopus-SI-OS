@@ -6,7 +6,6 @@
     "interrupted_effect_recovery": "reinvoke_exact_artifact",
     "authority": {
       "read_root_slots": ["ee_instances_root", "registry_artifact_root"],
-      "optional_read_root_slots": ["run_records_root"],
       "write_root_slots": [], "executable_root_slots": [],
       "read_paths": [], "write_paths": [], "executable_paths": [],
       "executable_commands": [], "read_env_paths": [], "write_env_paths": [],

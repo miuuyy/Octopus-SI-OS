@@ -1003,8 +1003,8 @@ fn persistent_frontiers_fixture() -> Pin<Box<dyn Future<Output = ()>>> {
     let waiting = persistent_input(
         &root,
         4,
-        "code_mode.wait",
-        json!({"cell_id":cell_id,"yield_time_ms":50}),
+        "code_mode.cancel",
+        json!({"cell_id":cell_id}),
         &prelude,
         &prelude_bytes,
     );
@@ -1012,7 +1012,7 @@ fn persistent_frontiers_fixture() -> Pin<Box<dyn Future<Output = ()>>> {
         .admit(&waiting, InterfaceId::new("world_provider_test"), decoder)
         .unwrap();
     let visible = owner_frontier(&room, input, &formation, &kind, |_| {
-        panic!("buffered Wait emitted an effect")
+        panic!("buffered Cancel emitted an effect")
     })
     .await
     .unwrap();
@@ -1022,7 +1022,7 @@ fn persistent_frontiers_fixture() -> Pin<Box<dyn Future<Output = ()>>> {
         .admit(&waiting, InterfaceId::new("world_provider_test"), decoder)
         .unwrap();
     let consumed = owner_frontier(&room, input, &formation, &kind, |_| {
-        panic!("consumed Wait emitted an effect")
+        panic!("consumed Cancel emitted an effect")
     })
     .await
     .unwrap();
@@ -1216,6 +1216,7 @@ struct FrontierAdmission {
     run_records: PathBuf,
     file_writes: std::sync::atomic::AtomicUsize,
     conflict_next: AtomicBool,
+    unproven_conflict_next: AtomicBool,
     reject_next_owner_arrival: AtomicBool,
     fail_after_nested_output: AtomicBool,
     interleave_next_write: AtomicBool,
@@ -1445,6 +1446,12 @@ impl FrontierAdmission {
                 artifact_binding_payloads: vec![],
             };
             if self.conflict_next.swap(false, Ordering::SeqCst) { self.provider_progress(777).await?; }
+            if self.unproven_conflict_next.swap(false, Ordering::SeqCst) {
+                let path = self.run_records.join(format!("{}.json", source_runtime.run));
+                let mut unproven: Value = serde_json::from_slice(&std::fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                unproven["interface_state"]["world_provider_test"]["unproven_fixture_edit"] = json!(true);
+                std::fs::write(&path, serde_json::to_vec(&unproven).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            }
             if interleaved {
                 self.owner_write_admitted.notify_one();
                 if provider_wins && !provider_writes_first {
@@ -1725,7 +1732,7 @@ async fn actual_owner_failure_return(
     assert_eq!(serde_json::from_slice::<octopus_tool_handlers::ToolResultArtifact>(&delivered[0].file.read_payload_bytes().unwrap()).unwrap(), result);
 }
 
-enum FrontierCase { Full, Generated, Application, Coauthor, DetachedResult, DetachedFailure, InterleavedResult, UnsubmittedResult, RefusedFailure, RefusedFailurePretty, NestedFailure, ReadinessFailure }
+enum FrontierCase { Full, Generated, Application, Coauthor, DetachedResult, DetachedFailure, InterleavedResult, UnsubmittedResult, RefusedFailure, RefusedFailurePretty, AdvancedFailure, NestedFailure, ReadinessFailure }
 
 fn exact_install_does_not_claim_later_state(
     ctx: &octopus_tool_door_runtime::InterfaceLiftContext,
@@ -2016,7 +2023,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
     let provider_directory = root.join("provider-interface");
     std::fs::create_dir_all(&provider_directory).unwrap();
     let mut provider_descriptor:octopus_interfaces::InterfaceDescriptor=serde_json::from_value(json!({"id":"world_provider_test","interface_type":"world","role":"provider","direction":"bidirectional","source_names":["fixture"],"interface_driver_ref":"fixture","interface_driver_config":{"private_config":{"model_hidden_tools":["file.write.provider"],"run_authoring_profile":{"file_write_tool":"file.write.provider","file_write_label":"tool.call","file_write_result_label":"file.write.provider.result","result_timeout_ms":30000},"context_output_labels":["provider.fixture.snapshot"],"session_snapshot_labels":["provider.fixture.snapshot"]}}})).unwrap();
-    if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::NestedFailure) {
+    if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure | FrontierCase::NestedFailure) {
         provider_descriptor.interface_driver_config.as_mut().unwrap().private_config["context_output_labels"] = json!(["provider.fixture.snapshot", "tool.call"]);
     }
     let control = root.join("control");std::fs::create_dir_all(&control).unwrap();
@@ -2100,7 +2107,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
             let bindings = checkpoint["artifact_bindings"].as_array_mut().unwrap();
             bindings.splice(0..0, roles.iter().map(|role| json!({"id":role.id})));
         }
-        if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty) {
+        if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure) {
             let writer = octopus_run_authoring::separate_writer_run(
                 &mut run, &InterfaceId::new("world_provider_test"), &RunId::new("run_detached_provider_writer"),
             ).unwrap();
@@ -2199,6 +2206,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
         run_records: records,
         file_writes: std::sync::atomic::AtomicUsize::new(0),
         conflict_next: AtomicBool::new(false),
+        unproven_conflict_next: AtomicBool::new(false),
         reject_next_owner_arrival: AtomicBool::new(false),
         fail_after_nested_output: AtomicBool::new(false),
         interleave_next_write: AtomicBool::new(false),
@@ -2302,7 +2310,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
         "code_mode.run",
         json!({"script":if matches!(case, FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult) { "const docs = await prelude.cua.documentation(); return docs;" } else { "let sum = prelude.seed; let both = await Promise.all([tools.process_list({}), prelude.browser.tabs.selected()]); if (both[1].id !== 't' || typeof both[1].info !== 'function') throw new Error('browser facade lost its admitted Tab closure'); sum.value += both[0].body.value + both[1].id.length; notify('two exact doors'); text(sum.value);" },"yield_time_ms":if matches!(case, FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult) { 1000 } else { 20 }}),
     );
-    if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty) {
+    if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure) {
         let handoff = admission.provider_handoff().unwrap().unwrap();
         handoff.hand(octopus_run_authoring::ProviderEmission {
             artifact: InterfaceArtifactFile::write(admission.provider.context.var_dir.join("model-call"), "tool.call", &source.artifact_file.read_payload_bytes().unwrap()).unwrap(),
@@ -2319,7 +2327,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
     let metadata = initial.2.metadata().unwrap();
     let snapshot = std::fs::read(root.join("blobs").join(metadata.runtime.as_ref().unwrap().run_record_hash.as_ref().unwrap())).unwrap();
     octopus_run_authoring::validate_admitted_run_writer(&snapshot, metadata, coauthor).unwrap();
-    if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty) {
+    if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure) {
         admission.provider_handoff().unwrap().unwrap().recover_source().await.unwrap();
         let target_path = admission.run_records.join("run_code_mode_test.json");
         let target = std::fs::read(&target_path).unwrap();
@@ -2416,8 +2424,10 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
             let _ = tokio::join!(provider_socket, provider_pump, pump);
             return;
         }
-        if matches!(case, FrontierCase::DetachedFailure | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty) {
-            if matches!(case, FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty) {
+        if matches!(case, FrontierCase::DetachedFailure | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure) {
+            if matches!(case, FrontierCase::AdvancedFailure) {
+                Box::pin(failure_return_tests::actual_advanced_failure_return(&admission, &handoff, &formation, &parsed_config, &initial, &durable)).await;
+            } else if matches!(case, FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty) {
                 Box::pin(failure_return_tests::actual_refused_failure_return(&admission, &room, &handoff, &formation, &kind, &parsed_config, &initial, &durable)).await;
             } else {
                 Box::pin(actual_owner_failure_return(&admission, &room, &handoff, &formation, &parsed_config, &initial, &durable)).await;

@@ -4,8 +4,10 @@ const fs = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const os = require('node:os');
 
 const SLOT = 'desktop_app_preferences_root';
+const DEVICE_LOCK_SLOT = 'desktop_device_lock_root';
 const MAX_HOST_BYTES = 1024 * 1024;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
@@ -115,6 +117,23 @@ async function planDesktopApplicationPreferences({ octopusHomeRoot, plannedWrite
       }
     }
     host.root_refs[SLOT] = preferences;
+    const userSupport = path.join(os.homedir(), 'Library', 'Application Support');
+    await directoryState(userSupport, false);
+    const deviceLockParent = path.join(userSupport, 'Octopus');
+    const deviceLock = path.join(deviceLockParent, 'desktop-device');
+    if (Object.hasOwn(host.root_refs, DEVICE_LOCK_SLOT) && host.root_refs[DEVICE_LOCK_SLOT] !== deviceLock) {
+      throw new Error('The desktop device lock already has a different explicit root; setup cannot relocate it');
+    }
+    for (const directory of [deviceLockParent, deviceLock]) {
+      try { await directoryState(directory, directory === deviceLock); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        await fs.mkdir(directory, { mode: 0o700 });
+        const stat = await directoryState(directory, true);
+        created.push({ path: directory, dev: stat.dev, ino: stat.ino });
+      }
+    }
+    host.root_refs[DEVICE_LOCK_SLOT] = deviceLock;
     const content = `${JSON.stringify(host, null, 2)}\n`;
     if (Buffer.byteLength(content) > MAX_HOST_BYTES) throw new Error('Desktop preference host manifest exceeds its byte limit');
     return {

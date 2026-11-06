@@ -32,7 +32,94 @@ pub struct CurrentRunRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection: Option<CurrentRunSelection>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<CurrentRunChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub authored: Option<AuthoredCurrentRun>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentRunSelectionEntries {
+    #[serde(default)]
+    pub selected_tools: Vec<SelectedToolSeed>,
+    #[serde(default)]
+    pub selected_worker_environment_kinds: Vec<String>,
+    #[serde(default)]
+    pub door_host_slots: BTreeMap<String, BTreeMap<String, PathBuf>>,
+    #[serde(default)]
+    pub external_inputs: Vec<ExternalInputSeed>,
+    #[serde(default)]
+    pub external_relays: Vec<ExternalRelaySeed>,
+    #[serde(default)]
+    pub model_outputs: Vec<ModelOutputSeed>,
+    #[serde(default)]
+    pub context_artifact_bindings: Vec<ArtifactBindingSeed>,
+    #[serde(default)]
+    pub payload_artifact_bindings: Vec<ArtifactRef>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentRunChange {
+    #[serde(default)]
+    pub add: CurrentRunSelectionEntries,
+    #[serde(default)]
+    pub remove: CurrentRunSelectionEntries,
+}
+
+fn change_list<T: PartialEq + std::fmt::Debug>(field: &str, current: &mut Vec<T>, add: Vec<T>, remove: Vec<T>) -> Result<bool, String> {
+    let changed = !add.is_empty() || !remove.is_empty();
+    for entry in remove {
+        let index = current.iter().position(|item| item == &entry)
+            .ok_or_else(|| format!("change removes {field} entry {entry:?} that the current selection does not hold"))?;
+        current.remove(index);
+    }
+    for entry in add {
+        if current.contains(&entry) {
+            return Err(format!("change adds {field} entry {entry:?} that the current selection already holds"));
+        }
+        current.push(entry);
+    }
+    Ok(changed)
+}
+
+pub fn apply_current_run_change(mut selection: CurrentRunSelection, change: CurrentRunChange) -> Result<CurrentRunSelection, String> {
+    let CurrentRunChange { add, remove } = change;
+    let mut changed = false;
+    changed |= change_list("selected_tools", &mut selection.selected_tools, add.selected_tools, remove.selected_tools)?;
+    changed |= change_list("selected_worker_environment_kinds", &mut selection.selected_worker_environment_kinds,
+        add.selected_worker_environment_kinds, remove.selected_worker_environment_kinds)?;
+    changed |= change_list("external_inputs", &mut selection.external_inputs, add.external_inputs, remove.external_inputs)?;
+    changed |= change_list("external_relays", &mut selection.external_relays, add.external_relays, remove.external_relays)?;
+    changed |= change_list("model_outputs", &mut selection.model_outputs, add.model_outputs, remove.model_outputs)?;
+    changed |= change_list("context_artifact_bindings", &mut selection.context_artifact_bindings,
+        add.context_artifact_bindings, remove.context_artifact_bindings)?;
+    changed |= change_list("payload_artifact_bindings", &mut selection.payload_artifact_bindings,
+        add.payload_artifact_bindings, remove.payload_artifact_bindings)?;
+    for (door, slots) in remove.door_host_slots {
+        changed = true;
+        let held = selection.door_host_slots.get_mut(&door)
+            .ok_or_else(|| format!("change removes host slots of door '{door}' that the current selection does not hold"))?;
+        for (slot, path) in slots {
+            if held.get(&slot) != Some(&path) {
+                return Err(format!("change removes host slot '{slot}' of door '{door}' that the current selection does not hold at that path"));
+            }
+            held.remove(&slot);
+        }
+        if held.is_empty() { selection.door_host_slots.remove(&door); }
+    }
+    for (door, slots) in add.door_host_slots {
+        changed = true;
+        let held = selection.door_host_slots.entry(door.clone()).or_default();
+        for (slot, path) in slots {
+            if held.contains_key(&slot) {
+                return Err(format!("change adds host slot '{slot}' of door '{door}' that the current selection already holds"));
+            }
+            held.insert(slot, path);
+        }
+    }
+    if !changed { return Err("change adds and removes nothing".into()); }
+    Ok(selection)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -482,11 +569,17 @@ fn plan_current_run_amendment_with_source(roots: &CompositionRoots, current: &Ru
     bridge: ProviderCapabilityBridge, retained_tools: &[(String, InterfaceId)], native_metadata: Option<&InvocationMetadata>) -> Result<CurrentRunPlan, String> {
     safe_segment(&request.amendment_key, "amendment_key")?;
     let exact_authored = request.authored.is_some();
-    let (authored, publication_evidence) = match (request.selection, request.authored) {
-        (Some(selection), None) => plan_selection(roots, current, provider, &request.amendment_key, selection, request.publications, native_metadata)?,
-        (None, Some(authored)) if request.publications.is_empty() => (authored, Vec::new()),
-        (None, Some(_)) => return Err("exact authored current-run records cannot also request publication selection".into()),
-        _ => return Err("current-run amendment requires exactly one complete selection or authored record".into()),
+    let (authored, publication_evidence) = match (request.selection, request.change, request.authored) {
+        (Some(selection), None, None) => plan_selection(roots, current, provider, &request.amendment_key, selection, request.publications, native_metadata)?,
+        (None, Some(change), None) => {
+            let selection = current_selection(roots, current, provider)?
+                .ok_or("this run has no client selection owner to change; supply its exact authored future record")?;
+            let selection = apply_current_run_change(selection, change)?;
+            plan_selection(roots, current, provider, &request.amendment_key, selection, request.publications, native_metadata)?
+        }
+        (None, None, Some(authored)) if request.publications.is_empty() => (authored, Vec::new()),
+        (None, None, Some(_)) => return Err("exact authored current-run records cannot also request publication selection".into()),
+        _ => return Err("current-run amendment requires exactly one of a complete selection, a change or an authored record".into()),
     };
     let descriptor = load_interface_descriptor(&roots.registry_root.join("interface"), provider.as_str())?;
     let authoring_profile = parse(descriptor.interface_driver_config.as_ref()

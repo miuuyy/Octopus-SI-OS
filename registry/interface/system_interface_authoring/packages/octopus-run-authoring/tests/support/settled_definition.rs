@@ -136,6 +136,7 @@ async fn selected_home_accepts_new_definition_without_replaying_completed_work()
             consumed_context_free_independent_input: None,
             consumed_verified_input: false,
             deferred_context_generations: 0,
+            result_rebase: None,
         })),
     };
     assert!(handoff.settled_input_definition(&record, &current).unwrap());

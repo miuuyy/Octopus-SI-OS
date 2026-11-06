@@ -83,7 +83,6 @@ test('Triggers includes bound event sensors without treating them as cron activa
   assert.equal(rows[1].last_movement_seq, 7);
   assert.deepEqual(rows[1].event_source.sources, ['mail']);
   assert.equal(rows[0].valid, true);
-  assert.equal(rows[0].clone_eligible, false);
   assert.equal(rows[0].schedule, undefined);
   assert.equal(rows[0].last_movement_seq, 5);
   assert.deepEqual(rows[0].event_source, { sources: ['issue.opened'], targets: [
@@ -101,21 +100,17 @@ test('trigger history groups delivery edges and uses the same task title as All 
   t.after(() => store.close());
   const edge = (seq, run, kind, artifact = 'firing') => ({ ...movement(seq, 'cron.current_time', {}, { from: 'trigger', kind }),
     artifact: { id: `cron.current_time:${artifact}` }, invocation_metadata: { runtime: { run } } });
-  const edges = [edge(1, 'controller', 'InterfaceArrival'), edge(2, 'task', 'InterfaceArrival'), edge(3, 'task', 'InterfaceOutbound')];
+  const edges = [edge(1, 'observer', 'InterfaceArrival'), edge(2, 'task', 'InterfaceArrival'), edge(3, 'task', 'InterfaceOutbound')];
   entry.activity = [edges[1]];
-  projection.descriptorIndexes.interface.set('trigger', { activation_sidecars: [{ activations: [{ activation_driver_ref: 'cron_life', config: { run_template: { id: 'run_review' } } }] }] });
+  projection.descriptorIndexes.interface.set('trigger', { activation_sidecars: [{ activations: [{ activation_driver_ref: 'cron_life', config: { schedule: {} } }] }] });
   const title = () => store.operatorChatTitle(projection, entry, new Map(), protocol);
   const read = (rows = edges) => store.scheduledInterfaceEvidence(projection, 'trigger', { schedule: {} }, rows);
-  assert.equal(await title(), 'Review');
-  assert.deepEqual((await read()).deliveries.map(row => [row.run_id, row.chat_interface_id, row.title]), [['task', 'chat', 'Review']]);
-  const directory = path.join(root, 'state/change-journals/task'); fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, 'journal.json'), JSON.stringify({ schema_version: 1, run: 'task', outcome: 'unchanged', summary: 'Reviewed the activity window', changes: [] }));
-  assert.equal((await read()).deliveries[0].title, await title());
-  assert.equal(await title(), 'Reviewed the activity window');
+  assert.equal(await title(), 'Trigger');
+  assert.deepEqual((await read()).deliveries.map(row => [row.run_id, row.chat_interface_id, row.title]), [['task', 'chat', 'Trigger']]);
   assert.equal((await read([...edges, edge(4, 'other', 'InterfaceArrival'), edge(5, 'other', 'InterfaceOutbound')])).deliveries.length, 2);
   assert.equal((await read([...edges, edge(6, 'task', 'InterfaceArrival', 'second')])).deliveries.length, 2);
   assert.equal((await read([edges[0]])).deliveries[0].chat_interface_id, '');
-  assert.equal(require('../electron/projection/registryRows.cjs').projectionTruthChange('state/change-journals/task/journal.json'), 'runs');
+  assert.equal(require('../electron/projection/registryRows.cjs').projectionTruthChange('state/change-journals/task/1790000000000/journal.json'), 'runs');
 });
 const cronOwner = path.resolve(__dirname, "../../registry/interface/world_cron");
 const cronDueMs = 1_800_000_000_000;
@@ -137,56 +132,40 @@ module.commit_interval_state(schedule, "waiting", due * 1_000_000)
 print(schedule["fingerprint"])
 `;
 
-for (const mode of ["existing_run", "new_run"]) {
-  test(`Triggers projects owner-written interval state for ${mode}`, async (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "oct-cron-projection-"));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const directory = path.join(root, "registry/interface/world_cron");
-    fs.mkdirSync(directory, { recursive: true });
-    const descriptor = JSON.parse(fs.readFileSync(path.join(cronOwner, "interface.json")));
-    const activation = JSON.parse(fs.readFileSync(path.join(cronOwner, "activation.json")));
-    activation.activations[0].enabled = true;
-    const config = activation.activations[0].config;
-    config.schedule = { interval_seconds: 7200, fire_on_start: false, timezone: "UTC",
-      reminder_env: "", reminder_default: "Review café / проверка 🐙\u007f" };
-    if (mode === "new_run") config.target = { mode, ee_id: "ee_existence", worker_interface_id: "worker",
-      provider_interface_id: "provider", reasoning_effort: "high", client_surface_role: "task",
-      id_prefix: "review", door_host_slots: {} };
-    const activationPath = path.join(directory, "activation.json");
-    fs.writeFileSync(activationPath, JSON.stringify(activation));
-    fs.writeFileSync(path.join(directory, "interface.json"), JSON.stringify(descriptor));
-    const result = spawnSync("python3", ["-B", "-c", prepareCronState, root, cronOwner, String(cronDueMs)], { encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
-    const store = scheduledInterfacesProjection({
-      indexedArtifactLabelRows: async () => [], operatorOsScope: () => ({ client_runs: [] }),
-    });
-    const projection = { octopusHome: root, structureMemo: new Map(), descriptors: { interface: [
-      { ...descriptor, activation_sidecars: [{ ...activation, descriptor_path: activationPath }] },
-    ] }, runRecords: [config.run_template] };
-    const read = async () => { projection.structureMemo.clear(); return (await store.scheduledInterfaceRows(projection))[0]; };
-    const current = await read();
-    assert.equal(current.valid, true, current.error);
-    assert.equal(current.next_run_at_ms, cronDueMs);
-    assert.equal(current.next_run_source, "driver_state");
-    config.schedule.cron = null;
-    const explicitNull = await read();
-    assert.equal(explicitNull.next_run_at_ms, cronDueMs, "omitted cron and null are the same owner configuration");
-    if (mode === "new_run") {
-      config.target.interface_private_state_root = fs.realpathSync(path.join(root, "interfaces"));
-      assert.equal((await read()).next_run_at_ms, cronDueMs, "omitted private root resolves to this Home");
-      const planner = descriptor.interface_driver_config.private_config.task_planner_executable;
-      descriptor.interface_driver_config.private_config.task_planner_executable = "bin/changed-planner";
-      assert.equal((await read()).next_run_at_ms, null, "different planner must not validate old state");
-      descriptor.interface_driver_config.private_config.task_planner_executable = planner;
-    } else {
-      delete descriptor.interface_driver_config;
-      delete projection.descriptors.interface[0].interface_driver_config;
-      assert.equal((await read()).next_run_at_ms, cronDueMs, "existing-run triggers do not use a planner");
-    }
-    config.schedule.reminder_default = "Changed assignment";
-    assert.equal((await read()).next_run_at_ms, null, "different assignment must not validate old state");
+test("Triggers projects owner-written interval state", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oct-cron-projection-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, "registry/interface/world_cron");
+  fs.mkdirSync(directory, { recursive: true });
+  const descriptor = JSON.parse(fs.readFileSync(path.join(cronOwner, "interface.json")));
+  const activation = JSON.parse(fs.readFileSync(path.join(cronOwner, "activation.json")));
+  activation.activations[0].enabled = true;
+  const config = activation.activations[0].config;
+  config.schedule = { interval_seconds: 7200, fire_on_start: false, timezone: "UTC",
+    reminder_env: "", reminder_default: "Review café / проверка 🐙\u007f" };
+  const activationPath = path.join(directory, "activation.json");
+  fs.writeFileSync(activationPath, JSON.stringify(activation));
+  fs.writeFileSync(path.join(directory, "interface.json"), JSON.stringify(descriptor));
+  const result = spawnSync("python3", ["-B", "-c", prepareCronState, root, cronOwner, String(cronDueMs)], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const store = scheduledInterfacesProjection({
+    indexedArtifactLabelRows: async () => [], operatorOsScope: () => ({ client_runs: [] }), operatorChatRunIndex: async () => [],
   });
-}
+  const projection = { octopusHome: root, structureMemo: new Map(), descriptors: { interface: [
+    { ...descriptor, activation_sidecars: [{ ...activation, descriptor_path: activationPath }] },
+  ] }, runRecords: [{ run_id: "run_task", checkpoints: [{ status: "projected", interface: "world_cron" }] }] };
+  const read = async () => { projection.structureMemo.clear(); return (await store.scheduledInterfaceRows(projection))[0]; };
+  const current = await read();
+  assert.equal(current.valid, true, current.error);
+  assert.deepEqual(current.targets.map((target) => target.run_id), ["run_task"]);
+  assert.equal(current.next_run_at_ms, cronDueMs);
+  assert.equal(current.next_run_source, "driver_state");
+  config.schedule.cron = null;
+  const explicitNull = await read();
+  assert.equal(explicitNull.next_run_at_ms, cronDueMs, "omitted cron and null are the same owner configuration");
+  config.schedule.reminder_default = "Changed assignment";
+  assert.equal((await read()).next_run_at_ms, null, "different assignment must not validate old state");
+});
 
 function movement(seq, label, payload, { from = 'provider', to = 'chat', kind = 'InterfaceOutbound' } = {}) {
   const hex = seq.toString(16).padStart(64, '0');

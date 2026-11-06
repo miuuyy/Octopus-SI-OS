@@ -1,6 +1,7 @@
 use super::*;
 
 const DIRECTORY: &str = "completed-outputs";
+const RETAINED_REHAND_INTERVAL_MS: u64 = 100;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +109,12 @@ enum OutputAdmission {
     AwaitingVerdict { ledger_offset: u64 },
     Retained { scope_seq: Option<u64> },
     Settled { verdict: DeliveryVerdict },
+}
+
+enum RecordedDelivery {
+    Settled(DeliveryVerdict),
+    Pending,
+    AwaitingCurrentSource,
 }
 
 enum RecoveryProgress {
@@ -456,13 +463,7 @@ impl CompletedOutputs {
                 }
                 receipt.save(&owner_ctx)?;
                 drop(receipt);
-                let delivery = tokio::select! {
-                    biased;
-                    _ = owner_ctx.cancel.cancelled() => return Err("completed output remains retained while admission is cancelled".into()),
-                    delivery = ctx.hand_arrival_retained(artifact, Vec::new(), &delivery_id) => delivery?,
-                };
-                let mut receipt = retained.lock().await;
-                receipt.record_delivery(&owner_ctx, index, delivery)
+                Self::hand_retained(&retained, &ctx, &owner_ctx, index, artifact, &delivery_id).await
             })
         })
     }
@@ -470,44 +471,71 @@ impl CompletedOutputs {
     async fn resume_retained(&mut self, ctx: &InterfaceLiftContext, index: usize) -> Result<DeliveryVerdict, String> {
         let output = &self.outputs[index];
         let identity = output.dispatch.as_ref().ok_or("retained delivery has no exact dispatch identity")?;
-        let delivery_id = output.delivery_id.as_ref().ok_or("retained delivery has no retry identity")?;
-        if *delivery_id != identity.delivery_id(&self.input)? {
+        let delivery_id = output.delivery_id.clone().ok_or("retained delivery has no retry identity")?;
+        if delivery_id != identity.delivery_id(&self.input)? {
             return Err("completed-output retained delivery identity changed".into());
         }
         let artifact = identity.artifact(ctx)?;
-        let delivery = tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => return Err("completed output remains retained while admission is cancelled".into()),
-            delivery = ctx.hand_arrival_retained(artifact, Vec::new(), delivery_id) => delivery?,
-        };
-        self.record_delivery(ctx, index, delivery)
+        let retained = tokio::sync::Mutex::new(self.clone());
+        let result = Self::hand_retained(&retained, ctx, ctx, index, artifact, &delivery_id).await;
+        *self = retained.into_inner();
+        result
     }
 
-    fn record_delivery(&mut self, ctx: &InterfaceLiftContext, index: usize, delivery: octopus_ledger::ArtifactDelivery) -> Result<DeliveryVerdict, String> {
-        if matches!(&delivery, octopus_ledger::ArtifactDelivery::Complete { verdict } if verdict.awaits_current_source()) {
-            return Err("completed output remains retained while its current source is unresolved".into());
+    async fn hand_retained(
+        retained: &tokio::sync::Mutex<Self>,
+        ctx: &InterfaceLiftContext,
+        owner_ctx: &InterfaceLiftContext,
+        index: usize,
+        artifact: InterfaceArtifactFile,
+        delivery_id: &str,
+    ) -> Result<DeliveryVerdict, String> {
+        let mut watch = door_life::ledger_change_watch(&owner_ctx.movements_path)?;
+        loop {
+            let delivery = tokio::select! {
+                biased;
+                _ = owner_ctx.cancel.cancelled() => return Err("completed output remains retained while admission is cancelled".into()),
+                delivery = ctx.hand_arrival_retained(artifact.clone(), Vec::new(), delivery_id) => delivery?,
+            };
+            if let RecordedDelivery::Settled(verdict) = retained.lock().await.record_delivery(owner_ctx, index, delivery)? {
+                return Ok(verdict);
+            }
+            tokio::select! {
+                biased;
+                _ = owner_ctx.cancel.cancelled() => return Err("completed output remains retained while admission is cancelled".into()),
+                changed = watch.wait(&owner_ctx.cancel, &owner_ctx.movements_path) => changed?,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(RETAINED_REHAND_INTERVAL_MS)) => {}
+            }
         }
+    }
+
+    fn record_delivery(&mut self, ctx: &InterfaceLiftContext, index: usize, delivery: octopus_ledger::ArtifactDelivery) -> Result<RecordedDelivery, String> {
         let output = &mut self.outputs[index];
-        match (&output.admission, &delivery) {
+        let recorded = match (&output.admission, delivery) {
+            (OutputAdmission::Retained { .. }, octopus_ledger::ArtifactDelivery::Complete { verdict }) if verdict.awaits_current_source() => {
+                return Ok(RecordedDelivery::AwaitingCurrentSource);
+            }
             (OutputAdmission::Retained { scope_seq: prior }, octopus_ledger::ArtifactDelivery::Pending { scope_seq }) => {
-                if prior.is_some_and(|prior| prior != *scope_seq) {
+                if prior.is_some_and(|prior| prior != scope_seq) {
                     return Err("completed-output retained delivery changed its original candidate scope".into());
                 }
-                output.admission = OutputAdmission::Retained { scope_seq: Some(*scope_seq) };
+                if *prior == Some(scope_seq) {
+                    return Ok(RecordedDelivery::Pending);
+                }
+                output.admission = OutputAdmission::Retained { scope_seq: Some(scope_seq) };
+                RecordedDelivery::Pending
             }
             (OutputAdmission::Retained { .. }, octopus_ledger::ArtifactDelivery::Complete { verdict }) => {
                 output.admission = OutputAdmission::Settled { verdict: verdict.clone() };
+                RecordedDelivery::Settled(verdict)
             }
-            (OutputAdmission::Settled { verdict: saved }, octopus_ledger::ArtifactDelivery::Complete { verdict }) if saved == verdict => {},
+            (OutputAdmission::Settled { verdict: saved }, octopus_ledger::ArtifactDelivery::Complete { verdict }) if *saved == verdict => {
+                RecordedDelivery::Settled(verdict)
+            }
             _ => return Err("completed-output retained delivery returned conflicting completion evidence".into()),
-        }
+        };
         self.save(ctx)?;
-        match delivery {
-            octopus_ledger::ArtifactDelivery::Complete { verdict } => Ok(verdict),
-            octopus_ledger::ArtifactDelivery::Pending { scope_seq } => Err(format!(
-                "completed output remains retained while original delivery scope {scope_seq} has unresolved edges"
-            )),
-        }
+        Ok(recorded)
     }
 
     fn recover_admissions(&mut self, ctx: &InterfaceLiftContext, source: &ToolDoorOutputSource) -> Result<RecoveryProgress, String> {

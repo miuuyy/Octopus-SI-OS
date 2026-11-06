@@ -16,9 +16,9 @@ const projections = {
   ] },
   "projection.scheduled_interfaces.list": { scheduled_interfaces: [
     { display_name: "Hourly weather", valid: true, status: "enabled", schedule: { type: "interval", interval_seconds: 3600 },
-      next_run_at_ms: now + 840_000, last_run_at_ms: now - 2_760_000, target: { mode: "existing_run" }, run_template: { run_id: "run_weather" } },
+      next_run_at_ms: now + 840_000, last_run_at_ms: now - 2_760_000, targets: [{ run_id: "run_weather" }] },
     { display_name: "Broken", valid: false, error: "activation is malformed" },
-    { display_name: "System review", template: true, valid: true, schedule: { type: "inactivity", seconds: 3600 }, target: { mode: "new_run" } },
+    { display_name: "System review", template: true, valid: true, schedule: { type: "inactivity", seconds: 3600 } },
   ] },
   "projection.operator.os.scope": { status: "ready", root_ee_id: "ee_existence",
     projects: [{ ee_id: "ee_life", goal: "Everyday life" }],

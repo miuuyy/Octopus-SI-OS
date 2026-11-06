@@ -1993,7 +1993,10 @@ async function verifyCapabilityPreferenceSetup() {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-capability-preferences-")));
   const browser = require("../../registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/setup-host.cjs");
   const desktop = require("../../registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/setup-preferences.cjs");
+  const userHome = process.env.HOME;
   try {
+    process.env.HOME = root;
+    await fs.mkdir(path.join(root, "Library", "Application Support"), { recursive: true });
     for (const fail of [false, true]) {
       const home = path.join(root, fail ? "rollback" : "complete"), registry = path.join(home, "registry");
       await createFixture(home, registry);
@@ -2024,6 +2027,7 @@ async function verifyCapabilityPreferenceSetup() {
           const plan=await desktop.planDesktopApplicationPreferences({...input,plannedWrites:[nullPreferences,...input.plannedWrites]});
           const host=JSON.parse(plan.writes[0].content);assert.equal(host.root_refs.browser_native_host_root,path.join(home,'client/browser-native-host'));
           assert.equal(host.root_refs.desktop_app_preferences_root,path.join(home,'client/desktop-app-preferences'));assert.equal(host.root_refs.retained_root,root);
+          assert.equal(host.root_refs.desktop_device_lock_root,path.join(root,'Library/Application Support/Octopus/desktop-device'));
           return {...plan,writes:plan.writes.map(row=>({...row,expectedBeforeDigest:fail?'0'.repeat(64):row.expectedBeforeDigest})),rollback:async()=>{rollback.push('desktop');await plan.rollback();}};
         },
       };
@@ -2041,7 +2045,7 @@ async function verifyCapabilityPreferenceSetup() {
       }
     }
     console.log('Capability preference setup: actual two helpers merge one host write, preserve original roots, and roll back both lifetimes before publication');
-  } finally {await fs.rm(root,{recursive:true,force:true});}
+  } finally {process.env.HOME = userHome; await fs.rm(root,{recursive:true,force:true});}
 }
 
 async function verifyRetiredConsentSetup() {

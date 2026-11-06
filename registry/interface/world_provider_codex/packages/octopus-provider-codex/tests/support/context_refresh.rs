@@ -310,6 +310,7 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
             static_fingerprint: &static_hash,
             conversation: Some("original operator task"),
             obligations: Some("freshly admitted grant"),
+            checkpoint_bindings: None,
             session_available: true,
             reasoning_effort: None,
             reasoning_summary: ReasoningSummary::None,

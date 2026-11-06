@@ -45,19 +45,19 @@ async fn failed_source_projection_reaches_only_a_proven_standing_route() {
     };
     let session = ProviderHandoffSession::new(&ctx).unwrap();
     let run = RunId::new("run_fixture");
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        record_invalid_provider_context(
-            &ctx,
-            &descriptor,
-            &session,
-            &run,
-            &turn,
-            "invalid fixture".into(),
-        ),
-    ).await.expect("an unavailable authored route must not attempt an unproven arrival");
-    assert_eq!(result.unwrap_err(), "codex turn stopped because its admitted provider context is invalid (movement seq 7): invalid fixture");
-    assert!(matches!(receiver.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Empty)));
+    let failure = record_invalid_provider_context(&ctx, &descriptor, &session, &run, &turn, "invalid fixture".into());
+    let answer = async {
+        let arrival = receiver.recv().await.expect("an unroutable failed source is recorded as the interface's own failure");
+        assert_eq!(arrival.artifact.read_manifest().unwrap().label, "world_provider_fixture.failure");
+        let payload: serde_json::Value = serde_json::from_slice(&arrival.artifact.read_payload_bytes().unwrap()).unwrap();
+        assert_eq!(payload["source_movement_seq"], 7);
+        assert_eq!(payload["failure_class"], "provider_source_unroutable");
+        assert_eq!(payload["details"]["error"], "codex turn stopped because its admitted provider context is invalid (movement seq 7): invalid fixture");
+        arrival.verdict_tx.unwrap().send(octopus_interfaces::DeliveryVerdict::Admitted { seq: 8 }).unwrap();
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async { tokio::join!(failure, answer) })
+        .await.expect("the failure arrival is answered");
+    result.unwrap();
     assert!(std::fs::read(&ctx.movements_path).unwrap().is_empty());
     assert!(!ctx.interface_var_dir().join("emitted").exists());
     assert!(!ctx.interface_var_dir().join("ledger-cursor.json").exists());

@@ -1016,34 +1016,41 @@ impl OrderedArguments {
                 })
         });
         let writer_unadvanced = snapshot == decoded[0].0.as_bytes();
-        if (snapshot != decoded[0].1.as_bytes() && !(indeterminate && writer_unadvanced))
-            || runtime.run != record.id
-            || runtime.ee != record.ee
-            || runtime.worker != record.worker
-            || runtime.interface != writer.owner
-            || runtime.epoch != cp.epoch.0
-            || !record.active_checkpoints.contains(&cp.id)
-            || inbound.interface != writer.door
-            || !cp.outbound_interfaces().eq([&writer.owner])
-            || metadata.checkpoint_binding_policy.as_ref()
+        let mismatches = [
+            (snapshot != decoded[0].1.as_bytes() && !(indeterminate && writer_unadvanced), "run record bytes"),
+            (runtime.run != record.id, "run"),
+            (runtime.ee != record.ee, "execution environment"),
+            (runtime.worker != record.worker, "worker"),
+            (runtime.interface != writer.owner, "owner interface"),
+            (runtime.epoch != cp.epoch.0, "checkpoint epoch"),
+            (!record.active_checkpoints.contains(&cp.id), "active checkpoint"),
+            (inbound.interface != writer.door, "inbound door"),
+            (!cp.outbound_interfaces().eq([&writer.owner]), "checkpoint outbound"),
+            (metadata.checkpoint_binding_policy.as_ref()
                 != Some(&CheckpointBindingPolicySnapshot {
                     inbound,
                     outbound: cp.outbound_interface_bindings.clone(),
-                })
-            || metadata.outbound_interface_bindings != [writer.owner.clone()]
-            || metadata.verification_failure.is_some()
-            || !metadata.required_verified_artifacts.is_empty()
-            || !cp.required_verified_artifacts.is_empty()
-            || !artifact_refs_match_bindings(&metadata.artifact_binding_refs, &cp.artifact_bindings)
-            || !metadata.checkpoint_admission.as_ref().is_some_and(|a| {
+                }), "binding policy"),
+            (metadata.outbound_interface_bindings != [writer.owner.clone()], "invocation outbound"),
+            (metadata.verification_failure.is_some(), "verification failure"),
+            (!metadata.required_verified_artifacts.is_empty() || !cp.required_verified_artifacts.is_empty(), "required verified artifacts"),
+            (!artifact_refs_match_bindings(&metadata.artifact_binding_refs, &cp.artifact_bindings), "artifact bindings"),
+            (!metadata.checkpoint_admission.as_ref().is_some_and(|a| {
                 a.complete
                     && a.artifact_label == writer.result_label
                     && a.required_artifact_labels.is_empty()
-            })
-        {
-            return Err(
-                "ordered result differs from its newly admitted exact writer checkpoint".into(),
-            );
+            }), "checkpoint admission"),
+        ];
+        let differing = mismatches.iter().filter(|(differs, _)| *differs).map(|(_, field)| *field).collect::<Vec<_>>();
+        if !differing.is_empty() {
+            let reported = match result.error.as_ref().filter(|_| !result.ok && !indeterminate) {
+                Some(error) => format!("; {} reported {}: {}", writer.tool, error.code, error.message),
+                None => String::new(),
+            };
+            return Err(format!(
+                "ordered result differs from its newly admitted exact writer checkpoint in: {}{reported}",
+                differing.join(", ")
+            ));
         }
         if result.tool != writer.tool || result.label != writer.result_label {
             return Err("ordered result changed tool or label".into());
@@ -1606,8 +1613,7 @@ impl ProviderOutputHandoff {
             let candidate_config = result_inputs::saved_attempt_config(&record, &original_config)?;
             validate_bound_run_authoring_topology(&record, &candidate_config, None)?;
             result_inputs::validate_saved(&self.ctx, &original, &record, &original_config)?;
-            let source_movement_seq = result_inputs::definition_source(&original, &record, &original_config)?
-                .unwrap_or(pending.source_movement_seq);
+            let source_movement_seq = pending.source_movement_seq;
             let result_template = original_config
                 .checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult)?;
             let result = writer_record

@@ -2384,8 +2384,11 @@ function traceReadArtifactReference(message: ChatRenderMessage, presentation: Dy
     const args = eventRecord(message.eventData?.arguments);
     const pin = eventRecord(body.pin);
     const source = eventRecord(pin.source);
+    const requested = eventRecord(args.source);
     const entry = eventRecord(body.entry);
-    if (!eventString(args.source) || source.id !== args.source || pin.entry_id !== presentation.target
+    if (!eventString(requested.id) || source.id !== requested.id
+      || !Array.isArray(source.content) || JSON.stringify(source.content) !== JSON.stringify(requested.content)
+      || pin.entry_id !== presentation.target
       || entry.id !== presentation.target || !/^[a-f0-9]{64}$/.test(eventString(pin.revision))
       || pin.revision !== args.revision) {
       throw new Error("The admitted context entry does not match the selected source and revision.");

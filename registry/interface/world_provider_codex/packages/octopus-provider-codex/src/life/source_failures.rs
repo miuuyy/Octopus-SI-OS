@@ -15,17 +15,38 @@ pub(crate) async fn record_invalid_provider_context(
     if author_failed_provider_source(ctx, descriptor, handoff_session, run, turn, &message, false).await? {
         return Ok(());
     }
-    if let Err(error) = hand_failure_into_standing_route(ctx, run, turn.seq, &message).await {
+    if let Err(route_error) = hand_failure_into_standing_route(ctx, run, turn.seq, &message).await {
         tracing::warn!(
             interface = ctx.interface.as_str(),
             run = run.as_str(),
             seq = turn.seq,
-            error = %error,
+            error = %route_error,
             "codex failed provider source has no proven standing route into its run"
         );
-        return Err(message);
+        ctx.hand_admitted_failure(
+            turn.seq,
+            "provider_source_unroutable",
+            serde_json::json!({"error": message, "route_error": route_error}),
+        )
+        .await?;
     }
     Ok(())
+}
+
+pub(crate) async fn fail_source_closed(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    handoff_session: &ProviderHandoffSession,
+    run: &RunId,
+    turn: &QueuedTurn,
+    driver: &mut Option<Arc<CodexAppServerInterfaceDriver>>,
+    error: String,
+) -> Result<(), String> {
+    let error = match shutdown_driver(ctx, driver).await {
+        Ok(()) => error,
+        Err(shutdown_error) => format!("{error}; {shutdown_error}"),
+    };
+    record_invalid_provider_context(ctx, descriptor, handoff_session, run, turn, error).await
 }
 
 pub(crate) async fn hand_failure_into_standing_route(
@@ -322,7 +343,6 @@ pub(crate) async fn restore_completed_provider_sources(
                 continue;
             }
         };
-        if matches!(recovery, ProviderSourceRecovery::Bridged { .. }) { continue; }
         if try_settle_completed_interrupted_result(ctx, descriptor, &run, &turn, &handoff, interrupted).await? { continue; }
         if recovery != ProviderSourceRecovery::Completed { continue; }
         let record = handoff.current_run_record_bytes().await;
@@ -410,7 +430,6 @@ pub(crate) async fn settle_completed_interrupted_result(
         candidate.as_object_mut().ok_or("saved interrupted settlement is not an object")?.remove("session_context");
         if candidate != original { return Err("saved interrupted settlement changed its exact Closing closure".into()); }
         let (recovery, outcomes) = handoff.recover_completed_source_settlement(&proof.predecessor, &materialized_artifact_ref(&closure)?).await?;
-        if matches!(recovery, ProviderSourceRecovery::Bridged { .. }) { return Ok(()); }
         if recovery != ProviderSourceRecovery::Completed { return Err("saved interrupted settlement did not complete its checked source".into()); }
         let admission = interrupted_result_admission(&outcomes)?.ok_or("saved interrupted settlement has no admitted closure")?;
         let (_, bytes) = read_pinned_provider_artifact(ctx, &admission.artifact, "recovered interrupted settlement")?;

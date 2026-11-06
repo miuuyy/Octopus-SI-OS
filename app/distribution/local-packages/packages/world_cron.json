@@ -14,11 +14,7 @@
     "icon": "scheduled"
   },
   "members": [
-    { "registry_kind": "interface", "owner": "world_cron", "primary": true },
-    { "registry_kind": "interface", "owner": "system_worker_cron" },
-    { "registry_kind": "interface", "owner": "system_interface_authoring_cron" },
-    { "registry_kind": "interface", "owner": "system_context_cron_authoring" },
-    { "registry_kind": "tool", "owner": "file.write.cron_authoring" }
+    { "registry_kind": "interface", "owner": "world_cron", "primary": true }
   ],
   "required_packages": ["world_operator_chat"]
 }

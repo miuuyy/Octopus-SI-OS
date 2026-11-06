@@ -211,7 +211,8 @@ async fn completed_outputs_survive_transient_refusal_and_cold_broker_recovery_wi
                 if target_changed { "arrival_target_changed" } else { reason.as_str() }})};
             complete_output_reply(first.retained.unwrap(), verdict.clone());
             if retryable {
-                assert!(matches!(hot.await, ToolProcessBrokerResult::OutputPending { .. }));
+                ctx.cancel.cancel();
+                assert!(matches!(hot.await, ToolProcessBrokerResult::OutputPending { error } if error.contains("cancelled")));
             } else {
                 assert!(matches!(hot.await, ToolProcessBrokerResult::Refused {reason:observed,..} if observed==reason));
             }

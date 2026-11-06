@@ -17,28 +17,14 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
         : rawSchedule?.type === "inactivity" && positiveNumber(rawSchedule.seconds) && objectValue(rawSchedule.interface_match)
           ? { type: "inactivity" as const, seconds: rawSchedule.seconds, interfaceMatch: rawSchedule.interface_match as Record<string, string>, excludeInterfaceMatch: objectValue(rawSchedule.exclude_interface_match) as Record<string, string> | null, withinEe: stringValue(rawSchedule.within_ee) }
           : null;
-  const rawTemplate = objectValue(row.run_template);
   const rawEvent = objectValue(row.event_source);
-  const eventSource = rawEvent ? {
-    sources: stringArray(rawEvent.sources),
-    targets: Array.isArray(rawEvent.targets) ? rawEvent.targets.flatMap((value) => {
-      const target = objectValue(value);
-      const runId = stringValue(target?.run_id);
-      return runId ? [{ runId, chatInterfaceId: stringValue(target?.chat_interface_id), title: stringValue(target?.title) || runId }] : [];
-    }) : [],
-  } : null;
-  const runTemplate = rawTemplate ? {
-    runId: stringValue(rawTemplate.run_id),
-    eeId: stringValue(rawTemplate.ee_id),
-    workerInterfaceId: stringValue(rawTemplate.worker_interface_id),
-    checkpointCount: nonNegativeNumber(rawTemplate.checkpoint_count),
-    outboundInterfaceIds: stringArray(rawTemplate.outbound_interface_ids),
-    artifactBindingCount: nonNegativeNumber(rawTemplate.artifact_binding_count),
-  } : null;
+  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets) } : null;
+  const targets = normalizeTargets(row.targets);
+  const template = row.template === true;
   const valid = row.valid === true
     && status !== "invalid"
     && (eventSource ? eventSource.targets.length > 0 && status === "enabled"
-      : Boolean(schedule) && Boolean(runTemplate?.runId && runTemplate.eeId && runTemplate.workerInterfaceId)
+      : Boolean(schedule) && (template || targets.length > 0)
         && /^[0-9a-f]{64}$/.test(stringValue(row.activation_digest)));
   return {
     interfaceId,
@@ -54,17 +40,25 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
     fireOnStart: row.fire_on_start === true,
     instructions: typeof row.instructions === "string" ? row.instructions : "",
     reminderEnv: stringValue(row.reminder_env),
-    runTemplate,
-    cloneEligible: valid && !eventSource && row.clone_eligible === true,
-    template: row.template === true,
+    targets,
+    cloneEligible: valid && !eventSource && template,
+    template,
     inactivityState: normalizeInactivityState(row.inactivity_state),
     deliveries: Array.isArray(row.deliveries) ? row.deliveries.map(normalizeDelivery).filter((delivery): delivery is ScheduledDelivery => Boolean(delivery)) : [],
     lastRunAtMs: nullableTimestamp(row.last_run_at_ms),
     lastMovementSeq: nullableInteger(row.last_movement_seq),
     nextRunAtMs: nullableTimestamp(row.next_run_at_ms),
     nextRunSource: row.next_run_source === "driver_state" || row.next_run_source === "schedule" ? row.next_run_source : "",
-    error: stringValue(row.error) || (valid ? "" : eventSource ? "The event source has no active receiving task." : "The activation does not satisfy the cron_life contract."),
+    error: stringValue(row.error) || (valid ? "" : eventSource ? "The event source has no active receiving task." : "The trigger sends to no task, or its activation does not satisfy the cron_life contract."),
   };
+}
+
+function normalizeTargets(value: unknown): ScheduledInterfaceProjection["targets"] {
+  return Array.isArray(value) ? value.flatMap((entry) => {
+    const target = objectValue(entry);
+    const runId = stringValue(target?.run_id);
+    return runId ? [{ runId, chatInterfaceId: stringValue(target?.chat_interface_id), title: stringValue(target?.title) || runId }] : [];
+  }) : [];
 }
 
 function normalizeInactivityState(value: unknown): InactivityState | null {
@@ -102,6 +96,7 @@ function normalizeJournal(value: unknown): ChangeJournal | null {
   }) : [];
   return {
     digest: stringValue(row.digest),
+    firing: stringValue(row.firing),
     outcome: row.outcome === "changed" ? "changed" : "unchanged",
     summary: stringValue(row.summary),
     checks: Array.isArray(row.checks) ? row.checks.flatMap((entry) => {
@@ -109,7 +104,7 @@ function normalizeJournal(value: unknown): ChangeJournal | null {
       return check ? [{ check: stringValue(check.check), result: stringValue(check.result), evidence: stringValue(check.evidence) }] : [];
     }) : [],
     changes,
-    undoable: row.undoable === true && /^[0-9a-f]{64}$/.test(stringValue(row.digest)),
+    undoable: row.undoable === true && /^[0-9a-f]{64}$/.test(stringValue(row.digest)) && /^[0-9]+$/.test(stringValue(row.firing)),
     undone: row.undone === true,
     error: stringValue(row.error),
   };
@@ -621,10 +616,6 @@ function stringArray(value: unknown): string[] {
 
 function positiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function nonNegativeNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 function nullableTimestamp(value: unknown): number | null {

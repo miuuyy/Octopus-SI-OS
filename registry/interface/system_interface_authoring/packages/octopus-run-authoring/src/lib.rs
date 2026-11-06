@@ -108,7 +108,6 @@ impl From<ProviderEmission> for ProviderHandoffEmission {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderSourceRecovery {
     Process,
-    Bridged { invocation_movement_seq: u64 },
     Completed,
     Interrupted { last_artifact_label: String },
 }
@@ -312,6 +311,7 @@ enum AuthoringAttemptRecovery {
 struct ValidatedAuthoringFailureSource {
     provider_source_movement_seq: u64,
     correlation_id: String,
+    rebase: Vec<ArtifactRef>,
 }
 
 #[derive(Clone)]
@@ -353,6 +353,7 @@ struct HandoffState {
     consumed_context_free_independent_input: Option<RunAuthoringCheckpoint>,
     consumed_verified_input: bool,
     deferred_context_generations: u64,
+    result_rebase: Option<Vec<ArtifactRef>>,
 }
 
 #[derive(Clone)]
@@ -423,6 +424,8 @@ struct PendingHandoff {
     replacement: Option<Box<rejected_final::Rejection>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     standing: Vec<PendingHandoffItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rebase: Vec<ArtifactRef>,
 }
 
 impl PendingHandoff {

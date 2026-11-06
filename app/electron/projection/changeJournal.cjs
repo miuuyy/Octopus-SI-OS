@@ -15,9 +15,14 @@ async function currentFileDigest(file) {
   return crypto.createHash("sha256").update(await fs.readFile(file)).digest("hex");
 }
 
-async function readChangeJournalDocument(octopusHome, runId) {
+function requiredJournalFiring(value) {
+  if (typeof value !== "string" || !/^[0-9]{1,20}$/.test(value)) throw new Error("change journal firing must be the trigger artifact's now_unix_ms");
+  return value;
+}
+
+async function readChangeJournalDocument(octopusHome, runId, firing) {
   requiredSafeRegistryId(runId, "change journal run");
-  const directory = path.join(octopusHome, "state", "change-journals", runId);
+  const directory = path.join(octopusHome, "state", "change-journals", runId, requiredJournalFiring(firing));
   const file = path.join(directory, "journal.json");
   const stat = await fs.lstat(file).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
   if (!stat) return null;
@@ -30,8 +35,8 @@ async function readChangeJournalDocument(octopusHome, runId) {
   return { document, digest, directory };
 }
 
-async function changeJournalPlan(octopusHome, registryRoot, runId) {
-  const journal = await readChangeJournalDocument(octopusHome, runId);
+async function changeJournalPlan(octopusHome, registryRoot, runId, firing) {
+  const journal = await readChangeJournalDocument(octopusHome, runId, firing);
   if (!journal) return null;
   const { document, digest, directory } = journal;
   const restorableRoots = [
@@ -78,6 +83,7 @@ async function changeJournalPlan(octopusHome, registryRoot, runId) {
   return {
     digest,
     run_id: runId,
+    firing,
     outcome: document.outcome,
     summary: stringValue(document.summary),
     trigger_artifact: stringValue(document.trigger_artifact),
@@ -92,8 +98,9 @@ async function changeJournalPlan(octopusHome, registryRoot, runId) {
 async function undoChangeJournal(registryRoot, octopusHomeRoot, request, commitClientAuthoring) {
   if (typeof commitClientAuthoring !== "function") throw new Error("client authoring transaction is unavailable");
   const runId = requiredSafeRegistryId(request?.runId, "runId");
-  const plan = await changeJournalPlan(octopusHomeRoot, registryRoot, runId);
-  if (!plan) throw new Error(`run ${runId} kept no change journal`);
+  const firing = requiredJournalFiring(request?.firing);
+  const plan = await changeJournalPlan(octopusHomeRoot, registryRoot, runId, firing);
+  if (!plan) throw new Error(`run ${runId} kept no change journal for firing ${firing}`);
   if (plan.digest !== requiredDigest(request?.expectedJournalDigest, "expectedJournalDigest")) throw new Error("the change journal changed before undo");
   if (!plan.undoable) {
     const blocked = plan.changes.filter((entry) => entry.kind === "file" && (entry.status !== "applied" || !entry.restorable));
@@ -105,5 +112,5 @@ async function undoChangeJournal(registryRoot, octopusHomeRoot, request, commitC
     removals: [],
     publishBarrierPath: plan.writes.at(-1).file,
   });
-  return { action: "undo_changes", runId, restored: plan.writes.map((write) => write.file) };
+  return { action: "undo_changes", runId, firing, restored: plan.writes.map((write) => write.file) };
 }

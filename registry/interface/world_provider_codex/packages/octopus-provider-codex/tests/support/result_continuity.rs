@@ -1,26 +1,22 @@
 #[test]
-fn forwarded_result_preserves_its_exact_native_wait() {
+fn a_result_preserves_its_exact_native_wait() {
     let temp = tempfile::tempdir().unwrap();
     let mut input = model_policy_input(serde_json::json!(["gpt-5.5"]));
     let runtime = input.metadata.as_ref().unwrap().runtime.as_ref().unwrap().clone();
     let payload = serde_json::json!({"label":"read.result","tool":"read","correlation_id":"call-a","ok":true,"body":{"text":"ok"}});
     let bytes = serde_json::to_vec(&payload).unwrap();
-    let original = InterfaceArtifactFile::write(temp.path().join("original"), "read.result", &bytes).unwrap();
-    let source = original.pin_manifest_into_blob(&mut octopus_ledger::InMemoryBlobs::new()).unwrap().artifact;
-    input.artifact_file = InterfaceArtifactFile::write(temp.path().join("forwarded"), "read.result", &bytes).unwrap();
+    input.artifact_file = InterfaceArtifactFile::write(temp.path().join("result"), "read.result", &bytes).unwrap();
     input.artifact = input.artifact_file.pin_manifest_into_blob(&mut octopus_ledger::InMemoryBlobs::new()).unwrap().artifact;
-    assert_ne!(input.artifact, source);
-    input.artifact_binding_payloads = vec![ArtifactBindingPayload::new(source.clone(), bytes)];
-    input.metadata.as_mut().unwrap().artifact_binding_refs = vec![source.clone()];
-    input.metadata.as_mut().unwrap().grant.artifact_access.insert(source.id.to_string(), octopus_runtime::ArtifactAccess::read_only());
+    let source = input.artifact.clone();
+    input.artifact_binding_payloads = Vec::new();
+    input.metadata.as_mut().unwrap().artifact_binding_refs = Vec::new();
     let requirement = serde_json::json!({"mark":"corresponds","verifier":"tool_result_correspondence","artifact_label":"read.result",
-        "params":{"call_artifact":source,"tool":"read","correlation_id":"call-a","params":{},"invocation":{
-            "source":{"artifact":source,"source_movement_seq":40},"artifact":input.artifact,"manifest_relative_path":"invocation/result.json"}}});
+        "params":{"call_artifact":source,"tool":"read","correlation_id":"call-a","params":{}}});
     let binding = serde_json::json!({"interface":"result-door","config":{"artifact_policy":{"mode":"all"}}});
     let record = octopus_run_record::RunRecord::from_bytes(&serde_json::to_vec(&serde_json::json!({
         "id":runtime.run,"ee":runtime.ee,"worker":runtime.worker,"trace":"trace","status":"running",
         "active_checkpoints":[runtime.checkpoint],"checkpoints":[{"id":runtime.checkpoint,"run":runtime.run,"trace":"trace","epoch":1,
-            "interface_binding":binding,"outbound_interface_bindings":[],"artifact_bindings":[{"id":source.id}],"required_verified_artifacts":[requirement]}],
+            "interface_binding":binding,"outbound_interface_bindings":[],"artifact_bindings":[],"required_verified_artifacts":[requirement]}],
         "interface_state":{runtime.interface.as_str():{"run_authoring_binding":{"schema_version":2,"run":runtime.run,"worker":runtime.worker,
             "provider_interface":runtime.interface,"authoring_source_interface":"writer","checkpoints":[{"name":"result","role":"result_input",
                 "interface_binding":binding,"outbound_interface_bindings":[],"include_context":true,"required_verified_artifacts":[requirement]}]}}}
@@ -32,7 +28,7 @@ fn forwarded_result_preserves_its_exact_native_wait() {
     result.source_artifact = source;
     let call = serde_json::from_value(session_artifact("call", "tool.call", serde_json::json!({"label":"tool.call",CODEX_CONTINUITY_FIELD:pending}), 30)).unwrap();
     let session = vec![call, result];
-    let sources = continuity_input_sources(&record, &input).unwrap();
+    let sources = vec![input.artifact.clone()];
     let recovered = recover_codex_continuity_from_current_session(&session, &sources, &runtime.interface, runtime.run.as_str(), &codex_context_labels()).unwrap().unwrap();
     assert_eq!(recovered, pending);
     let call = bound("exact-call", serde_json::json!({"label":"tool.call", "tool":"read", "correlation_id":"call-a", "arguments":{}, CODEX_CONTINUITY_FIELD:pending}));
@@ -75,12 +71,6 @@ fn forwarded_result_preserves_its_exact_native_wait() {
     let mut foreign = session_without_call.clone();
     foreign[0].payload[CODEX_CONTINUITY_FIELD]["run"] = serde_json::json!("other-run");
     assert!(recover_provider_result_continuity(&descriptor, &input, None, &foreign, &runtime.run, &pinned).is_err());
-    let wrong = serde_json::json!({"label":"read.result","tool":"read","correlation_id":"call-a","ok":true,"body":{"text":"changed"}});
-    input.artifact_binding_payloads[0] = ArtifactBindingPayload::new(sources[1].clone(), serde_json::to_vec(&wrong).unwrap());
-    assert!(continuity_input_sources(&record, &input).is_err());
-    input.artifact_binding_payloads[0] = ArtifactBindingPayload::new(sources[1].clone(), serde_json::to_vec(&payload).unwrap());
-    input.metadata.as_mut().unwrap().grant.artifact_access.clear();
-    assert!(continuity_input_sources(&record, &input).is_err());
 }
 
 #[test]

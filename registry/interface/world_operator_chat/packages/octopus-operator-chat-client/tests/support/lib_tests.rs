@@ -1265,7 +1265,7 @@
         let door = InterfaceId::new(&changed.capability_doors["system_room"]);
         let bridge = ProviderCapabilityBridge {tool:changed.capability_tools["file.read"].clone(),correlation_id:"nested-read".into(),arguments_hash:octopus_ledger::ContentHash::of_bytes(b"{}").to_hex(),return_interface:door.clone()};
         let retained = [(changed.capability_tools["file.read"].clone(),door)];
-        let amendment = plan_current_run_amendment(&roots,&current,&provider,CurrentRunRequest {amendment_key:"nested-retain".into(),selection:Some(first.clone()),authored:None,publications:vec![]},bridge.clone(),&retained).unwrap();
+        let amendment = plan_current_run_amendment(&roots,&current,&provider,CurrentRunRequest { change: None,amendment_key:"nested-retain".into(),selection:Some(first.clone()),authored:None,publications:vec![]},bridge.clone(),&retained).unwrap();
         assert!(amendment.validation.safe_to_apply,"{:?}",amendment.validation.regressions);
         let result_mark = current.interface_state[&provider]["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter()
             .find_map(|cp|cp["result_receiving"][&bridge.tool]["mark"].as_str()).unwrap();
@@ -1278,7 +1278,7 @@
             expected_before:serde_json::json!(current),run_record:serde_json::json!(current),writes:vec![crate::run_composition::RegistryCandidateWrite {
                 path:policy_path.clone(),content:narrowed.to_string(),expected_before_hash:Some(octopus_ledger::ContentHash::of_bytes(&policy_bytes).to_hex()),
             }]};
-        assert!(plan_current_run_amendment(&roots,&current,&provider,CurrentRunRequest {amendment_key:"nested-mark-denied".into(),selection:None,authored:Some(authored),publications:vec![]},bridge,&retained)
+        assert!(plan_current_run_amendment(&roots,&current,&provider,CurrentRunRequest { change: None,amendment_key:"nested-mark-denied".into(),selection:None,authored:Some(authored),publications:vec![]},bridge,&retained)
             .unwrap_err().contains("removes the bridge result mark"));
         assert_eq!(std::fs::read(policy_path).unwrap(),policy_bytes);
         let after = RunRecord::from_bytes(&serde_json::to_vec(&amendment.amendment.after).unwrap()).unwrap();
@@ -1569,7 +1569,7 @@
                 let door = InterfaceId::new(&plan.capability_doors["system_room"]);
                 let bridge = ProviderCapabilityBridge { tool:plan.capability_tools["file.read"].clone(),correlation_id:"home-read".into(),
                     arguments_hash:octopus_ledger::ContentHash::of_bytes(b"{}").to_hex(),return_interface:door.clone() };
-                let amend = |record: &RunRecord| plan_current_run_amendment(&roots,record,&provider,CurrentRunRequest {
+                let amend = |record: &RunRecord| plan_current_run_amendment(&roots,record,&provider,CurrentRunRequest { change: None,
                     amendment_key:"home-context-retained".into(),selection:Some(selection.clone()),authored:None,publications:vec![],
                 },bridge.clone(),&[(plan.capability_tools["file.read"].clone(),door.clone())]);
                 let preview = amend(&current).unwrap();

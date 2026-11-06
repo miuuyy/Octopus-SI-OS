@@ -86,7 +86,7 @@ function useScheduledWorkspaceState(active: boolean, onCreateTask: (text: string
   function confirmUndo() {
     const delivery = undoCandidate;
     if (!delivery?.journal?.undoable || pending || !canEdit) return;
-    void mutate({ action: "undo_changes", runId: delivery.runId, expectedJournalDigest: delivery.journal.digest }, "Could not undo changes", () => setUndoCandidate(null));
+    void mutate({ action: "undo_changes", runId: delivery.runId, firing: delivery.journal.firing, expectedJournalDigest: delivery.journal.digest }, "Could not undo changes", () => setUndoCandidate(null));
   }
 
   return {

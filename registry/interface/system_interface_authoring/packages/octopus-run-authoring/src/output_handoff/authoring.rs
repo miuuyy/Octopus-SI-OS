@@ -386,6 +386,7 @@ impl ProviderOutputHandoff {
             withdrawal: None,
             replacement: None,
             standing,
+            rebase: Vec::new(),
         };
         provider_state.insert(
             "pending_handoff".to_string(),
@@ -434,7 +435,7 @@ impl ProviderOutputHandoff {
                 self.config.run.as_str()
             ));
         }
-        Ok(AuthoredRun {
+        let mut authored = AuthoredRun {
             json_format: Some(JsonFormat::Compact),
             before_hash,
             after_hash,
@@ -448,7 +449,43 @@ impl ProviderOutputHandoff {
             pending_handoff: pending_batch,
             content,
             patch,
-        })
+        };
+        self.seal_authored_run(current, &mut authored, None)?;
+        Ok(authored)
+    }
+
+    pub(crate) fn seal_authored_run(
+        &self,
+        current: &[u8],
+        authored: &mut AuthoredRun,
+        consumed: Option<&[ArtifactRef]>,
+    ) -> Result<(), String> {
+        let before = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&authored.content).map_err(|error| error.to_string())?;
+        let pending = result_inputs::seal_pending(&before, &mut value, &self.config)?;
+        if consumed.is_some_and(|required| required != pending.rebase.as_slice()) {
+            return Err("result consumption context differs from its recorded rebase".into());
+        }
+        if pending == authored.pending_handoff {
+            return Ok(());
+        }
+        let format = authored.json_format.unwrap_or(JsonFormat::Compact);
+        let content = String::from_utf8(format.encode(&value)?).map_err(|error| error.to_string())?;
+        let after_hash = ContentHash::of_bytes(content.as_bytes()).to_hex();
+        let patch = json_patch::diff(
+            &serde_json::from_slice(current).map_err(|error| error.to_string())?,
+            &value,
+        );
+        if apply_run_json_patch(current, &patch, &after_hash, Some(format))? != content {
+            return Err("sealed provider write did not reconstruct its exact bytes".into());
+        }
+        authored.json_format = Some(format);
+        authored.content = content;
+        authored.after_hash = after_hash;
+        authored.patch = patch;
+        authored.pending_handoff = pending;
+        Ok(())
     }
 
     pub(crate) fn materialize_file_write_call(
@@ -498,7 +535,7 @@ impl ProviderOutputHandoff {
             if let Some(rejected) = authoring_retry::rejected_write(&self.ctx, &self.config, authored)? {
                 return Ok(AuthoringWriteOutcome::Rejected(rejected));
             }
-            if let Some((failure_seq, failure)) =
+            if let Some((failure_seq, failure, _)) =
                 self.recover_authoring_failure(&current_record, current_run_record)?
             {
                 if admitted_seq.is_some_and(|admitted| failure.source_movement_seq != admitted) {

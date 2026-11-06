@@ -6,14 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
-[dependencies]
-octopus-operator-chat-client = { path = "../../../world_operator_chat/packages/octopus-operator-chat-client" }
-serde_json.workspace = true
-
-[[bin]]
-name = "octopus-world-cron-task-plan"
-path = "src/bin/octopus-world-cron-task-plan.rs"
-
 [dev-dependencies]
 serde_json.workspace = true
 tempfile = "3"
@@ -22,6 +14,7 @@ tokio-util.workspace = true
 octopus-app-server = { path = "../../../../../crates/octopus-app-server" }
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-interface-transport = { path = "../../../../../crates/octopus-interface-transport" }
+octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
 octopus-ledger-store = { path = "../../../../../crates/octopus-ledger-store" }
 octopus-runtime = { path = "../../../../../crates/octopus-runtime" }

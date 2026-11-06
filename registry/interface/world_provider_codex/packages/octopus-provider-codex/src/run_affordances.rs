@@ -954,16 +954,16 @@ impl RunAffordances {
         if !self.contains(operation_name) { return Err("native operation is not granted".into()); }
         if !matches!(row.operation,RunOperation::PreviewCurrentRun | RunOperation::AmendCurrentRun) { return Ok(None); }
         let request: CurrentRunRequest = serde_json::from_value(arguments.clone()).map_err(|e|e.to_string())?;
-        match (request.selection,request.authored) {
-            (Some(_),None)=>Ok(None),
-            (None,Some(authored))=>{
+        match (request.selection,request.change,request.authored) {
+            (Some(_),None,None)|(None,Some(_),None)=>Ok(None),
+            (None,None,Some(authored))=>{
                 if ContentHash::from_hex(&authored.expected_before_hash).is_none_or(|hash|hash.to_hex()!=authored.expected_before_hash) {
                     return Err("authored current-run baseline requires an exact content hash".into());
                 }
                 RunRecord::from_bytes(&serde_json::to_vec(&authored.expected_before).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
                 Ok(Some((authored.expected_before_hash,authored.expected_before)))
             }
-            _=>Err("current-run amendment requires exactly one complete selection or authored record".into()),
+            _=>Err("current-run amendment requires exactly one of a complete selection, a change or an authored record".into()),
         }
     }
 

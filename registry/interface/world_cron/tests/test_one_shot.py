@@ -23,7 +23,6 @@ class OneShotContract(unittest.TestCase):
         self.document["activations"][0]["enabled"] = True
         self.config = self.document["activations"][0]["config"]
         self.config["schedule"].update(interval_seconds=None, due_at=DUE, fire_on_start=False)
-        (self.runs / f"{self.config['run_template']['id']}.json").write_text(json.dumps(self.config["run_template"]))
         environment = {
             "OCTOPUS_INTERFACE_ID": "world_cron",
             "OCTOPUS_INTERFACE_DIR": str(self.root),
@@ -31,7 +30,7 @@ class OneShotContract(unittest.TestCase):
             "OCTOPUS_INTERFACE_DESCRIPTOR_JSON": (OWNER / "interface.json").read_text(),
             "OCTOPUS_MOVEMENTS_JSONL": str(self.ledger),
             "OCTOPUS_INTERFACE_HOST_IO_LIMITS": json.dumps({key: 1048576 for key in ("max_control_frame_bytes", "max_manifest_bytes", "max_payload_bytes", "max_stderr_bytes")}),
-            "OCTOPUS_ROOT_SLOTS_JSON": json.dumps({"run_records_root": str(self.runs), **{key: str(self.root / key) for key in ("app_server_control_root", "interface_hand_in_root", "timezone_database_root")}}),
+            "OCTOPUS_ROOT_SLOTS_JSON": json.dumps({"run_records_root": str(self.runs), "timezone_database_root": str(self.root / "timezone_database_root")}),
         }
         self.environment = patch.dict(os.environ, environment)
         self.environment.start()
@@ -64,7 +63,7 @@ class OneShotContract(unittest.TestCase):
         return 7
 
     def execute(self, hand=None):
-        with patch.object(self.module.time, "time_ns", lambda: self.clock), patch.object(self.module.time, "sleep", self.sleep), patch.object(self.module, "hand_artifact_with_evidence", hand or self.admit), patch.object(self.module, "rearm_scheduled_run", side_effect=AssertionError("one-shot must not rearm")):
+        with patch.object(self.module.time, "time_ns", lambda: self.clock), patch.object(self.module.time, "sleep", self.sleep), patch.object(self.module, "hand_artifact_with_evidence", hand or self.admit):
             return self.module.run_one_shot(self.schedule(), "Check result")
 
     def test_descriptor_deadline_is_absolute_and_exclusive(self):
@@ -131,14 +130,12 @@ class OneShotContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "configuration changed"):
             self.execute()
 
-    def test_refusal_and_spent_frontier_do_not_rearm_or_record_success(self):
+    def test_refusal_does_not_record_success(self):
         def refused(*_):
             raise self.module.DeliveryRefused({"refused": {"reason": "policy", "detail": {}}})
         with self.assertRaises(self.module.DeliveryRefused):
             self.execute(refused)
         self.assertEqual(self.module.load_one_shot_state(self.schedule())["status"], "prepared")
-        with patch.object(self.module, "frontier_has_arrival", return_value=True), self.assertRaisesRegex(RuntimeError, "checkpoint is spent"):
-            self.execute()
         self.assertEqual(self.emissions, [])
 
 

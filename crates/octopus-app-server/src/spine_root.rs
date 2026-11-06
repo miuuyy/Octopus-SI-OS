@@ -2500,50 +2500,10 @@ description: ""
     }
 
     #[test]
-    fn context_artifact_resolver_materializes_activation_role_artifacts_on_demand() {
+    fn context_artifact_resolver_materializes_role_artifacts_on_demand() {
         let scratch = tempfile::tempdir().expect("scratch registry opens");
         let registry_root = scratch.path().to_path_buf();
-        let interface = InterfaceId::new("world_probe_trigger");
         let role_id = "artifact-probe-role";
-        let interface_dir = registry_root.join("interface").join(interface.as_str());
-        std::fs::create_dir_all(&interface_dir).expect("probe interface folder writes");
-        let checkpoint = serde_json::json!({
-            "id": "cp_probe_in",
-            "run": "run_probe",
-            "epoch": 0,
-            "interface_binding": {
-                "interface": interface.as_str(),
-                "config": {"artifact_policy": {"mode": "all"}}
-            },
-            "outbound_interface_bindings": [],
-            "artifact_bindings": [{"id": role_id}],
-            "required_verified_artifacts": [],
-            "trace": "trace:run_probe:cp_probe_in"
-        });
-        std::fs::write(
-            interface_dir.join("activation.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "schema_version": 1,
-                "interface": interface.as_str(),
-                "activations": [{
-                    "enabled": false,
-                    "activation_driver_ref": "probe_life",
-                    "config": {
-                        "run_template": {
-                            "id": "run_probe",
-                            "ee": "ee_probe",
-                            "worker": "system_worker_probe",
-                            "trace": "trace:run_probe",
-                            "status": "idle",
-                            "checkpoints": [checkpoint],
-                            "active_checkpoints": ["cp_probe_in"]
-                        }
-                    }
-                }]
-            }))
-            .expect("probe activation encodes"),
-        )
-        .expect("probe activation writes");
         let role_dir = registry_root.join("artifact").join(role_id);
         std::fs::create_dir_all(&role_dir).expect("probe role folder writes");
         std::fs::write(
@@ -2556,30 +2516,6 @@ description: ""
             .expect("probe role encodes"),
         )
         .expect("probe role writes");
-        let activation = octopus_interface_projection::interface_activation::load_interface_activation_file_for_interface(
-            &registry_root,
-            &interface,
-        )
-        .expect("probe activation loads");
-        let mut ids: BTreeSet<String> = BTreeSet::new();
-        for entry in &activation.descriptor.activations {
-            let Some(value) = entry.config.get("run_template") else {
-                continue;
-            };
-            let bytes = serde_json::to_vec(value).expect("interface-owned run template encodes");
-            let record = octopus_run_record::RunRecord::from_bytes(&bytes)
-                .expect("interface-owned run template parses through the canonical run contract");
-            for checkpoint in &record.checkpoints {
-                for binding in &checkpoint.artifact_bindings {
-                    ids.insert(binding.id.as_str().to_string());
-                }
-            }
-        }
-        assert!(
-            ids.contains(role_id),
-            "the activation run template must bind its role artifact; got {ids:?}"
-        );
-
         let blobs: SharedBlobs = Arc::new(Mutex::new(InMemoryBlobs::new()));
         let resolver = RegistryContextArtifactCache::new(registry_root.clone(), blobs.clone())
             .expect("context artifact cache opens");
@@ -2591,7 +2527,7 @@ description: ""
         assert_eq!(
             resolver
                 .resolve(&ArtifactId::new(role_id))
-                .expect("activation role artifact resolves on demand"),
+                .expect("role artifact resolves on demand"),
             hash
         );
         assert!(
