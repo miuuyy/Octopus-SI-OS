@@ -598,11 +598,6 @@ pub(crate) fn terminal_usage_evidence(
                 "app-server token usage carries a non-positive context window".to_string(),
             )
         })?;
-    if used_tokens > context_window {
-        return Err(InterfaceDriverError::Protocol(
-            "app-server token usage exceeds its declared model context window".to_string(),
-        ));
-    }
     Ok((
         ContextWindowUsage {
             used_tokens,
