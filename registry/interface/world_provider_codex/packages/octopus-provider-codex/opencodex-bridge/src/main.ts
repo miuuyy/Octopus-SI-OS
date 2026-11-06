@@ -3,6 +3,7 @@ import { createAnthropicAdapter } from "../node_modules/@bitkyc08/opencodex/src/
 import { createAzureAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/azure.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
 import { createClaudeCliAdapter } from "./claude-cli.ts";
+import { createReasoningDetailsReplay } from "./reasoning-details.ts";
 import { createGrokCliAdapter, runGrokCaptureMcpServer } from "./grok-cli.ts";
 import { runCodeBuddyMcpServer } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/mcp-server.ts";
 import { createGoogleAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/google.ts";
@@ -597,6 +598,8 @@ function upstreamErrorReason(text: string, detail: string): string {
   return detail && detail !== reason ? `${detail}: ${reason}` : reason;
 }
 
+const reasoningDetailsReplay = createReasoningDetailsReplay(4096);
+
 async function responsesRequest(request: Request, config: BridgeConfig, adapter: ProviderAdapter): Promise<Response> {
   let raw: unknown;
   try {
@@ -652,13 +655,22 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
     const target = new URL(built.url);
     const declared = new URL(config.provider.base_url);
     if (target.origin !== declared.origin) throw new Error("adapter target escaped the declared provider origin");
+    const replaysReasoning = config.provider.adapter === "openai-chat";
+    const body = replaysReasoning ? reasoningDetailsReplay.restore(built.body) : built.body;
+    const headers = new Headers(built.headers);
+    if (body !== built.body) headers.delete("content-length");
     upstream = await fetch(target, {
       method: built.method,
-      headers: built.headers,
-      body: built.body,
+      headers,
+      body,
       signal: abort.signal,
       redirect: "error",
     });
+    if (replaysReasoning && upstream.ok && upstream.body) {
+      const [forAdapter, forReplay] = upstream.body.tee();
+      reasoningDetailsReplay.observe(forReplay, parsed.stream).catch(() => {});
+      upstream = new Response(forAdapter, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
+    }
   } catch (error) {
     clearTimeout(timer);
     built?.releaseBodyObservation?.();

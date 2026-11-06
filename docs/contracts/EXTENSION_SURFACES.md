@@ -573,7 +573,7 @@ fields, and the alternatives are stated in the tool's description; some
 upstreams refuse root combinators, and the tool's owner still validates the
 call against its declared schema. When an upstream answers with an error, the
 error Codex receives carries the upstream's own reason when the body names one
-(`error.metadata.raw`), not only the gateway's summary. The managed Codex CLI pin lists every app-server notification Octopus
+(`error.metadata.raw`), not only the gateway's summary. A Chat Completions upstream's `reasoning_details` from an assistant message that called tools, its encrypted entries included, go back unchanged with that message in the next request, matched by the message's tool call ids, so a model that signs its reasoning keeps reasoning after each tool result. The managed Codex CLI pin lists every app-server notification Octopus
 decodes and the ones it opts out of; installing a binary that sends any other
 notification fails closed and names it. The provider descriptor also pins
 which Codex features are on and which are off; a binary that reports a
