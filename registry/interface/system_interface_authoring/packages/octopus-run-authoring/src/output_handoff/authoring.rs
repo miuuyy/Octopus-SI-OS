@@ -373,6 +373,7 @@ impl ProviderOutputHandoff {
                     .ok_or_else(|| "provider response batch became empty".to_string())?
             ),
         );
+        let standing = standing_routes::distinct_standing(standing, &pending_items)?;
         let pending_batch = PendingHandoff {
             source_movement_seq: self.source_movement_seq,
             items: pending_items,

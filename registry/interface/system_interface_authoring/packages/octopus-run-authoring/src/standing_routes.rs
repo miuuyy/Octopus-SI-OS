@@ -310,6 +310,32 @@ fn standing_route<'a>(
     .then_some(*checkpoint))
 }
 
+pub(super) fn distinct_standing(
+    items: impl IntoIterator<Item = PendingHandoffItem>,
+    delivered: &[PendingHandoffItem],
+) -> Result<Vec<PendingHandoffItem>, String> {
+    let mut kept: Vec<PendingHandoffItem> = Vec::new();
+    for item in items {
+        let earlier = delivered
+            .iter()
+            .chain(kept.iter())
+            .find(|earlier| earlier.artifact_id == item.artifact_id);
+        match earlier {
+            None => kept.push(item),
+            Some(earlier)
+                if earlier.artifact_content_hash == item.artifact_content_hash
+                    && earlier.artifact_label == item.artifact_label => {}
+            Some(_) => {
+                return Err(format!(
+                    "standing delivery '{}' repeats an artifact id with different content",
+                    item.artifact_id.as_str()
+                ))
+            }
+        }
+    }
+    Ok(kept)
+}
+
 fn pending_checkpoint_of(checkpoint: &CheckpointRecord) -> Result<PendingHandoffCheckpoint, String> {
     if checkpoint.artifact_bindings.iter().any(|binding| binding.access != Default::default()) {
         return Err("standing route carries a non-default artifact binding".into());
@@ -520,7 +546,7 @@ impl ProviderOutputHandoff {
                 self.source_movement_seq, other.source_movement_seq
             ));
         }
-        Ok(lines.into_iter().flat_map(|line| line.items).collect())
+        distinct_standing(lines.into_iter().flat_map(|line| line.items), &[])
     }
 
     pub(super) async fn hand_standing_batch(
@@ -549,7 +575,7 @@ impl ProviderOutputHandoff {
                 items: items.clone(),
             },
         )?;
-        let pending = self.standing_pending(items);
+        let pending = self.standing_pending(distinct_standing(items, &[])?);
         let outcomes = self.hand_standing_items(&pending).await?;
         Ok((pending, outcomes))
     }
@@ -612,6 +638,7 @@ impl ProviderOutputHandoff {
                 .checked_add(line.context_generations)
                 .ok_or("standing journal context generation overflowed")?;
         }
+        let items = distinct_standing(items, &[])?;
         Ok((!items.is_empty()).then(|| StandingJournal {
             pending: self.standing_pending(items),
             context_generations,

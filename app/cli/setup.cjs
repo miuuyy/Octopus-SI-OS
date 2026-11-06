@@ -7,7 +7,7 @@ const { initializeWorkspace, readWorkspaceSetupState, workspaceInitializeRequest
 const { applyLocalApplicationPack, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
 const { createOperatorChatClientLoader } = require("../electron/operatorChatClientContract.cjs");
 const { createClientProviderMetadata, validateProviderModelSelection } = require("../electron/clientProviderMetadata.cjs");
-const { readProviderInterfaceDescriptors, mutateOctopusOsWorkspace, setupTriggerEntries, setupTriggerProof, armSetupTriggers } = require("../electron/projection.cjs");
+const { readProviderInterfaceDescriptors, mutateOctopusOsWorkspace, setupTriggerEntries, setupTriggerProof, armSetupTriggers, setupTriggerTaskPlanner } = require("../electron/projection.cjs");
 const { projectionReadRequest } = require("../electron/projectionReadContract.cjs");
 const { planClientAgentTemplate } = require("../electron/clientAgentCatalog.cjs");
 const { commitProjectionClientAuthoring } = require("../electron/clientWorkspaceAuthoring.cjs");
@@ -232,6 +232,11 @@ function createSetupOwners(environment, options = {}) {
           await armSetupTriggers(registryRoot, environment.home, entries, {
             commitClientAuthoring: (request) => commitProjectionClientAuthoring(environment.home, registryRoot, request,
               { publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) }),
+            planTriggerTask: setupTriggerTaskPlanner(planSurface, {
+              eeInstancesRoot: path.join(environment.home, "state", "ee_instances"),
+              rootEeId: configured.receipt.root_ee_id,
+              home: plan.workspace.request?.home,
+            }),
           });
           getProjection().invalidate();
           if (!await setupTriggerProof(registryRoot, environment.home, entries)) throw new Error("Setup triggers were armed without read-back proof.");

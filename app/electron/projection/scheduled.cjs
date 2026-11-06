@@ -1,4 +1,4 @@
-module.exports = { applyScheduledDraft, armSetupTriggers, mutateScheduledInterface, setupTriggerEntries, setupTriggerProof, setupTriggerState, withScheduleEditLock };
+module.exports = { applyScheduledDraft, armSetupTriggers, mutateScheduledInterface, setupTriggerEntries, setupTriggerProof, setupTriggerState, setupTriggerTaskPlanner, withScheduleEditLock };
 
 const { parseScheduledDueAt } = require("../scheduledTime.cjs");
 const fs = require("node:fs/promises");
@@ -142,6 +142,38 @@ async function setupTriggerProof(registryRoot, octopusHomeRoot, entries) {
     proven.push(state);
   }
   return proven;
+}
+
+function setupTriggerTaskPlanner(planSurface, { eeInstancesRoot, rootEeId, home }) {
+  const required = (value, field) => {
+    const text = stringValue(value);
+    if (!text) throw new Error(`${field} is required`);
+    return text;
+  };
+  return async (entry, externalInput) => {
+    const surface = await planSurface({
+      eeInstancesRoot,
+      request: {
+        chatId: `trigger_${entry.interface_id}`,
+        cycle: `trigger_${entry.interface_id}`,
+        clientSurfaceRole: "task",
+        eeId: required(rootEeId, "Home root EE"),
+        providerInterfaceId: required(home?.providerInterfaceId, "Home provider interface"),
+        providerModel: required(home?.providerModel, "Home provider model"),
+        reasoningEffort: home?.reasoningEffort,
+        serviceTier: home?.serviceTier,
+        workerInterfaceId: entry.task.worker_interface_id,
+        doorHostSlots: entry.task.door_host_slots ?? {},
+        contextArtifactBindings: entry.task.context_artifact_bindings,
+        selectedWorkerEnvironmentKinds: entry.task.selected_worker_environment_kinds,
+        externalInputs: [externalInput],
+      },
+    });
+    return {
+      runId: surface.runId,
+      writes: surface.writes.map((write) => ({ file: write.filePath, beforeDigest: write.expectedBeforeHash, content: write.content, label: write.tag })),
+    };
+  };
 }
 
 async function armSetupTriggers(registryRoot, octopusHomeRoot, entries, hooks = {}) {

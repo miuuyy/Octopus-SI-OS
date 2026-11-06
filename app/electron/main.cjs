@@ -33,6 +33,7 @@ const {
   setupTriggerEntries,
   setupTriggerProof,
   armSetupTriggers,
+  setupTriggerTaskPlanner,
 } = require("./projection.cjs");
 const { projectionReadRequest } = require("./projectionReadContract.cjs");
 const { createClientAccessController } = require("./clientAccess.cjs");
@@ -1566,30 +1567,11 @@ async function applyClientSetupTriggers(plan, operationId) {
   const home = plan.workspace.request?.home;
   await armSetupTriggers(registryRoot, octopusHome, entries, {
     commitClientAuthoring: (authoringRequest) => commitProjectionClientAuthoring(octopusHome, registryRoot, authoringRequest),
-    planTriggerTask: async (entry, externalInput) => {
-      const surface = await planWorkspaceHomeSurface({
-        eeInstancesRoot: path.join(octopusHome, "state", "ee_instances"),
-        request: {
-          chatId: `trigger_${entry.interface_id}`,
-          cycle: `trigger_${entry.interface_id}`,
-          clientSurfaceRole: "task",
-          eeId: requiredString(state.receipt.root_ee_id, "Home root EE"),
-          providerInterfaceId: requiredString(home?.providerInterfaceId, "Home provider interface"),
-          providerModel: requiredString(home?.providerModel, "Home provider model"),
-          reasoningEffort: home?.reasoningEffort,
-          serviceTier: home?.serviceTier,
-          workerInterfaceId: entry.task.worker_interface_id,
-          doorHostSlots: entry.task.door_host_slots ?? {},
-          contextArtifactBindings: entry.task.context_artifact_bindings,
-          selectedWorkerEnvironmentKinds: entry.task.selected_worker_environment_kinds,
-          externalInputs: [externalInput],
-        },
-      });
-      return {
-        runId: surface.runId,
-        writes: surface.writes.map((write) => ({ file: write.filePath, beforeDigest: write.expectedBeforeHash, content: write.content, label: write.tag })),
-      };
-    },
+    planTriggerTask: setupTriggerTaskPlanner(planWorkspaceHomeSurface, {
+      eeInstancesRoot: path.join(octopusHome, "state", "ee_instances"),
+      rootEeId: state.receipt.root_ee_id,
+      home,
+    }),
   });
   getProjectionStore("live").invalidate();
   if (!await setupTriggerProof(registryRoot, octopusHome, entries)) {

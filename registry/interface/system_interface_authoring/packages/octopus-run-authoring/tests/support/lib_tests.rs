@@ -5168,6 +5168,16 @@
         );
         assert!(record.checkpoints.iter().any(|checkpoint| checkpoint.id.as_str().ends_with("_standing_transport_dispatch_standing")));
         validate_pending_items_are_active(&record, &provider, &pending).unwrap();
+        let repeated = pending.items[0].clone();
+        assert_eq!(
+            standing_routes::distinct_standing([repeated.clone(), repeated.clone()], &[]).unwrap(),
+            vec![repeated.clone()],
+            "an output emitted twice with the same bytes is one standing delivery"
+        );
+        assert!(standing_routes::distinct_standing([repeated.clone()], &[repeated.clone()]).unwrap().is_empty());
+        let mut conflicting = repeated.clone();
+        conflicting.artifact_content_hash = ContentHash::of_bytes(b"other").to_hex();
+        assert!(standing_routes::distinct_standing([repeated, conflicting], &[]).is_err());
         std::fs::write(&run_path, authored.content.as_bytes()).unwrap();
         std::fs::write(
             &movements_path,

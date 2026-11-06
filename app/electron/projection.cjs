@@ -3,7 +3,7 @@ const { DESCRIPTOR_REGISTRIES } = require("./projection/constants.cjs");
 const { nativeTurnRecordedInputs } = require("./projection/operatorChatEvents.cjs");
 const { mutateApplicationPrivateConfiguration, readApplicationLogoAsset } = require("./projection/privateConfiguration.cjs");
 const { readProviderInterfaceDescriptors } = require("./projection/providerDescriptors.cjs");
-const { armSetupTriggers, mutateScheduledInterface, setupTriggerEntries, setupTriggerProof } = require("./projection/scheduled.cjs");
+const { armSetupTriggers, mutateScheduledInterface, setupTriggerEntries, setupTriggerProof, setupTriggerTaskPlanner } = require("./projection/scheduled.cjs");
 const { parseApplicationManifest } = require("./projection/sidecars.cjs");
 const { arrayValue, numberValue, objectOrEmpty, requiredString, stringValue, topologyArtifactRow } = require("./projection/values.cjs");
 const { mutateOctopusOsWorkspace } = require("./projection/workspaceMutations.cjs");
@@ -99,6 +99,7 @@ module.exports = {
   setupTriggerEntries,
   setupTriggerProof,
   armSetupTriggers,
+  setupTriggerTaskPlanner,
   readProviderInterfaceDescriptors,
   parseApplicationManifest,
   readApplicationLogoAsset,
