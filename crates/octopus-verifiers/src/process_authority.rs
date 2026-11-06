@@ -1116,6 +1116,12 @@ fn prepare_macos(
     readable_exact.extend(process_closure.selector_paths.iter().cloned());
     readable_exact.extend(process_closure.runtime_library_paths.iter().cloned());
     let mut environment = BTreeMap::new();
+    if process_closure
+        .selector_paths
+        .contains(Path::new("/private/var/select/developer_dir"))
+    {
+        environment.insert(OsString::from("xcrun_nocache"), OsString::from("1"));
+    }
     if authority.allow_network {
         let trust_store = PathBuf::from("/private/etc/ssl/cert.pem");
         if !trust_store.is_file() {
@@ -1752,7 +1758,8 @@ fn macos_selected_executable(
                 selector.display()
             ));
         }
-        let selectors = BTreeSet::from([selector, developer_dir.clone()]);
+        let mut selectors = BTreeSet::from([selector, developer_dir.clone()]);
+        selectors.extend(macos_developer_sdk_metadata_paths(&developer_dir));
         let library = developer_dir.join("usr/lib/libxcrun.dylib");
         let canonical_library = normalize_existing_path(library.clone())?;
         if !canonical_library.starts_with(&developer_dir) || !canonical_library.is_file() {
@@ -1820,6 +1827,48 @@ fn macos_selected_executable(
         selected,
         BTreeSet::new(),
     )))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_developer_sdk_metadata_paths(developer_dir: &Path) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    for sdks_root in [
+        developer_dir.join("SDKs"),
+        developer_dir.join("Platforms/MacOSX.platform/Developer/SDKs"),
+    ] {
+        macos_sdk_root_metadata_paths(developer_dir, sdks_root, &mut paths);
+    }
+    paths
+}
+
+#[cfg(target_os = "macos")]
+fn macos_sdk_root_metadata_paths(developer_dir: &Path, sdks_root: PathBuf, paths: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(&sdks_root) else {
+        return;
+    };
+    paths.insert(sdks_root);
+    for entry in entries.flatten() {
+        let sdk_path = entry.path();
+        paths.insert(sdk_path.clone());
+        let Ok(canonical_sdk) = std::fs::canonicalize(&sdk_path) else {
+            continue;
+        };
+        if !canonical_sdk.starts_with(developer_dir) || !canonical_sdk.is_dir() {
+            continue;
+        }
+        paths.insert(canonical_sdk.clone());
+        for relative in [
+            "SDKSettings.plist",
+            "SDKSettings.json",
+            "Entitlements.plist",
+            "System/Library/CoreServices/SystemVersion.plist",
+        ] {
+            let metadata_file = canonical_sdk.join(relative);
+            if metadata_file.is_file() {
+                paths.insert(metadata_file);
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -2657,6 +2706,44 @@ mod native_path_tests {
         let profile = std::fs::read_to_string(&prepared.args[1]).expect("prepared profile");
         assert!(profile.contains("process-exec (with no-sandbox)\n(literal \"/usr/bin/sandbox-exec\")"));
         assert!(profile.contains("lsopen"));
+    }
+
+    #[test]
+    fn macos_developer_shim_disables_xcrun_cache_and_grants_sdk_metadata() {
+        let authority = ProcessAuthority::resolve(
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            false,
+            false,
+            false,
+            false,
+            false,
+            octopus_descriptors::ProcessSandboxMode::Enforced,
+        )
+        .expect("process authority");
+        let profiles = tempfile::tempdir().expect("profile root");
+        let prepared = authority
+            .prepare(
+                "/usr/bin/git",
+                &[],
+                Path::new("/tmp"),
+                None,
+                profiles.path(),
+            )
+            .expect("prepared developer shim process");
+        assert_eq!(
+            prepared.environment.get(OsStr::new("xcrun_nocache")),
+            Some(&OsString::from("1"))
+        );
+        let profile = std::fs::read_to_string(&prepared.args[1]).expect("prepared profile");
+        let developer_dir = std::fs::canonicalize("/private/var/select/developer_dir").expect("developer directory");
+        for metadata in macos_developer_sdk_metadata_paths(&developer_dir) {
+            assert!(profile.contains(&*metadata.to_string_lossy()), "{}", metadata.display());
+        }
     }
 }
 

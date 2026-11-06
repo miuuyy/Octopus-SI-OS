@@ -400,6 +400,13 @@ resources, including ICU locale data, alongside system libraries and timezone
 data. Application files and credentials come from the process authority
 declared by their owner.
 
+A process selected through the developer-directory shim (`git`, `python3`)
+runs with `xcrun_nocache=1` and exact read access to the selected developer
+directory's SDK metadata, so the shim neither writes its cache nor reports SDK
+errors under the sandbox. A workspace command's temporary directory is
+`/private/tmp` when its sandbox may write there, otherwise its working
+directory or another writable root, never `/`.
+
 The macOS desktop helper builds its pinned Swift package with SwiftPM sandboxing
 disabled. This avoids nesting SwiftPM's manifest sandbox inside the caller's
 existing process sandbox; the caller's declared filesystem, network and process

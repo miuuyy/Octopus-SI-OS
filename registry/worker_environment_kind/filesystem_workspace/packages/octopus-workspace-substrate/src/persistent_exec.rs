@@ -341,9 +341,12 @@ impl WorkspaceProcessManager {
                 worker_environment_id, limits.max_processes_per_worker_environment
             ));
         }
-        env.insert("TMPDIR".to_string(), cwd.as_str().to_string());
-        env.insert("TMP".to_string(), cwd.as_str().to_string());
-        env.insert("TEMP".to_string(), cwd.as_str().to_string());
+        let tmp_dir = crate::sandboxed_exec::sandboxed_tmp_dir(sandbox, &cwd)
+            .to_string_lossy()
+            .into_owned();
+        env.insert("TMPDIR".to_string(), tmp_dir.clone());
+        env.insert("TMP".to_string(), tmp_dir.clone());
+        env.insert("TEMP".to_string(), tmp_dir);
         let identity = new_process_identity(worker_environment_id)?;
         let spec = KeeperSpec {
             schema_version: KEEPER_SPEC_SCHEMA_VERSION,

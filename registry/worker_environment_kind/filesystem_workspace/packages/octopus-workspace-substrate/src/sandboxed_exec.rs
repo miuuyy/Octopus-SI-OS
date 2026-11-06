@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::io::Read;
-#[cfg(target_os = "linux")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(not(target_os = "macos"))]
 use std::process::Child;
 use std::process::{Command, ExitStatus, Stdio};
@@ -71,6 +70,29 @@ pub fn sandboxed_room_process_argv(
         ProcessSandboxMode::Disabled => Ok(argv),
         ProcessSandboxMode::Enforced => platform_sandboxed_room_process_argv(sandbox, cwd, argv),
     }
+}
+
+pub(crate) fn sandboxed_tmp_dir(sandbox: &ProjectedSandbox, cwd: &AbsPath) -> PathBuf {
+    for candidate in ["/private/tmp", "/tmp"] {
+        if let Ok(canonical) = std::fs::canonicalize(candidate)
+            && canonical != Path::new("/")
+            && let Ok(abs) = AbsPath::new(&canonical)
+            && sandbox.authorize_write(&abs).is_ok()
+        {
+            return canonical;
+        }
+    }
+    if cwd.as_path() != Path::new("/") && sandbox.authorize_write(cwd).is_ok() {
+        return cwd.as_path().to_path_buf();
+    }
+    if let Some(writable) = sandbox
+        .writable_roots()
+        .iter()
+        .find(|root| root.as_path() != Path::new("/") && sandbox.authorize_write(root).is_ok())
+    {
+        return writable.as_path().to_path_buf();
+    }
+    cwd.as_path().to_path_buf()
 }
 
 #[cfg(target_os = "linux")]
@@ -148,13 +170,14 @@ pub fn run_sandboxed_in_room(
     let (program, process_args) = process_argv
         .split_first()
         .ok_or_else(|| WorkerEnvError::ExecFailed("sandbox floor produced empty argv".into()))?;
+    let tmp_dir = sandboxed_tmp_dir(sandbox, cwd);
     let mut command = Command::new(program);
     command
         .args(process_args)
         .current_dir(cwd.as_path())
-        .env("TMPDIR", cwd.as_path())
-        .env("TMP", cwd.as_path())
-        .env("TEMP", cwd.as_path());
+        .env("TMPDIR", &tmp_dir)
+        .env("TMP", &tmp_dir)
+        .env("TEMP", &tmp_dir);
     let output = run_bounded_command(
         command,
         timeout,
@@ -205,13 +228,14 @@ pub fn run_sandboxed_in_room(
     let (program, process_args) = process_argv
         .split_first()
         .ok_or_else(|| WorkerEnvError::ExecFailed("sandbox floor produced empty argv".into()))?;
+    let tmp_dir = sandboxed_tmp_dir(sandbox, cwd);
     let mut command = Command::new(program);
     command
         .args(process_args)
         .current_dir(cwd.as_path())
-        .env("TMPDIR", cwd.as_path())
-        .env("TMP", cwd.as_path())
-        .env("TEMP", cwd.as_path());
+        .env("TMPDIR", &tmp_dir)
+        .env("TMP", &tmp_dir)
+        .env("TEMP", &tmp_dir);
     run_bounded_command(
         command,
         timeout,
@@ -740,6 +764,38 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, WorkerEnvError::ExecFailed(_)));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sandboxed_tmp_dir_prefers_writable_non_root_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        let ctx = ctx_for(&repo, &wt);
+        let caps = WorkerEnvCaps::from_kind_boundary(&git_worktree_spec());
+        let projected = project_sandbox(&git_worktree_spec(), &caps, &ctx).unwrap();
+        let wt_abs = AbsPath::new(&wt).unwrap();
+        let repo_abs = AbsPath::new(&repo).unwrap();
+
+        assert_eq!(sandboxed_tmp_dir(&projected, &wt_abs), wt_abs.as_path());
+        assert_eq!(sandboxed_tmp_dir(&projected, &repo_abs), wt_abs.as_path());
+
+        let root_abs = AbsPath::new(Path::new("/")).unwrap();
+        let root_sandbox = ProjectedSandbox::from_parts(
+            vec![root_abs.clone()],
+            Vec::new(),
+            Vec::new(),
+            octopus_worker_env::NetworkCeiling::Full,
+        );
+        let selected = sandboxed_tmp_dir(&root_sandbox, &root_abs);
+        assert_ne!(selected, Path::new("/"));
+        assert_eq!(selected, std::fs::canonicalize("/tmp").unwrap());
+        assert_eq!(
+            sandboxed_tmp_dir(&root_sandbox, &repo_abs),
+            std::fs::canonicalize("/tmp").unwrap()
+        );
     }
 
     #[test]
