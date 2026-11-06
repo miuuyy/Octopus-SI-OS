@@ -308,7 +308,12 @@ async fn file_write_process_case(ordered: bool) {
         run_record_hash: None,
     });
     let descriptor_json = serde_json::to_string(&interface).unwrap();
-    let root_slots_json = serde_json::to_string(&root_slots).unwrap();
+    let mut exposed_root_slots = root_slots.clone();
+    let coordinate = tempfile::tempdir().unwrap();
+    let inaccessible = coordinate.path().join("loop");
+    std::os::unix::fs::symlink(&inaccessible, &inaccessible).unwrap();
+    exposed_root_slots.insert("interface_life_install_root".into(), inaccessible);
+    let root_slots_json = serde_json::to_string(&exposed_root_slots).unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_octopus-file-write-tool"))
         .env("OCTOPUS_INTERFACE_ID", door.as_str())
         .env("OCTOPUS_INTERFACE_DIR", &interface_dir)

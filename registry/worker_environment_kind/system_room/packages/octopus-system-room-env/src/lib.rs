@@ -68,11 +68,18 @@ impl ToolProcessHandler for FileWriteProcess {
             let formation = invocation.worker_environment.as_ref().ok_or_else(|| {
                 capability("file.write invocation has no formed worker environment")
             })?;
+            let authority = &invocation.descriptor.process.authority;
+            let write_slots = authority.write_root_slots.iter()
+                .chain(&authority.optional_write_root_slots)
+                .chain(authority.write_argument_paths.iter().flat_map(|binding| &binding.within_root_slots));
+            let write_roots = write_slots.filter_map(|slot| {
+                self.root_slots.get(slot).map(|path| (slot.clone(), path.clone()))
+            }).collect();
             let response = match file_write::execute_file_write_result(
                 &invocation.envelope,
                 &call.arguments,
                 &room_kinds,
-                &self.root_slots,
+                &write_roots,
                 &self.effect_root,
                 self.max_payload_bytes,
             ) {
