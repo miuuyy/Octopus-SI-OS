@@ -668,7 +668,7 @@ async fn settled_native_history_reseeds_only_after_exact_result_proof() {
     let mut driver = CodexAppServerInterfaceDriver::new(AppServerClient::Remote(client));
     let scope = TransportStateScope::Run("run-a".into());
     let acquisition = |source, retired_history, session_context_available| ThreadAcquisition { recovered:Some(source), retired_history, require_exact_resume:false,
-        context_generation:9,input_changes_context:true,model:Some("gpt-5.5".into()),bound_instructions:"bound role",native_affordances:&[],static_context_fingerprint:&settled.static_context_fingerprint,session_context_available };
+        context_generation:9,covered_context_generation:8,model:Some("gpt-5.5".into()),bound_instructions:"bound role",native_affordances:&[],static_context_fingerprint:&settled.static_context_fingerprint,session_context_available };
     assert!(driver.acquire_transport_thread(&scope, acquisition(&settled,Some(&proof),true)).await.is_err());
     driver.interface_private_config.insert("private_thread_cold_start".into(), serde_json::json!("resume_compatible"));
     assert!(driver.acquire_transport_thread(&scope, acquisition(&original,Some(&proof),true)).await.is_err());
@@ -703,7 +703,7 @@ async fn settled_native_history_reseeds_only_after_exact_result_proof() {
     };
     let (_, restored) = tokio::join!(admit, collect);
     driver.transport_state.lock().await.clear();
-    let acquired = driver.acquire_transport_thread(&scope,ThreadAcquisition { recovered:Some(&restored),retired_history:None,require_exact_resume:false,context_generation:10,input_changes_context:true,
+    let acquired = driver.acquire_transport_thread(&scope,ThreadAcquisition { recovered:Some(&restored),retired_history:None,require_exact_resume:false,context_generation:10,covered_context_generation:9,
         model:Some("gpt-5.5".into()),bound_instructions:"bound role",native_affordances:&[],static_context_fingerprint:&restored.static_context_fingerprint,session_context_available:true }).await.unwrap();
     assert_eq!(acquired.0,"replacement"); assert!(!acquired.1);
     assert_eq!(std::fs::read(&path).unwrap(),bytes);

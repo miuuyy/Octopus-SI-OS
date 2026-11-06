@@ -11,7 +11,7 @@ pub(crate) struct ResultArrival<'a, 's> {
     pub(crate) lifecycle_payloads: &'a Vec<ArtifactBindingPayload>,
     pub(crate) lifecycle_resumed_provider_input: bool,
     pub(crate) recovered: &'a Option<CodexContinuityState>,
-    pub(crate) context_generation: u64,
+    pub(crate) source_context_generation: u64,
     pub(crate) current_session_context: &'a Arc<Vec<SessionContextArtifact>>,
     pub(crate) effective_manifest_label: &'a String,
     pub(crate) effective_request_bytes: &'a Vec<u8>,
@@ -46,7 +46,7 @@ impl CodexAppServerInterfaceDriver {
             input,
             scope,
             recovered,
-            context_generation,
+            source_context_generation,
             effective_manifest_label,
             effective_source_artifact,
             ..
@@ -99,7 +99,7 @@ impl CodexAppServerInterfaceDriver {
                         turn_context,
                         response.clone(),
                         recovered.as_ref(),
-                        context_generation,
+                        source_context_generation,
                     )
                     .await?
                 {
@@ -109,7 +109,7 @@ impl CodexAppServerInterfaceDriver {
                     validate_recovered_operator_response(response, pending)?;
                     if matches!(response, OperatorResponseArtifact::UserInput { .. }) {
                         let state = recovered.as_ref().expect("pending continuity");
-                        if state.context_generation != context_generation || state.interrupted_pending.is_some()
+                        if state.context_generation != source_context_generation || state.interrupted_pending.is_some()
                             || state.native_terminal.is_some() || state.tool_operator_request.is_some()
                         {
                             return Err(InterfaceDriverError::FailedClosed("question response changed its pending native context".into()));
@@ -173,7 +173,7 @@ impl CodexAppServerInterfaceDriver {
             lifecycle_payloads,
             lifecycle_resumed_provider_input,
             recovered,
-            context_generation,
+            source_context_generation,
             current_session_context,
             effective_manifest_label,
             effective_request_bytes,
@@ -242,7 +242,7 @@ impl CodexAppServerInterfaceDriver {
                 turn_context,
                 result.clone(),
                 recovered.as_ref(),
-                context_generation,
+                source_context_generation,
                 interrupted_after_artifact.as_deref() == Some(TURN_DYNAMIC_TOOL_CALL_LABEL),
             )
             .await?
@@ -321,7 +321,7 @@ impl CodexAppServerInterfaceDriver {
                     "cold tool result has no source continuity".into(),
                 )
             })?;
-            if state.context_generation != context_generation {
+            if state.context_generation != source_context_generation {
                 return Err(InterfaceDriverError::FailedClosed(
                     "cold tool result has stale source context generation".into(),
                 ));
@@ -503,7 +503,7 @@ impl CodexAppServerInterfaceDriver {
             lifecycle_payloads,
             lifecycle_resumed_provider_input,
             recovered,
-            context_generation,
+            source_context_generation,
             current_session_context,
             effective_manifest_label,
             effective_request_bytes,
@@ -587,7 +587,7 @@ impl CodexAppServerInterfaceDriver {
                 turn_context,
                 result,
                 recovered.as_ref(),
-                context_generation,
+                source_context_generation,
                 interrupted_after_artifact.as_deref() == Some(TURN_DYNAMIC_TOOL_CALL_LABEL),
             )
             .await?
@@ -662,7 +662,7 @@ impl CodexAppServerInterfaceDriver {
                     "cold interface result has no source continuity".into(),
                 )
             })?;
-            if state.context_generation != context_generation {
+            if state.context_generation != source_context_generation {
                 return Err(InterfaceDriverError::FailedClosed(
                     "cold interface result has stale source context generation".into(),
                 ));

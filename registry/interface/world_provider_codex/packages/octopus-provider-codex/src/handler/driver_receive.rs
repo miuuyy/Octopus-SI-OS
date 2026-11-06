@@ -426,16 +426,18 @@ impl CodexAppServerInterfaceDriver {
                     .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?);
             assembled_context.session_context_available = true;
         }
-        let authored_context_generation = read_codex_context_generation(&run_record, &runtime.interface)?
+        let authored_source_generation = read_codex_context_generation(&run_record, &runtime.interface)?;
+        let authored_context_generation = authored_source_generation
             .checked_add(deferred_context_generations)
             .ok_or_else(|| InterfaceDriverError::FailedClosed("Codex authored context generation overflowed".to_string()))?;
-        let context_generation = if durable_interrupt_override {
-            recovered
+        let (source_context_generation, context_generation) = if durable_interrupt_override {
+            let generation = recovered
                 .as_ref()
                 .map(|state| state.context_generation)
-                .unwrap_or(authored_context_generation)
+                .unwrap_or(authored_context_generation);
+            (generation, generation)
         } else {
-            authored_context_generation
+            (authored_source_generation, authored_context_generation)
         };
         let invocation_context_generation = if input_changes_context {
             context_generation.checked_add(1).ok_or_else(|| {
@@ -495,7 +497,7 @@ impl CodexAppServerInterfaceDriver {
         if let Some(model_context) = &early_model_context
             && recovered.as_ref().is_none_or(|state| state.outstanding_len() <= 1)
             && self.refresh_native_context(
-                turn_context, &provider_input, recovered.as_ref(), context_generation,
+                turn_context, &provider_input, recovered.as_ref(), source_context_generation,
                 CurrentNativeContext {
                     model: &model_context.model, instructions: &model_context.bound_instructions, tools: &native_catalog.specs,
                     static_fingerprint: &model_context.static_context_fingerprint,
@@ -580,7 +582,7 @@ impl CodexAppServerInterfaceDriver {
             lifecycle_payloads: &lifecycle_payloads,
             lifecycle_resumed_provider_input,
             recovered: &recovered,
-            context_generation,
+            source_context_generation,
             current_session_context: &current_session_context,
             effective_manifest_label: &effective_manifest_label,
             effective_request_bytes: &effective_request_bytes,
@@ -615,7 +617,7 @@ impl CodexAppServerInterfaceDriver {
                 response,
                 recovered,
                 &pending,
-                context_generation,
+                source_context_generation,
                 &model,
                 &bound_instructions,
                 native_affordances,
@@ -650,7 +652,11 @@ impl CodexAppServerInterfaceDriver {
                         || resume_control_id.is_some()
                         || cut_turn_continuation.is_some(),
                     context_generation: invocation_context_generation,
-                    input_changes_context,
+                    covered_context_generation: if recovered_tool_continuation.is_some() || cut_turn_continuation.is_some() {
+                        source_context_generation
+                    } else {
+                        context_generation
+                    },
                     model: Some(model.clone()),
                     bound_instructions: &bound_instructions,
                     native_affordances,

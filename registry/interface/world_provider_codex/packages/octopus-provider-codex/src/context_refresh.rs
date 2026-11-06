@@ -1287,7 +1287,7 @@ impl CodexAppServerInterfaceDriver {
                                 )
                             },
                         )?,
-                        input_changes_context: true,
+                        covered_context_generation: previous.context_generation,
                         model: Some(current.model.into()),
                         bound_instructions: current.instructions,
                         native_affordances: current.tools,

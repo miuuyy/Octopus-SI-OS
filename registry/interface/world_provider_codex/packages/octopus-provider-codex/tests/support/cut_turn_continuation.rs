@@ -1,5 +1,10 @@
 #[tokio::test]
 async fn a_turn_cut_by_process_death_continues_from_its_late_result() {
+    continue_cut_turn(0, true, None).await;
+    continue_cut_turn(1, false, Some(TURN_TOKEN_USAGE_LABEL)).await;
+}
+
+async fn continue_cut_turn(deferred_context_generations: u64, input_changes_context: bool, interrupted_after_artifact: Option<&str>) {
     use octopus_appserver_proto::{ApprovalsReviewer, AskForApproval, SandboxPolicy, SessionSource, Thread, ThreadStatus};
     let temp = tempfile::tempdir().unwrap();
     let cwd = octopus_util_abspath::AbsolutePathBuf::from_absolute_path(temp.path()).unwrap();
@@ -152,7 +157,7 @@ done
         current_session_context: Arc::new(Vec::new()),
         output_root: &output_root, live_stream_root: &live_stream_root,
         source_movement_seq: 1, attempt: 1, admitted_run_record: &admitted_record, current_run_record: &current_record,
-        deferred_context_generations: 0, input_changes_context: true, interrupted_after_artifact: None,
+        deferred_context_generations, input_changes_context, interrupted_after_artifact: interrupted_after_artifact.map(str::to_owned),
         recovered_handoff_artifacts: Arc::new(Vec::new()), durable_interrupted_continuity: None,
         reconciled_result_continuity: None, control: &control, handoff_barrier: ProviderHandoffBarrier::new(),
     });
@@ -194,5 +199,6 @@ done
     assert_eq!(continued.thread_id, "thr-exact");
     assert!(continued.interrupted_pending.is_none() && continued.native_terminal.is_none());
     assert!(matches!(continued.pending, Some(CodexPendingContinuity::DynamicTool { ref call_id, .. }) if call_id == "call-2"));
+    assert_eq!(continued.context_generation, 9, "the late result and the next call each advance the call's generation once");
     driver.shutdown().await.unwrap();
 }

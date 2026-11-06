@@ -139,18 +139,18 @@ impl CodexAppServerInterfaceDriver {
             retired_history,
             require_exact_resume,
             context_generation,
-            input_changes_context,
+            covered_context_generation,
             model,
             bound_instructions,
             native_affordances,
             static_context_fingerprint,
             session_context_available,
         } = acquisition;
-        let covered_context_generation = context_generation
-            .checked_sub(u64::from(input_changes_context))
-            .ok_or_else(|| InterfaceDriverError::FailedClosed(
+        if covered_context_generation > context_generation {
+            return Err(InterfaceDriverError::FailedClosed(
                 "Codex invocation context generation has no covered predecessor".to_string(),
-            ))?;
+            ));
+        }
         if require_exact_resume && recovered.is_none() {
             return Err(InterfaceDriverError::FailedClosed(
                 "Codex operation requires exact existing thread continuity".to_string(),

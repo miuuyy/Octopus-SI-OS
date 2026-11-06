@@ -193,7 +193,7 @@ pub(crate) struct ThreadAcquisition<'a> {
     pub(crate) retired_history: Option<&'a NativeHistoryProof>,
     pub(crate) require_exact_resume: bool,
     pub(crate) context_generation: u64,
-    pub(crate) input_changes_context: bool,
+    pub(crate) covered_context_generation: u64,
     pub(crate) model: Option<String>,
     pub(crate) bound_instructions: &'a str,
     pub(crate) native_affordances: &'a [DynamicToolSpec],
