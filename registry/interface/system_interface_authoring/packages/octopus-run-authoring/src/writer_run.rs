@@ -1015,9 +1015,10 @@ impl OrderedArguments {
                         && details["failure_details"]["effect_state"].as_str() == Some("in_flight_outcome_unknown")
                 })
         });
+        let unresolved = indeterminate || definite_refusal(result).is_some();
         let writer_unadvanced = snapshot == decoded[0].0.as_bytes();
         let mismatches = [
-            (snapshot != decoded[0].1.as_bytes() && !(indeterminate && writer_unadvanced), "run record bytes"),
+            (snapshot != decoded[0].1.as_bytes() && !(unresolved && writer_unadvanced), "run record bytes"),
             (runtime.run != record.id, "run"),
             (runtime.ee != record.ee, "execution environment"),
             (runtime.worker != record.worker, "worker"),
@@ -1055,7 +1056,7 @@ impl OrderedArguments {
         if result.tool != writer.tool || result.label != writer.result_label {
             return Err("ordered result changed tool or label".into());
         }
-        if indeterminate {
+        if unresolved {
             return Ok(if writer_unadvanced { OrderedTargetEffect::UncertainWriter } else { OrderedTargetEffect::Uncertain });
         }
         let body = if result.ok {
@@ -1125,6 +1126,12 @@ pub(super) enum OrderedTargetEffect {
     UncertainWriter,
 }
 
+fn definite_refusal(result: &ToolResultArtifact) -> Option<String> {
+    let error = result.error.as_ref().filter(|_| !result.ok && result.body.is_none())?;
+    (!matches!(error.code.as_str(), "tool_effect_indeterminate" | "file_write_incomplete"))
+        .then(|| format!("{}: {}", error.code, error.message))
+}
+
 #[derive(Clone)]
 struct UnresolvedTarget {
     seq: u64,
@@ -1132,6 +1139,7 @@ struct UnresolvedTarget {
     call: Movement,
     result: Movement,
     writer_advanced: bool,
+    refusal: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1145,6 +1153,7 @@ pub(super) struct WriterHistory {
     last_applied_target: Option<(u64, Vec<u8>)>,
     unresolved: Option<UnresolvedTarget>,
     voided: BTreeMap<u64, u64>,
+    refused: BTreeMap<u64, String>,
     cursor: Option<(u64, u64, ContentHash)>,
 }
 
@@ -1182,6 +1191,7 @@ fn history(
         last_applied_target: None,
         unresolved: None,
         voided: BTreeMap::new(),
+        refused: BTreeMap::new(),
         cursor: None,
     });
     if saved.binding.run != binding.run || saved.binding.initial_record != binding.initial_record || saved.binding.initial_record_format != binding.initial_record_format {
@@ -1375,7 +1385,8 @@ fn history(
             }
             let effect = args.checked_result(&declared, metadata, &snapshot, &result, limits.max_payload_bytes, call.seq.0)?;
             current.current = snapshot;
-            let attempt = UnresolvedTarget { seq, args, call, result: movement.clone(), writer_advanced: effect != OrderedTargetEffect::UncertainWriter };
+            let attempt = UnresolvedTarget { seq, args, call, result: movement.clone(),
+                writer_advanced: effect != OrderedTargetEffect::UncertainWriter, refusal: definite_refusal(&result) };
             if matches!(effect, OrderedTargetEffect::Uncertain | OrderedTargetEffect::UncertainWriter) {
                 current.unresolved = Some(attempt);
             } else {
@@ -1478,7 +1489,11 @@ fn resolve_target_attempt(
         return Err("ordered target effect remains uncertain; its target moved to content neither attempt state proves".into());
     }
     let writer = RunRecord::from_bytes(attempt.args.writes[0].content(maximum)?.as_bytes()).map_err(|e| e.to_string())?;
-    current.voided.insert(attempt.seq, target(&writer, provider)?.generation);
+    let generation = target(&writer, provider)?.generation;
+    current.voided.insert(attempt.seq, generation);
+    if let Some(refusal) = attempt.refusal {
+        current.refused.insert(generation, refusal);
+    }
     Ok(())
 }
 
@@ -1762,6 +1777,12 @@ impl ProviderOutputHandoff {
                 return Err("provider ordered file write awaits its admitted result".into());
             }
             let progress = history(&self.ctx, &self.session.writer_history, &self.config)?;
+            if let Some(refusal) = known.as_ref()
+                .filter(|(after_hash, _, _, _)| *after_hash == planned.after_hash)
+                .and_then(|(_, _, _, generation)| progress.refused.get(generation))
+            {
+                return Err(format!("provider ordered file write was refused before any effect: {refusal}"));
+            }
             if known.as_ref().is_none_or(|(after_hash, _, _, generation)| {
                 *after_hash != planned.after_hash || progress.voided.values().any(|voided| voided == generation)
             }) {

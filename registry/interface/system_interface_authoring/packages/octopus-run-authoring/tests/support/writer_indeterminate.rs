@@ -35,4 +35,12 @@ fn indeterminate_writer_requires_exact_failure_and_unadvanced_readback() {
     assert_eq!(args.checked_result(&writer, &metadata, &before, &result, 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
     assert!(args.checked_result(&writer, &metadata, &before, &result, 1048576, 11).is_err());
     assert!(args.checked_result(&writer, &metadata, &after, &result, 1048576, 10).is_err());
+    let refused: ToolResultArtifact = serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
+        "error":{"code":"file_write_evidence_failed","message":"configured root cannot be canonicalized"}})).unwrap();
+    assert_eq!(args.checked_result(&writer, &metadata, &before, &refused, 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
+    assert_eq!(definite_refusal(&refused).as_deref(), Some("file_write_evidence_failed: configured root cannot be canonicalized"));
+    assert_eq!(definite_refusal(&result), None);
+    let incomplete: ToolResultArtifact = serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
+        "error":{"code":"file_write_incomplete","message":"partial"}})).unwrap();
+    assert!(args.checked_result(&writer, &metadata, &before, &incomplete, 1048576, 10).is_err());
 }
