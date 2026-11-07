@@ -790,9 +790,20 @@ pub(crate) fn refresh_projection_contracts(
     {
         return Err("accepted maintenance projection observes another source".into());
     }
-    config.input_rules = input_rules;
-    config.input_routes = input_routes;
-    config.evidence_rules = evidence_rules;
+    let formed = input_rules.iter().chain(&evidence_rules).flat_map(|rule| rule.labels.iter().cloned()).collect::<BTreeSet<_>>();
+    let retained = |rules: &[ProjectionRule]| rules.iter().filter_map(|rule| {
+        let labels = rule.labels.iter().filter(|label| !formed.contains(*label)).cloned().collect::<Vec<_>>();
+        (!labels.is_empty()).then(|| ProjectionRule { labels, ..rule.clone() })
+    }).collect::<Vec<_>>();
+    let kept_inputs = retained(&config.input_rules);
+    let kept_evidence = retained(&config.evidence_rules);
+    let mut routes = input_routes;
+    for route in std::mem::take(&mut config.input_routes) {
+        if !routes.iter().any(|next| json!(next) == json!(route)) { routes.push(route); }
+    }
+    config.input_rules = input_rules.into_iter().chain(kept_inputs).collect();
+    config.evidence_rules = evidence_rules.into_iter().chain(kept_evidence).collect();
+    config.input_routes = routes;
     config.validate()?;
     *slot = json!(config);
     if writes.iter().any(|write| write.path == path) {

@@ -184,18 +184,53 @@ fn current_change_retires_a_standing_external_input() {
     let writer = composition.authoring.capability_tools["file.write"].clone();
     let bridge = ProviderCapabilityBridge { tool: writer.clone(), correlation_id: "readback".into(),
         arguments_hash: ContentHash::of_bytes(b"{}").to_hex(), return_interface: door.clone().into() };
+    let state = json!(current)["interface_state"].clone();
+    let client = state.as_object().unwrap().iter().find(|(_, value)| value.get("client_surface_role").is_some()).unwrap().0.clone();
+    let templates = state[provider.as_str()]["run_authoring_binding"]["checkpoints"].as_array().unwrap().clone();
+    let own_routes = templates.iter().filter(|cp| cp["interface_binding"]["interface"] == json!(client)
+        && (cp["role"] == "stable" || cp["role"] == "independent_input")).collect::<Vec<_>>();
+    assert!(own_routes.len() >= 2);
+    for own in own_routes {
+        let mut future = json!(current);
+        let rows = future["checkpoints"].as_array().unwrap().iter().filter(|cp| cp["interface_binding"] == own["interface_binding"]
+            && cp["outbound_interface_bindings"] == own["outbound_interface_bindings"]).map(|cp| cp["id"].clone()).collect::<Vec<_>>();
+        future["checkpoints"].as_array_mut().unwrap().retain(|cp| !rows.contains(&cp["id"]));
+        future["active_checkpoints"].as_array_mut().unwrap().retain(|id| !rows.contains(id));
+        future["interface_state"][provider.as_str()]["run_authoring_binding"]["checkpoints"].as_array_mut().unwrap().retain(|cp| cp["name"] != own["name"]);
+        let error = plan_current_run_amendment(&request.roots, &current, &provider, CurrentRunRequest { change: None,
+            amendment_key: "drop-own-route".into(), publications: vec![], selection: None,
+            authored: Some(AuthoredCurrentRun { expected_before_hash: ContentHash::of_bytes(waiting.as_bytes()).to_hex(),
+                expected_before: json!(current), run_record: future, writes: vec![] }) },
+            bridge.clone(), &[(writer.clone(), door.clone().into())]).err().expect("the run's own client route must stay");
+        assert!(error.contains("removes or duplicates retained template"), "{error}");
+    }
+    write(&root, "registry/artifact/pulse-notes/artifact.json", json!({"id":"pulse-notes","label":"context.reference","text":"Pulse notes"}));
+    let mut add = CurrentRunSelectionEntries::default();
+    add.context_artifact_bindings.push(octopus_operator_chat_client::ArtifactBindingSeed { id: "pulse-notes".into() });
     let mut remove = CurrentRunSelectionEntries::default();
     remove.external_inputs.push(pulse);
     let plan = plan_current_run_amendment(&request.roots, &current, &provider, CurrentRunRequest {
-        change: Some(CurrentRunChange { add: Default::default(), remove }),
+        change: Some(CurrentRunChange { add, remove }),
         amendment_key: "retire-pulse".into(), publications: vec![], selection: None, authored: None },
         bridge, &[(writer, door.into())]).unwrap();
     assert!(plan.validation.safe_to_apply, "{:?}", plan.validation.regressions);
     let after = json!(plan.amendment.after);
     assert!(!pinned(&after));
-    assert_eq!(after["interface_state"][provider.as_str()]["pending_handoff"], json!(current)["interface_state"][provider.as_str()]["pending_handoff"]);
-    let selection = current_selection(&request.roots, &current, &provider).unwrap().unwrap();
-    assert!(selection.external_inputs.iter().any(|input| input.interface_id == "world_test_pulse"));
+    let retired = json!(current)["checkpoints"].as_array().unwrap().iter()
+        .find(|cp| cp["interface_binding"]["interface"] == "world_test_pulse").unwrap()["id"].clone();
+    let provider_state = &after["interface_state"][provider.as_str()];
+    assert!(!provider_state["frontier_checkpoint_ids"].as_array().unwrap().contains(&retired));
+    assert!(!after["active_checkpoints"].as_array().unwrap().contains(&retired));
+    assert!(!provider_state["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter()
+        .any(|cp| cp["interface_binding"]["interface"] == "world_test_pulse"));
+    assert_eq!(provider_state["pending_handoff"], json!(current)["interface_state"][provider.as_str()]["pending_handoff"]);
+    assert!(after["checkpoints"].as_array().unwrap().iter().any(|cp| after["active_checkpoints"].as_array().unwrap().contains(&cp["id"])
+        && cp["interface_binding"]["interface"] == json!(client)
+        && cp["artifact_bindings"].as_array().unwrap().iter().any(|binding| binding["id"] == "pulse-notes")));
+    let sidecar: Value = serde_json::from_str(&plan.activation_writes.iter().find(|write|
+        write.path.ends_with(format!("{client}/octopus_os.json"))).unwrap().content).unwrap();
+    assert!(sidecar["authoring_profile"]["context_artifact_bindings"].as_array().unwrap().iter().any(|binding| binding["id"] == "pulse-notes"));
+    assert!(!sidecar["authoring_profile"]["external_inputs"].as_array().into_iter().flatten().any(|input| input["interface_id"] == "world_test_pulse"));
 }
 
 fn pending_tool_handoff(request: &RunCompositionRequest, plan: &RunCompositionPlan, before: &Value) -> Value {

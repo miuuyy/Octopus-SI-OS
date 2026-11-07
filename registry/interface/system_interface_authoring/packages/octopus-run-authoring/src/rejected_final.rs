@@ -29,6 +29,10 @@ impl RejectedFinalOutput {
     pub fn refusal_movement_seqs(&self) -> Vec<u64> {
         self.proof.refusals.iter().map(|row| row.seq).collect()
     }
+
+    pub fn rejected_artifact(&self) -> Option<&ArtifactId> {
+        self.proof.predecessor.items.first().map(|item| &item.artifact_id)
+    }
 }
 
 pub(super) fn follows(before: &PendingHandoff, after: &PendingHandoff) -> bool {

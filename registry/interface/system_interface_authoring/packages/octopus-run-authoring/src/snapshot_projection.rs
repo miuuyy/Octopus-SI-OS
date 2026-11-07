@@ -250,25 +250,6 @@ pub fn read_source_artifact(
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
-pub fn selected_source_input_binding(
-    ctx: &InterfaceLiftContext,
-    entry: &SessionContextArtifact,
-    scope: &SnapshotSourceScope,
-) -> Result<AuthoredInterfaceBinding, String> {
-    let (movement, record) = source_entry_record(ctx, entry, scope)?;
-    let checkpoint = movement
-        .invocation_metadata
-        .as_ref()
-        .and_then(|value| value.invocation())
-        .and_then(|metadata| metadata.runtime.as_ref())
-        .map(|runtime| runtime.checkpoint.clone())
-        .ok_or("source input runtime absent")?;
-    record
-        .checkpoint(&checkpoint)
-        .and_then(|cp| cp.interface_binding.clone())
-        .ok_or_else(|| "source input binding absent".into())
-}
-
 pub fn verify_selected_source_input(
     ctx: &InterfaceLiftContext,
     entry: &SessionContextArtifact,
@@ -293,6 +274,9 @@ pub fn verify_selected_source_input(
         .interface_binding
         .as_ref()
         .ok_or("source input binding absent")?;
+    if !routes.iter().any(|route| route.interface_binding == *inbound && route.interface_binding.admits(&entry.label)) {
+        return Err(format!("selected input arrived through '{}', outside the declared source input routes", inbound.interface));
+    }
     let topology: BoundRunAuthoringTopology = serde_json::from_value(
         record
             .interface_state
@@ -306,9 +290,6 @@ pub fn verify_selected_source_input(
         || topology.run != record.id
         || topology.worker != record.worker
         || topology.provider_interface.as_str() != scope.provider
-        || !routes.iter().any(|route| {
-            route.interface_binding == *inbound && route.interface_binding.admits(&entry.label)
-        })
         || !topology.checkpoints.iter().any(|template| {
             template.role.is_provider_input()
                 && checkpoint_record_matches_template(cp, template, &record.id)

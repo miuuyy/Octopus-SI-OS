@@ -9,7 +9,7 @@ use octopus_run_authoring::{
     ProviderSourceRecovery, RejectedFinalOutput, RunAuthoringResultIdentity, SessionContextArtifact,
     snapshot_projection::{
         SnapshotInputOrigin, SnapshotInputRoute, SnapshotSourceScope, SnapshotWindowBounds,
-        resolve_session_snapshot_window, selected_source_input_binding, verify_selected_source_input, verify_source_bound_entry,
+        resolve_session_snapshot_window, verify_selected_source_input, verify_source_bound_entry,
         verify_source_context_entry, verify_terminal_source,
     },
 };
@@ -920,6 +920,13 @@ fn project_source(
                 "projection input differs from both declared exact relay boundaries".into(),
             );
         }
+        if let Some(rejected) = rejected {
+            let output = json!({"schema_version":1,"label":OUTCOME_ERROR_LABEL,
+                "source":{"run":config.source_run,"projection_run":config.projection_run,
+                    "terminal_artifact":envelope.artifact,"projection_source_movement_seq":movement.seq.0},
+                "input_refusal":{"rejected_input":rejected.rejected_artifact(),"refusal_movement_seqs":rejected.refusal_movement_seqs()}});
+            return Ok((OUTCOME_ERROR_LABEL, projection_bytes(&output, config.bounds.max_output_bytes)?));
+        }
         let scope = SnapshotSourceScope {
             run: config.source_run.clone(),
             worker: config.source_worker_interface.clone(),
@@ -963,15 +970,6 @@ fn project_source(
             .iter()
             .find(|rule| rule.labels.contains(&selected.label))
             .ok_or("selected source input rule is absent")?;
-        let inbound = selected_source_input_binding(ctx, selected, &scope)?;
-        if !config.input_routes.iter().any(|route| {
-            route.interface_binding == inbound && route.interface_binding.admits(&selected.label)
-        }) {
-            return Err(format!(
-                "selected input arrived through '{}', outside the declared source input routes",
-                inbound.interface
-            ));
-        }
         let input_proof = verify_selected_source_input(
             ctx,
             selected,
