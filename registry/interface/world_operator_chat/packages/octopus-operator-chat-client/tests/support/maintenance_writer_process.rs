@@ -233,6 +233,7 @@ async fn invoke(
         "authority_arguments":authority_arguments,"arguments":arguments,"record":record})).unwrap()).unwrap();
     let executable = std::env::current_exe().unwrap();
     let tool = executable.parent().unwrap().parent().unwrap().join("octopus-file-write-tool");
+    assert!(tool.is_file(), "'{}' is built by cargo build -p octopus-system-room-env --bin octopus-file-write-tool", tool.display());
     let authority = octopus_verifiers::process_authority::ProcessAuthority::resolve(
         roots.values().cloned().chain([source().join("registry"), interface_dir.to_path_buf()]),
         [private.path().to_path_buf()], [executable.clone(), tool], [], [], [],

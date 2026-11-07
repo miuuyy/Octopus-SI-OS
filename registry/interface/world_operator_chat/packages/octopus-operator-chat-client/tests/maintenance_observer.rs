@@ -1007,10 +1007,12 @@ mod movement_gate {
         }
     }
 
-    #[tokio::test]
-    async fn scripted_provider_request_receives_exact_projected_evidence() {
-        let fixture = scripted_provider_request_fixture();
-        Box::pin(fixture).await;
+    #[test]
+    fn scripted_provider_request_receives_exact_projected_evidence() {
+        std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+                .block_on(Box::pin(scripted_provider_request_fixture()));
+        }).unwrap().join().unwrap();
     }
 
     async fn scripted_provider_request_fixture() {

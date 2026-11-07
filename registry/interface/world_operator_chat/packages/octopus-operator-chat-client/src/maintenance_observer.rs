@@ -637,6 +637,7 @@ pub fn plan_maintenance_observer(
         "collection_entries_root":entries_root,"publication_door_interface":publication_door,"publication_tool":publication_tool,
         "initial_record":initial_record,"initial_record_content":content,"lifecycle_ownership":lifecycle_ownership,
         "observer_selection":request.observer_selection});
+    let mut owner_first = Vec::new();
     push_json_write(
         request
             .roots
@@ -644,8 +645,10 @@ pub fn plan_maintenance_observer(
             .join(format!("{run_id}.json")),
         content,
         format!("run:{run_id}"),
-        &mut run_writes,
+        &mut owner_first,
     )?;
+    owner_first.append(&mut run_writes);
+    let mut run_writes = owner_first;
     normalize_write_hash_algorithm(&mut writes, request.write_hash_algorithm)?;
     normalize_write_hash_algorithm(&mut run_writes, request.write_hash_algorithm)?;
     let mut interfaces = exact_topology_interface_ids(&identity, &external);
@@ -1482,6 +1485,7 @@ fn plan_projection_run(
         &tool,
         writes,
     )?;
+    let mut owner_first = Vec::new();
     push_json_write(
         request
             .roots
@@ -1489,9 +1493,10 @@ fn plan_projection_run(
             .join(format!("{}.json", projection.projection_run)),
         content.clone(),
         format!("run:{}", projection.projection_run),
-        &mut run_writes,
+        &mut owner_first,
     )?;
-    Ok((content, run_writes, interfaces, vec![tool]))
+    owner_first.append(&mut run_writes);
+    Ok((content, owner_first, interfaces, vec![tool]))
 }
 
 fn names_binding(interface: &str, labels: &[String]) -> Result<AuthoredInterfaceBinding, String> {
