@@ -77,7 +77,7 @@ async fn authored_interpreted_tool_loads_hot_and_repairs_in_the_same_run() {
         }
     };
     assert!(matches!(host.invoke(&ctx, "authored.echo".into(), json!({}), envelope(1), false).await,
-        ToolProcessBrokerInvocation::Outcome(ToolProcessBrokerResult::CapabilityFailed { .. })));
+        ToolProcessBrokerInvocation::Outcome(ToolProcessBrokerResult::InvocationRefused { .. })));
     std::fs::write(kind.join("worker_environment_kind.json"), serde_json::to_vec(&json!({
         "worker_environment_kind_id": "test.room", "substrate_family": "process_exec", "door_driver_refs": ["test_door"],
         "tool_process_bins": ["node"], "worker_consent": "explicit_ceiling", "supported_executor_kinds": ["exec"],

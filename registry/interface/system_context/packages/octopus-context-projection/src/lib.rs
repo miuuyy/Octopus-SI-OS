@@ -825,8 +825,50 @@ async fn process(
             );
         }
     } }
+    let emission = projected_emission(ctx, config, envelope, movement, rejected.as_ref(), limits, settle_unprojectable)?;
+    let outcome = match rejected {
+        Some(rejected) => handoff.hand_replacement_final(&rejected, emission).await?,
+        None => match handoff.hand_final(emission).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let Ok(observed) = session
+                    .from_invocation_when_ready(
+                        ctx,
+                        &descriptor,
+                        &octopus_descriptors::RunId::new(&config.projection_run),
+                        envelope,
+                        movement.seq.0,
+                        &pinned,
+                    )
+                    .await
+                else {
+                    return Err(error);
+                };
+                let Ok(Some(rejected)) = observed.rejected_final_output().await else {
+                    return Err(error);
+                };
+                let emission = projected_emission(ctx, config, envelope, movement, Some(&rejected), limits, settle_unprojectable)?;
+                observed.hand_replacement_final(&rejected, emission).await?
+            }
+        },
+    };
+    if !matches!(outcome, ProviderHandoffOutcome::Admitted { .. }) {
+        return Err("projection final output was not admitted".into());
+    }
+    Ok(())
+}
+
+fn projected_emission(
+    ctx: &InterfaceLiftContext,
+    config: &ContextProjectionConfig,
+    envelope: &octopus_interfaces::InterfaceInvocationEnvelope,
+    movement: &octopus_ledger::Movement,
+    rejected: Option<&RejectedFinalOutput>,
+    limits: octopus_interface_transport::InterfaceHostIoLimits,
+    settle_unprojectable: bool,
+) -> Result<ProviderEmission, String> {
     let (output_label, bytes) =
-        match project_source(ctx, config, envelope, movement, rejected.as_ref(), limits) {
+        match project_source(ctx, config, envelope, movement, rejected, limits) {
             Ok(projected) => projected,
             Err(error) if !settle_unprojectable => return Err(error),
             Err(error) => (
@@ -843,15 +885,7 @@ async fn process(
     let artifact =
         InterfaceArtifactFile::write(ctx.var_dir.join("projected-context"), output_label, &bytes)
             .map_err(|e| e.to_string())?;
-    let emission = ProviderEmission { artifact, route: ProviderEmissionRoute::ClientProjection };
-    let outcome = match rejected {
-        Some(rejected) => handoff.hand_replacement_final(&rejected, emission).await?,
-        None => handoff.hand_final(emission).await?,
-    };
-    if !matches!(outcome, ProviderHandoffOutcome::Admitted { .. }) {
-        return Err("projection final output was not admitted".into());
-    }
-    Ok(())
+    Ok(ProviderEmission { artifact, route: ProviderEmissionRoute::ClientProjection })
 }
 
 fn project_source(

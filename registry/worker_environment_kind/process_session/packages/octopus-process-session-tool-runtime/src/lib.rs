@@ -947,31 +947,34 @@ fn materialize_tool_process_binding(
         let directory_permissions = {
             use std::os::unix::fs::PermissionsExt;
             let permissions = std::fs::metadata(&temporary)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| format!("tool-process bound artifact stage '{}' metadata cannot be read: {error}", temporary.display()))?
                 .permissions();
             std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o700))
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| format!("tool-process bound artifact stage '{}' cannot be made private: {error}", temporary.display()))?;
             permissions
         };
-        let payload = binding.read_bytes().map_err(|error| error.to_string())?;
+        let payload = binding.read_bytes()
+            .map_err(|error| format!("tool-process bound artifact '{}' payload cannot be read: {error}", binding.artifact.id.as_str()))?;
         for (name, bytes) in [
             ("payload", payload.as_ref()),
             ("artifact.json", manifest_bytes.as_slice()),
         ] {
-            let file = octopus_file_storage::write_new(&temporary.join(name), bytes)
-                .map_err(|error| error.to_string())?;
+            let target = temporary.join(name);
+            let file = octopus_file_storage::write_new(&target, bytes)
+                .map_err(|error| format!("tool-process bound carrier '{}' cannot be written: {error}", target.display()))?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 file.set_permissions(std::fs::Permissions::from_mode(0o600))
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| format!("tool-process bound carrier '{}' cannot be made private: {error}", target.display()))?;
             }
-            file.sync_all().map_err(|error| error.to_string())?;
+            file.sync_all()
+                .map_err(|error| format!("tool-process bound carrier '{}' cannot be synced: {error}", target.display()))?;
         }
         drop(payload);
         #[cfg(unix)]
         std::fs::set_permissions(&temporary, directory_permissions)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("tool-process bound artifact stage '{}' permissions cannot be restored: {error}", temporary.display()))?;
         sync_tool_process_owner_directory(&temporary)?;
         match std::fs::rename(&temporary, &destination) {
             Ok(()) => sync_tool_process_owner_directory(parent)?,
@@ -981,7 +984,8 @@ fn materialize_tool_process_binding(
                     std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
                 ) =>
             {
-                std::fs::remove_dir_all(&temporary).map_err(|error| error.to_string())?;
+                std::fs::remove_dir_all(&temporary)
+                    .map_err(|error| format!("tool-process bound artifact stage '{}' cannot be removed: {error}", temporary.display()))?;
             }
             Err(error) => {
                 return Err(format!(

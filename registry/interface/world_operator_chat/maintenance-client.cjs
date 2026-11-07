@@ -17,7 +17,11 @@ function decodeMaintenanceDeclaration(plan, target) {
     "source_worker_interface", "source_provider_interface", "source_client_interface", "source_relay_interface",
     "projection_interface", "experience_interface", "terminal_label", "input_label", "outcome_interface", "capture_interface", "outcome_label",
     "projection_run", "collection_source", "collection_entries_root", "publication_door_interface", "publication_tool",
-    "provider_output_labels", "initial_record", "initial_record_content", "lifecycle_ownership"], ["ee", "outcome_error_label"]);
+    "provider_output_labels", "initial_record", "initial_record_content", "lifecycle_ownership", "observer_selection"], ["ee", "outcome_error_label"]);
+  const selection = object(d.observer_selection, "observer selection");
+  fields(selection, ["template_interface_id", "config_file"]);
+  component(selection.template_interface_id, "observer selection template");
+  component(selection.config_file, "observer selection configuration file");
   if (d.schema_version !== 1 || target.id !== plan.run_id || target.worker !== plan.worker_interface_id
     || d.source_run !== target.id || d.source_worker_interface !== target.worker
     || d.source_provider_interface !== owner || d.source_client_interface !== plan.chat_interface_id) {
