@@ -149,7 +149,7 @@ impl FileSurface for GatedFs {
             res?;
             resolved_target?;
             std::fs::read(path.as_path())
-                .map_err(|e| WorkerEnvError::ReadOutsideRoots(format!("{}: {e}", path.as_str())))
+                .map_err(|e| WorkerEnvError::PathIo { operation: "read", path: path.as_str().to_string(), reason: e.to_string() })
         })
     }
 
@@ -173,10 +173,10 @@ impl FileSurface for GatedFs {
             res?;
             resolved_target?;
             let mut file = std::fs::File::open(path.as_path())
-                .map_err(|e| WorkerEnvError::ReadOutsideRoots(format!("{}: {e}", path.as_str())))?;
+                .map_err(|e| WorkerEnvError::PathIo { operation: "open", path: path.as_str().to_string(), reason: e.to_string() })?;
             let file_size = file
                 .metadata()
-                .map_err(|e| WorkerEnvError::ReadOutsideRoots(format!("{}: {e}", path.as_str())))?
+                .map_err(|e| WorkerEnvError::PathIo { operation: "stat", path: path.as_str().to_string(), reason: e.to_string() })?
                 .len();
             if offset > file_size {
                 return Err(WorkerEnvError::ReadOutsideRoots(format!(
@@ -185,7 +185,7 @@ impl FileSurface for GatedFs {
                 )));
             }
             file.seek(std::io::SeekFrom::Start(offset))
-                .map_err(|e| WorkerEnvError::ReadOutsideRoots(format!("{}: {e}", path.as_str())))?;
+                .map_err(|e| WorkerEnvError::PathIo { operation: "seek", path: path.as_str().to_string(), reason: e.to_string() })?;
             let limit = u64::try_from(max_bytes).map_err(|_| {
                 WorkerEnvError::ReadOutsideRoots(format!(
                     "{} bounded read exceeds u64",
@@ -195,7 +195,7 @@ impl FileSurface for GatedFs {
             let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
             file.take(limit)
                 .read_to_end(&mut bytes)
-                .map_err(|e| WorkerEnvError::ReadOutsideRoots(format!("{}: {e}", path.as_str())))?;
+                .map_err(|e| WorkerEnvError::PathIo { operation: "read", path: path.as_str().to_string(), reason: e.to_string() })?;
             Ok(octopus_worker_env::FileReadOutput {
                 file_size,
                 offset,
@@ -223,16 +223,11 @@ impl FileSurface for GatedFs {
             if let Some(parent) = path.as_path().parent() {
                 let parent = AbsPath::new(parent)?;
                 sandbox.authorize_write(&parent)?;
-                std::fs::create_dir_all(parent.as_path()).map_err(|e| {
-                    WorkerEnvError::WriteOutsideRoots(format!(
-                        "creating parent dir {} failed: {e}",
-                        parent.as_str()
-                    ))
-                })?;
+                std::fs::create_dir_all(parent.as_path())
+                    .map_err(|e| WorkerEnvError::PathIo { operation: "create directory", path: parent.as_str().to_string(), reason: e.to_string() })?;
             }
-            std::fs::write(path.as_path(), &bytes).map_err(|e| {
-                WorkerEnvError::WriteOutsideRoots(format!("{}: {e}", path.as_str()))
-            })?;
+            std::fs::write(path.as_path(), &bytes)
+                .map_err(|e| WorkerEnvError::PathIo { operation: "write", path: path.as_str().to_string(), reason: e.to_string() })?;
             Ok(FileWriteOutput { previous_content })
         })
     }
@@ -250,7 +245,7 @@ impl FileSurface for GatedFs {
             resolved_target?;
             let mut out = Vec::new();
             let rd = std::fs::read_dir(dir.as_path())
-                .map_err(|e| WorkerEnvError::ReadOutsideRoots(format!("{}: {e}", dir.as_str())))?;
+                .map_err(|e| WorkerEnvError::PathIo { operation: "list", path: dir.as_str().to_string(), reason: e.to_string() })?;
             for entry in rd.flatten() {
                 if let Ok(p) = AbsPath::new(&entry.path()) {
                     out.push(p);
@@ -395,32 +390,18 @@ fn resolve_existing_ancestor(
                 existing.pop();
             }
             Err(error) => {
-                return Err(if allow_missing {
-                    WorkerEnvError::WriteOutsideRoots(format!(
-                        "cannot inspect path '{}': {error}",
-                        target.as_str()
-                    ))
-                } else {
-                    WorkerEnvError::ReadOutsideRoots(format!(
-                        "cannot inspect path '{}': {error}",
-                        target.as_str()
-                    ))
+                return Err(WorkerEnvError::PathIo {
+                    operation: "inspect",
+                    path: target.as_str().to_string(),
+                    reason: error.to_string(),
                 });
             }
         }
     }
-    let mut resolved = std::fs::canonicalize(&existing).map_err(|error| {
-        if allow_missing {
-            WorkerEnvError::WriteOutsideRoots(format!(
-                "cannot resolve path '{}': {error}",
-                target.as_str()
-            ))
-        } else {
-            WorkerEnvError::ReadOutsideRoots(format!(
-                "cannot resolve path '{}': {error}",
-                target.as_str()
-            ))
-        }
+    let mut resolved = std::fs::canonicalize(&existing).map_err(|error| WorkerEnvError::PathIo {
+        operation: "resolve",
+        path: target.as_str().to_string(),
+        reason: error.to_string(),
     })?;
     for component in missing_suffix.iter().rev() {
         resolved.push(component);

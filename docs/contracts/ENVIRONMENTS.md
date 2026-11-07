@@ -156,7 +156,14 @@ within the declared cleanup timeout;
 a deadline or permission failure never synthesizes an exit. A successful retry
 clears the current termination failure only after closure, while earlier call
 receipts remain unchanged. Replacing a package does not change the sandbox of
-an already running keeper.
+an already running keeper. A keeper creates only its own record directories
+inside a process registry that still exists; once the Home that owned it is
+gone, retiring a closed command fails instead of recreating the tree.
+
+A path outside the formed roots is refused as a boundary violation. A
+filesystem failure inside them (a missing file, a permission the operating
+system denies) names its operation and path instead, so it never reads as a
+policy refusal.
 
 On macOS, the executor observes root exit without reaping its PID until the owned
 group has finished. Signals and reaping share that ownership; after it is

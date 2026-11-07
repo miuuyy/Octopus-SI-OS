@@ -231,6 +231,12 @@ pub enum WorkerEnvError {
     WriteOutsideRoots(String),
     #[error("read outside projected readable roots: {0}")]
     ReadOutsideRoots(String),
+    #[error("filesystem {operation} '{path}' failed: {reason}")]
+    PathIo {
+        operation: &'static str,
+        path: String,
+        reason: String,
+    },
     #[error("substrate open failed for {substrate_family}: {reason}")]
     OpenFailed {
         substrate_family: String,

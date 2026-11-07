@@ -879,7 +879,7 @@ fn retained_spec_path(spec_path: &Path) -> PathBuf {
 
 fn retire_spec(path: &Path, spec: &KeeperSpec) -> Result<(), String> {
     let retained = retained_spec_path(path);
-    private_directory(retained.parent().expect("retained process parent"))?;
+    keeper_directory(retained.parent().expect("retained process parent"))?;
     match std::fs::hard_link(path, &retained) {
         Ok(()) => {},
         Err(error) if matches!(error.kind(), std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotFound) => {
@@ -978,19 +978,31 @@ fn duration_ms(duration: Duration) -> Result<u64, String> {
 }
 
 fn private_directory(path: &Path) -> Result<(), String> {
+    create_private_directory(path, true)
+}
+
+fn keeper_directory(path: &Path) -> Result<(), String> {
+    create_private_directory(path, false)
+}
+
+fn create_private_directory(path: &Path, recursive: bool) -> Result<(), String> {
     let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
+    builder.recursive(recursive);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder.create(path).map_err(|error| {
-        format!(
-            "persistent process registry '{}' cannot be created: {error}",
-            path.display()
-        )
-    })?;
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if !recursive && error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(format!(
+                "persistent process registry '{}' cannot be created: {error}",
+                path.display()
+            ));
+        }
+    }
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(format!(
@@ -1218,7 +1230,7 @@ impl Keeper {
         }
         let call_path = call_record_path(&self.spec_path, &request);
         if let Some(path) = &call_path {
-            let prepared = private_directory(path.parent().expect("call record parent"))
+            let prepared = keeper_directory(path.parent().expect("call record parent"))
                 .and_then(|()| serde_json::to_vec(&request).map_err(|error| error.to_string()))
                 .and_then(|bytes| write_private_new(path, &bytes));
             if let Err(error) = prepared {
@@ -1787,6 +1799,18 @@ mod termination_tests;
 mod tests {
     use super::*;
     use octopus_exec::{ByteChunk, ProcessOutputChunk};
+
+    #[test]
+    fn keeper_never_recreates_a_removed_process_registry() {
+        let home = tempfile::tempdir().unwrap();
+        let registry = home.path().join("interfaces/room/processes");
+        std::fs::create_dir_all(&registry).unwrap();
+        keeper_directory(&registry.join("retired")).unwrap();
+        keeper_directory(&registry.join("retired")).unwrap();
+        std::fs::remove_dir_all(home.path().join("interfaces")).unwrap();
+        assert!(keeper_directory(&registry.join("retired")).is_err());
+        assert!(!home.path().join("interfaces").exists());
+    }
 
     #[test]
     fn collector_orders_output_exit_late_output_and_close_in_one_sequence() {
