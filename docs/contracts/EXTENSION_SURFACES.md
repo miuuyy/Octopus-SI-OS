@@ -518,6 +518,14 @@ retained templates' static context order, and rebased onto the current record:
 the pending effect and its checkpoints stay exactly as admitted, and only the
 template change and the new routes are applied.
 
+A change may remove a standing external input: a requirement-free input with no
+owner and no result receiving, such as a trigger the run no longer wants. Its
+template, checkpoint and frontier entry leave the run in the same checked edit,
+so that one run stops receiving the trigger while every other run pinning it
+keeps it. A context-carrying input can be removed only while another input still
+carries the run's context, and an input a pending handoff delivers to cannot be
+removed. Every other retained selection entry stays.
+
 Authored run previews and publication plans also validate the complete candidate
 against each bound provider's declared authoring profile. They use the provider
 owner's topology validator, including its frontier and future checkpoint
@@ -539,6 +547,11 @@ Recovery retains that failure, checks both exact file states, and never treats
 the error as a successful receipt. A spent writer call needs an independently
 authorized edit to its recorded next generation. A fresh attempt skips voided
 generations; historical replay uses the next admitted preimage, not today's file.
+A write the room refused without effect evidence (no result body, not
+indeterminate) is settled the same way: when the writer and its target still
+hold their exact preimages the attempt is void, and replay continues instead of
+failing. The refusal stays with the voided generation, and the writer fails
+that write with the room's reason instead of retrying it.
 
 Claude Code replay carries user attachments and tool screenshots as native image
 blocks in conversation order. Whole-message history cuts remove their images
