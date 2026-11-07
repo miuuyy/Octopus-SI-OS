@@ -42,4 +42,13 @@ fn indeterminate_writer_requires_exact_failure_and_unadvanced_readback() {
     let incomplete: ToolResultArtifact = serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
         "error":{"code":"file_write_incomplete","message":"partial"}})).unwrap();
     assert!(args.checked_result(&writer, &metadata, &before, &incomplete, 1048576, 10).is_err());
+    let receipt = |path: &str, before: &[u8], after: &[u8], outcome: &str| json!({"path":path,"before_hash":ContentHash::of_bytes(before).to_hex(),
+        "after_hash":ContentHash::of_bytes(after).to_hex(),"bytes":after.len(),"outcome":outcome,"observed_hash":null,"error":null});
+    let stopped = |first: &str, second: &str| -> ToolResultArtifact { serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
+        "error":{"code":"file_write_incomplete","message":"no space left on device","details":{"file_write":{"result":"ordered_file_writes","writes":[
+            receipt("/runs/writer.json", &before, &after, first), receipt("/runs/target.json", b"before", b"after", second)]}}}})).unwrap() };
+    assert_eq!(args.checked_result(&writer, &metadata, &before, &stopped("uncertain", "not_attempted"), 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
+    assert!(unadvanced_refusal(&stopped("refused", "not_attempted")).is_some());
+    assert!(args.checked_result(&writer, &metadata, &after, &stopped("uncertain", "not_attempted"), 1048576, 10).is_err());
+    assert!(args.checked_result(&writer, &metadata, &before, &stopped("uncertain", "uncertain"), 1048576, 10).is_err());
 }

@@ -224,6 +224,9 @@ fn current_change_retires_a_standing_external_input() {
     assert!(!provider_state["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter()
         .any(|cp| cp["interface_binding"]["interface"] == "world_test_pulse"));
     assert_eq!(provider_state["pending_handoff"], json!(current)["interface_state"][provider.as_str()]["pending_handoff"]);
+    let control = templates.iter().find(|cp| cp["interface_binding"]["interface"] == json!(client) && cp["role"] == "independent_input").unwrap();
+    let control_rows = |record: &Value| record["checkpoints"].as_array().unwrap().iter().filter(|cp| cp["interface_binding"] == control["interface_binding"]).cloned().collect::<Vec<_>>();
+    assert_eq!(control_rows(&after), control_rows(&json!(current)));
     assert!(after["checkpoints"].as_array().unwrap().iter().any(|cp| after["active_checkpoints"].as_array().unwrap().contains(&cp["id"])
         && cp["interface_binding"]["interface"] == json!(client)
         && cp["artifact_bindings"].as_array().unwrap().iter().any(|binding| binding["id"] == "pulse-notes")));

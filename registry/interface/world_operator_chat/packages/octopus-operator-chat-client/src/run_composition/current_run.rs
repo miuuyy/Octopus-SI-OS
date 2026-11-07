@@ -521,6 +521,32 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
             template["static_artifact_bindings"] = json!(ordered);
         }
     }
+    let prior_templates = current_topology["checkpoints"].as_array().ok_or("current templates absent")?.clone();
+    let mut kept = Vec::new();
+    for template in candidate["interface_state"][provider.as_str()]["run_authoring_binding"]["checkpoints"].as_array_mut().ok_or("planned templates absent")? {
+        let Some(old) = prior_templates.iter().find(|old| old["name"] == template["name"]) else { continue; };
+        let context_free = matches!(template["role"].as_str(), Some("stable" | "independent_input")) && template["include_context"] != true;
+        if !context_free && template["role"] != "owner_input" { continue; }
+        let fields = template.as_object_mut().ok_or("planned template is not an object")?;
+        match old.get("static_artifact_bindings") {
+            Some(ids) => { fields.insert("static_artifact_bindings".into(), ids.clone()); }
+            None => { fields.remove("static_artifact_bindings"); }
+        }
+        if context_free { kept.push(template.clone()); }
+    }
+    for template in kept {
+        let same = |cp: &Value| cp["interface_binding"] == template["interface_binding"]
+            && cp["outbound_interface_bindings"] == template["outbound_interface_bindings"]
+            && cp["required_verified_artifacts"] == template["required_verified_artifacts"];
+        let rows = candidate["checkpoints"].as_array_mut().ok_or("candidate checkpoints absent")?;
+        let replaced = rows.iter().filter(|cp| same(cp)).map(|cp| cp["id"].clone()).collect::<Vec<_>>();
+        rows.retain(|cp| !same(cp));
+        let retained = current_value["checkpoints"].as_array().ok_or("current checkpoints absent")?.iter().filter(|cp| same(cp)).cloned().collect::<Vec<_>>();
+        rows.extend(retained.iter().cloned());
+        let active = candidate["active_checkpoints"].as_array_mut().ok_or("candidate active checkpoints absent")?;
+        active.retain(|id| !replaced.contains(id) && !retained.iter().any(|cp| &cp["id"] == id));
+        active.extend(retained.iter().filter(|cp| current.active_checkpoints.iter().any(|id| cp["id"] == json!(id))).map(|cp| cp["id"].clone()));
+    }
     let provider_owner = roots.registry_root.join("interface").join(provider.as_str());
     let catalog_pin = private.pointer("/run_affordances/catalog_artifact").map(parse::<ArtifactRef>).transpose()?;
     let planned = plan.interface_writes.iter().chain(&plan.run_writes).collect::<Vec<_>>();

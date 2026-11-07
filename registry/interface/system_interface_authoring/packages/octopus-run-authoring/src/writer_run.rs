@@ -713,6 +713,9 @@ impl OwnerWriterEvidence {
             .map_err(|e| e.to_string())?;
         let config = owner_config(&before, &attempt.writer)?;
         let progress = history(ctx, &self.0, &config)?;
+        if let Some(refusal) = progress.refused.get(&entry.after_hash()) {
+            return Err(format!("owner ordered file write was refused before any effect: {refusal}"));
+        }
         let result = progress
             .completed
             .get(&ContentHash::of_bytes(entry.content(maximum)?.as_bytes()).to_hex())
@@ -1016,9 +1019,10 @@ impl OrderedArguments {
                 })
         });
         let unresolved = indeterminate || definite_refusal(result).is_some();
+        let stopped = stopped_at_writer(result);
         let writer_unadvanced = snapshot == decoded[0].0.as_bytes();
         let mismatches = [
-            (snapshot != decoded[0].1.as_bytes() && !(unresolved && writer_unadvanced), "run record bytes"),
+            (snapshot != decoded[0].1.as_bytes() && !((unresolved || stopped) && writer_unadvanced), "run record bytes"),
             (runtime.run != record.id, "run"),
             (runtime.ee != record.ee, "execution environment"),
             (runtime.worker != record.worker, "worker"),
@@ -1102,7 +1106,8 @@ impl OrderedArguments {
             }
         }
         if body.writes[0].outcome != "applied" {
-            return Err("ordered writer Run was not advanced".into());
+            return if stopped && writer_unadvanced { Ok(OrderedTargetEffect::UncertainWriter) }
+                else { Err("ordered writer Run was not advanced".into()) };
         }
         match body.writes[1].outcome.as_str() {
             "applied" if result.ok => Ok(OrderedTargetEffect::Applied),
@@ -1130,6 +1135,18 @@ pub(super) fn definite_refusal(result: &ToolResultArtifact) -> Option<String> {
     let error = result.error.as_ref().filter(|_| !result.ok && result.body.is_none())?;
     (!matches!(error.code.as_str(), "tool_effect_indeterminate" | "file_write_incomplete"))
         .then(|| format!("{}: {}", error.code, error.message))
+}
+
+fn stopped_at_writer(result: &ToolResultArtifact) -> bool {
+    !result.ok && result.body.is_none() && result.error.as_ref().is_some_and(|error| error.code == "file_write_incomplete"
+        && error.details.as_ref().and_then(|details| details["file_write"]["writes"].as_array()).is_some_and(|writes| writes.len() == 2
+            && matches!(writes[0]["outcome"].as_str(), Some("refused" | "uncertain"))
+            && writes[1]["outcome"].as_str() == Some("not_attempted")))
+}
+
+pub(super) fn unadvanced_refusal(result: &ToolResultArtifact) -> Option<String> {
+    definite_refusal(result).or_else(|| stopped_at_writer(result).then(|| result.error.as_ref()
+        .map(|error| format!("{}: {}", error.code, error.message))).flatten())
 }
 
 #[derive(Clone)]
@@ -1384,7 +1401,7 @@ fn history(
             }
             let effect = args.checked_result(&declared, metadata, &snapshot, &result, limits.max_payload_bytes, call.seq.0)?;
             current.current = snapshot;
-            if let Some(refusal) = definite_refusal(&result).filter(|_| effect == OrderedTargetEffect::UncertainWriter) {
+            if let Some(refusal) = unadvanced_refusal(&result).filter(|_| effect == OrderedTargetEffect::UncertainWriter) {
                 let writer = RunRecord::from_bytes(args.writes[0].content(limits.max_payload_bytes)?.as_bytes()).map_err(|e| e.to_string())?;
                 current.voided.insert(seq, target(&writer, &config.provider_interface)?.generation);
                 current.refused.insert(args.writes[1].after_hash(), refusal);

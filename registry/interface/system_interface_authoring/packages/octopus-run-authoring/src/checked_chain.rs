@@ -430,7 +430,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
             if let Some(ordered) = &candidate.ordered {
                 let effect = ordered.checked_result(writer,metadata,&snapshot,&result,reader.max_payload_bytes(),candidate.call.seq.0)?;
                 if effect == writer_run::OrderedTargetEffect::Refused
-                    || (effect == writer_run::OrderedTargetEffect::UncertainWriter && writer_run::definite_refusal(&result).is_some()) { continue; }
+                    || (effect == writer_run::OrderedTargetEffect::UncertainWriter && writer_run::unadvanced_refusal(&result).is_some()) { continue; }
                 let prospective = apply_run_json_patch(&candidate.before,&candidate.arguments.patch,&candidate.arguments.expected_after_hash, candidate.arguments.json_format)?.into_bytes();
                 let transition = CheckedRunTransition {writer:candidate.writer,before:candidate.before,after:prospective,call:candidate.call,result:movement,placement:false};
                 if matches!(effect, writer_run::OrderedTargetEffect::Uncertain | writer_run::OrderedTargetEffect::UncertainWriter) {
