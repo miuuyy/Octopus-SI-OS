@@ -65,7 +65,10 @@ keeps the root waitable until the owned group closes, so cleanup never signals
 a recycled PID or PGID. Protocol EOF allows a bounded exit observation; process
 cleanup and private stderr draining also have finite deadlines. Wait, signal and
 cleanup failures remain explicit, with the original exit status and private
-diagnostics preserved.
+diagnostics preserved. Each incarnation writes its own bounded stderr capture
+in the interface's var directory; the host keeps the sixteen newest, so a life
+that restarts with backoff for days keeps its recent history without filling
+the disk.
 
 ## In the client
 
@@ -405,7 +408,8 @@ runs with `xcrun_nocache=1` and exact read access to the selected developer
 directory's SDK metadata, so the shim neither writes its cache nor reports SDK
 errors under the sandbox. A workspace command's temporary directory is
 `/private/tmp` when its sandbox may write there, otherwise its working
-directory or another writable root, never `/`.
+directory or another writable root, never `/`; a room that may write nowhere
+runs its command with `TMPDIR`, `TMP` and `TEMP` unset.
 
 The macOS desktop helper builds its pinned Swift package with SwiftPM sandboxing
 disabled. This avoids nesting SwiftPM's manifest sandbox inside the caller's
@@ -557,7 +561,11 @@ sends no reasoning effort upstream.
 The curated OpenCodex home keeps Codex's own retries at Codex's defaults. A
 dropped response stream is retried up to five times (`stream_max_retries = 5`):
 Codex samples the step again with the outputs of tools it already executed, so
-an upstream disconnect does not end the turn. A request that fails before its
+an upstream disconnect does not end the turn. A Claude Code stream that ends
+while a captured tool call is still open fails closed as `protocol_error`; the
+bridge appends the content-free sequence of the CLI's last stream frames (frame,
+block and stop types, never text or arguments), so the retried step's
+`turn.error` names which frames left the call open. A request that fails before its
 stream starts is retried up to four times (`request_max_retries = 4`). Every Codex-started descriptor also pins
 `include_permissions_instructions=false`, because Codex's sandbox and
 escalation instructions describe parameters Octopus tools do not have.

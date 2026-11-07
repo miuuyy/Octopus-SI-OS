@@ -40,6 +40,48 @@ const IMPORTED_EXECUTABLE_BUILD_RECEIPT_FILE: &str = "build-receipt.json";
 const INTERFACE_PRIVATE_ENVIRONMENT_FILE: &str = "environment.json";
 const INTERFACE_PRIVATE_ENVIRONMENT_MAX_BYTES: u64 = 1024 * 1024;
 
+const RETAINED_STDERR_CAPTURES: usize = 16;
+
+fn retire_stderr_captures(var_dir: &Path, keep: usize) -> Result<(), String> {
+    let entries = match std::fs::read_dir(var_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("life stderr captures in '{}' cannot be listed: {error}", var_dir.display())),
+    };
+    let mut captures = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("life stderr captures in '{}' cannot be listed: {error}", var_dir.display()))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(order) = name
+            .strip_prefix("interface-life.stderr.")
+            .and_then(|rest| rest.strip_suffix(".log"))
+            .and_then(|rest| {
+                let mut parts = rest.split('.');
+                let started_at = parts.next()?.parse::<u128>().ok()?;
+                let pid = parts.next()?.parse::<u64>().ok()?;
+                let sequence = parts.next()?.parse::<u64>().ok()?;
+                parts.next().is_none().then_some((started_at, sequence, pid))
+            })
+        else {
+            continue;
+        };
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            captures.push((order, entry.path()));
+        }
+    }
+    captures.sort();
+    let excess = captures.len().saturating_sub(keep);
+    for (_, path) in captures.into_iter().take(excess) {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("life stderr capture '{}' cannot be retired: {error}", path.display())),
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterfaceHostIoLimits {
@@ -2910,6 +2952,7 @@ fn spawn_process_command_life(
             .map_err(|e| format!("life spawn '{}' failed: {e}", executable.display()))?;
         let child_pid = child.id();
         let capture_sequence = STDERR_CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        retire_stderr_captures(&var_dir, RETAINED_STDERR_CAPTURES - 1)?;
         let stderr_path = var_dir.join(format!(
             "interface-life.stderr.{started_at}.{child_pid}.{capture_sequence}.log"
         ));
@@ -4358,6 +4401,24 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("exceeded declared ceiling of 32 bytes"));
         assert!(!error.contains("xxx"));
+    }
+
+    #[test]
+    fn stderr_captures_keep_only_the_newest_incarnations() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..20u64 {
+            let started_at = 1_794_000_000_000_000_000u128 + u128::from(index) * 1_000;
+            std::fs::write(dir.path().join(format!("interface-life.stderr.{started_at}.{}.{index}.log", 900 - index)), b"crash").unwrap();
+        }
+        std::fs::write(dir.path().join("interface-life.stderr.existing.log"), b"other").unwrap();
+        retire_stderr_captures(dir.path(), 15).unwrap();
+        let mut kept = std::fs::read_dir(dir.path()).unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        kept.sort();
+        assert_eq!(kept.len(), 16);
+        assert!(kept.contains(&"interface-life.stderr.existing.log".to_string()));
+        assert!(kept.iter().all(|name| !name.ends_with(".0.log") && !name.ends_with(".4.log")));
+        assert!(kept.iter().any(|name| name.ends_with(".5.log")) && kept.iter().any(|name| name.ends_with(".19.log")));
     }
 
     #[tokio::test]

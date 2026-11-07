@@ -72,27 +72,33 @@ pub fn sandboxed_room_process_argv(
     }
 }
 
-pub(crate) fn sandboxed_tmp_dir(sandbox: &ProjectedSandbox, cwd: &AbsPath) -> PathBuf {
+pub(crate) fn sandboxed_tmp_dir(sandbox: &ProjectedSandbox, cwd: &AbsPath) -> Option<PathBuf> {
     for candidate in ["/private/tmp", "/tmp"] {
         if let Ok(canonical) = std::fs::canonicalize(candidate)
             && canonical != Path::new("/")
             && let Ok(abs) = AbsPath::new(&canonical)
             && sandbox.authorize_write(&abs).is_ok()
         {
-            return canonical;
+            return Some(canonical);
         }
     }
     if cwd.as_path() != Path::new("/") && sandbox.authorize_write(cwd).is_ok() {
-        return cwd.as_path().to_path_buf();
+        return Some(cwd.as_path().to_path_buf());
     }
-    if let Some(writable) = sandbox
+    sandbox
         .writable_roots()
         .iter()
         .find(|root| root.as_path() != Path::new("/") && sandbox.authorize_write(root).is_ok())
-    {
-        return writable.as_path().to_path_buf();
+        .map(|root| root.as_path().to_path_buf())
+}
+
+fn set_tmp_dir(command: &mut Command, tmp_dir: Option<&Path>) {
+    for name in ["TMPDIR", "TMP", "TEMP"] {
+        match tmp_dir {
+            Some(dir) => command.env(name, dir),
+            None => command.env_remove(name),
+        };
     }
-    cwd.as_path().to_path_buf()
 }
 
 #[cfg(target_os = "linux")]
@@ -172,12 +178,8 @@ pub fn run_sandboxed_in_room(
         .ok_or_else(|| WorkerEnvError::ExecFailed("sandbox floor produced empty argv".into()))?;
     let tmp_dir = sandboxed_tmp_dir(sandbox, cwd);
     let mut command = Command::new(program);
-    command
-        .args(process_args)
-        .current_dir(cwd.as_path())
-        .env("TMPDIR", &tmp_dir)
-        .env("TMP", &tmp_dir)
-        .env("TEMP", &tmp_dir);
+    command.args(process_args).current_dir(cwd.as_path());
+    set_tmp_dir(&mut command, tmp_dir.as_deref());
     let output = run_bounded_command(
         command,
         timeout,
@@ -230,12 +232,8 @@ pub fn run_sandboxed_in_room(
         .ok_or_else(|| WorkerEnvError::ExecFailed("sandbox floor produced empty argv".into()))?;
     let tmp_dir = sandboxed_tmp_dir(sandbox, cwd);
     let mut command = Command::new(program);
-    command
-        .args(process_args)
-        .current_dir(cwd.as_path())
-        .env("TMPDIR", &tmp_dir)
-        .env("TMP", &tmp_dir)
-        .env("TEMP", &tmp_dir);
+    command.args(process_args).current_dir(cwd.as_path());
+    set_tmp_dir(&mut command, tmp_dir.as_deref());
     run_bounded_command(
         command,
         timeout,
@@ -779,8 +777,8 @@ mod tests {
         let wt_abs = AbsPath::new(&wt).unwrap();
         let repo_abs = AbsPath::new(&repo).unwrap();
 
-        assert_eq!(sandboxed_tmp_dir(&projected, &wt_abs), wt_abs.as_path());
-        assert_eq!(sandboxed_tmp_dir(&projected, &repo_abs), wt_abs.as_path());
+        assert_eq!(sandboxed_tmp_dir(&projected, &wt_abs).as_deref(), Some(wt_abs.as_path()));
+        assert_eq!(sandboxed_tmp_dir(&projected, &repo_abs).as_deref(), Some(wt_abs.as_path()));
 
         let root_abs = AbsPath::new(Path::new("/")).unwrap();
         let root_sandbox = ProjectedSandbox::from_parts(
@@ -789,13 +787,17 @@ mod tests {
             Vec::new(),
             octopus_worker_env::NetworkCeiling::Full,
         );
-        let selected = sandboxed_tmp_dir(&root_sandbox, &root_abs);
-        assert_ne!(selected, Path::new("/"));
-        assert_eq!(selected, std::fs::canonicalize("/tmp").unwrap());
-        assert_eq!(
-            sandboxed_tmp_dir(&root_sandbox, &repo_abs),
-            std::fs::canonicalize("/tmp").unwrap()
+        let tmp = std::fs::canonicalize("/tmp").unwrap();
+        assert_eq!(sandboxed_tmp_dir(&root_sandbox, &root_abs), Some(tmp.clone()));
+        assert_eq!(sandboxed_tmp_dir(&root_sandbox, &repo_abs), Some(tmp));
+
+        let read_only = ProjectedSandbox::from_parts(
+            Vec::new(),
+            Vec::new(),
+            vec![root_abs.clone()],
+            octopus_worker_env::NetworkCeiling::Full,
         );
+        assert_eq!(sandboxed_tmp_dir(&read_only, &root_abs), None);
     }
 
     #[test]

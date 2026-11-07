@@ -342,11 +342,13 @@ impl WorkspaceProcessManager {
             ));
         }
         let tmp_dir = crate::sandboxed_exec::sandboxed_tmp_dir(sandbox, &cwd)
-            .to_string_lossy()
-            .into_owned();
-        env.insert("TMPDIR".to_string(), tmp_dir.clone());
-        env.insert("TMP".to_string(), tmp_dir.clone());
-        env.insert("TEMP".to_string(), tmp_dir);
+            .map(|dir| dir.to_string_lossy().into_owned());
+        for name in ["TMPDIR", "TMP", "TEMP"] {
+            match &tmp_dir {
+                Some(dir) => env.insert(name.to_string(), dir.clone()),
+                None => env.remove(name),
+            };
+        }
         let identity = new_process_identity(worker_environment_id)?;
         let spec = KeeperSpec {
             schema_version: KEEPER_SPEC_SCHEMA_VERSION,

@@ -11,6 +11,7 @@ import { buildCodeBuddyToolBridge, CODEBUDDY_MCP_SERVER_NAME, CODEBUDDY_TOOL_LIM
 import { buildSystemPrompt } from "../node_modules/@bitkyc08/opencodex/src/adapters/coding-agent/protocol.ts";
 import { runCodingAgentTurn, type CodingAgentToolBridgeInput } from "../node_modules/@bitkyc08/opencodex/src/adapters/coding-agent/turn.ts";
 import { buildClaudeConversationInput } from "./claude-replay.ts";
+import { FrameTrace, tracedSpawn, withFrameTrace } from "./frame-trace.ts";
 
 export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: ClaudeCliAdapterDeps = {}): ProviderAdapter {
   return {
@@ -49,13 +50,14 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
           JSON.stringify(Object.fromEntries([...bridge.emittedNameMap].map(([cli, wire]) => [wire, cli]))),
         ].join("\n") : "";
         await writeFile(prompt, [buildSystemPrompt(parsed), CLAUDE_REPLAY_SYSTEM_PROMPT, tools].filter(Boolean).join("\n\n"), { encoding: "utf8", mode: 0o600, flag: "wx" });
+        const trace = new FrameTrace();
         await runCodingAgentTurn({
           profiles: CLAUDE_CLI_PROFILES, provider, parsed, incoming,
-          emit: withClaudeLoginHint(emit), ...(toolBridge ? { toolBridge } : {}),
+          emit: withClaudeLoginHint(withFrameTrace(emit, trace)), ...(toolBridge ? { toolBridge } : {}),
           conversationInput: buildClaudeConversationInput,
           buildArgs: (profile, request, config) => buildArgs(profile as ClaudeCliProfile, request, config, prompt),
           buildEnv: (profile, key) => buildChildEnv(profile as ClaudeCliProfile, key),
-          deps: { ...deps, which: deps.which ?? findClaudeCliBinary },
+          deps: { ...deps, which: deps.which ?? findClaudeCliBinary, spawn: tracedSpawn(trace, deps.spawn) },
         });
       } finally { await rm(directory, { recursive: true, force: true }); }
     },
