@@ -68,7 +68,7 @@ def verify(request):
             body = value.get("body")
             results[correlation] = key
             error = value.get("error")
-            if value.get("ok") is False and body is None and isinstance(error, dict) and error.get("code") == "tool_process_failure":
+            if value.get("ok") is False and body is None and isinstance(error, dict) and error.get("code") == "tool_invocation_refused":
                 continue
             assert value.get("ok") is True and error is None and isinstance(body, dict) and body.get("result") in ("memory_saved", "memory_already_saved"), "publication failed or has an uncertain effect"
             if body["result"] == "memory_saved":

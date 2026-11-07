@@ -305,7 +305,7 @@ impl OwnerHandoff {
         if captured.manifest.label.ends_with(".result") {
             let result: ToolResultArtifact = serde_json::from_slice(&captured.payload_bytes).map_err(|e| e.to_string())?;
             if result.error.as_ref().is_some_and(|error|
-                ["tool_effect_indeterminate", "tool_process_failure"].contains(&error.code.as_str())) {
+                ["tool_effect_indeterminate", "tool_process_failure", "tool_invocation_refused"].contains(&error.code.as_str())) {
                 let seq = result.error.as_ref().and_then(|error| error.details.as_ref())
                     .and_then(|details| details.get("source_movement_seq")).and_then(Value::as_u64);
                 if result.ok || result.body.is_some() || result.label != captured.manifest.label
@@ -1622,7 +1622,7 @@ impl OwnerHandoff {
             let result: ToolResultArtifact = serde_json::from_slice(&captured.payload_bytes).map_err(|e| e.to_string())?;
             if result.ok || result.body.is_some() || result.label != manifest.label
                 || result.error.as_ref().is_none_or(|error|
-                    !["tool_effect_indeterminate", "tool_process_failure"].contains(&error.code.as_str())
+                    !["tool_effect_indeterminate", "tool_process_failure", "tool_invocation_refused"].contains(&error.code.as_str())
                     || error.details.as_ref().and_then(|details| details.get("source_movement_seq"))
                         .and_then(Value::as_u64) != Some(source_seq)) {
                 return Err("prospective failure differs from its exact recorded cause".into());
@@ -1951,7 +1951,7 @@ impl OwnerHandoff {
         if !captured.manifest.label.ends_with(".result") { return Ok(()); }
         let result: ToolResultArtifact = serde_json::from_slice(&captured.payload_bytes).map_err(|e| e.to_string())?;
         let Some(error) = result.error.as_ref().filter(|error|
-            ["tool_effect_indeterminate", "tool_process_failure"].contains(&error.code.as_str())) else { return Ok(()); };
+            ["tool_effect_indeterminate", "tool_process_failure", "tool_invocation_refused"].contains(&error.code.as_str())) else { return Ok(()); };
         if octopus_run_authoring::generated_artifacts::read_movement(&evidence, failure.seq.0)? != *failure {
             return Err("recorded owner failure differs from its durable evidence".into());
         }

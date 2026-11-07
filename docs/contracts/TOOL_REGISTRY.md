@@ -129,7 +129,13 @@ accepted output recovery retains its existing invocation and result evidence.
 
 A failed tool process result names its failure class and the first line of
 its diagnostic in the error message; the bounded details keep the full
-evidence.
+evidence. A call the door refuses before it invokes the tool process — a tool
+outside the grant, an unavailable or foreign descriptor, arguments its schema
+rejects, a formation the call cannot have — fails as `tool_invocation_refused`,
+which proves the tool had no effect. A failure after the process was invoked
+is `tool_process_failure`, and an unknown outcome is
+`tool_effect_indeterminate`. A call re-delivered after a restart may have run
+before it, so its refusal stays `tool_process_failure`.
 
 ## Persistent commands and recovery
 
