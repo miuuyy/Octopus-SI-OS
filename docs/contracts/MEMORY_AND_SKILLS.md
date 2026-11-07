@@ -98,7 +98,10 @@ routes and rules; a current-run amendment that adds an input to the source
 re-forms them in the same transaction, so a trigger bound later is captured
 like one bound at creation. It re-forms them from the observer selection the accepted declaration
 records, so the routes follow even after the Home stops selecting an observer
-for new tasks.
+for new tasks. Removing an input keeps the rules and routes the projection
+already declared: a turn that arrived through the removed input before the
+edit is still selected as itself, while the source no longer pins the route,
+so nothing new can cross it.
 
 An observer's final text is one JSON object. Malformed JSON produces an explicit
 `memory.capture.error` diagnostic with the original terminal artifact reference.
@@ -108,7 +111,9 @@ rewrites the model's decision. Well-formed outcomes still cross the declared
 capture verifier before any success mark is admitted. An outcome that verifier
 refuses is settled the same way: its replacement is a `memory.capture.error`
 diagnostic that keeps the model's decision and names the refusal movements, so a
-refused outcome is never resubmitted unchanged. The diagnostic is an ordinary
+refused outcome is never resubmitted unchanged. A projected experience input
+that the input verifier refuses settles the same way, as a `memory.capture.error`
+diagnostic naming the refusal movements. The diagnostic is an ordinary
 projection output, not part of the projection run's session snapshot. A refused
 final changes its label only this way: from a verified output to a declared
 output that requires no mark, with the refusal evidence as its proof.

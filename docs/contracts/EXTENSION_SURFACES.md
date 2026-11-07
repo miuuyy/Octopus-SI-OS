@@ -68,7 +68,8 @@ cleanup failures remain explicit, with the original exit status and private
 diagnostics preserved. Each incarnation writes its own bounded stderr capture
 in the interface's var directory; the host keeps the sixteen newest, so a life
 that restarts with backoff for days keeps its recent history without filling
-the disk.
+the disk. Older captures are retired before each incarnation starts; one that
+cannot be retired is reported in the runtime log and does not stop the life.
 
 ## In the client
 
@@ -518,13 +519,20 @@ retained templates' static context order, and rebased onto the current record:
 the pending effect and its checkpoints stay exactly as admitted, and only the
 template change and the new routes are applied.
 
-A change may remove a standing external input: a requirement-free input with no
-owner and no result receiving, such as a trigger the run no longer wants. Its
-template, checkpoint and frontier entry leave the run in the same checked edit,
-so that one run stops receiving the trigger while every other run pinning it
-keeps it. A context-carrying input can be removed only while another input still
-carries the run's context, and an input a pending handoff delivers to cannot be
-removed. Every other retained selection entry stays.
+A change may remove a standing external input: a requirement-free stable input
+with no owner and no result receiving, such as a trigger the run no longer
+wants, whose interface keeps no other route or state in the run. The run's
+worker, provider, authoring source, and any interface holding state in the run,
+such as its own client with its message and control routes, are never removed
+this way. The input's template, checkpoint and frontier entry leave the run in
+the same checked edit, so that one run stops receiving the trigger while every
+other run pinning it keeps it. A context-carrying input can be removed only
+while another input still carries the run's context. Removal does not withdraw
+what the input already admitted: the turn that arrived through it, including
+the turn that removes it, and any arrival admitted before the edit settle
+against the record pinned at their arrival. Every other retained selection
+entry stays. Static context a change adds reaches every retained input that
+carries static artifacts, context-free control inputs included.
 
 Authored run previews and publication plans also validate the complete candidate
 against each bound provider's declared authoring profile. They use the provider
@@ -548,10 +556,12 @@ the error as a successful receipt. A spent writer call needs an independently
 authorized edit to its recorded next generation. A fresh attempt skips voided
 generations; historical replay uses the next admitted preimage, not today's file.
 A write the room refused without effect evidence (no result body, not
-indeterminate) is settled the same way: when the writer and its target still
-hold their exact preimages the attempt is void, and replay continues instead of
-failing. The refusal stays with the voided generation, and the writer fails
-that write with the room's reason instead of retrying it.
+indeterminate) whose writer did not advance is void on its own evidence:
+ordered writes stop at the first one that fails, so the target was never
+reached, and replay needs no later readback of a target other writers may have
+moved since. The refusal stays with the planned target write, and the writer
+fails that write with the room's reason on every pass, after a restart too,
+instead of retrying it.
 
 Claude Code replay carries user attachments and tool screenshots as native image
 blocks in conversation order. Whole-message history cuts remove their images
@@ -576,9 +586,11 @@ dropped response stream is retried up to five times (`stream_max_retries = 5`):
 Codex samples the step again with the outputs of tools it already executed, so
 an upstream disconnect does not end the turn. A Claude Code leg is one
 assistant message: when the CLI starts another message before the previous one
-finished, or the response stops with `refusal`, the bridge ends the leg at that
-frame and names the reason, so a continuation the CLI produced on its own never
-reaches the model and Codex samples the step again from recorded history. A
+finished, the bridge ends the leg at that frame and names the reason, so a
+continuation the CLI produced on its own never reaches the model and Codex
+samples the step again from recorded history. A response that stops with
+`refusal` also ends at that frame, as a terminal refusal Codex does not retry:
+the model decided, and resending the same context cannot change that. A
 stream that ends while a captured tool call is still open fails closed as
 `protocol_error`. Both errors carry the content-free sequence of the CLI's last
 stream frames (frame, block and stop types, never text or arguments). A request that fails before its
