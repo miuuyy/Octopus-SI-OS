@@ -9,7 +9,7 @@ use octopus_run_authoring::{
     ProviderSourceRecovery, RejectedFinalOutput, RunAuthoringResultIdentity, SessionContextArtifact,
     snapshot_projection::{
         SnapshotInputOrigin, SnapshotInputRoute, SnapshotSourceScope, SnapshotWindowBounds,
-        resolve_session_snapshot_window, verify_selected_source_input, verify_source_bound_entry,
+        resolve_session_snapshot_window, selected_source_input_binding, verify_selected_source_input, verify_source_bound_entry,
         verify_source_context_entry, verify_terminal_source,
     },
 };
@@ -929,6 +929,15 @@ fn project_source(
             .iter()
             .find(|rule| rule.labels.contains(&selected.label))
             .ok_or("selected source input rule is absent")?;
+        let inbound = selected_source_input_binding(ctx, selected, &scope)?;
+        if !config.input_routes.iter().any(|route| {
+            route.interface_binding == inbound && route.interface_binding.admits(&selected.label)
+        }) {
+            return Err(format!(
+                "selected input arrived through '{}', outside the declared source input routes",
+                inbound.interface
+            ));
+        }
         let input_proof = verify_selected_source_input(
             ctx,
             selected,

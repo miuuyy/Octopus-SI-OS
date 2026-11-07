@@ -1756,6 +1756,10 @@ fn amended_external_input_reaches_the_observer_projection_routes() {
         std::fs::create_dir_all(write.path.parent().unwrap()).unwrap();
         std::fs::write(write.path, write.content).unwrap();
     }
+    let client_file = "registry/interface/world_operator_chat/client.json";
+    let mut client = read(&root.join(client_file));
+    client["run"]["maintenance_observer"] = Value::Null;
+    support::write(&root, client_file, client);
     let current = RunRecord::from_bytes(plan.run_write.content.as_bytes()).unwrap();
     let provider: octopus_descriptors::InterfaceId = plan.provider_interface_id.clone().into();
     let declaration = &json!(current)["interface_state"][provider.as_str()]["maintenance_observer"];

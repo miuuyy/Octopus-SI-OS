@@ -96,7 +96,9 @@ shape belongs to the interface that produced it and the provider showed the
 model the same payload. The observer's projection declares the source's input
 routes and rules; a current-run amendment that adds an input to the source
 re-forms them in the same transaction, so a trigger bound later is captured
-like one bound at creation.
+like one bound at creation. It re-forms them from the observer selection the accepted declaration
+records, so the routes follow even after the Home stops selecting an observer
+for new tasks.
 
 An observer's final text is one JSON object. Malformed JSON produces an explicit
 `memory.capture.error` diagnostic with the original terminal artifact reference.

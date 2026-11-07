@@ -250,6 +250,25 @@ pub fn read_source_artifact(
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
+pub fn selected_source_input_binding(
+    ctx: &InterfaceLiftContext,
+    entry: &SessionContextArtifact,
+    scope: &SnapshotSourceScope,
+) -> Result<AuthoredInterfaceBinding, String> {
+    let (movement, record) = source_entry_record(ctx, entry, scope)?;
+    let checkpoint = movement
+        .invocation_metadata
+        .as_ref()
+        .and_then(|value| value.invocation())
+        .and_then(|metadata| metadata.runtime.as_ref())
+        .map(|runtime| runtime.checkpoint.clone())
+        .ok_or("source input runtime absent")?;
+    record
+        .checkpoint(&checkpoint)
+        .and_then(|cp| cp.interface_binding.clone())
+        .ok_or_else(|| "source input binding absent".into())
+}
+
 pub fn verify_selected_source_input(
     ctx: &InterfaceLiftContext,
     entry: &SessionContextArtifact,

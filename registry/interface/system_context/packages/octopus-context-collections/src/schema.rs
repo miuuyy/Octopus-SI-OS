@@ -284,10 +284,15 @@ impl CollectionEntry {
         if self.schema_version != 1 {
             return Err(invalid("entry schema_version must be 1"));
         }
-        for ids in [&self.scope.ee_ids, &self.scope.worker_interfaces]
+        for (axis, ids) in [("ee_ids", &self.scope.ee_ids), ("worker_interfaces", &self.scope.worker_interfaces)]
             .into_iter()
-            .flatten()
+            .filter_map(|(axis, ids)| ids.as_ref().map(|ids| (axis, ids)))
         {
+            if ids.is_empty() {
+                return Err(invalid(format!(
+                    "scope.{axis} is empty and would hide the entry from every run; omit it to leave that axis unrestricted"
+                )));
+            }
             let mut seen = BTreeSet::new();
             for id in ids {
                 safe_id(id)?;

@@ -4,7 +4,7 @@ use crate::maintenance_observer::{MaintenanceObserverConfig, MaintenanceObserver
 use crate::run_composition::CompositionRoots;
 use serde_json::Value;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct Selection {
     template_interface_id: String,
@@ -41,20 +41,24 @@ pub(super) fn wire(
         let relay = validate_retained(existing, declaration, identity)?;
         retain_source_ceiling(&request, &relay, writes)?;
         let content = wire_source_terminal_declaration(&content, declaration)?;
-        if let Some(config) = selected_config(&request)? {
-            let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
-            refresh_projection_contracts(&observer_request(&request, config)?, &record, declaration, writes)?;
-        }
+        let selection: Selection = serde_json::from_value(
+            declaration.get("observer_selection").cloned()
+                .ok_or("accepted maintenance declaration does not name the observer selection it was formed from")?,
+        ).map_err(|e| format!("accepted maintenance observer selection: {e}"))?;
+        let config = load_selection(&request, &selection)?;
+        let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
+        refresh_projection_contracts(&observer_request(&request, selection, config)?, &record, declaration, writes)?;
         required_interfaces.push(relay);
         required_interfaces.sort();
         required_interfaces.dedup();
         return Ok((content, Vec::new()));
     }
-    let Some(config) = selected_config(&request)? else {
+    let Some(selection) = selected(&request)? else {
         return Ok((content, Vec::new()));
     };
+    let config = load_selection(&request, &selection)?;
     let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
-    let observer = plan_maintenance_observer(&observer_request(&request, config)?, &record, writes, request.capabilities)?;
+    let observer = plan_maintenance_observer(&observer_request(&request, selection, config)?, &record, writes, request.capabilities)?;
     if !observer.source_required_artifact_bindings.is_empty() {
         return Err("maintenance source requires artifact bindings absent from its authored context".into());
     }
@@ -74,15 +78,19 @@ pub(super) fn wire(
     Ok((content, observer.run_writes))
 }
 
-fn selected_config(request: &AttachmentRequest<'_>) -> Result<Option<MaintenanceObserverConfig>, String> {
+fn selected(request: &AttachmentRequest<'_>) -> Result<Option<Selection>, String> {
     let Some(config) = request.config.run._rest.get("maintenance_observer") else {
         return Ok(None);
     };
     if config.is_null() {
         return Ok(None);
     }
-    let selection: Selection = serde_json::from_value(config.clone())
-        .map_err(|e| format!("client maintenance_observer selection: {e}"))?;
+    serde_json::from_value(config.clone())
+        .map(Some)
+        .map_err(|e| format!("client maintenance_observer selection: {e}"))
+}
+
+fn load_selection(request: &AttachmentRequest<'_>, selection: &Selection) -> Result<MaintenanceObserverConfig, String> {
     selection_component(&selection.template_interface_id, "maintenance template")?;
     selection_component(&selection.config_file, "maintenance configuration file")?;
     let owner = request.capabilities.registry_root().join("interface").join(&selection.template_interface_id);
@@ -91,17 +99,17 @@ fn selected_config(request: &AttachmentRequest<'_>) -> Result<Option<Maintenance
             return Err("maintenance selection cannot follow a symlink".into());
         }
     }
-    let bytes = octopus_interfaces::read_artifact_carrier_file_bounded(&owner.join(selection.config_file), 1_048_576)
+    let bytes = octopus_interfaces::read_artifact_carrier_file_bounded(&owner.join(&selection.config_file), 1_048_576)
         .map_err(|e| e.to_string())?;
     let config: MaintenanceObserverConfig = serde_json::from_slice(&bytes)
         .map_err(|e| format!("client maintenance_observer configuration: {e}"))?;
     if config.worker_template_interface_id != selection.template_interface_id {
         return Err("maintenance configuration belongs to a different selected worker template".into());
     }
-    Ok(Some(config))
+    Ok(config)
 }
 
-fn observer_request(request: &AttachmentRequest<'_>, config: MaintenanceObserverConfig) -> Result<MaintenanceObserverRequest, String> {
+fn observer_request(request: &AttachmentRequest<'_>, selection: Selection, config: MaintenanceObserverConfig) -> Result<MaintenanceObserverRequest, String> {
     let identity = request.identity;
     let roots = CompositionRoots {
         registry_root: request.capabilities.registry_root().to_path_buf(),
@@ -122,6 +130,7 @@ fn observer_request(request: &AttachmentRequest<'_>, config: MaintenanceObserver
         source_input_labels,
         source_payload_input_labels: request.source_payload_input_labels.clone(),
         config,
+        observer_selection: serde_json::to_value(selection).map_err(|e| e.to_string())?,
         write_hash_algorithm: request.write_hash_algorithm,
     })
 }

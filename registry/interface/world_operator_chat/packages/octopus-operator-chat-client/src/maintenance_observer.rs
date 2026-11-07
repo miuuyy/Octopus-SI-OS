@@ -49,6 +49,7 @@ pub struct MaintenanceObserverRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_payload_input_labels: Vec<String>,
     pub config: MaintenanceObserverConfig,
+    pub observer_selection: Value,
     pub write_hash_algorithm: WriteHashAlgorithm,
 }
 
@@ -634,7 +635,8 @@ pub fn plan_maintenance_observer(
             "provider_interface":projection_id,"initial_record":projection_initial,"initial_record_content":projection_content},
         "collection_source":cfg.collection_source,
         "collection_entries_root":entries_root,"publication_door_interface":publication_door,"publication_tool":publication_tool,
-        "initial_record":initial_record,"initial_record_content":content,"lifecycle_ownership":lifecycle_ownership});
+        "initial_record":initial_record,"initial_record_content":content,"lifecycle_ownership":lifecycle_ownership,
+        "observer_selection":request.observer_selection});
     push_json_write(
         request
             .roots

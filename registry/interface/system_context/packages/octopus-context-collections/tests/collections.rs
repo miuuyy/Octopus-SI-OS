@@ -310,7 +310,7 @@ fn scope_narrows_source_and_hides_revision_before_staleness() {
         Err(CollectionError::NotVisible(_))
     ));
     let mut denied = entry("denied");
-    denied["scope"] = json!({"ee_ids":[]});
+    denied["scope"] = json!({"ee_ids":["another-ee"]});
     f.store(&denied);
     let mut worker = entry("worker-private");
     worker["scope"] = json!({"worker_interfaces":["another-worker"]});
@@ -345,7 +345,7 @@ fn pagination_pins_visible_query_scope_snapshot_and_survives_hidden_changes() {
     let mut next = request(1);
     next.cursor = first.cursor.clone();
     let mut hidden = entry("hidden");
-    hidden["scope"] = json!({"ee_ids":[]});
+    hidden["scope"] = json!({"ee_ids":["another-ee"]});
     f.store(&hidden);
     let second = c.list(&scope(), &next).unwrap();
     assert_eq!(second.snapshot, first.snapshot);
@@ -563,7 +563,7 @@ fn publication_postimages_remain_scannable_and_pageable() {
 fn hidden_integrity_errors_do_not_return_private_metadata_or_entry_paths() {
     let f = Fixture::new();
     let mut hidden = entry("hidden");
-    hidden["scope"] = json!({"ee_ids":[]});
+    hidden["scope"] = json!({"ee_ids":["another-ee"]});
     f.store(&hidden);
     hidden["PrivateMarker"] = json!("PrivateBody");
     fs::write(

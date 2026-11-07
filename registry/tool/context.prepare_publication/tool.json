@@ -99,10 +99,12 @@
           },
           "scope": {
             "type": "object",
+            "description": "Who may see the entry. Omit an axis to leave it unrestricted; a listed axis names at least one exact id.",
             "additionalProperties": false,
             "properties": {
               "ee_ids": {
                 "type": "array",
+                "minItems": 1,
                 "uniqueItems": true,
                 "items": {
                   "type": "string",
@@ -111,6 +113,7 @@
               },
               "worker_interfaces": {
                 "type": "array",
+                "minItems": 1,
                 "uniqueItems": true,
                 "items": {
                   "type": "string",
