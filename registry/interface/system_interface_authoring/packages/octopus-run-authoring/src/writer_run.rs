@@ -1126,7 +1126,7 @@ pub(super) enum OrderedTargetEffect {
     UncertainWriter,
 }
 
-fn definite_refusal(result: &ToolResultArtifact) -> Option<String> {
+pub(super) fn definite_refusal(result: &ToolResultArtifact) -> Option<String> {
     let error = result.error.as_ref().filter(|_| !result.ok && result.body.is_none())?;
     (!matches!(error.code.as_str(), "tool_effect_indeterminate" | "file_write_incomplete"))
         .then(|| format!("{}: {}", error.code, error.message))
@@ -1139,7 +1139,6 @@ struct UnresolvedTarget {
     call: Movement,
     result: Movement,
     writer_advanced: bool,
-    refusal: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1153,7 +1152,7 @@ pub(super) struct WriterHistory {
     last_applied_target: Option<(u64, Vec<u8>)>,
     unresolved: Option<UnresolvedTarget>,
     voided: BTreeMap<u64, u64>,
-    refused: BTreeMap<u64, String>,
+    refused: BTreeMap<String, String>,
     cursor: Option<(u64, u64, ContentHash)>,
 }
 
@@ -1385,8 +1384,14 @@ fn history(
             }
             let effect = args.checked_result(&declared, metadata, &snapshot, &result, limits.max_payload_bytes, call.seq.0)?;
             current.current = snapshot;
+            if let Some(refusal) = definite_refusal(&result).filter(|_| effect == OrderedTargetEffect::UncertainWriter) {
+                let writer = RunRecord::from_bytes(args.writes[0].content(limits.max_payload_bytes)?.as_bytes()).map_err(|e| e.to_string())?;
+                current.voided.insert(seq, target(&writer, &config.provider_interface)?.generation);
+                current.refused.insert(args.writes[1].after_hash(), refusal);
+                continue;
+            }
             let attempt = UnresolvedTarget { seq, args, call, result: movement.clone(),
-                writer_advanced: effect != OrderedTargetEffect::UncertainWriter, refusal: definite_refusal(&result) };
+                writer_advanced: effect != OrderedTargetEffect::UncertainWriter };
             if matches!(effect, OrderedTargetEffect::Uncertain | OrderedTargetEffect::UncertainWriter) {
                 current.unresolved = Some(attempt);
             } else {
@@ -1489,11 +1494,7 @@ fn resolve_target_attempt(
         return Err("ordered target effect remains uncertain; its target moved to content neither attempt state proves".into());
     }
     let writer = RunRecord::from_bytes(attempt.args.writes[0].content(maximum)?.as_bytes()).map_err(|e| e.to_string())?;
-    let generation = target(&writer, provider)?.generation;
-    current.voided.insert(attempt.seq, generation);
-    if let Some(refusal) = attempt.refusal {
-        current.refused.insert(generation, refusal);
-    }
+    current.voided.insert(attempt.seq, target(&writer, provider)?.generation);
     Ok(())
 }
 
@@ -1777,10 +1778,7 @@ impl ProviderOutputHandoff {
                 return Err("provider ordered file write awaits its admitted result".into());
             }
             let progress = history(&self.ctx, &self.session.writer_history, &self.config)?;
-            if let Some(refusal) = known.as_ref()
-                .filter(|(after_hash, _, _, _)| *after_hash == planned.after_hash)
-                .and_then(|(_, _, _, generation)| progress.refused.get(generation))
-            {
+            if let Some(refusal) = progress.refused.get(&planned.after_hash) {
                 return Err(format!("provider ordered file write was refused before any effect: {refusal}"));
             }
             if known.as_ref().is_none_or(|(after_hash, _, _, generation)| {
