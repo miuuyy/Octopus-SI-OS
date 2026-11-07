@@ -2947,12 +2947,19 @@ fn spawn_process_command_life(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| format!("life process start time is before the Unix epoch: {error}"))?
             .as_nanos();
+        let retention_dir = var_dir.clone();
+        let retention = tokio::task::spawn_blocking(move || retire_stderr_captures(&retention_dir, RETAINED_STDERR_CAPTURES - 1))
+            .await
+            .unwrap_or_else(|error| Err(format!("life stderr capture retention stopped: {error}")));
+        if let Err(error) = retention {
+            tracing::warn!(error = %error, "life stderr capture retention failed");
+            eprintln!("{error}");
+        }
         let mut child = LifeProcess::spawn(&mut command)
             .await
             .map_err(|e| format!("life spawn '{}' failed: {e}", executable.display()))?;
         let child_pid = child.id();
         let capture_sequence = STDERR_CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        retire_stderr_captures(&var_dir, RETAINED_STDERR_CAPTURES - 1)?;
         let stderr_path = var_dir.join(format!(
             "interface-life.stderr.{started_at}.{child_pid}.{capture_sequence}.log"
         ));

@@ -190,23 +190,11 @@ pub trait FileSurface: Send + Sync {
         let path = path.clone();
         Box::pin(async move {
             let bytes = self.read(&path).await?;
-            let file_size = u64::try_from(bytes.len()).map_err(|_| {
-                WorkerEnvError::ReadOutsideRoots(format!(
-                    "{} is too large to address with a u64 offset",
-                    path.as_str()
-                ))
-            })?;
-            let start = usize::try_from(offset).map_err(|_| {
-                WorkerEnvError::ReadOutsideRoots(format!(
-                    "{} offset {offset} exceeds this platform",
-                    path.as_str()
-                ))
-            })?;
+            let failure = |reason: String| WorkerEnvError::PathIo { operation: "read", path: path.as_str().to_string(), reason };
+            let file_size = u64::try_from(bytes.len()).map_err(|_| failure("file is too large to address with a u64 offset".into()))?;
+            let start = usize::try_from(offset).map_err(|_| failure(format!("offset {offset} exceeds this platform")))?;
             if start > bytes.len() {
-                return Err(WorkerEnvError::ReadOutsideRoots(format!(
-                    "{} offset {offset} exceeds file size {file_size}",
-                    path.as_str()
-                )));
+                return Err(failure(format!("offset {offset} exceeds file size {file_size}")));
             }
             let end = start.saturating_add(max_bytes).min(bytes.len());
             Ok(FileReadOutput {

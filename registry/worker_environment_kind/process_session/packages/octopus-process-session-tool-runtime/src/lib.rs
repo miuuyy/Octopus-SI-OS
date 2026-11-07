@@ -8261,58 +8261,30 @@ fn prepare_tool_door_action(
         Err(error) => return error.into_action(purpose),
     };
     let target = ToolResultTarget::from(&call);
+    let refused = |reason: &str, error: String| ToolDoorAction::Failure {
+        class: TOOL_INVOCATION_REFUSED,
+        details: serde_json::json!({ "reason": reason, "tool": call.tool, "error": error }),
+        target: Some(target.clone()),
+    };
     let granted_tools = match envelope.granted_tool_names() {
         Ok(granted) => granted,
-        Err(error) => {
-            return ToolDoorAction::Failure {
-                class: "malformed_tool_grant_metadata",
-                details: serde_json::json!({
-                    "field": "tools",
-                    "error": error.to_string(),
-                }),
-                target: Some(target),
-            };
-        }
+        Err(error) => return refused("malformed_tool_grant_metadata", format!("formed tool grant cannot be read: {error}")),
     };
     if !granted_tools.iter().any(|granted| granted == &call.tool) {
-        return ToolDoorAction::Failure {
-            class: "tool_not_granted",
-            details: serde_json::json!({ "tool": call.tool }),
-            target: Some(target),
-        };
+        return refused("tool_not_granted", format!("tool '{}' is outside the formed grant", call.tool));
     }
     let hard_blocked_tools = match envelope.hard_blocked_tool_names() {
         Ok(blocked) => blocked,
-        Err(error) => {
-            return ToolDoorAction::Failure {
-                class: "malformed_tool_grant_metadata",
-                details: serde_json::json!({
-                    "field": "hard_blocked_tools",
-                    "error": error.to_string(),
-                }),
-                target: Some(target),
-            };
-        }
+        Err(error) => return refused("malformed_tool_grant_metadata", format!("hard-blocked tools cannot be read: {error}")),
     };
-    if hard_blocked_tools
-        .iter()
-        .any(|blocked| blocked == &call.tool)
-    {
-        return ToolDoorAction::Failure {
-            class: "tool_hard_blocked",
-            details: serde_json::json!({ "tool": call.tool }),
-            target: Some(target),
-        };
+    if hard_blocked_tools.iter().any(|blocked| blocked == &call.tool) {
+        return refused("tool_hard_blocked", format!("tool '{}' is hard-blocked for this run", call.tool));
     }
     let captured = match ctx.required_host_io_limits().and_then(|limits| {
         ToolProcessEnvelope::capture(&envelope, own.movement.seq.0, &limits)
     }) {
         Ok(captured) => captured,
-        Err(error) => return ToolDoorAction::Failure {
-            class: "invalid_tool_process_input",
-            details: serde_json::json!({ "error": error }),
-            target: Some(target),
-        },
+        Err(error) => return refused("invalid_tool_process_input", format!("tool process input cannot be captured: {error}")),
     };
     ToolDoorAction::Invoke { call, envelope, captured }
 }

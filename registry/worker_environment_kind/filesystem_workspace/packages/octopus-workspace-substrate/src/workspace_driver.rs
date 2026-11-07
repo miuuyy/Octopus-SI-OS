@@ -179,19 +179,13 @@ impl FileSurface for GatedFs {
                 .map_err(|e| WorkerEnvError::PathIo { operation: "stat", path: path.as_str().to_string(), reason: e.to_string() })?
                 .len();
             if offset > file_size {
-                return Err(WorkerEnvError::ReadOutsideRoots(format!(
-                    "{} offset {offset} exceeds file size {file_size}",
-                    path.as_str()
-                )));
+                return Err(WorkerEnvError::PathIo { operation: "read", path: path.as_str().to_string(),
+                    reason: format!("offset {offset} exceeds file size {file_size}") });
             }
             file.seek(std::io::SeekFrom::Start(offset))
                 .map_err(|e| WorkerEnvError::PathIo { operation: "seek", path: path.as_str().to_string(), reason: e.to_string() })?;
-            let limit = u64::try_from(max_bytes).map_err(|_| {
-                WorkerEnvError::ReadOutsideRoots(format!(
-                    "{} bounded read exceeds u64",
-                    path.as_str()
-                ))
-            })?;
+            let limit = u64::try_from(max_bytes).map_err(|_| WorkerEnvError::PathIo { operation: "read",
+                path: path.as_str().to_string(), reason: format!("bounded read of {max_bytes} bytes exceeds u64") })?;
             let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
             file.take(limit)
                 .read_to_end(&mut bytes)
