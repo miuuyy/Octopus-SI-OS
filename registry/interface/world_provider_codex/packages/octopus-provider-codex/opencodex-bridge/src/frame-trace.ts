@@ -7,11 +7,13 @@ type ErrorEvent = { type: "error"; message: string; code?: string };
 const MAX_ENTRIES = 48;
 const MAX_LINE_BYTES = 64 * 1024;
 const TRACED_CODES = new Set(["protocol_error", "tool_bridge_init_missing"]);
+const REFUSAL_BOUNDARY = "The model's response ended with stop_reason refusal; the CLI's continuation is discarded.";
 
 export class FrameTrace {
   private entries: Array<{ text: string; count: number }> = [];
   private dropped = 0;
   private openMessage = false;
+  refused = false;
 
   boundary(line: string): string | undefined {
     let frame: unknown;
@@ -30,7 +32,8 @@ export class FrameTrace {
     }
     if (kind === "message_stop") this.openMessage = false;
     if (kind === "message_delta" && field(field(event, "delta"), "stop_reason") === "refusal") {
-      return "The model's response ended with stop_reason refusal; the CLI's continuation is discarded.";
+      this.refused = true;
+      return REFUSAL_BOUNDARY;
     }
     return undefined;
   }
@@ -144,6 +147,11 @@ export function tracedSpawn(trace: FrameTrace, spawn: SpawnFn = nodeSpawn): Spaw
 export function withFrameTrace<E extends { type: string }>(emit: (event: E) => void, trace: FrameTrace): (event: E) => void {
   return (event) => {
     const error = event as unknown as ErrorEvent;
+    if (error.type === "error" && trace.refused && error.message.includes(REFUSAL_BOUNDARY)) {
+      emit({ type: "incomplete", reason: "content_filter", retryable: false,
+        message: 'Claude Code ended the response with stop_reason "refusal"' } as unknown as E);
+      return;
+    }
     if (error.type === "error" && error.code !== undefined && TRACED_CODES.has(error.code)) {
       emit({ ...event, message: `${error.message} CLI frames: ${trace.render()}` });
       return;
