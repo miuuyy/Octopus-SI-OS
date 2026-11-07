@@ -561,11 +561,14 @@ sends no reasoning effort upstream.
 The curated OpenCodex home keeps Codex's own retries at Codex's defaults. A
 dropped response stream is retried up to five times (`stream_max_retries = 5`):
 Codex samples the step again with the outputs of tools it already executed, so
-an upstream disconnect does not end the turn. A Claude Code stream that ends
-while a captured tool call is still open fails closed as `protocol_error`; the
-bridge appends the content-free sequence of the CLI's last stream frames (frame,
-block and stop types, never text or arguments), so the retried step's
-`turn.error` names which frames left the call open. A request that fails before its
+an upstream disconnect does not end the turn. A Claude Code leg is one
+assistant message: when the CLI starts another message before the previous one
+finished, or the response stops with `refusal`, the bridge ends the leg at that
+frame and names the reason, so a continuation the CLI produced on its own never
+reaches the model and Codex samples the step again from recorded history. A
+stream that ends while a captured tool call is still open fails closed as
+`protocol_error`. Both errors carry the content-free sequence of the CLI's last
+stream frames (frame, block and stop types, never text or arguments). A request that fails before its
 stream starts is retried up to four times (`request_max_retries = 4`). Every Codex-started descriptor also pins
 `include_permissions_instructions=false`, because Codex's sandbox and
 escalation instructions describe parameters Octopus tools do not have.

@@ -65,8 +65,7 @@
           "codex"
         ],
         "read_env_paths": [
-          "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
-          "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"
+          "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
         ],
         "write_env_paths": [
           "OCTOPUS_MACHINE_CODEX_AUTH_FILE",

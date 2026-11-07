@@ -11,6 +11,29 @@ const TRACED_CODES = new Set(["protocol_error", "tool_bridge_init_missing"]);
 export class FrameTrace {
   private entries: Array<{ text: string; count: number }> = [];
   private dropped = 0;
+  private openMessage = false;
+
+  boundary(line: string): string | undefined {
+    let frame: unknown;
+    try {
+      frame = JSON.parse(line);
+    } catch {
+      return undefined;
+    }
+    if (field(frame, "type") !== "stream_event") return undefined;
+    const event = field(frame, "event");
+    const kind = field(event, "type");
+    if (kind === "message_start") {
+      const cut = this.openMessage;
+      this.openMessage = true;
+      return cut ? "Claude Code started another assistant message before the previous one finished; the cut message and the CLI's own continuation are discarded." : undefined;
+    }
+    if (kind === "message_stop") this.openMessage = false;
+    if (kind === "message_delta" && field(field(event, "delta"), "stop_reason") === "refusal") {
+      return "The model's response ended with stop_reason refusal; the CLI's continuation is discarded.";
+    }
+    return undefined;
+  }
 
   record(text: string): void {
     const last = this.entries.at(-1);
@@ -89,6 +112,11 @@ function observeLines(trace: FrameTrace): Transform {
           trace.record("oversized");
         } else if (line.trim()) {
           trace.record(summarizeFrame(line));
+          const boundary = trace.boundary(line);
+          if (boundary) {
+            callback(new Error(boundary));
+            return;
+          }
         }
       }
       if (pending.length > MAX_LINE_BYTES) {

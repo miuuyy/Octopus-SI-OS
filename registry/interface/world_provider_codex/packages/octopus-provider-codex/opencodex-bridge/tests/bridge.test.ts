@@ -455,6 +455,40 @@ test("an incomplete claude-cli tool call fails closed and names the frame sequen
   expect(text).not.toContain("secret text");
 });
 
+test("a claude-cli continuation after a cut assistant message is discarded with a named reason", async () => {
+  const home = mkdtempSync(join(tmpdir(), "octopus-claude-cli-cut-"));
+  directories.push(home);
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  const frames = [
+    { type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] },
+    { type: "stream_event", event: { type: "message_start" } },
+    { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call_0", name: "exact_tool", input: {} } } },
+    { type: "stream_event", event: { type: "message_start" } },
+    { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+    { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "The previous step was stopped" } } },
+    { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+    { type: "stream_event", event: { type: "message_stop" } },
+    { type: "result", subtype: "success", is_error: false, result: "The previous step was stopped", usage: { input_tokens: 3, output_tokens: 4 } },
+  ];
+  writeFileSync(join(home, "frames"), frames.map(frame => JSON.stringify(frame)).join("\n") + "\n");
+  writeFileSync(join(bin, "claude"), ["#!/bin/sh", 'cat > /dev/null', 'cat "$HOME/frames"'].join("\n"), { mode: 0o755 });
+  const bridge = await spawnBridge(config("https://api.anthropic.com", {
+    id: "world_provider_claude_cli", adapter: "claude-cli", registry_entry: "claude-cli",
+    models: ["claude-sonnet-5"], default_model: "claude-sonnet-5", api_key: undefined, auth_header: undefined,
+    auth_value_prefix: undefined, headers: {}, allow_private_network: false,
+  }), { HOME: home, USER: "octopus-test", PATH: `${bin}:/usr/bin:/bin`, TMPDIR: home });
+  const response = await fetch(`${bridge.origin}/v1/responses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-5", stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }], tools: [exactTool] }),
+  });
+  const text = await response.text();
+  expect(text).toContain("Claude Code started another assistant message before the previous one finished");
+  expect(text).toContain("CLI frames: system:init message_start block_start[0]:tool_use(");
+  expect(text).not.toContain("The previous step was stopped");
+});
+
 test("grok-cli turns run the signed-in Grok CLI in an isolated home and hand back the catalog calls it makes", async () => {
   const home = mkdtempSync(join(tmpdir(), "octopus-grok-cli-"));
   directories.push(home);

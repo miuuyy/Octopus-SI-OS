@@ -30,7 +30,7 @@
           "relative_path": "world_provider_codex/packages/bin/codex-code-mode-host"
         }],
         "executable_commands": ["codex"],
-        "read_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE", "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"],
+        "read_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE"],
         "write_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE", "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"],
         "executable_env_paths": [],
         "read_env_subpaths": [],
