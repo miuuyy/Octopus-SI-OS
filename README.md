@@ -102,7 +102,7 @@ Model availability and usage limits belong to your provider account. Voice and s
 
 <br>
 
-A setup file (`*.octopus-setup.json`) carries an Octopus's space, projects, capabilities and model, never its keys, accounts or history. On the first setup step, **Import setup…** fills the wizard from one; **Export setup…** on the review step, or **Settings → General → Setup file**, saves yours. Try it with the [legacy-watch experiment](experiments/legacy-watch/README.md). More in [Setup files](docs/getting-started.md#setup-files).
+A setup file (`*.octopus-setup.json`) carries an Octopus's space, projects, capabilities and model, never its keys, accounts or history. On the first setup step, **Import setup…** fills the wizard from one; **Export setup…** on the review step, or **Settings → General → Setup file**, saves yours. Try it with the [Legacy watch setup file](registry/interface/world_legacy_watch/legacy-watch.octopus-setup.json). More in [Setup files](docs/getting-started.md#setup-files).
 
 </details>
 

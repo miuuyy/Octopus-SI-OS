@@ -12,8 +12,8 @@ import sys
 sys.dont_write_bytecode = True
 
 KIT_DIR = os.path.dirname(os.path.abspath(__file__))
-KIT_INTERFACES = os.path.join(KIT_DIR, "registry", "interface")
-sys.path.insert(0, os.path.join(KIT_INTERFACES, "world_legacy_watch"))
+KIT_INTERFACES = os.path.dirname(KIT_DIR)
+sys.path.insert(0, KIT_DIR)
 
 from octopus_content_hash import octopus_content_hash
 

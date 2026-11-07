@@ -11,11 +11,10 @@ import unittest
 
 sys.dont_write_bytecode = True
 
-KIT = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(KIT))
-SENSOR_DIR = os.path.join(KIT, "registry", "interface", "world_legacy_watch")
+SENSOR_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(SENSOR_DIR)))
 LIFE = os.path.join(SENSOR_DIR, "legacy_watch_life.py")
-AUTHOR = os.path.join(KIT, "author.py")
+AUTHOR = os.path.join(SENSOR_DIR, "author.py")
 sys.path.insert(0, SENSOR_DIR)
 
 from octopus_content_hash import octopus_content_hash

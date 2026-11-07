@@ -144,6 +144,7 @@ jobs:
           node --test registry/interface/world_email/tests/test_connection.cjs
           python3 -m unittest discover -s registry/interface/world_cron/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_issues/tests -p 'test_*.py'
+          python3 -m unittest discover -s registry/interface/world_legacy_watch/tests -p 'test_*.py'
           node registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/configure-transport.test.cjs
           node registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/setup-host.test.cjs
           node registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/tests/engine-mode.test.cjs

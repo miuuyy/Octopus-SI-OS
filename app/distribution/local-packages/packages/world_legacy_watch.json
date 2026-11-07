@@ -1,0 +1,31 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_legacy_watch",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_legacy_watch",
+  "release_status": "optional",
+  "display": {
+    "name": "Legacy watch",
+    "description": "A trigger template: the first letter in your mailbox that reports your death wakes one task with your last instructions.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "mail"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_legacy_watch",
+      "primary": true
+    },
+    {
+      "registry_kind": "interface",
+      "owner": "system_worker_legacy_relay"
+    }
+  ],
+  "required_packages": [
+    "world_email",
+    "world_operator_chat"
+  ]
+}
