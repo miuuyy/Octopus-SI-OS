@@ -29,19 +29,15 @@ class DaylightSavingSchedule(unittest.TestCase):
                 self.module.run_cron({"cron": cron, "fire_on_start": False, "timezone": NEW_YORK}, "")
         return fired
 
-    def test_fall_back_keeps_wildcard_schedules_running_through_the_repeated_hour(self):
-        self.assertEqual(self.fired("0 * * * *", datetime(2026, 11, 1, 0, 30), 4), ["11-01 05:00Z", "11-01 06:00Z", "11-01 07:00Z", "11-01 08:00Z"])
-        self.assertEqual(self.fired("*/30 * * * *", datetime(2026, 11, 1, 0, 50), 2.5), ["11-01 05:00Z", "11-01 05:30Z", "11-01 06:00Z", "11-01 06:30Z", "11-01 07:00Z"])
-
-    def test_fall_back_runs_a_fixed_time_in_the_repeated_hour_once(self):
-        self.assertEqual(self.fired("30 1 * * *", datetime(2026, 10, 31, 12, 0), 48), ["11-01 05:30Z", "11-02 06:30Z"])
-
-    def test_spring_forward_runs_a_skipped_fixed_time_when_the_clock_jumps(self):
-        self.assertEqual(self.fired("30 2 * * *", datetime(2026, 3, 7, 12, 0), 48), ["03-08 07:00Z", "03-09 06:30Z"])
-
-    def test_spring_forward_does_not_backfill_wildcard_schedules(self):
-        self.assertEqual(self.fired("0 * * * *", datetime(2026, 3, 8, 0, 30), 3), ["03-08 06:00Z", "03-08 07:00Z", "03-08 08:00Z"])
-
+    def test_schedules_follow_cron_rules_across_both_transitions(self):
+        for cron, start, hours, expected in [
+            ("*/30 * * * *", datetime(2026, 11, 1, 0, 50), 2.5, ["11-01 05:00Z", "11-01 05:30Z", "11-01 06:00Z", "11-01 06:30Z", "11-01 07:00Z"]),
+            ("30 1 * * *", datetime(2026, 10, 31, 12, 0), 48, ["11-01 05:30Z", "11-02 06:30Z"]),
+            ("30 2 * * *", datetime(2026, 3, 7, 12, 0), 48, ["03-08 07:00Z", "03-09 06:30Z"]),
+            ("0 * * * *", datetime(2026, 3, 8, 0, 30), 3, ["03-08 06:00Z", "03-08 07:00Z", "03-08 08:00Z"]),
+        ]:
+            with self.subTest(cron=cron, start=start):
+                self.assertEqual(self.fired(cron, start, hours), expected)
 
 if __name__ == "__main__":
     unittest.main()
