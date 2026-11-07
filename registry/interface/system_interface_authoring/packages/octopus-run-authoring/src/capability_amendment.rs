@@ -531,7 +531,7 @@ fn apply_delta(current: &RunRecord, ordinary: &mut Value, delta: &CapabilityDelt
     let pending = pending_handoff(&initial, provider)?;
     let pending_items = pending.as_ref().map(|pending| pending.items.as_slice()).unwrap_or_default();
     let unclaimed = |template: &RunAuthoringCheckpoint| retains_future_output(template)
-        && !pending_items.iter().any(|item| pending_output_matches_template(item, template));
+        && !pending_items.iter().any(|item| pending_output_serves_template(item, template));
     let mut rows = Vec::new();
     for prior in delta.before.checkpoints.iter().filter(|template| retains_future_output(template)) {
         let next = successors(prior, &delta.after);

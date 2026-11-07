@@ -102,6 +102,17 @@ pub(crate) fn pending_output_matches_template(item: &PendingHandoffItem, templat
         && item.checkpoint.required_verified_artifacts == template.required_verified_artifacts
 }
 
+pub(crate) fn pending_output_serves_template(item: &PendingHandoffItem, template: &RunAuthoringCheckpoint) -> bool {
+    if pending_output_matches_template(item, template) { return true; }
+    if template.role != RunAuthoringCheckpointRole::ProviderToolOutput { return false; }
+    let mut extended = template.clone();
+    let ([required], [served]) = (extended.required_verified_artifacts.as_mut_slice(), item.checkpoint.required_verified_artifacts.as_slice()) else { return false; };
+    let (Some(granted), Some(called)) = (required.params["tools"].as_array(), served.params["tools"].as_array()) else { return false; };
+    if !called.iter().all(|tool| granted.contains(tool)) { return false; }
+    required.params["tools"] = served.params["tools"].clone();
+    pending_output_matches_template(item, &extended)
+}
+
 pub(crate) fn materialize_pending_checkpoint(
     checkpoint: &PendingHandoffCheckpoint,
     run: &RunId,
@@ -231,7 +242,7 @@ pub(crate) fn validate_pending_output_frontier(
         .map(serde_json::from_value).transpose().map_err(|e|e.to_string())?;
     if let Some(topology) = &topology { topology.validate_identity(record,provider)?; }
     let retained = topology.iter().flat_map(|topology| &topology.checkpoints).filter(|template| retains_future_output(template)
-        && !pending.items.iter().any(|item| pending_output_matches_template(item, template))).collect::<Vec<_>>();
+        && !pending.items.iter().any(|item| pending_output_serves_template(item, template))).collect::<Vec<_>>();
     let mut retained_ids = BTreeSet::new();
     let item_ids = pending.items.iter().map(|item| item.checkpoint.id.clone()).collect::<BTreeSet<_>>();
     let mut standing_ids = BTreeSet::new();

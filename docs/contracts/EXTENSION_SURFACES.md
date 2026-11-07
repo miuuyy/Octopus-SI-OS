@@ -532,7 +532,10 @@ what the input already admitted: the turn that arrived through it, including
 the turn that removes it, and any arrival admitted before the edit settle
 against the record pinned at their arrival. Every other retained selection
 entry stays. Static context a change adds reaches the run's context and the
-tool outputs the run arms, including outputs armed while the turn waits. A
+tool outputs the run arms, including outputs armed while the turn waits; a
+tool route whose call is still pending is armed again only after that call
+settles, even when the change extends its tools, so the pending call is never
+admitted twice. A
 context-free input and an input another owner writes keep the static artifacts
 they were accepted with, so an arrival they already admitted keeps its exact
 checkpoint.
@@ -562,11 +565,13 @@ A write the room refused without effect evidence (no result body, not
 indeterminate) whose writer did not advance is void on its own evidence:
 ordered writes stop at the first one that fails, so the target was never
 reached, and replay needs no later readback of a target other writers may have
-moved since. An incomplete write whose receipts show the writer entry not
-applied and the target not attempted settles the same way. The refusal stays
-with the planned target write, and the writer, the provider's own or another
-owner's, fails that write with the room's reason on every pass, after a restart
-too, instead of retrying it or waiting for evidence that cannot arrive.
+moved since. An incomplete write whose receipts show the target not attempted
+is void on the same evidence, whether or not its writer entry landed: a writer
+entry the room refused carries that refusal, while an uncertain one leaves the
+writer free to author a fresh attempt. A refusal stays with the planned target
+write, and the writer, the provider's own or another owner's, fails that write
+with the room's reason on every pass, after a restart too, instead of retrying
+it or waiting for evidence that cannot arrive.
 
 Claude Code replay carries user attachments and tool screenshots as native image
 blocks in conversation order. Whole-message history cuts remove their images

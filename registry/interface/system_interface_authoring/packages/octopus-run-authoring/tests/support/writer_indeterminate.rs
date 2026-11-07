@@ -21,13 +21,16 @@ fn indeterminate_writer_requires_exact_failure_and_unadvanced_readback() {
         OrderedEntry::prepare(PathBuf::from("/runs/writer.json"), &before, &after, Some(JsonFormat::Compact)).unwrap(),
         OrderedEntry::Content(OrderedContentEntry {path:PathBuf::from("/runs/target.json"), content:"after".into(), expected_before_content:"before".into(), expected_before_hash:ContentHash::of_bytes(b"before").to_hex()})
     ]};
-    let pinned = RunRecord::from_bytes(&before).unwrap();
-    let cp = &pinned.checkpoints[0];
-    let metadata = InvocationMetadata::new(Default::default())
-        .with_runtime(octopus_ledger::RuntimeInvocationMetadata {run:pinned.id.clone(), ee:pinned.ee.clone(), worker:pinned.worker.clone(), checkpoint:cp.id.clone(), interface:writer.owner.clone(), epoch:0, run_record_hash:Some(ContentHash::of_bytes(&before).to_hex())})
-        .with_outbound_interface_bindings(vec![writer.owner.clone()])
-        .with_checkpoint_binding_policy(CheckpointBindingPolicySnapshot {inbound:cp.interface_binding.clone().unwrap(), outbound:cp.outbound_interface_bindings.clone()})
-        .with_checkpoint_admission(octopus_ledger::CheckpointAdmissionMetadata {artifact_label:writer.result_label.clone(), required_artifact_labels:vec![], complete:true});
+    let pinned_metadata = |bytes: &[u8]| {
+        let pinned = RunRecord::from_bytes(bytes).unwrap();
+        let cp = &pinned.checkpoints[0];
+        InvocationMetadata::new(Default::default())
+            .with_runtime(octopus_ledger::RuntimeInvocationMetadata {run:pinned.id.clone(), ee:pinned.ee.clone(), worker:pinned.worker.clone(), checkpoint:cp.id.clone(), interface:writer.owner.clone(), epoch:0, run_record_hash:Some(ContentHash::of_bytes(bytes).to_hex())})
+            .with_outbound_interface_bindings(vec![writer.owner.clone()])
+            .with_checkpoint_binding_policy(CheckpointBindingPolicySnapshot {inbound:cp.interface_binding.clone().unwrap(), outbound:cp.outbound_interface_bindings.clone()})
+            .with_checkpoint_admission(octopus_ledger::CheckpointAdmissionMetadata {artifact_label:writer.result_label.clone(), required_artifact_labels:vec![], complete:true})
+    };
+    let metadata = pinned_metadata(&before);
     let result: ToolResultArtifact = serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
         "error":{"code":"tool_effect_indeterminate","message":"disk full","details":{"source_movement_seq":10,"failure_details":{
             "source_movement_seq":10,"tool":writer.tool,"effect_state":"in_flight_outcome_unknown"}}}
@@ -47,8 +50,14 @@ fn indeterminate_writer_requires_exact_failure_and_unadvanced_readback() {
     let stopped = |first: &str, second: &str| -> ToolResultArtifact { serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
         "error":{"code":"file_write_incomplete","message":"no space left on device","details":{"file_write":{"result":"ordered_file_writes","writes":[
             receipt("/runs/writer.json", &before, &after, first), receipt("/runs/target.json", b"before", b"after", second)]}}}})).unwrap() };
-    assert_eq!(args.checked_result(&writer, &metadata, &before, &stopped("uncertain", "not_attempted"), 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
-    assert!(unadvanced_refusal(&stopped("refused", "not_attempted")).is_some());
-    assert!(args.checked_result(&writer, &metadata, &after, &stopped("uncertain", "not_attempted"), 1048576, 10).is_err());
+    let landed = pinned_metadata(&after);
+    for first in ["uncertain", "refused"] {
+        let result = stopped(first, "not_attempted");
+        assert_eq!(args.checked_result(&writer, &metadata, &before, &result, 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
+        assert!(target_untouched(&result, OrderedTargetEffect::UncertainWriter));
+        assert_eq!(untouched_refusal(&result).is_some(), first == "refused");
+    }
+    assert_eq!(args.checked_result(&writer, &landed, &after, &stopped("uncertain", "not_attempted"), 1048576, 10).unwrap(), OrderedTargetEffect::Uncertain);
+    assert!(args.checked_result(&writer, &landed, &after, &stopped("refused", "not_attempted"), 1048576, 10).is_err());
     assert!(args.checked_result(&writer, &metadata, &before, &stopped("uncertain", "uncertain"), 1048576, 10).is_err());
 }

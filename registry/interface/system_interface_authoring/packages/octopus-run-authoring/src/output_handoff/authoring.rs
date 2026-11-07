@@ -245,7 +245,7 @@ impl ProviderOutputHandoff {
             });
         }
         for template in next_config.checkpoints.iter().filter(|template| retains_future_output(template)) {
-            if !pending_items.iter().any(|item| pending_output_matches_template(item, template)) {
+            if !pending_items.iter().any(|item| pending_output_serves_template(item, template)) {
                 let id = format!("{batch_prefix}_{}",template.name);
                 next_frontier_ids.push(id.clone());
                 next_frontier.push(materialize_checkpoint(template,&id,&record.id,&mandatory_role_bindings));

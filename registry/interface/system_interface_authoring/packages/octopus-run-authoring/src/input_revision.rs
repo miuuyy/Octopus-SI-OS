@@ -1080,7 +1080,7 @@ fn payload_value(
         let future_tool = template.role == RunAuthoringCheckpointRole::ProviderToolOutput
             && pending.as_ref().is_none_or(|handoff| {
                 retains_future_output(template)
-                    && !handoff.items.iter().any(|item| pending_output_matches_template(item, template))
+                    && !handoff.items.iter().any(|item| pending_output_serves_template(item, template))
             });
         if !stable && !authoring && !future_tool {
             continue;

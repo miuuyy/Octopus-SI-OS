@@ -1019,10 +1019,10 @@ impl OrderedArguments {
                 })
         });
         let unresolved = indeterminate || definite_refusal(result).is_some();
-        let stopped = stopped_at_writer(result);
+        let stopped = writer_stop(result);
         let writer_unadvanced = snapshot == decoded[0].0.as_bytes();
         let mismatches = [
-            (snapshot != decoded[0].1.as_bytes() && !((unresolved || stopped) && writer_unadvanced), "run record bytes"),
+            (snapshot != decoded[0].1.as_bytes() && !((unresolved || stopped.is_some()) && writer_unadvanced), "run record bytes"),
             (runtime.run != record.id, "run"),
             (runtime.ee != record.ee, "execution environment"),
             (runtime.worker != record.worker, "worker"),
@@ -1106,8 +1106,11 @@ impl OrderedArguments {
             }
         }
         if body.writes[0].outcome != "applied" {
-            return if stopped && writer_unadvanced { Ok(OrderedTargetEffect::UncertainWriter) }
-                else { Err("ordered writer Run was not advanced".into()) };
+            return match (stopped, writer_unadvanced) {
+                (Some(_), true) => Ok(OrderedTargetEffect::UncertainWriter),
+                (Some("uncertain"), false) => Ok(OrderedTargetEffect::Uncertain),
+                _ => Err("ordered writer Run was not advanced".into()),
+            };
         }
         match body.writes[1].outcome.as_str() {
             "applied" if result.ok => Ok(OrderedTargetEffect::Applied),
@@ -1137,15 +1140,20 @@ pub(super) fn definite_refusal(result: &ToolResultArtifact) -> Option<String> {
         .then(|| format!("{}: {}", error.code, error.message))
 }
 
-fn stopped_at_writer(result: &ToolResultArtifact) -> bool {
-    !result.ok && result.body.is_none() && result.error.as_ref().is_some_and(|error| error.code == "file_write_incomplete"
-        && error.details.as_ref().and_then(|details| details["file_write"]["writes"].as_array()).is_some_and(|writes| writes.len() == 2
-            && matches!(writes[0]["outcome"].as_str(), Some("refused" | "uncertain"))
-            && writes[1]["outcome"].as_str() == Some("not_attempted")))
+fn writer_stop(result: &ToolResultArtifact) -> Option<&str> {
+    let error = result.error.as_ref().filter(|error| !result.ok && result.body.is_none() && error.code == "file_write_incomplete")?;
+    let writes = error.details.as_ref()?.get("file_write")?.get("writes")?.as_array()?;
+    let [writer, target] = writes.as_slice() else { return None };
+    (target["outcome"].as_str() == Some("not_attempted"))
+        .then(|| writer["outcome"].as_str()).flatten().filter(|outcome| matches!(*outcome, "refused" | "uncertain"))
 }
 
-pub(super) fn unadvanced_refusal(result: &ToolResultArtifact) -> Option<String> {
-    definite_refusal(result).or_else(|| stopped_at_writer(result).then(|| result.error.as_ref()
+pub(super) fn target_untouched(result: &ToolResultArtifact, effect: OrderedTargetEffect) -> bool {
+    writer_stop(result).is_some() || (effect == OrderedTargetEffect::UncertainWriter && definite_refusal(result).is_some())
+}
+
+pub(super) fn untouched_refusal(result: &ToolResultArtifact) -> Option<String> {
+    definite_refusal(result).or_else(|| (writer_stop(result) == Some("refused")).then(|| result.error.as_ref()
         .map(|error| format!("{}: {}", error.code, error.message))).flatten())
 }
 
@@ -1401,10 +1409,10 @@ fn history(
             }
             let effect = args.checked_result(&declared, metadata, &snapshot, &result, limits.max_payload_bytes, call.seq.0)?;
             current.current = snapshot;
-            if let Some(refusal) = unadvanced_refusal(&result).filter(|_| effect == OrderedTargetEffect::UncertainWriter) {
+            if target_untouched(&result, effect) {
                 let writer = RunRecord::from_bytes(args.writes[0].content(limits.max_payload_bytes)?.as_bytes()).map_err(|e| e.to_string())?;
                 current.voided.insert(seq, target(&writer, &config.provider_interface)?.generation);
-                current.refused.insert(args.writes[1].after_hash(), refusal);
+                if let Some(refusal) = untouched_refusal(&result) { current.refused.insert(args.writes[1].after_hash(), refusal); }
                 continue;
             }
             let attempt = UnresolvedTarget { seq, args, call, result: movement.clone(),
