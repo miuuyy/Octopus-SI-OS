@@ -91,6 +91,14 @@ fn same_future_contract(before: &BoundRunAuthoringTopology, after: &BoundRunAuth
     before == after
 }
 
+fn retirable_standing_input(template: &RunAuthoringCheckpoint, after: &BoundRunAuthoringTopology) -> bool {
+    matches!(template.role, RunAuthoringCheckpointRole::Stable | RunAuthoringCheckpointRole::IndependentInput)
+        && template.owner_authoring.is_none()
+        && template.required_verified_artifacts.is_empty() && template.result_receiving.is_empty()
+        && (!template.include_context || after.checkpoints.iter().any(|next|
+            next.role == RunAuthoringCheckpointRole::Stable && next.include_context))
+}
+
 fn validate_templates(before: &BoundRunAuthoringTopology, after: &BoundRunAuthoringTopology) -> Result<(), String> {
     let mut old_header = before.clone();
     let mut new_header = after.clone();
@@ -111,6 +119,7 @@ fn validate_templates(before: &BoundRunAuthoringTopology, after: &BoundRunAuthor
             || (prior.role == RunAuthoringCheckpointRole::ProviderToolOutput && next.role == prior.role
                 && next.interface_binding == prior.interface_binding
                 && next.outbound_interface_bindings == prior.outbound_interface_bindings)).collect::<Vec<_>>();
+        if matches.is_empty() && retirable_standing_input(prior, after) { continue; }
         let [next] = matches.as_slice() else { return Err(format!("capability amendment removes or duplicates retained template '{}' ({:?}: {} -> {:?})", prior.name,prior.role,prior.interface(),prior.outbound_interfaces().collect::<Vec<_>>())); };
         let next = *next;
         let mut old = prior.clone();
@@ -493,6 +502,19 @@ fn apply_delta(current: &RunRecord, ordinary: &mut Value, delta: &CapabilityDelt
         replace_context_checkpoints(root, &context_config, &initial.id, &prefix, &bindings)?;
     }
     let mut frontier = raw_frontier_checkpoint_ids(state)?.into_iter().collect::<Vec<_>>();
+    let pending = pending_handoff(&initial, provider)?;
+    for retired in delta.before.checkpoints.iter().filter(|old| !delta.after.checkpoints.iter().any(|next| next.name == old.name)) {
+        let ids = initial.checkpoints.iter().filter(|cp| checkpoint_record_matches_template(cp, retired, &initial.id))
+            .map(|cp| cp.id.as_str().to_string()).collect::<BTreeSet<_>>();
+        if pending.as_ref().is_some_and(|pending| pending.items.iter().any(|item| ids.contains(item.checkpoint.id.as_str()))) {
+            return Err(format!("capability amendment cannot retire '{}' while a pending handoff delivers to it", retired.name));
+        }
+        root.get_mut("checkpoints").and_then(Value::as_array_mut).ok_or("capability checkpoints absent")?
+            .retain(|cp| cp.get("id").and_then(Value::as_str).is_none_or(|id| !ids.contains(id)));
+        root.get_mut("active_checkpoints").and_then(Value::as_array_mut).ok_or("capability active checkpoints absent")?
+            .retain(|id| id.as_str().is_none_or(|id| !ids.contains(id)));
+        frontier.retain(|id| !ids.contains(id.as_str()));
+    }
     let mut rows = Vec::new();
     for template in delta.after.checkpoints.iter().filter(|cp| !delta.before.checkpoints.iter().any(|old| old.name == cp.name)) {
         let id = format!("{prefix}_{}", template.name);

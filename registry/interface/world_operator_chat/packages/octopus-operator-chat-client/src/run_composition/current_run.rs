@@ -145,7 +145,7 @@ fn parse<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, String> {
 
 fn retain_selection<T: PartialEq>(prior: &[T], next: &[T], field: &str) -> Result<(), String> {
     if prior.iter().any(|value| !next.contains(value)) {
-        return Err(format!("current-run amendment cannot remove or change retained {field} during its accepted effect"));
+        return Err(format!("current-run amendment cannot remove or change retained {field}; only a standing external input can be removed"));
     }
     Ok(())
 }
@@ -436,7 +436,6 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
     let selected = &plan.authoring_profile;
     retain_selection(&previous.selected_tools, &selected.selected_tools, "tools")?;
     retain_selection(&previous.selected_worker_environment_kinds, &selected.selected_worker_environment_kinds, "worker environment kinds")?;
-    retain_selection(&previous.external_inputs, &selected.external_inputs, "external inputs")?;
     retain_selection(&previous.external_relays, &selected.external_relays, "external relays")?;
     retain_selection(&previous.model_outputs, &selected.model_outputs, "model outputs")?;
     retain_selection(&previous.context_artifact_bindings, &selected.context_artifact_bindings, "context artifacts")?;
