@@ -121,6 +121,7 @@ function maintenanceFixture(registryRoot, runsRoot, original = {}) {
       .map((row) => JSON.parse(row.content).id).filter((id) => !sourceIds.has(id)).sort(),
     private_tool_ids: plan.interface_writes.filter((row) => row.path.endsWith(`${path.sep}tool.json`))
       .map((row) => JSON.parse(row.content).id).filter((id) => !sourcePolicy.ceiling.tools.includes(id)).sort() };
+  d.observer_selection = { template_interface_id: "system_worker_memory_observer", config_file: "maintenance.json" };
   plan.run_record_content = `${JSON.stringify(source, null, 2)}\n`;
   return plan;
 }
@@ -166,6 +167,8 @@ if (require.main === module) {
   test("lifecycle inventory matches new private descriptors and companion ceilings exactly", () => {
     const edits = [
       (p) => changeSource(p, (_, d) => { delete d.lifecycle_ownership; }),
+      (p) => changeSource(p, (_, d) => { delete d.observer_selection; }),
+      (p) => changeSource(p, (_, d) => { d.observer_selection.config_file = "../maintenance.json"; }),
       (p) => changeSource(p, (_, d) => { d.lifecycle_ownership.schema_version = 2; }),
       (p) => changeSource(p, (_, d) => { d.lifecycle_ownership.extra = true; }),
       (p) => changeSource(p, (_, d) => { d.lifecycle_ownership.private_interface_ids.push(d.worker_interface); }),
