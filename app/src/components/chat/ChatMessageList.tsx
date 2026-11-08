@@ -32,10 +32,12 @@ import { projectAssistantDirectives, type AssistantVisualizationTarget } from ".
 import {
   buildThreadVirtualizerLayout,
   distanceFromBottomAnchoredToTurn,
+  distanceFromBottomForTurn,
   rangeAnchoredToTurn,
   threadVirtualizerRange,
   type ThreadVirtualizerRange,
 } from "./threadVirtualizer";
+import { DevThreadSearch, type DevThreadSearchHost } from "./DevThreadSearch";
 
 const WorkingPatchDiff = lazy(() => import("./WorkingPatchDiff"));
 
@@ -257,6 +259,27 @@ export function ChatMessageList({
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [unseenMessageCount, setUnseenMessageCount] = useState(0);
   const reducedMotion = useShouldReduceMotion();
+  const devSearchRevealRef = useRef<(() => void) | null>(null);
+  const devSearchHost = useMemo<DevThreadSearchHost>(() => ({
+    detachFromLatest() {
+      pinnedRef.current = false;
+      readingAnchorRef.current = null;
+    },
+    revealTurn(key) {
+      pinnedRef.current = false;
+      readingAnchorRef.current = null;
+      return new Promise<void>((resolve) => {
+        devSearchRevealRef.current?.();
+        devSearchRevealRef.current = resolve;
+        setVirtualRevealRequest({ id: `__devsearch:${key}`, instant: true, turnKey: key });
+        window.setTimeout(() => {
+          if (devSearchRevealRef.current !== resolve) return;
+          devSearchRevealRef.current = null;
+          resolve();
+        }, 1_500);
+      });
+    },
+  }), []);
   const findState = useMemo(() => {
     const query = findQuery.trim();
     let offset = 0;
@@ -707,6 +730,9 @@ export function ChatMessageList({
 
   return (
     <div className="relative h-full flex-1 [content-visibility:auto]">
+      {import.meta.env?.DEV && listenToGlobalCommands ? (
+        <DevThreadSearch host={devSearchHost} listRef={listRef} turnKeyOf={turnKey} turns={turns} />
+      ) : null}
       <UserMessageNavigationRail
         activeId={activeUserMessageId}
         items={navigationItems}
@@ -800,6 +826,15 @@ export function ChatMessageList({
                     return;
                   }
                   if (request.id.startsWith("__pinned:")) return;
+                  if (request.id.startsWith("__devsearch:")) {
+                    const resolve = devSearchRevealRef.current;
+                    devSearchRevealRef.current = null;
+                    pinnedRef.current = false;
+                    listRef.current?.querySelector<HTMLElement>(`[data-thread-turn-key="${CSS.escape(request.turnKey)}"]`)
+                      ?.scrollIntoView({ block: "start", behavior: "instant" });
+                    resolve?.();
+                    return;
+                  }
                   revealUserMessage(request.id, request.instant, true);
                 }}
                 onRestoreStateChange={onVirtualizerRestoreStateChange}
@@ -1119,6 +1154,12 @@ function VirtualizedTurns({
     const index = layout.turnIndexByKey.get(revealRequest.turnKey);
     if (index === undefined) return;
     if (index < range.startIndex || index >= range.endIndex) {
+      const distance = distanceFromBottomForTurn({
+        layout,
+        turnKey: revealRequest.turnKey,
+        viewportHeightPx: scrollElementRef.current?.clientHeight ?? 800,
+      });
+      if (distance !== null) scrollToDistanceFromBottomPx(distance);
       setRange({
         startIndex: Math.max(0, index - THREAD_VIRTUALIZATION_OVERSCAN_TURNS),
         endIndex: Math.min(turns.length, index + THREAD_VIRTUALIZATION_OVERSCAN_TURNS + 1),
@@ -1127,7 +1168,7 @@ function VirtualizedTurns({
     }
     const frame = window.requestAnimationFrame(() => onRevealReady(revealRequest));
     return () => window.cancelAnimationFrame(frame);
-  }, [layout.turnIndexByKey, onRevealReady, range.endIndex, range.startIndex, revealRequest, turns.length, virtualized]);
+  }, [layout, onRevealReady, range.endIndex, range.startIndex, revealRequest, scrollElementRef, scrollToDistanceFromBottomPx, turns.length, virtualized]);
 
   const commitMeasuredHeights = useCallback((measurements: ReadonlyMap<string, number>) => {
     const current = measuredHeightsByKeyRef.current;
