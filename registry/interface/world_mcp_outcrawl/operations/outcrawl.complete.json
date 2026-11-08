@@ -1,0 +1,28 @@
+{
+  "id": "outcrawl.complete",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "complete"
+  },
+  "description": "Request argument completion from the bound remote MCP World interface.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object"
+      },
+      "argument": {
+        "type": "object"
+      },
+      "context": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "ref",
+      "argument"
+    ],
+    "additionalProperties": false
+  }
+}

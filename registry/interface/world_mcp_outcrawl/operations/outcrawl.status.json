@@ -1,0 +1,13 @@
+{
+  "id": "outcrawl.status",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "status"
+  },
+  "description": "Inspect negotiated capabilities, transport session, auth handle status and durable event cursor.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

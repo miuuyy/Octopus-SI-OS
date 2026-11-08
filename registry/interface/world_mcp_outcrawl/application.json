@@ -1,0 +1,52 @@
+{
+  "schema_version": 3,
+  "id": "world_mcp_outcrawl",
+  "name": "Outcrawl",
+  "description": "Search the web with the results already read, scrape and crawl pages into clean markdown or JSON, and hand a browser task to an agent.",
+  "category": "plugin",
+  "developer": "Outcrawl",
+  "version": "1.0.0",
+  "icon": "globe",
+  "logo": "application-logo.svg",
+  "interfaces": [
+    "world_mcp_outcrawl"
+  ],
+  "artifact_bindings": [
+    {
+      "artifact_id": "artifact-application-mcp-outcrawl-context",
+      "label": "Outcrawl capability contract"
+    }
+  ],
+  "task_capabilities": {
+    "tools": [
+      {
+        "tool": "artifact.send",
+        "interface": "system_room",
+        "worker_environment_kind": "system_room"
+      }
+    ]
+  },
+  "setup": {
+    "fields": [
+      {
+        "interface": "world_mcp_outcrawl",
+        "pointer": "/interface_driver_config/transport/auth_env_key",
+        "label": "Outcrawl API key",
+        "kind": "secret",
+        "required": true,
+        "placeholder": "ock_\u2026"
+      }
+    ]
+  },
+  "connection": {
+    "disclosure": [
+      "Tasks you connect can search the web, scrape and crawl pages, and run browser agents through Outcrawl, and pass what they read to their model.",
+      "Requests use the credits of the Outcrawl workspace that owns the key.",
+      "Connect checks the key with Outcrawl before saving it. The key stays on this Mac, readable only by the Outcrawl interface."
+    ],
+    "help": {
+      "label": "Get an Outcrawl API key",
+      "url": "https://outcrawl.ai/console/keys"
+    }
+  }
+}
