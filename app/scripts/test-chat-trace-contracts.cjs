@@ -981,9 +981,13 @@ async function verifyTranscriptLayout() {
       assert.equal(history(), null);
     }
     reducedMotion = true;
-    await render([], false); await render([message("thought", "reasoning", "", { summary: ["Comparing the two files"] })], false, finalResponse, true);
-    assert.match(query(".octopus-worked-for-boundary").textContent, /^Worked for /, "a turn that only thought still says how long it worked");
-    assert.equal(all(".octopus-agent-activity").length, 0);
+    await render([], false); await render([message("thought", "reasoning", "", { summary: ["Comparing the two files"] }),
+      message("content-thought", "reasoning", "", { summary: [], content: ["**Planning the merge**\n\nThe totals differ"] })], false, finalResponse, true);
+    assert.match(historyToggle().textContent, /^Worked for /, "a turn that only thought still says how long it worked");
+    await click(historyToggle());
+    assert.deepEqual(all(".octopus-agent-activity-toggle").map((node) => node.getAttribute("aria-label")), ["Thought", "Thought"], "settled thoughts stay in the turn history");
+    await click(all(".octopus-agent-activity-toggle")[1]);
+    assert.equal(query(".octopus-reasoning-detail").textContent, "The totals differ", "reasoning projected only as content is shown");
     await render([], false); await render([], false, finalResponse, true);
     assert.equal(container.childElementCount, 0, "a turn without work or thought renders nothing");
     await render([operation, message("interrupted", "interrupted_result", "", {})], false, undefined, true);

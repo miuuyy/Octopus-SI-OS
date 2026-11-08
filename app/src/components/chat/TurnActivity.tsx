@@ -138,10 +138,11 @@ export function TurnActivity({ activityWindow = "all", activities, finalStartedA
         presented,
         toolPresentations,
         presentation === "ledger",
+        working,
       );
       return activityWindow === "latest-context" ? latestContextActivityUnits(projected) : projected;
     },
-    [activityWindow, presentation, presented, toolPresentations],
+    [activityWindow, presentation, presented, toolPresentations, working],
   );
   const hasConversationReasoningWork = presentation === "conversation"
     && visibleActivity.some((message) => activityFamily(message) === "reasoning");
@@ -1032,6 +1033,7 @@ function buildActivityUnits(
   messages: ChatRenderMessage[],
   toolPresentations: ChatToolPresentationIndex,
   preserveMovements = false,
+  working = false,
 ): ActivityUnit[] {
   const entries = coalesceActivities(messages, preserveMovements).filter((entry) => (
     preserveMovements || conversationActivityEntryVisible(entry)
@@ -1075,7 +1077,7 @@ function buildActivityUnits(
 
   for (const entry of entries) {
     if (!preserveMovements) {
-      if (entry.family === "reasoning") {
+      if (entry.family === "reasoning" && (entry.active || (working && entry === entries.at(-1)))) {
         if (explorationOpen) grouped.push(entry);
         continue;
       }
@@ -1163,13 +1165,13 @@ function conversationActivityMessages(
         eventData: reasoningSummaryEventData(data, summaryIndex),
       }];
     }
-    const summaries = reasoningSummaryTexts(data.summary);
+    const summaries = conversationReasoningTexts(data);
     if (!summaries.length) return [];
     return [{
       ...message,
       id: `${message.id}:summary`,
       text: reasoningSummaryContent(summaries),
-      eventData: reasoningSummaryEventData(data),
+      eventData: { ...reasoningSummaryEventData(data), summary: summaries },
       pending: false,
     }];
   });
@@ -1193,7 +1195,12 @@ function reasoningSummaryContent(summaries: string[]): string {
   return [first.startsWith("**") ? first : `**${first}**`, ...rest].join("\n\n");
 }
 
-function reasoningSummaryTexts(value: unknown): string[] {
+function conversationReasoningTexts(data: Record<string, unknown>): string[] {
+  const summaries = reasoningTextParts(data.summary);
+  return summaries.length ? summaries : reasoningTextParts(data.content);
+}
+
+function reasoningTextParts(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => typeof item === "string" ? item.trim() : text(record(item).text))
@@ -1343,7 +1350,7 @@ function activityDetailMessages(entry: ActivityEntry): ChatRenderMessage[] {
   if (entry.family === "reasoning") {
     const completed = lastOf(["reasoning"]);
     if (completed) {
-      const summaries = reasoningSummaryTexts(record(completed.eventData).summary);
+      const summaries = conversationReasoningTexts(record(completed.eventData));
       if (!summaries.length) return [];
       return [{
         ...completed,
