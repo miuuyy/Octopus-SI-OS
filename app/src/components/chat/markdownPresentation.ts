@@ -5,9 +5,9 @@ import type { Nodes } from "mdast";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { unified } from "unified";
+import { unified, type PluggableList } from "unified";
 
-export const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+export const MARKDOWN_REMARK_PLUGINS: PluggableList = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]];
 
 const markdownParser = unified().use(remarkParse).use(MARKDOWN_REMARK_PLUGINS).freeze();
 
