@@ -133,7 +133,7 @@ function fakeElectron(world) {
       app,
       BrowserWindow,
       clipboard: { writeText: (text) => { world.clipboard = text; } },
-      dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }), showSaveDialog: async () => world.saveResult ?? ({ canceled: true }), showMessageBox: async () => ({ response: 0 }) },
+      dialog: { showOpenDialog: async () => world.openResult ?? ({ canceled: true, filePaths: [] }), showSaveDialog: async () => world.saveResult ?? ({ canceled: true }), showMessageBox: async () => ({ response: 0 }) },
       globalShortcut: {
         register: (accelerator, callback) => { shortcuts.set(accelerator, callback); return true; },
         unregister: (accelerator) => { shortcuts.delete(accelerator); },
@@ -434,10 +434,12 @@ test("Help reports work independently of the main renderer and export the review
   const locked = main.windows().at(-1);
   assert.match(locked.options.webPreferences.preload, /supportPreload\.cjs$/);
   assert.equal(locked.options.webPreferences.sandbox, true);
-  const basic = await main.invoke("octopus:support-collect", locked, { includeDetails: false });
+  const { report: basic } = await main.invoke("octopus:support-collect", locked, { includeDetails: false });
   assert.equal(basic.access, "locked");
   assert.equal(basic.client_logs, undefined);
+  assert.equal(basic.runtime_evidence, undefined);
   await assert.rejects(main.invoke("octopus:support-collect", locked, { includeDetails: true }), /Unlock/);
+  await assert.rejects(main.invoke("octopus:support-collect", locked, { includeDetails: false, source: "choose" }), /Unlock/);
   await assert.rejects(main.invoke("octopus:support-collect", primary, { includeDetails: false }), /report window/);
   locked.destroy();
   await main.unlock(primary);
@@ -446,8 +448,10 @@ test("Help reports work independently of the main renderer and export the review
   const support = main.windows().at(-1);
   primary.webContents.emit("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
   await until(() => main.log().some((item) => item.event === "client.renderer.gone"), "renderer crash was recorded");
-  const report = await main.invoke("octopus:support-collect", support, { includeDetails: true });
+  const { report } = await main.invoke("octopus:support-collect", support, { includeDetails: true });
   assert.equal(report.access, "live");
+  assert.equal(report.schema_version, 2);
+  assert.ok(report.runtime_evidence.ledger);
   assert.ok(report.client_logs.events.some((item) => item.message?.includes("Renderer exited: crashed")));
   const request = { reportId: report.report_id, description: "Setup is waiting" };
   await main.invoke("octopus:support-copy", support, request);
@@ -462,6 +466,23 @@ test("Help reports work independently of the main renderer and export the review
   assert.match(main.eventsOf("external").at(-1)[1], /^https:\/\/github.com\/miuuyy\/Octopus-SI-OS\/issues\/new\?/);
   await main.invoke("octopus:support-collect", support, { includeDetails: false });
   await assert.rejects(main.invoke("octopus:support-copy", support, request), /Refresh/);
+  assert.equal(await main.invoke("octopus:support-collect", support, { includeDetails: false, source: "choose" }), null);
+  const saved = path.join(main.world.root, ".octopus-preserved");
+  fs.mkdirSync(path.join(saved, "client/logs"), { recursive: true });
+  fs.writeFileSync(path.join(saved, "host.json"), JSON.stringify({ host_manifest_version: 1 }));
+  const savedLog = path.join(saved, "client/logs/octopus-client.jsonl");
+  fs.writeFileSync(savedLog, JSON.stringify({ event: "renderer.toast", level: "error", detail: { message: "Saved Home failure" } }) + "\n");
+  const before = fs.statSync(savedLog).mtimeMs;
+  main.world.openResult = { canceled: false, filePaths: [saved] };
+  const captured = await main.invoke("octopus:support-collect", support, { includeDetails: true, source: "choose" });
+  assert.equal(captured.source.name, ".octopus-preserved");
+  assert.equal(captured.report.collection.mode, "saved_home");
+  assert.equal(captured.report.runtime.phase, "not_observed");
+  assert.deepEqual(captured.report.client_logs.events.map(item => item.message), ["Saved Home failure"]);
+  assert.equal((await main.invoke("octopus:support-collect", support, { includeDetails: false })).source.kind, "saved");
+  assert.equal(fs.statSync(savedLog).mtimeMs, before);
+  assert.deepEqual(fs.readdirSync(saved).sort(), ["client", "host.json"]);
+  assert.equal((await main.invoke("octopus:support-collect", support, { includeDetails: false, source: "current" })).source.kind, "current");
   assert.equal(main.eventsOf("runtime-start").length, 0);
 });
 const names = (main, wanted) => main.world.events.map(([name]) => name).filter((name) => wanted.includes(name));

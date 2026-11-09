@@ -964,6 +964,15 @@ pub fn resolve_executable(
     Ok(executable)
 }
 
+pub fn validate_executable_runtime(executable: &Path) -> Result<(), String> {
+    if !executable_file(executable) {
+        return Err(format!("process executable '{}' is not an executable regular file", executable.display()));
+    }
+    #[cfg(target_os = "macos")]
+    macos_process_closure(BTreeSet::from([executable.to_path_buf()]), &macos_runtime_roots())?;
+    Ok(())
+}
+
 pub fn resolve_required_repository_file(
     declared: &str,
     repository_root: &Path,
@@ -1116,11 +1125,9 @@ fn prepare_macos(
     readable_exact.extend(process_closure.selector_paths.iter().cloned());
     readable_exact.extend(process_closure.runtime_library_paths.iter().cloned());
     let mut environment = BTreeMap::new();
-    if process_closure
-        .selector_paths
-        .contains(Path::new("/private/var/select/developer_dir"))
-    {
+    if let Some(developer_dir) = &process_closure.developer_dir {
         environment.insert(OsString::from("xcrun_nocache"), OsString::from("1"));
+        environment.insert(OsString::from("DEVELOPER_DIR"), developer_dir.as_os_str().to_owned());
     }
     if authority.allow_network {
         let trust_store = PathBuf::from("/private/etc/ssl/cert.pem");
@@ -1591,6 +1598,7 @@ struct MacosProcessClosure {
     selector_paths: BTreeSet<PathBuf>,
     bundle_roots: BTreeSet<PathBuf>,
     runtime_library_paths: BTreeSet<PathBuf>,
+    developer_dir: Option<PathBuf>,
 }
 
 #[cfg(target_os = "macos")]
@@ -1602,6 +1610,7 @@ fn macos_process_closure(
     let mut executables = BTreeSet::new();
     let mut selector_paths = BTreeSet::new();
     let mut runtime_library_paths = BTreeSet::new();
+    let mut developer_dir = None;
     while let Some(path) = pending.pop_first() {
         let metadata = match std::fs::metadata(&path) {
             Ok(metadata) => metadata,
@@ -1622,10 +1631,13 @@ fn macos_process_closure(
         if let Some(interpreter) = macos_script_interpreter(&executable)? {
             pending.insert(interpreter);
         }
-        if let Some((selectors, selected, libraries)) = macos_selected_executable(&executable)? {
+        if let Some((selectors, selected, libraries)) = macos_selected_executable(&executable, &mut developer_dir)? {
             selector_paths.extend(selectors);
             pending.insert(selected);
             runtime_library_paths.extend(libraries);
+            if developer_dir.is_some() {
+                pending.extend([PathBuf::from("/usr/bin/xcode-select"), PathBuf::from("/usr/bin/xcrun")]);
+            }
         }
     }
     let mut bundle_roots = BTreeSet::new();
@@ -1650,6 +1662,7 @@ fn macos_process_closure(
         selector_paths,
         bundle_roots,
         runtime_library_paths,
+        developer_dir,
     })
 }
 
@@ -1716,11 +1729,15 @@ fn macos_script_interpreter(executable: &Path) -> Result<Option<PathBuf>, String
 #[cfg(target_os = "macos")]
 fn macos_selected_executable(
     executable: &Path,
+    developer_directory: &mut Option<PathBuf>,
 ) -> Result<Option<(BTreeSet<PathBuf>, PathBuf, BTreeSet<PathBuf>)>, String> {
     let Some(parent) = executable.parent() else {
         return Ok(None);
     };
     if parent != Path::new("/bin") && parent != Path::new("/usr/bin") {
+        return Ok(None);
+    }
+    if executable == Path::new("/usr/bin/xcode-select") {
         return Ok(None);
     }
     let Some(name) = executable.file_name() else {
@@ -1733,36 +1750,15 @@ fn macos_selected_executable(
         )
     })?;
     if macos_imported_libraries(&bytes).0.contains(b"/usr/lib/libxcselect.dylib".as_slice()) {
-        let selector = PathBuf::from("/private/var/select/developer_dir");
-        let metadata = std::fs::symlink_metadata(&selector).map_err(|error| {
-            format!(
-                "developer executable selector '{}' cannot be inspected: {error}",
-                selector.display()
-            )
-        })?;
-        if !metadata.file_type().is_symlink() {
-            return Err(format!(
-                "developer executable selector '{}' is not a symbolic link",
-                selector.display()
-            ));
-        }
-        let developer_dir = std::fs::canonicalize(&selector).map_err(|error| {
-            format!(
-                "developer executable selector '{}' cannot be resolved: {error}",
-                selector.display()
-            )
-        })?;
-        if !developer_dir.is_dir() {
-            return Err(format!(
-                "developer executable selector '{}' does not select a directory",
-                selector.display()
-            ));
-        }
-        let mut selectors = BTreeSet::from([selector, developer_dir.clone()]);
-        selectors.extend(macos_developer_sdk_metadata_paths(&developer_dir));
+        let developer_dir: &PathBuf = match developer_directory {
+            Some(path) => path,
+            None => developer_directory.insert(macos_developer_directory()?),
+        };
+        let mut selectors = BTreeSet::from([PathBuf::from("/private/var/select/developer_dir"), developer_dir.clone()]);
+        selectors.extend(macos_developer_sdk_metadata_paths(developer_dir));
         let library = developer_dir.join("usr/lib/libxcrun.dylib");
         let canonical_library = normalize_existing_path(library.clone())?;
-        if !canonical_library.starts_with(&developer_dir) || !canonical_library.is_file() {
+        if !canonical_library.starts_with(developer_dir) || !canonical_library.is_file() {
             return Err(format!(
                 "developer selector library '{}' is outside selected developer directory '{}' or is not a file",
                 canonical_library.display(), developer_dir.display()
@@ -1776,6 +1772,7 @@ fn macos_selected_executable(
         let output = std::process::Command::new(&resolver)
             .args([OsStr::new("--no-cache"), OsStr::new("--find"), name])
             .env_clear()
+            .env("DEVELOPER_DIR", developer_dir)
             .output()
             .map_err(|error| {
                 format!(
@@ -1794,7 +1791,7 @@ fn macos_selected_executable(
             .map_err(|error| format!("developer executable selection is not UTF-8: {error}"))?
             .trim();
         let selected = normalize_existing_path(PathBuf::from(selected))?;
-        if !selected.starts_with(&developer_dir) || !executable_file(&selected) {
+        if !selected.starts_with(developer_dir) || !executable_file(&selected) {
             return Err(format!("developer executable '{}' is not an executable inside selected developer directory '{}'", selected.display(), developer_dir.display()));
         }
         return Ok(Some((selectors, selected, libraries)));
@@ -1827,6 +1824,24 @@ fn macos_selected_executable(
         selected,
         BTreeSet::new(),
     )))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_developer_directory() -> Result<PathBuf, String> {
+    let output = std::process::Command::new("/usr/bin/xcode-select")
+        .arg("--print-path")
+        .env_clear()
+        .output()
+        .map_err(|error| format!("macOS developer directory cannot be selected: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("macOS developer directory selection failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    let path = Path::new(std::str::from_utf8(&output.stdout)
+        .map_err(|error| format!("macOS developer directory is not UTF-8: {error}"))?.trim());
+    if !path.is_absolute() {
+        return Err("macOS developer directory selection did not return an absolute path".into());
+    }
+    normalize_existing_directory(path)
 }
 
 #[cfg(target_os = "macos")]
@@ -2710,9 +2725,10 @@ mod native_path_tests {
 
     #[test]
     fn macos_developer_shim_disables_xcrun_cache_and_grants_sdk_metadata() {
+        let profiles = tempfile::tempdir().expect("profile root");
         let authority = ProcessAuthority::resolve(
             [],
-            [],
+            [profiles.path().to_path_buf()],
             [],
             [],
             [],
@@ -2725,7 +2741,6 @@ mod native_path_tests {
             octopus_descriptors::ProcessSandboxMode::Enforced,
         )
         .expect("process authority");
-        let profiles = tempfile::tempdir().expect("profile root");
         let prepared = authority
             .prepare(
                 "/usr/bin/git",
@@ -2740,10 +2755,30 @@ mod native_path_tests {
             Some(&OsString::from("1"))
         );
         let profile = std::fs::read_to_string(&prepared.args[1]).expect("prepared profile");
-        let developer_dir = std::fs::canonicalize("/private/var/select/developer_dir").expect("developer directory");
+        let developer_dir = macos_developer_directory().expect("developer directory");
+        assert_eq!(prepared.environment.get(OsStr::new("DEVELOPER_DIR")), Some(&developer_dir.clone().into_os_string()));
         for metadata in macos_developer_sdk_metadata_paths(&developer_dir) {
             assert!(profile.contains(&*metadata.to_string_lossy()), "{}", metadata.display());
         }
+        for executable in ["/usr/bin/git", "/usr/bin/python3"] {
+            let prepared = authority.prepare(executable, &[OsString::from("--version")], Path::new("/tmp"), None, profiles.path()).unwrap();
+            let output = std::process::Command::new(&prepared.program).args(&prepared.args)
+                .env_clear().envs(&prepared.environment).env("TMPDIR", profiles.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output().unwrap();
+            assert!(output.status.success(), "{executable}: {}", String::from_utf8_lossy(&output.stderr));
+            assert!(!output.stdout.is_empty());
+        }
+    }
+
+    #[test]
+    fn macos_developer_shims_without_explicit_selection() {
+        let output = std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", "(version 1)(allow default)(allow process-exec (with no-sandbox) (literal \"/usr/bin/sandbox-exec\"))(deny file-read* (with errno ENOENT) (literal \"/private/var/select/developer_dir\"))"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "process_authority::native_path_tests::macos_developer_shim_disables_xcrun_cache_and_grants_sdk_metadata", "--nocapture"])
+            .output().unwrap();
+        assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     }
 }
 

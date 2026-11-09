@@ -9,10 +9,11 @@ export type SupportReport = {
   [key: string]: unknown;
 };
 type ReportAction = { reportId: string; description: string };
+type ReportSource = { kind: "current" | "saved"; name: string };
 declare global {
   interface Window {
     octopusSupport?: {
-      collect(includeDetails: boolean): Promise<SupportReport>;
+      collect(includeDetails: boolean, source?: "choose" | "current"): Promise<{ report: SupportReport; source: ReportSource } | null>;
       copy(request: ReportAction): Promise<{ copied: boolean }>;
       save(request: ReportAction): Promise<{ saved: boolean }>;
       openIssue(request: ReportAction): Promise<{ opened: boolean }>;
@@ -22,6 +23,7 @@ declare global {
 
 export function SupportWindow() {
   const [report, setReport] = useState<SupportReport | null>(null);
+  const [source, setSource] = useState<ReportSource>({ kind: "current", name: "Current Home" });
   const [description, setDescription] = useState("");
   const [includeDetails, setIncludeDetails] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -29,13 +31,14 @@ export function SupportWindow() {
   const [notice, setNotice] = useState("");
   const generation = useRef(0);
 
-  async function collect(details = includeDetails) {
+  async function collect(details = includeDetails, selectedSource?: "choose" | "current") {
     const attempt = ++generation.current;
-    setBusy(true); setError(""); setNotice(""); setReport(null);
+    setBusy(true); setError(""); setNotice("");
+    if (selectedSource !== "choose") setReport(null);
     try {
       if (!window.octopusSupport) throw new Error("Problem reports are available in the Octopus desktop app.");
-      const result = await window.octopusSupport.collect(details);
-      if (attempt === generation.current) setReport(result);
+      const result = await window.octopusSupport.collect(details, selectedSource);
+      if (attempt === generation.current && result) { setReport(result.report); setSource(result.source); }
     } catch (failure) {
       if (attempt === generation.current) setError(failure instanceof Error ? failure.message : String(failure));
     } finally { if (attempt === generation.current) setBusy(false); }
@@ -66,8 +69,16 @@ export function SupportWindow() {
             <h2 className="font-medium">Diagnostics</h2>
             <OcButton disabled={busy} onClick={() => void collect()} size="sm" variant="ghost">Refresh</OcButton>
           </div>
-          <p className="text-sm text-token-description-foreground">Build, setup progress and recent client events. Conversations and project files are excluded. Nothing is sent automatically.</p>
-          <OcCheckbox checked={includeDetails} disabled={busy || (!includeDetails && report?.access !== "live")} label="Include error text" onCheckedChange={(checked) => { setIncludeDetails(checked); void collect(checked); }} showLabel />
+          <div className="space-y-2">
+            <p className="break-all text-sm">{source.kind === "saved" ? `Saved Home: ${source.name}` : source.name}</p>
+            <div className="flex flex-wrap gap-2">
+              <OcButton disabled={busy || report?.access !== "live"} onClick={() => void collect(includeDetails, "choose")} size="sm" variant="secondary">Choose saved Home…</OcButton>
+              {source.kind === "saved" ? <OcButton disabled={busy} onClick={() => void collect(includeDetails, "current")} size="sm" variant="ghost">Use current Home</OcButton> : null}
+            </div>
+            {source.kind === "saved" ? <p className="text-sm text-token-description-foreground">Reads this Home without opening or changing it. Build details identify the app collecting the report.</p> : null}
+          </div>
+          <p className="text-sm text-token-description-foreground">Build, setup, recent errors and runtime diagnostics. Conversations, tool contents and project files are excluded. Nothing is sent automatically.</p>
+          <OcCheckbox checked={includeDetails} disabled={busy || (!includeDetails && report?.access !== "live")} label="Include error text and log excerpts" onCheckedChange={(checked) => { setIncludeDetails(checked); void collect(checked); }} showLabel />
           {includeDetails ? <p className="text-sm text-token-description-foreground">Error text can contain private paths, request content or secrets. Read the preview before sharing.</p> : null}
           {report && report.access !== "live" ? <p className="text-sm text-token-description-foreground">This report contains application facts only. To include setup and logs, unlock Octopus as Administrator and reopen this window.</p> : null}
           {report ? <details className="rounded-xl border border-token-border p-3">

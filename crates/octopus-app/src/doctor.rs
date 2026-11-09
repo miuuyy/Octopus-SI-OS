@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use octopus_descriptors::InterfaceId;
 use octopus_interface_transport::{
-    RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeExecutable, SpawnLifeDoctorCommand,
+    RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeExecutable, SpawnLifeCommand, SpawnLifeDoctorCommand,
     resolve_spawn_life_executable, validate_spawn_life_config,
 };
 use serde::Deserialize;
@@ -84,6 +84,7 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
     let mut probe_jobs = Vec::new();
     let mut imported_executable_cache =
         BTreeMap::<String, Result<ResolvedSpawnLifeExecutable, String>>::new();
+    let mut executable_runtime_cache = BTreeMap::new();
 
     for interface in &interfaces {
         let resolved = match validate_spawn_life_config(&registry_root, interface) {
@@ -136,6 +137,9 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
                     continue;
                 }
             };
+            for error in diagnose_executable_runtime(process, &executable, &mut executable_runtime_cache) {
+                errors.push(format!("interface '{}' process {process_index} runtime dependencies: {error}", interface.as_str()));
+            }
             let Some(doctor) = process.doctor.clone() else {
                 unprobed_processes += 1;
                 continue;
@@ -204,6 +208,8 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
     println!(
         "probes     {passed_probes}/{declared_probes} passed · {unprobed_processes} not declared"
     );
+    println!("executables {}/{} runtime dependency checks passed",
+        executable_runtime_cache.values().filter(|result| result.is_ok()).count(), executable_runtime_cache.len());
     if errors.is_empty() {
         println!("result     PASS");
         return Ok(());
@@ -213,6 +219,38 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
         eprintln!("- {error}");
     }
     Err(format!("octopus doctor found {} error(s)", errors.len()))
+}
+
+fn diagnose_executable_runtime(
+    process: &SpawnLifeCommand,
+    executable: &ResolvedSpawnLifeExecutable,
+    cache: &mut BTreeMap<PathBuf, Result<(), String>>,
+) -> Vec<String> {
+    use octopus_interface_transport::process_authority::{resolve_executable, validate_executable_runtime};
+    let search_path = process.env.get("PATH").map(std::ffi::OsString::from)
+        .or_else(|| process.inherit_env.contains("PATH").then(|| std::env::var_os("PATH")).flatten());
+    let mut paths = BTreeSet::from([executable.executable.clone()]);
+    let mut errors = Vec::new();
+    let commands = process.authority.executable_commands.iter().map(|command| {
+        resolve_executable(command, &executable.working_directory, search_path.as_deref())
+    });
+    let declared_paths = process.authority.executable_paths.iter().map(|declared| {
+        let path = executable.working_directory.join(declared);
+        std::fs::canonicalize(&path).map_err(|error| format!("declared executable path '{}' cannot be resolved: {error}", path.display()))
+    });
+    for result in commands.chain(declared_paths) {
+        match result {
+            Ok(path) if path.is_dir() => {}
+            Ok(path) => { paths.insert(path); }
+            Err(error) => errors.push(error),
+        }
+    }
+    for path in paths {
+        if let Err(error) = cache.entry(path.clone()).or_insert_with(|| validate_executable_runtime(&path)) {
+            errors.push(format!("'{}': {error}", path.display()));
+        }
+    }
+    errors
 }
 
 async fn run_client_doctor(
@@ -762,6 +800,21 @@ mod tests {
         std::fs::create_dir(&metadata).unwrap();
 
         run(&home, &installation_root).await.unwrap();
+
+        let dependency = interface.join("required-command");
+        std::fs::write(&dependency, "#!/missing/octopus-doctor-interpreter\n").unwrap();
+        std::fs::set_permissions(&dependency, std::fs::Permissions::from_mode(0o755)).unwrap();
+        life["processes"][0]["authority"]["executable_commands"] = serde_json::json!([dependency]);
+        std::fs::write(&life_path, life.to_string()).unwrap();
+        #[cfg(target_os = "macos")]
+        assert!(run(&home, &installation_root).await.is_err(), "a passing probe cannot hide an unusable required command");
+        life["processes"][0].as_object_mut().unwrap().remove("doctor");
+        std::fs::write(&life_path, life.to_string()).unwrap();
+        std::fs::remove_file(&dependency).unwrap();
+        assert!(run(&home, &installation_root).await.is_err(), "a missing declared command must be reported even without a probe");
+        life["processes"][0]["doctor"] = serde_json::json!({"args": [], "timeout_ms": 1000});
+        life["processes"][0]["authority"]["executable_commands"] = serde_json::json!([]);
+        std::fs::write(&life_path, life.to_string()).unwrap();
 
         std::fs::write(&active_bin, "#!/bin/sh\nexit 1\n").unwrap();
         assert!(run(&home, &installation_root).await.is_err(), "a failing declared probe must be reported");

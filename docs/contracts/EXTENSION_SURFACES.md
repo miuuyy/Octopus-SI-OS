@@ -405,9 +405,16 @@ data. Application files and credentials come from the process authority
 declared by their owner.
 
 A process selected through the developer-directory shim (`git`, `python3`)
-runs with `xcrun_nocache=1` and exact read access to the selected developer
-directory's SDK metadata, so the shim neither writes its cache nor reports SDK
-errors under the sandbox. A workspace command's temporary directory is
+uses the system selection returned by `xcode-select --print-path`, including
+macOS's default selection when no explicit selector symlink exists. Authority
+formation resolves `xcrun --no-cache --find` against that directory and pins
+the same `DEVELOPER_DIR` for execution, with `xcrun_nocache=1` and exact read
+access to its selector library and SDK metadata. An unavailable selection or
+a selected executable outside that directory fails closed. No system selection
+is changed. Doctor checks life executables and their explicitly declared
+executable paths and commands through the same runtime-closure resolver,
+including lives without diagnostic probes; it does not execute a model turn
+or establish that pending work can recover. A workspace command's temporary directory is
 `/private/tmp` when its sandbox may write there, otherwise its working
 directory or another writable root, never `/`; a room that may write nowhere
 runs its command with `TMPDIR`, `TMP` and `TEMP` unset.

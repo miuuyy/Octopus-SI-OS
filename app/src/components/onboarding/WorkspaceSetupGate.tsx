@@ -15,6 +15,7 @@ import type {
 import { useClientExtensions } from "../../extensions/useClientExtensions";
 import {
   clearWorkspaceSetupDraft,
+  clearCompletedWorkspaceSetupDraft,
   compileWorkspaceInitializeRequest,
   readWorkspaceSetupDraft,
   saveWorkspaceSetupDraft,
@@ -359,12 +360,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
       setApplyState,
     }).then((complete) => {
       if (!complete) return;
-      const currentDraft = readWorkspaceSetupDraft();
-      if (!currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(persisted)) {
-        throw new ProductSetupError("Setup choices changed while Octopus was working. The configured workspace was not opened automatically.");
-      }
-      clearWorkspaceSetupDraft();
-      setDraftState({ draft: null, error: "" });
+      setDraftState({ draft: clearCompletedWorkspaceSetupDraft(persisted), error: "" });
     }).catch((error) => {
       console.error("Workspace setup apply failed", error);
       void window.octopusTransport?.logClientEvent?.({
@@ -401,6 +397,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
       detail: "Finish signing in in your browser. Octopus will continue once your account is verified.",
     } : savedSetupProgress(setup));
     activeOperationId.current = setup.operationId;
+    let resumedDraft: WorkspaceSetupDraft | null = null;
     const operation = Promise.resolve().then(async () => {
       const currentDraft = readDraftForHostResume(trustedDraft);
       if (currentDraft) {
@@ -410,6 +407,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
           await readGateSnapshot(),
           extensionsRef.current,
         );
+        resumedDraft = currentDraft;
       }
       const resumed = await resumeClientSetup(setup.operationId, { allowSignIn });
       return resumed.status === "in_progress" && chatgptSignInCompleted() ? verifyExistingSignIn(setup.operationId) : resumed;
@@ -420,8 +418,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
         return;
       }
       await refresh(false, (proven) => proveCompletedClientSetup(completed, proven));
-      clearWorkspaceSetupDraft();
-      setDraftState({ draft: null, error: "" });
+      setDraftState(resumedDraft ? { draft: clearCompletedWorkspaceSetupDraft(resumedDraft), error: "" } : loadDraft());
       setApplyState({
         state: "running",
         label: "Workspace verified",
@@ -467,20 +464,6 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
       void apply(draft);
     }
   }, [accessProfile, apply, applyState.state, catalogResult.error, catalogResult.pack, draftState.draft, snapshot, snapshotError]);
-
-  useEffect(() => {
-    const setup = snapshot?.clientSetup;
-    const draft = draftState.draft;
-    if (
-      setup?.status === "complete"
-      && draft?.operationId === setup.operationId
-      && matrix?.mode === "shell"
-      && !inFlight.current
-    ) {
-      clearWorkspaceSetupDraft();
-      setDraftState({ draft: null, error: "" });
-    }
-  }, [draftState.draft, matrix?.mode, snapshot]);
 
   useEffect(() => {
     if (

@@ -283,7 +283,7 @@ function clientApplicationInfo() {
 function getClientSupportHost() {
   if (!clientSupportHost) clientSupportHost = createClientSupportHost({
     app, BrowserWindow, ipcMain, dialog, clipboard, shell,
-    clientRoot: clientProfileRoot, application: clientApplicationInfo,
+    home: resolveOctopusHome, application: clientApplicationInfo,
     accessStatus: (token) => getClientAccessController().status(token),
     runtime: () => runtimeHost?.snapshot() ?? null,
     progress: () => latestSetupProgress,

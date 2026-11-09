@@ -451,6 +451,14 @@ export function clearWorkspaceSetupDraft(): void {
   window.localStorage.removeItem(WORKSPACE_SETUP_STORAGE_KEY);
 }
 
+export function clearCompletedWorkspaceSetupDraft(completed: WorkspaceSetupDraft): WorkspaceSetupDraft | null {
+  const current = readWorkspaceSetupDraft();
+  if (!current) return null;
+  if (stableJson({ ...current, updatedAt: null }) !== stableJson({ ...completed, updatedAt: null })) return current;
+  clearWorkspaceSetupDraft();
+  return null;
+}
+
 export function workspaceSetupTreeItems(projects: readonly WorkspaceSetupProject[]): Array<{
   id: string;
   label: string;

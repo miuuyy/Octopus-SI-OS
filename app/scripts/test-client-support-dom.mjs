@@ -21,9 +21,15 @@ try {
   await build({ stdin: { contents: 'import "./src/components/icon-glyphs/shell"; export {SupportWindow} from "./src/support/SupportWindow"; export * as React from "react"; export {createRoot} from "react-dom/client";', resolveDir: path.resolve(import.meta.dirname, ".."), loader: "tsx" }, outfile: path.join(output, "test.mjs"), bundle: true, format: "esm", platform: "browser", loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"development"' }, logLevel: "silent" });
   const { React, createRoot, SupportWindow } = await import(pathToFileURL(path.join(output, "test.mjs")));
   const report = { report_id: "visible", captured_at: new Date().toISOString(), access: "live", application: { version: "1.0.0", revision: null } };
-  let copied, failDetails = false;
+  let copied, failDetails = false, cancelChoice = false;
+  let source = { kind: "current", name: "Current Home" };
   w.octopusSupport = {
-    collect: async (details) => { if (details && failDetails) throw new Error("Collection failed"); return { ...report, disclosure: details ? "detailed" : "metadata" }; },
+    collect: async (details, choice) => {
+      if (choice === "choose" && cancelChoice) return null;
+      if (choice) source = choice === "choose" ? { kind: "saved", name: ".octopus-preserved" } : { kind: "current", name: "Current Home" };
+      if (details && failDetails) throw new Error("Collection failed");
+      return { report: { ...report, disclosure: details ? "detailed" : "metadata" }, source };
+    },
     copy: async (value) => { copied = value; return { copied: true }; },
     save: async () => ({ saved: false }),
     openIssue: async () => ({ opened: true }),
@@ -37,6 +43,16 @@ try {
   assert.equal(copied.reportId, "visible");
   await click(button("Save report…"));
   assert.doesNotMatch(document.body.textContent, /Report saved/);
+  cancelChoice = true;
+  await click(button("Choose saved Home…"));
+  assert.equal(button("Copy report").disabled, false);
+  cancelChoice = false;
+  await click(button("Choose saved Home…"));
+  assert.match(document.body.textContent, /Saved Home: .octopus-preserved/);
+  await click(button("Refresh"));
+  assert.match(document.body.textContent, /Saved Home: .octopus-preserved/);
+  await click(button("Use current Home"));
+  assert.doesNotMatch(document.body.textContent, /Saved Home:/);
   failDetails = true;
   await click(document.querySelector('input[type="checkbox"]'));
   assert.match(document.querySelector('[role="alert"]').textContent, /Collection failed/);

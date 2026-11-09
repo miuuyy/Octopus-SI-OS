@@ -73,7 +73,7 @@ const LaunchTerminal = compile("src/components/onboarding/LaunchTerminal.tsx", {
 const WorkspaceSetupGate = compile("src/components/onboarding/WorkspaceSetupGate.tsx", {
   "../chat/chatWorkspaceCapabilities": "export const providerServiceTierAvailable = () => false;",
   "../../extensions/useClientExtensions": "export function useClientExtensions() { return { loading: true }; }",
-  "../../onboarding/workspaceSetup": "export const clearWorkspaceSetupDraft = () => {}; export const compileWorkspaceInitializeRequest = () => ({}); export const readWorkspaceSetupDraft = () => null; export const saveWorkspaceSetupDraft = (draft) => draft; export const workspaceInitializeRequestDigest = async () => \"\";",
+  "../../onboarding/workspaceSetup": "export const clearWorkspaceSetupDraft = () => {}; export const clearCompletedWorkspaceSetupDraft = () => null; export const compileWorkspaceInitializeRequest = () => ({}); export const readWorkspaceSetupDraft = () => null; export const saveWorkspaceSetupDraft = (draft) => draft; export const workspaceInitializeRequestDigest = async () => \"\";",
   "../../projectionClient": `const gate = () => globalThis.__boot.gate;
 export async function readCurrentClientSetup() { gate().reads += 1; if (gate().failure) throw new Error(gate().failure); return gate().setup; }
 export async function readWorkspaceSetupState() { return gate().workspace; }

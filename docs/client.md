@@ -515,10 +515,19 @@ Use **Help → Report a Problem…** to describe a failure, preview diagnostics,
 save or copy a report, and open a GitHub issue draft. The report has its own
 window, so it remains accessible during setup or a failure of the main
 renderer. Nothing is submitted automatically. The default report includes
-build facts, setup observations and recent client event metadata; error text
-is a separate opt-in because it may contain private data. A locked client or
-Test profile exposes application facts only. Reports do not include chat
-history, project files, credentials files or environment variables.
+build facts, setup observations, client events and bounded runtime evidence:
+selected ledger movements, matching calls and results, context generations,
+pending handoffs and failed interfaces. Private identities are replaced
+consistently within the report. Error text and log excerpts are a separate
+opt-in because they may contain private data. A locked client or Test profile
+exposes application facts only. Technical projections exclude conversation
+text, tool arguments and results, project files, credentials and environment
+variables. Missing, changed, corrupt and omitted sources are reported.
+**Choose saved Home…** reads a preserved Home selected in the native folder
+picker without switching to it, launching its runtime or changing its files.
+Its folder name is shown in the window and excluded from the exported report.
+**Use current Home** returns to the active Home's diagnostics. Build details
+for a saved Home identify the app collecting the report, not the old installation.
 
 **Settings → About & Diagnostics** opens the same report window and also
 provides Doctor and the local logs folder.

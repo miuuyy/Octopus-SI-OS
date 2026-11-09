@@ -17,11 +17,14 @@ otherwise it contains application facts only. It observes existing evidence
 without booting, repairing or restarting the runtime. A long-running setup
 step remains pending; 100% is reserved for a sealed setup receipt.
 
-By default, only technical metadata is collected. **Include error text** adds
-recent client errors and the setup journal's last error. Those strings can
-contain paths, request text or secrets: review them before sharing. The
-collector does not read conversations, artifacts, project files, credential
-files or environment variables. Reports are bounded observations, not a health
+By default, the report contains technical metadata: setup and client events,
+selected ledger movements, matching calls and results, context generations,
+pending handoffs and failed interfaces. Private identities are replaced
+consistently within each report. Only technical fields are exported from verified
+artifact data; conversation text, tool arguments and results, project files,
+credential files and environment variables are excluded. **Include error text
+and log excerpts** adds bounded diagnostics that may contain private data;
+review them before sharing. Reports are bounded observations, not a health
 verdict or a complete runtime trace. Missing or unreadable sources are named
 in the report. Use **Refresh** to capture a later snapshot.
 
@@ -42,6 +45,15 @@ For a deeper local investigation:
    ```sh
    open -n --env OCTOPUS_HOME="$HOME/.octopus-preview" /Applications/Octopus.app
    ```
+
+If the failed Home was already moved aside, open **Help → Report a Problem…**
+in the updated app and click **Choose saved Home…**. Select the preserved
+Octopus Home folder, enable **Include error text and log excerpts** if needed,
+review the preview and click **Save report…**. The picker shows hidden folders.
+This reads the selected Home without switching to it, starting its runtime or
+changing its files. **Use current Home** returns to the active Home's diagnostics.
+For a saved Home, build details identify the app collecting the report; include
+the original report or revision when reporting a failure from an older build.
 
 ## Where the evidence is
 
@@ -140,9 +152,30 @@ downloads with `curl` and avoids all three.
 
 ## Setup cannot run python3 or git
 
-Octopus runs `python3` and `git` from the Command Line Tools for Xcode. On a Mac
-without them, macOS offers to install the tools instead of running the
-command. Install them with `xcode-select --install` and retry.
+For Apple's `python3` and `git` shims, Octopus uses the active developer
+directory reported by `xcode-select --print-path`. The installed Command Line
+Tools or Xcode must provide the requested command, as described in
+[Apple's command-line tools settings](https://developer.apple.com/documentation/xcode/configuring-command-line-tools-settings).
+Check the selection without
+changing it:
+
+```sh
+xcode-select --print-path
+xcrun --no-cache --find git
+xcrun --no-cache --find python3
+```
+
+If no developer tools are installed, use `xcode-select --install`. If the
+selection names a missing installation, select the tools you actually installed
+with `sudo xcode-select --switch <developer-directory>`. A missing
+`/private/var/select/developer_dir` alone does not mean the tools are unavailable:
+macOS can select its default installation without that symlink.
+
+Doctor checks the runtime dependencies of life executables and their declared
+commands and files even when a life has no diagnostic probe. A passing check
+does not settle a previously interrupted tool call. Keep a failed Home closed
+while collecting its saved evidence; do not delete continuity or pending-result
+records to force a retry.
 
 ## The build fails
 

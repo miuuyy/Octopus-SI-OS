@@ -1,45 +1,15 @@
-const fs = require("node:fs/promises");
-const { constants } = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
+const { readBounded, sourceFailure } = require("./clientSupportFiles.cjs");
+const { collectRuntimeReport } = require("./clientRuntimeReport.cjs");
 
 const STEPS = new Set(["packages", "extensions", "workspace", "provider"]);
 const PHASES = new Set(["verifying", "applying", "complete", "sealed", "failed"]);
 const EVENTS = new Set(["setup.progress", "setup.failed", "workspace.setup.failed", "workspace.setup.resume_failed", "client.renderer.gone", "client.renderer.unresponsive", "client.renderer.responsive", "renderer.boundary_failure", "renderer.chat_surface_failure", "renderer.surface_failure", "renderer.voice_closure", "renderer.voice_startup", "renderer.topology.read_failed", "renderer.toast", "client.command"]);
 const MAX_LOG_BYTES = 256 * 1024;
 
-async function readBounded(root, relative, limit, tail = false) {
-  const destination = path.join(root, relative);
-  const canonicalRoot = await fs.realpath(root);
-  let cursor = root;
-  for (const part of relative.split(path.sep)) {
-    cursor = path.join(cursor, part);
-    if ((await fs.lstat(cursor)).isSymbolicLink()) throw new Error("symlink_refused");
-  }
-  const real = await fs.realpath(destination);
-  if (!real.startsWith(canonicalRoot + path.sep)) throw new Error("outside_report_source");
-  const handle = await fs.open(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) throw new Error("not_a_regular_file");
-    if (!tail && stat.size > limit) throw new Error("source_too_large");
-    const bytes = Buffer.alloc(Math.min(stat.size, limit));
-    const { bytesRead } = await handle.read(bytes, 0, bytes.length, tail ? Math.max(0, stat.size - limit) : 0);
-    let text = bytes.subarray(0, bytesRead).toString("utf8");
-    const truncated = stat.size > limit;
-    if (tail && truncated) text = text.slice(text.indexOf("\n") + 1);
-    return { text, truncated };
-  } finally {
-    await handle.close();
-  }
-}
-
 function time(value) {
   return typeof value === "string" && /^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
-}
-
-function sourceFailure(error) {
-  return error?.code === "ENOENT" ? "not_found" : "unreadable";
 }
 
 function setupProgress(value) {
@@ -47,20 +17,21 @@ function setupProgress(value) {
   return { step: value.step, phase: value.phase, percent: Number.isFinite(value.percent) ? Math.max(0, Math.min(100, value.percent)) : null };
 }
 
-async function collectSupportReport({ application, profile, clientRoot, runtime, progress, includeDetails = false, now = Date.now() }) {
+async function collectSupportReport({ application, profile, clientRoot, home, runtime, progress, includeDetails = false, now = Date.now() }) {
   const report = {
     schema: "octopus.client_support_report",
-    schema_version: 1,
+    schema_version: 2,
     report_id: randomUUID(),
     captured_at: new Date(now).toISOString(),
     application,
     access: profile ?? "locked",
     disclosure: includeDetails ? "includes_error_text_review_before_sharing" : "technical_metadata_only",
-    limitations: ["Local observations, not an atomic system snapshot or a health verdict.", "No conversations, artifacts, project files, credentials files, or environment variables are collected.", "Nothing is uploaded. Error text can contain private data when explicitly included."],
+    limitations: ["Bounded local observations, not an atomic snapshot or a recovery verdict. Missing, changed and omitted evidence is reported.", "Runtime evidence contains technical fields and report-local identifiers. Conversation text, tool arguments and results, project files, credentials files and environment variables are excluded.", "Nothing is uploaded. Explicitly included error text and stderr excerpts can contain private data; review them before sharing."],
   };
   if (profile !== "live") return report;
+  if (home && runtime?.home !== home) runtime = null;
   report.runtime = runtime ? {
-    phase: ["probing", "ready", "unmanaged", "degraded", "registry_install", "registry_ready", "state_ready", "starting_runtime", "access_required"].includes(runtime.phase) ? runtime.phase : "unknown",
+    phase: ["probing", "ready", "unmanaged", "degraded", "registry_install", "registry_ready", "state_ready", "starting_runtime", "stopping", "access_required"].includes(runtime.phase) ? runtime.phase : "unknown",
     ready: runtime.ready === true,
     observed_at: Number.isFinite(runtime.updatedAtMs) ? new Date(runtime.updatedAtMs).toISOString() : null,
     ...(includeDetails && runtime.error ? { error: String(runtime.error).slice(0, 8000) } : {}),
@@ -101,8 +72,10 @@ async function collectSupportReport({ application, profile, clientRoot, runtime,
         try { entry = JSON.parse(line); } catch { malformed++; continue; }
         const event = EVENTS.has(entry.event) ? entry.event : "client.event";
         const progress = entry.event === "setup.progress" ? setupProgress(entry.detail) : null;
+        const sourceSequence = /\bmovement seq (\d+)\b/.exec(String(entry.detail?.message ?? ""));
         events.push({ at: time(entry.at), level: ["info", "warn", "error"].includes(entry.level) ? entry.level : "info", event,
           ...(progress ? { progress } : {}),
+          ...(sourceSequence && Number.isSafeInteger(Number(sourceSequence[1])) ? { source_movement_seq: Number(sourceSequence[1]) } : {}),
           ...(includeDetails && (entry.level === "error" || entry.level === "warn") ? { message: String(entry.detail?.message ?? "").slice(0, 8000) } : {}),
         });
       }
@@ -111,8 +84,14 @@ async function collectSupportReport({ application, profile, clientRoot, runtime,
       report.client_logs.sources.push({ file: name, state: sourceFailure(error) });
     }
   }
-  report.client_logs.omitted_events = Math.max(0, events.length - 60);
-  report.client_logs.events = events.slice(-60);
+  const failures = events.filter(event => event.level === "error" || event.level === "warn");
+  const selected = new Set([...failures.slice(0, 8), ...failures.slice(-40), ...events.filter(event => event.level === "info").slice(-24)]);
+  report.client_logs.events = events.filter(event => selected.has(event));
+  report.client_logs.omitted_events = events.length - report.client_logs.events.length;
+  report.runtime_evidence = home ? await collectRuntimeReport({ home, includeDetails,
+    sourceSequences: [...new Set(events.flatMap(event => event.source_movement_seq === undefined ? [] : [event.source_movement_seq]))],
+    interfaceFailures: runtime?.interfaceFailures ?? [],
+  }) : { source: "not_selected" };
   return report;
 }
 

@@ -71,8 +71,18 @@ async function rendererPlanAdmission(root) {
   };
   const module = { exports: {} };
   const code = ts.transpileModule(await source("src/onboarding/workspaceSetup.ts"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  Function("module", "exports", "crypto", code)(module, module.exports, crypto.webcrypto);
+  const storage = new Map();
+  const window = { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) } };
+  Function("module", "exports", "crypto", "window", code)(module, module.exports, crypto.webcrypto, window);
   const renderer = module.exports;
+  const completedDraft = renderer.saveWorkspaceSetupDraft({ ...renderer.createWorkspaceSetupDraft("custom"), step: "applying" });
+  for (const [key, value] of storage) storage.set(key, JSON.stringify({ ...JSON.parse(value), updatedAt: "2026-11-10T00:00:00.000Z" }));
+  assert.equal(renderer.clearCompletedWorkspaceSetupDraft(completedDraft), null, "saving unchanged choices again cannot fail completed setup");
+  assert.equal(storage.size, 0);
+  assert.equal(renderer.clearCompletedWorkspaceSetupDraft(completedDraft), null, "another view may have already retired the completed draft");
+  const newerDraft = renderer.saveWorkspaceSetupDraft({ ...completedDraft, spaceName: "New choices" });
+  assert.deepEqual(renderer.clearCompletedWorkspaceSetupDraft(completedDraft), newerDraft, "completion preserves choices edited in another view");
+  assert.deepEqual(renderer.readWorkspaceSetupDraft(), newerDraft);
   const { readLocalPackageCatalog } = require("../electron/localPackages.cjs");
   const catalog = await readLocalPackageCatalog({ sourceRegistryRoot: path.join(app, "../registry"),
     libraryRoot: path.join(app, "distribution/local-packages"), activeRegistryRoot: path.join(root, "registry"), stateRoot: path.join(root, "package-state") });
