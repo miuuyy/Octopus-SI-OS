@@ -4,7 +4,7 @@ name = "octopus-appserver-proto"
 edition = "2024"
 version.workspace = true
 license.workspace = true
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 name = "octopus_appserver_proto"
@@ -37,7 +37,7 @@ clap = { version = "4", features = ["derive"] }
 schemars = "0.8.22"
 serde_with = "3.17"
 strum_macros = "0.28.0"
-rmcp = { version = "1.7.0", default-features = false, features = [
+rmcp = { version = "3.9.0", default-features = false, features = [
     "base64",
     "macros",
     "schemars",

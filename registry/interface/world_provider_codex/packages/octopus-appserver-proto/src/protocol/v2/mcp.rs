@@ -281,13 +281,16 @@ impl From<McpServerElicitationAction> for rmcp::model::ElicitationAction {
     }
 }
 
-impl From<rmcp::model::ElicitationAction> for McpServerElicitationAction {
-    fn from(value: rmcp::model::ElicitationAction) -> Self {
-        match value {
+impl TryFrom<rmcp::model::ElicitationAction> for McpServerElicitationAction {
+    type Error = String;
+
+    fn try_from(value: rmcp::model::ElicitationAction) -> Result<Self, Self::Error> {
+        Ok(match value {
             rmcp::model::ElicitationAction::Accept => Self::Accept,
             rmcp::model::ElicitationAction::Decline => Self::Decline,
             rmcp::model::ElicitationAction::Cancel => Self::Cancel,
-        }
+            _ => return Err("unsupported MCP elicitation action".into()),
+        })
     }
 }
 
@@ -699,22 +702,22 @@ pub struct McpServerElicitationRequestResponse {
     pub meta: Option<JsonValue>,
 }
 
-impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitationResult {
+impl From<McpServerElicitationRequestResponse> for rmcp::model::ElicitResult {
     fn from(value: McpServerElicitationRequestResponse) -> Self {
-        Self {
-            action: value.action.into(),
-            content: value.content,
-            meta: None,
-        }
+        let mut result = Self::new(value.action.into());
+        result.content = value.content;
+        result
     }
 }
 
-impl From<rmcp::model::CreateElicitationResult> for McpServerElicitationRequestResponse {
-    fn from(value: rmcp::model::CreateElicitationResult) -> Self {
-        Self {
-            action: value.action.into(),
+impl TryFrom<rmcp::model::ElicitResult> for McpServerElicitationRequestResponse {
+    type Error = String;
+
+    fn try_from(value: rmcp::model::ElicitResult) -> Result<Self, Self::Error> {
+        Ok(Self {
+            action: value.action.try_into()?,
             content: value.content,
             meta: None,
-        }
+        })
     }
 }

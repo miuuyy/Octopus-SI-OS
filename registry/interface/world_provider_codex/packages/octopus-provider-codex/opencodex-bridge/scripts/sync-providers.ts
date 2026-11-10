@@ -387,7 +387,7 @@ for (const provider of spec.providers) {
   if (!ADAPTERS.has(adapter)) throw new Error(`${provider.interface}: adapter ${adapter} is not served by the bridge`);
   if (!provider.key && !provider.local && !provider.cli) throw new Error(`${provider.interface}: a remote provider needs a key field or a signed-in CLI`);
   if (provider.cli && provider.key) throw new Error(`${provider.interface}: a CLI provider keeps its sign-in inside the CLI`);
-  if (provider.models && (entry || provider.model)) throw new Error(`${provider.interface}: declared models belong to a provider without a registry entry or model setup field`);
+  if (provider.models && provider.model) throw new Error(`${provider.interface}: declare a model catalog or a model setup field, not both`);
   if (provider.endpoint && entry) throw new Error(`${provider.interface}: a registry entry already names its endpoint`);
   const baseUrl = provider.base_url ? "" : seed?.baseUrl ?? provider.endpoint;
   if (!provider.base_url && !baseUrl) throw new Error(`${provider.interface}: no base URL`);

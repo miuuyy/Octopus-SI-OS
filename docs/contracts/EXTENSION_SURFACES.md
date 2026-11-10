@@ -382,6 +382,10 @@ use the recipes below when extending what the runtime can do.
 
 The last column is the point.
 
+In `providers.json`, an explicit `models` list supplies the model catalog even
+when `registry_entry` supplies upstream transport defaults. Keep model additions
+in that list and regenerate the descriptors so the build preserves them.
+
 ## Where code lives
 
 Every executable file belongs to a concrete owner folder:

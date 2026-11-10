@@ -3125,7 +3125,7 @@ mod tests {
                 "UPDATE movements
                  SET to_id = 'system_other', runtime_interface = 'system_other'
                  WHERE seq = ?1",
-                [target],
+                [i64::try_from(target).unwrap()],
             )
             .unwrap();
         drop(connection);
