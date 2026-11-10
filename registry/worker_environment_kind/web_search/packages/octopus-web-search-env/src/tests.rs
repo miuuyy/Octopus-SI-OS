@@ -412,3 +412,121 @@ async fn web_extract_maps_batch_documents_inside_the_same_room_contract() {
     );
     assert!(server.join().unwrap().contains("octopus.example"));
 }
+
+fn keenable_catalog(tool: &str, base_url: &str) -> Value {
+    let mut config = descriptor(tool).handler_config;
+    config["providers"]["keenable"]["base_url"] = json!(base_url);
+    config
+}
+
+#[tokio::test]
+async fn web_search_keenable_provider_maps_snippets_from_the_keyless_route() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let read = stream.read(&mut request).unwrap();
+        let body = json!({"results": [{
+            "title": "Octopus",
+            "url": "https://octopus.example",
+            "description": "",
+            "snippet": "artifact-native page text",
+            "acquired_at": "2026-11-01T00:00:00Z"
+        }]})
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        String::from_utf8_lossy(&request[..read]).to_string()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let room = WebSearchRoom;
+    let tools = vec!["web.search".to_string()];
+    let (formation, kind) = formation("web_search", &tools, "web.search");
+    let mut call = invocation(
+        root.path(),
+        1,
+        "web.search",
+        json!({"query": "artifact architecture", "limit": 3, "provider": "keenable"}),
+        &tools,
+        &formation,
+        &kind,
+    );
+    call.descriptor.handler_config = keenable_catalog("web.search", &base_url);
+    let searched = response(received(room.receive(call, &TestLifecycleSink).await));
+    assert_eq!(searched["ok"], true, "{searched}");
+    assert_eq!(searched["body"]["provider"], "keenable");
+    assert_eq!(searched["body"]["candidate_count"], 1);
+    assert_eq!(
+        searched["body"]["candidates"][0]["snippet"],
+        "artifact-native page text"
+    );
+    let request = server.join().unwrap();
+    assert!(request.starts_with("POST /v1/search/public "), "{request}");
+    assert!(
+        request.to_ascii_lowercase().contains("x-keenable-title: octopus"),
+        "{request}"
+    );
+    assert!(request.contains("\"max_results\":3"), "{request}");
+    assert!(request.contains("artifact architecture"), "{request}");
+}
+
+#[tokio::test]
+async fn web_extract_keenable_provider_reads_one_page_per_url() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let read = stream.read(&mut request).unwrap();
+        let body = json!({
+            "url": "https://octopus.example/docs",
+            "title": "Octopus",
+            "content": "# Octopus\n\nartifact-native content",
+            "description": ""
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        String::from_utf8_lossy(&request[..read]).to_string()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let room = WebSearchRoom;
+    let tools = vec!["web.extract".to_string()];
+    let (formation, kind) = formation("web_search", &tools, "web.extract");
+    let mut call = invocation(
+        root.path(),
+        1,
+        "web.extract",
+        json!({"urls": ["https://octopus.example/docs"], "provider": "keenable"}),
+        &tools,
+        &formation,
+        &kind,
+    );
+    call.descriptor.handler_config = keenable_catalog("web.extract", &base_url);
+    let extracted = response(received(room.receive(call, &TestLifecycleSink).await));
+    assert_eq!(extracted["ok"], true, "{extracted}");
+    assert_eq!(extracted["body"]["document_count"], 1);
+    assert_eq!(extracted["body"]["documents"][0]["title"], "Octopus");
+    assert_eq!(
+        extracted["body"]["documents"][0]["content"],
+        "# Octopus\n\nartifact-native content"
+    );
+    let request = server.join().unwrap();
+    assert!(
+        request.starts_with("GET /v1/fetch/public?url=https%3A%2F%2Foctopus.example%2Fdocs "),
+        "{request}"
+    );
+    assert!(
+        request.to_ascii_lowercase().contains("x-keenable-title: octopus"),
+        "{request}"
+    );
+}

@@ -12,6 +12,7 @@
       "EXA_API_KEY",
       "FIRECRAWL_API_URL",
       "FIRECRAWL_API_KEY",
+      "KEENABLE_BASE_URL",
       "OCTOPUS_WEB_PROXY"
     ],
     "authority": {
@@ -177,6 +178,31 @@
         },
         "extraction_mode": "per_url",
         "retry": {}
+      },
+      "keenable": {
+        "base_url": "https://api.keenable.ai",
+        "base_url_env": "KEENABLE_BASE_URL",
+        "path": "/v1/fetch/public",
+        "method": "GET",
+        "headers": {
+          "X-Keenable-Title": "Octopus"
+        },
+        "query": {
+          "argument_fields": {
+            "url": "url"
+          }
+        },
+        "body": {},
+        "response": {
+          "title_paths": ["title"],
+          "url_paths": ["url"],
+          "content_paths": ["content"],
+          "raw_content_paths": ["content"],
+          "error_paths": ["error"],
+          "failure_items_paths": []
+        },
+        "extraction_mode": "per_url",
+        "retry": {}
       }
     }
   },
@@ -192,7 +218,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["custom", "tavily", "exa", "firecrawl"]
+        "enum": ["custom", "tavily", "exa", "firecrawl", "keenable"]
       },
       "formats": {
         "type": "array",
