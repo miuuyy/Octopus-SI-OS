@@ -645,7 +645,9 @@ atomic writes and one cross-process refresh lock; OpenCodex's own state for that
 account lives in the same directory. Task-private copies receive that exact
 directory as a writable `provider_account_root`; credentials are not copied into
 descriptors or task folders. Each request reads the current sign-in, so signing
-in again takes effect without restarting the provider.
+in again takes effect without restarting the provider. Only Google's refusal of
+the refresh asks for a new sign-in; a refresh that gets no answer from Google, or
+an overloaded one, keeps the credential and returns a retryable upstream error.
 
 Antigravity is OpenCodex's `google-antigravity` registry entry, served by its
 Cloud Code Assist adapter with the connected account's token and project.

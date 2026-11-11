@@ -92,6 +92,10 @@ test("refresh failures, account changes, missing projects and outside writes nev
   await f.api.loginOAuthAccount(f.config, { onAuth });
   const previous = await f.expire();
   f.dependencies.refresh = async () => { throw new Error("secret-token https://accounts.google.com/auth?secret=1"); };
+  await expect(f.api.resolveOAuthAccount(f.config)).rejects.toMatchObject({ code: "refresh_unavailable" });
+  f.dependencies.refresh = async () => { throw new Error("Antigravity token request failed: 503"); };
+  await expect(f.api.resolveOAuthAccount(f.config)).rejects.toMatchObject({ code: "refresh_unavailable" });
+  f.dependencies.refresh = async () => { throw new Error("Antigravity token request failed: 400"); };
   await expect(f.api.resolveOAuthAccount(f.config)).rejects.toMatchObject({ code: "refresh_failed", message: "Antigravity token refresh failed; sign in again" });
   f.dependencies.refresh = async () => fresh();
   f.dependencies.fetch = async () => Response.json({ id: "other-account", email: "other@example.test" });

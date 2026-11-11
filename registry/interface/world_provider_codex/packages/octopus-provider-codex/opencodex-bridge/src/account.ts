@@ -250,6 +250,22 @@ async function external<T>(store: Store, code: string, message: string, action: 
   }
 }
 
+async function refreshing<T>(store: Store, action: () => Promise<T>): Promise<T> {
+  store.check();
+  try {
+    const value = await action();
+    store.check();
+    return value;
+  } catch (error) {
+    store.check();
+    const status = error instanceof Error ? /^Antigravity token request failed: (\d{3})$/.exec(error.message)?.[1] : undefined;
+    if (status !== undefined && Number(status) >= 400 && Number(status) < 500 && Number(status) !== 429) {
+      throw new OAuthAccountError("refresh_failed", "Antigravity token refresh failed; sign in again");
+    }
+    throw new OAuthAccountError("refresh_unavailable", "Antigravity token refresh did not reach a Google answer; the request can be retried");
+  }
+}
+
 export function createOAuthAccountBoundary(dependencies: OAuthAccountDependencies) {
   async function request(store: Store, url: string, init: RequestInit): Promise<unknown> {
     const response = await dependencies.fetch(url, {
@@ -310,7 +326,7 @@ export function createOAuthAccountBoundary(dependencies: OAuthAccountDependencie
     const saved = store && await readCredential(store);
     if (!store || !saved) throw new OAuthAccountError("not_signed_in", "Antigravity is not signed in");
     if (saved.credential.expiresAt > Date.now() + REFRESH_MARGIN_MS) return saved.credential;
-    const fresh = await external(store, "refresh_failed", "Antigravity token refresh failed; sign in again", () => dependencies.refresh(saved.credential.refreshToken, store.signal));
+    const fresh = await refreshing(store, () => dependencies.refresh(saved.credential.refreshToken, store.signal));
     const credential = await verifiedCredential(store, fresh, saved.credential);
     await writeCredential(store, credential, saved);
     return credential;

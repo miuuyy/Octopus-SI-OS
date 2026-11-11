@@ -637,8 +637,9 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
     const message = isTranslatorBudgetExceededError(error)
       ? "request translation buffer exceeded the configured limit"
       : error instanceof Error ? error.message : "request parsing failed";
-    return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : error instanceof OAuthAccountError ? 401 : 400,
-      error instanceof OAuthAccountError ? "authentication_error" : "invalid_request_error", message);
+    const unavailable = error instanceof OAuthAccountError && error.code === "refresh_unavailable";
+    return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : unavailable ? 503 : error instanceof OAuthAccountError ? 401 : 400,
+      unavailable ? "upstream_error" : error instanceof OAuthAccountError ? "authentication_error" : "invalid_request_error", message);
   }
   const stallTimeoutSec = isLocalUpstream(config.provider.base_url)
     ? Math.ceil(config.limits.request_timeout_ms / 1000)
