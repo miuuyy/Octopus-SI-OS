@@ -2,7 +2,6 @@ module.exports = { operatorOsProjection };
 
 const { clientAgentCatalogPath } = require("../clientAgentCatalog.cjs");
 const { applicationTaskCapabilityReferences } = require("./applicationPackages.cjs");
-const { stableJson } = require("./jsonFiles.cjs");
 const { applicationPrivateConfigurationProjection, descendantEnvironmentIds, descriptorRows, eeInstanceRows, environmentLineage, lowestCommonEnvironment, octopusOsInterfaceSidecars, operatorOsProjectRows, projectedRunInterfaceIds, projectionMemo, runRows, workerEnvironmentRows } = require("./registryRows.cjs");
 const { arrayValue, isPlainRecord, numberValue, objectOrEmpty, stringValue } = require("./values.cjs");
 
@@ -213,8 +212,6 @@ function operatorOsProjection(store) {
         );
       }
     }
-    const profileIds = taskAuthoringProfiles.map((profile) => stringValue(profile?.ee_id)).filter(Boolean);
-    const profileScopeIds = [...new Set(profileIds)].sort();
     const presentationIds = projectPresentations.map((presentation) => stringValue(presentation?.ee_id)).filter(Boolean);
     if (new Set(presentationIds).size !== presentationIds.length) {
       errors.push("Octopus OS Home repeats a Project presentation");
@@ -225,9 +222,9 @@ function operatorOsProjection(store) {
     if (!agentCatalog || projection.clientAgentCatalogError) {
       errors.push(projection.clientAgentCatalogError || "Client Agent catalog is unavailable");
     } else {
-      const sourceProjectIds = agentProjectSources.map((source) => stringValue(source?.project_ee_id)).sort();
-      if (stableJson(sourceProjectIds) !== stableJson(profileScopeIds)) {
-        errors.push("Client Agent source workers and task-authoring EEs are not a bijection");
+      const sourceProjectIds = agentProjectSources.map((source) => stringValue(source?.project_ee_id));
+      if (new Set(sourceProjectIds).size !== sourceProjectIds.length) {
+        errors.push("Client Agent catalog names more than one source worker for a Project");
       }
       for (const source of agentProjectSources) {
         const sourceMatches = taskAuthoringProfiles.filter((profile) => (
