@@ -28,6 +28,7 @@
         "default": [
           "gemini-3.8-flash",
           "gemini-4-argon",
+          "gemini-4-carbon",
           "claude-opus-5-5",
           "claude-sonnet-5-5"
         ]
@@ -3749,6 +3750,37 @@
           "show_in_picker": true
         },
         {
+          "model": "gemini-4-carbon",
+          "display_name": "Gemini 4 Carbon",
+          "description": "Gemini 4 Carbon through Antigravity.",
+          "context_window": 1048576,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            }
+          ],
+          "show_in_picker": true
+        },
+        {
           "model": "claude-opus-5-5",
           "display_name": "Claude Opus 5.5",
           "description": "Claude Opus 5.5 through Antigravity.",
@@ -4048,6 +4080,49 @@
               "use_responses_lite": false
             },
             {
+              "slug": "gemini-4-carbon",
+              "display_name": "Gemini 4 Carbon",
+              "description": "Gemini 4 Carbon through Antigravity.",
+              "default_reasoning_level": "medium",
+              "supported_reasoning_levels": [
+                {
+                  "effort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "effort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "effort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                }
+              ],
+              "shell_type": "shell_command",
+              "visibility": "list",
+              "supported_in_api": true,
+              "priority": 2,
+              "base_instructions": "",
+              "supports_reasoning_summaries": true,
+              "default_reasoning_summary": "auto",
+              "support_verbosity": false,
+              "truncation_policy": {
+                "mode": "tokens",
+                "limit": 10000
+              },
+              "supports_parallel_tool_calls": false,
+              "context_window": 400000,
+              "max_context_window": 1048576,
+              "effective_context_window_percent": 95,
+              "experimental_supported_tools": [],
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "supports_search_tool": false,
+              "use_responses_lite": false
+            },
+            {
               "slug": "claude-opus-5-5",
               "display_name": "Claude Opus 5.5",
               "description": "Claude Opus 5.5 through Antigravity.",
@@ -4069,7 +4144,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 2,
+              "priority": 3,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4112,7 +4187,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 3,
+              "priority": 4,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",

@@ -49,6 +49,7 @@
     "src/oauth/store.ts"
   ],
   "patches": [
-    "upstream/patches/caller-context.patch"
+    "upstream/patches/caller-context.patch",
+    "upstream/patches/antigravity-carbon.patch"
   ]
 }
