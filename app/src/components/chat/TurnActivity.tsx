@@ -210,6 +210,23 @@ export function TurnActivity({ activityWindow = "all", activities, finalStartedA
     && hasConversationReasoningWork;
   const showWorkedForBoundary = !blocked && statusBoundaryVisible
     && (hasWork || failed || stopped || showStandaloneWorkedBoundary);
+  const revealInHistory = Boolean(revealFind && statusBoundaryVisible && finalStarted && !failed && !stopped && hasWork && activities.some((message) => message.id === revealFind.messageId));
+  const pendingFindRevealRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!revealInHistory || !revealFind) return;
+    pendingFindRevealRef.current = revealFind.index;
+    setHistoryDisclosureState("expanded");
+  }, [revealFind?.index, revealFind?.messageId, revealInHistory]);
+  useEffect(() => {
+    const index = pendingFindRevealRef.current;
+    if (index === null || !historyFullyExpanded) return;
+    const frame = window.requestAnimationFrame(() => {
+      pendingFindRevealRef.current = null;
+      sectionRef.current?.querySelector<HTMLElement>(`[data-octopus-thread-find-index="${index}"]`)
+        ?.scrollIntoView({ block: "center", behavior: reducedMotion ? "instant" : "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [historyFullyExpanded, reducedMotion, revealFind?.index]);
   if (startingTask) {
     return (
       <section className="octopus-turn-activity min-h-0 min-w-0" data-state="starting">
@@ -259,23 +276,6 @@ export function TurnActivity({ activityWindow = "all", activities, finalStartedA
   );
   const collapsibleHistory = statusBoundaryVisible && finalStarted && !failed && !stopped && hasWork;
   const contentsExpanded = !collapsibleHistory || historyFullyExpanded;
-  const revealInHistory = Boolean(revealFind && collapsibleHistory && activities.some((message) => message.id === revealFind.messageId));
-  const pendingFindRevealRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!revealInHistory || !revealFind) return;
-    pendingFindRevealRef.current = revealFind.index;
-    setHistoryDisclosureState("expanded");
-  }, [revealFind?.index, revealFind?.messageId, revealInHistory]);
-  useEffect(() => {
-    const index = pendingFindRevealRef.current;
-    if (index === null || !historyFullyExpanded) return;
-    const frame = window.requestAnimationFrame(() => {
-      pendingFindRevealRef.current = null;
-      sectionRef.current?.querySelector<HTMLElement>(`[data-octopus-thread-find-index="${index}"]`)
-        ?.scrollIntoView({ block: "center", behavior: reducedMotion ? "instant" : "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [historyFullyExpanded, reducedMotion, revealFind?.index]);
   return (
     <section
       ref={sectionRef}
