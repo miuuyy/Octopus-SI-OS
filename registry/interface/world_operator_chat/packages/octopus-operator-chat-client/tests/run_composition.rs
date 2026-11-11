@@ -1301,3 +1301,170 @@ fn current_run_change_adds_and_removes_exact_entries_and_refuses_what_it_cannot_
     assert!(apply_current_run_change(current.clone(), present).unwrap_err().contains("already holds"));
     assert!(apply_current_run_change(current, CurrentRunChange::default()).unwrap_err().contains("nothing"));
 }
+
+#[test]
+fn current_change_preserves_delegated_output_selection_and_parent_return_roles() {
+    use octopus_ledger::ContentHash;
+    use octopus_operator_chat_client::{ExternalInputSeed, run_composition::current_run::*};
+    use octopus_run_authoring::capability_amendment::ProviderCapabilityBridge;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let mut request = support::client_fixture(&root);
+    enable_native_profile(&root);
+    write(
+        &root,
+        "registry/artifact/role-parent-return/artifact.json",
+        json!({"id":"role-parent-return","label":"context.reference","text":"Parent return role"}),
+    );
+    let parent_policy_path = root.join("registry/interface/system_worker_parent/policy.json");
+    let mut parent_policy: Value =
+        serde_json::from_slice(&std::fs::read(&parent_policy_path).unwrap()).unwrap();
+    parent_policy["role_artifacts"] = json!(["role-parent-return"]);
+    std::fs::write(&parent_policy_path, serde_json::to_vec(&parent_policy).unwrap()).unwrap();
+    let mut parent_val = json!(request.admitted_parent_record);
+    for cp in parent_val["checkpoints"].as_array_mut().unwrap() {
+        cp["artifact_bindings"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"role-parent-return"}));
+    }
+    let parent_bytes = serde_json::to_vec(&parent_val).unwrap();
+    let parent_run_path = request
+        .roots
+        .run_records_root
+        .join(format!("{}.json", request.admitted_parent_record.id));
+    std::fs::create_dir_all(parent_run_path.parent().unwrap()).unwrap();
+    std::fs::write(&parent_run_path, &parent_bytes).unwrap();
+    request.admitted_parent_record = RunRecord::from_bytes(&parent_bytes).unwrap();
+    request.metadata.runtime.as_mut().unwrap().run_record_hash =
+        Some(ContentHash::of_bytes(&parent_bytes).to_hex());
+
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../../../registry/interface/world_cron/interface.json");
+    let mut trigger: Value = serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+    trigger["id"] = json!("world_test_pulse");
+    write(&root, "registry/interface/world_test_pulse/interface.json", trigger);
+    for (file, pointer) in [
+        ("registry/ee_template/existence/ee_template.json", "/allowed_interfaces"),
+        ("ee/ee_existence.json", "/policy_narrowing/allowed_interfaces"),
+        ("registry/interface/system_worker_template/policy.json", "/ceiling/interfaces"),
+    ] {
+        let mut value: Value =
+            serde_json::from_slice(&std::fs::read(root.join(file)).unwrap()).unwrap();
+        value
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(json!("world_test_pulse"));
+        write(&root, file, value);
+    }
+
+    let descriptor: Value = serde_json::from_slice(
+        &std::fs::read(root.join("registry/interface/world_provider_fixture/interface.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let return_labels = vec![
+        "interface.artifact.output".to_string(),
+        "turn.error".to_string(),
+        "turn.interrupted.result".to_string(),
+    ];
+    let record_labels = descriptor["interface_driver_config"]["private_config"]
+        ["client_projection_output_labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|label| !return_labels.iter().any(|ret| ret == label))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    request.communication.output_selection = Some(CompositionOutputSelection {
+        return_labels: return_labels.clone(),
+        record_labels: record_labels.clone(),
+    });
+
+    let composition = plan_run_composition(&request).unwrap();
+    for file in composition_candidate_writes(&composition) {
+        std::fs::create_dir_all(file.path.parent().unwrap()).unwrap();
+        std::fs::write(file.path, file.content).unwrap();
+    }
+    let initial: Value = serde_json::from_str(&composition.run_write.content).unwrap();
+    let prior_outputs = initial["interface_state"][&composition.provider_interface_id]
+        ["run_authoring_binding"]["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cp| cp["role"] == "provider_artifact_output")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(prior_outputs.len(), 2);
+
+    let pending = pending_tool_handoff(&request, &composition, &initial).to_string();
+    std::fs::write(&composition.run_write.path, &pending).unwrap();
+    let current = RunRecord::from_bytes(pending.as_bytes()).unwrap();
+    let provider: octopus_descriptors::InterfaceId =
+        composition.provider_interface_id.clone().into();
+    let door = composition.authoring.capability_doors["system_room"].clone();
+    let writer = composition.authoring.capability_tools["file.write"].clone();
+    let bridge = ProviderCapabilityBridge {
+        tool: writer.clone(),
+        correlation_id: "readback".into(),
+        arguments_hash: ContentHash::of_bytes(b"{}").to_hex(),
+        return_interface: door.clone().into(),
+    };
+    let mut add = CurrentRunSelectionEntries::default();
+    add.external_inputs.push(ExternalInputSeed {
+        checkpoint_id: "delegated_pulse".into(),
+        interface_id: "world_test_pulse".into(),
+        artifact_names: vec!["cron.current_time".into()],
+        required_verified_artifacts: Vec::new(),
+    });
+    let plan = plan_current_run_amendment(
+        &request.roots,
+        &current,
+        &provider,
+        CurrentRunRequest {
+            amendment_key: "delegated-mid-turn".into(),
+            publications: Vec::new(),
+            selection: None,
+            change: Some(CurrentRunChange {
+                add,
+                remove: CurrentRunSelectionEntries::default(),
+            }),
+            authored: None,
+        },
+        bridge,
+        &[(writer, door.into())],
+    )
+    .unwrap();
+    assert!(
+        plan.validation.safe_to_apply,
+        "{:?}",
+        plan.validation.regressions
+    );
+    let after = json!(plan.amendment.after);
+    let after_outputs = after["interface_state"][provider.as_str()]["run_authoring_binding"]
+        ["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cp| cp["role"] == "provider_artifact_output")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(after_outputs, prior_outputs);
+    let pulse_cp = after["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|cp| cp["interface_binding"]["interface"] == "world_test_pulse")
+        .expect("new trigger checkpoint must be present");
+    assert!(
+        pulse_cp["artifact_bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|binding| binding["id"] == "role-parent-return"),
+        "parent return worker role must stay bound on amended context inputs"
+    );
+}

@@ -1788,3 +1788,183 @@ fn amended_external_input_reaches_the_observer_projection_routes() {
     let rules = &descriptor["interface_driver_config"]["private_config"]["context_projection"]["input_rules"];
     assert!(rules.as_array().unwrap().iter().any(|rule| rule["labels"] == json!(["cron.current_time"]) && rule["whole_payload"] == true));
 }
+
+#[test]
+fn delegated_output_selection_with_observer_amends_cleanly_and_accepts_unchanged_worker_ceiling() {
+    use octopus_ledger::ContentHash;
+    use octopus_operator_chat_client::{
+        ArtifactBindingSeed, ExternalInputSeed, run_composition::current_run::*,
+    };
+    use octopus_run_authoring::capability_amendment::ProviderCapabilityBridge;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let mut request = capture_fixture(&root);
+    let provider_descriptor = read(&root.join("registry/interface/world_provider_fixture/interface.json"));
+    let return_labels = vec![
+        "interface.artifact.output".to_string(),
+        "turn.error".to_string(),
+        "turn.interrupted.result".to_string(),
+    ];
+    let record_labels = provider_descriptor["interface_driver_config"]["private_config"]
+        ["client_projection_output_labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|label| !return_labels.iter().any(|ret| ret == label))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    request.communication.output_selection = Some(CompositionOutputSelection {
+        return_labels,
+        record_labels,
+    });
+    support::write(
+        &root,
+        "registry/artifact/delegated-note/artifact.json",
+        json!({"id":"delegated-note","label":"context.reference","text":"Delegated note"}),
+    );
+    let mut trigger = read(&source().join("registry/interface/world_cron/interface.json"));
+    trigger["id"] = json!("world_test_pulse");
+    support::write(&root, "registry/interface/world_test_pulse/interface.json", trigger);
+    for (file, pointer) in [
+        ("registry/ee_template/existence/ee_template.json", "/allowed_interfaces"),
+        ("ee/ee_existence.json", "/policy_narrowing/allowed_interfaces"),
+        ("registry/interface/system_worker_template/policy.json", "/ceiling/interfaces"),
+    ] {
+        let mut value = read(&root.join(file));
+        value.pointer_mut(pointer).unwrap().as_array_mut().unwrap().push(json!("world_test_pulse"));
+        support::write(&root, file, value);
+    }
+
+    let plan = plan_run_composition(&request).unwrap();
+    for write in composition_candidate_writes(&plan) {
+        std::fs::create_dir_all(write.path.parent().unwrap()).unwrap();
+        std::fs::write(write.path, write.content).unwrap();
+    }
+    let current = RunRecord::from_bytes(plan.run_write.content.as_bytes()).unwrap();
+    let provider: octopus_descriptors::InterfaceId = plan.provider_interface_id.clone().into();
+    let initial_val = json!(current);
+    let initial_outputs = initial_val["interface_state"][provider.as_str()]["run_authoring_binding"]
+        ["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cp| cp["role"] == "provider_artifact_output")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        initial_outputs.len(),
+        3,
+        "expected recorded + memory_terminal + memory_recorded provider_artifact_output routes"
+    );
+
+    let door = plan.authoring.capability_doors["system_room"].clone();
+    let writer = plan.authoring.capability_tools["file.write"].clone();
+    let bridge = ProviderCapabilityBridge {
+        tool: writer.clone(),
+        correlation_id: "readback".into(),
+        arguments_hash: ContentHash::of_bytes(b"{}").to_hex(),
+        return_interface: door.clone().into(),
+    };
+
+    // 1) Context-only change leaves worker/policy.json unchanged on disk, exercising both
+    // retain_source_ceiling + preserve_policy with no planned worker policy write AND 3-way output preservation.
+    let mut add_note = CurrentRunSelectionEntries::default();
+    add_note
+        .context_artifact_bindings
+        .push(ArtifactBindingSeed { id: "delegated-note".into() });
+    let first = plan_current_run_amendment(
+        &request.roots,
+        &current,
+        &provider,
+        CurrentRunRequest {
+            amendment_key: "context-unchanged-ceiling".into(),
+            publications: Vec::new(),
+            selection: None,
+            change: Some(CurrentRunChange {
+                add: add_note,
+                remove: CurrentRunSelectionEntries::default(),
+            }),
+            authored: None,
+        },
+        bridge.clone(),
+        &[(writer.clone(), door.clone().into())],
+    )
+    .unwrap();
+    assert!(
+        first.validation.safe_to_apply,
+        "{:?}",
+        first.validation.regressions
+    );
+    let worker_policy_path = root
+        .join("registry/interface")
+        .join(current.worker.as_str())
+        .join("policy.json");
+    assert!(
+        !first
+            .dependency_writes
+            .iter()
+            .chain(&first.activation_writes)
+            .any(|write| write.path == worker_policy_path),
+        "context-only amendment should not rewrite an unchanged worker policy"
+    );
+    let first_after = json!(first.amendment.after);
+    let first_outputs = first_after["interface_state"][provider.as_str()]["run_authoring_binding"]
+        ["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cp| cp["role"] == "provider_artifact_output")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(first_outputs, initial_outputs);
+
+    for write in first.dependency_writes.iter().chain(&first.activation_writes) {
+        std::fs::create_dir_all(write.path.parent().unwrap()).unwrap();
+        std::fs::write(&write.path, &write.content).unwrap();
+    }
+    let next_record = RunRecord::from_bytes(&serde_json::to_vec(&first.amendment.after).unwrap()).unwrap();
+    std::fs::write(&plan.run_write.path, serde_json::to_vec(&next_record).unwrap()).unwrap();
+
+    // 2) Subsequent trigger addition updates worker/policy.json and observer projection routes while keeping all 3 outputs.
+    let mut add_pulse = CurrentRunSelectionEntries::default();
+    add_pulse.external_inputs.push(ExternalInputSeed {
+        checkpoint_id: "delegated_observer_pulse".into(),
+        interface_id: "world_test_pulse".into(),
+        artifact_names: vec!["cron.current_time".into()],
+        required_verified_artifacts: Vec::new(),
+    });
+    let second = plan_current_run_amendment(
+        &request.roots,
+        &next_record,
+        &provider,
+        CurrentRunRequest {
+            amendment_key: "delegated-observer-pulse".into(),
+            publications: Vec::new(),
+            selection: None,
+            change: Some(CurrentRunChange {
+                add: add_pulse,
+                remove: CurrentRunSelectionEntries::default(),
+            }),
+            authored: None,
+        },
+        bridge,
+        &[(writer, door.into())],
+    )
+    .unwrap();
+    assert!(
+        second.validation.safe_to_apply,
+        "{:?}",
+        second.validation.regressions
+    );
+    let second_outputs = json!(second.amendment.after)["interface_state"][provider.as_str()]
+        ["run_authoring_binding"]["checkpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cp| cp["role"] == "provider_artifact_output")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(second_outputs, initial_outputs);
+}

@@ -220,6 +220,10 @@ fn retain_source_ceiling(request: &AttachmentRequest<'_>, relay: &str, writes: &
     if policy.id.as_str() != request.identity.worker_interface_id || !policy.ceiling.interfaces.contains(&id) {
         return Err("accepted maintenance relay is outside its existing worker ceiling".into());
     }
+    let tag = format!("policy:{}", request.identity.worker_interface_id);
+    if !writes.iter().any(|write| write.tag == tag) {
+        return Ok(());
+    }
     extend_source_ceiling(request.identity, &[relay.into()], Some(&policy), writes)
 }
 

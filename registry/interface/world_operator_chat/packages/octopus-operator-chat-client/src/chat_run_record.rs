@@ -24,6 +24,7 @@ pub(crate) fn build_chat_run_record(
     let retained_connections = retained_connections::selected(
         existing, identity, previous_authoring_profile, external_inputs, external_relays, model_outputs,
     )?;
+    let retained_outputs = retained_connections::selected_artifact_outputs(existing, identity)?;
     let mut mandatory_role_artifacts = Vec::new();
     let mut seen = BTreeSet::new();
     for id in role_artifacts.iter().cloned() {
@@ -284,30 +285,71 @@ pub(crate) fn build_chat_run_record(
             Ok(output.checkpoint_id.clone())
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let return_interfaces = match &identity.native_communication {
-        Some(routes) => routes.return_interface_ids.iter().map(String::as_str)
-            .chain(routes.client_interface_id.as_deref()).collect(),
-        None => vec![identity.chat_interface_id.as_str()],
-    };
-    let mut provider_output = checkpoint(
-        client_id.clone(),
-        Some(&identity.model_interface_id),
-        return_interfaces,
-        &mandatory_role_artifacts,
-        Vec::new(),
-    );
-    let recorded_output_id = if let Some(selection) = identity.native_communication.as_ref()
-        .and_then(|routes| routes.output_selection.as_ref())
-    {
-        provider_output["interface_binding"]["config"]["artifact_policy"] = serde_json::json!({"mode":"allow","names":selection.return_labels,"namespaces":[]});
-        let recorded_id = format!("cp_provider_recorded_{cycle}");
-        let client = identity.native_communication.as_ref().and_then(|routes| routes.client_interface_id.as_deref());
-        let mut recorded = checkpoint(recorded_id.clone(), Some(&identity.model_interface_id), client.into_iter().collect(), &mandatory_role_artifacts, Vec::new());
-        recorded["interface_binding"]["config"]["artifact_policy"] = serde_json::json!({"mode":"allow","names":selection.record_labels,"namespaces":[]});
-        cycle_checkpoints.push(recorded);
-        Some(recorded_id)
-    } else { None };
-    cycle_checkpoints.push(provider_output);
+    let mut provider_output_ids = Vec::new();
+    if retained_outputs.is_empty() {
+        let return_interfaces = match &identity.native_communication {
+            Some(routes) => routes
+                .return_interface_ids
+                .iter()
+                .map(String::as_str)
+                .chain(routes.client_interface_id.as_deref())
+                .collect(),
+            None => vec![identity.chat_interface_id.as_str()],
+        };
+        let mut provider_output = checkpoint(
+            client_id.clone(),
+            Some(&identity.model_interface_id),
+            return_interfaces,
+            &mandatory_role_artifacts,
+            Vec::new(),
+        );
+        let recorded_output_id = if let Some(selection) = identity
+            .native_communication
+            .as_ref()
+            .and_then(|routes| routes.output_selection.as_ref())
+        {
+            provider_output["interface_binding"]["config"]["artifact_policy"] =
+                serde_json::json!({"mode":"allow","names":selection.return_labels,"namespaces":[]});
+            let recorded_id = format!("cp_provider_recorded_{cycle}");
+            let client = identity
+                .native_communication
+                .as_ref()
+                .and_then(|routes| routes.client_interface_id.as_deref());
+            let mut recorded = checkpoint(
+                recorded_id.clone(),
+                Some(&identity.model_interface_id),
+                client.into_iter().collect(),
+                &mandatory_role_artifacts,
+                Vec::new(),
+            );
+            recorded["interface_binding"]["config"]["artifact_policy"] =
+                serde_json::json!({"mode":"allow","names":selection.record_labels,"namespaces":[]});
+            cycle_checkpoints.push(recorded);
+            Some(recorded_id)
+        } else {
+            None
+        };
+        cycle_checkpoints.push(provider_output);
+        provider_output_ids.push(client_id);
+        provider_output_ids.extend(recorded_output_id);
+    } else {
+        for out in retained_outputs.iter().filter(|out| !out.after_authoring) {
+            let template = &out.template;
+            let id = format!(
+                "cp_provider_output_{}_{cycle}",
+                safe_segment(&template.name, "retained output template name")?
+            );
+            let mut row =
+                checkpoint(id.clone(), None, Vec::new(), &mandatory_role_artifacts, Vec::new());
+            row["interface_binding"] =
+                serde_json::to_value(&template.interface_binding).map_err(|e| e.to_string())?;
+            row["outbound_interface_bindings"] =
+                serde_json::to_value(&template.outbound_interface_bindings)
+                    .map_err(|e| e.to_string())?;
+            cycle_checkpoints.push(row);
+            provider_output_ids.push(id);
+        }
+    }
     cycle_checkpoints.push(checkpoint(
         authoring_call_id.clone(),
         Some(&identity.authoring_source_id),
@@ -322,6 +364,22 @@ pub(crate) fn build_chat_run_record(
         &mandatory_role_artifacts,
         Vec::new(),
     ));
+    for out in retained_outputs.iter().filter(|out| out.after_authoring) {
+        let template = &out.template;
+        let id = format!(
+            "cp_provider_output_{}_{cycle}",
+            safe_segment(&template.name, "retained output template name")?
+        );
+        let mut row =
+            checkpoint(id.clone(), None, Vec::new(), &mandatory_role_artifacts, Vec::new());
+        row["interface_binding"] =
+            serde_json::to_value(&template.interface_binding).map_err(|e| e.to_string())?;
+        row["outbound_interface_bindings"] =
+            serde_json::to_value(&template.outbound_interface_bindings)
+                .map_err(|e| e.to_string())?;
+        cycle_checkpoints.push(row);
+        provider_output_ids.push(id);
+    }
     let cycle_ids = cycle_checkpoints
         .iter()
         .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
@@ -560,8 +618,10 @@ pub(crate) fn build_chat_run_record(
         return Err("existing active checkpoints do not resolve to retained records".to_string());
     }
 
-    let mut next_frontier = vec![serde_json::json!(client_id)];
-    next_frontier.extend(recorded_output_id.map(serde_json::Value::String));
+    let mut next_frontier = provider_output_ids
+        .into_iter()
+        .map(serde_json::Value::String)
+        .collect::<Vec<_>>();
     for (source_interface_id, binding) in &topology.tool_bindings {
         if capability_binding_tools(config, identity, source_interface_id, binding)?.is_empty() {
             continue;
@@ -585,6 +645,33 @@ pub(crate) fn build_chat_run_record(
         &config.artifact_labels.message,
         &config.run.tool_call_verifier,
     )?;
+    if !retained_outputs.is_empty() {
+        let derived_outputs = next_binding
+            .checkpoints
+            .iter_mut()
+            .filter(|cp| {
+                cp.role == BoundCheckpointRole::ProviderArtifactOutput
+                    && cp.required_verified_artifacts.is_empty()
+            })
+            .collect::<Vec<_>>();
+        if derived_outputs.len() != retained_outputs.len() {
+            return Err(
+                "retained artifact outputs did not resolve one-to-one in planned topology".into(),
+            );
+        }
+        for (derived, retained_out) in derived_outputs.into_iter().zip(&retained_outputs) {
+            if derived.interface_binding != retained_out.template.interface_binding
+                || derived.outbound_interface_bindings
+                    != retained_out.template.outbound_interface_bindings
+            {
+                return Err(
+                    "retained artifact output binding order diverged during topology derivation"
+                        .into(),
+                );
+            }
+            *derived = retained_out.template.clone();
+        }
+    }
     for template in admitted_inputs {
         if next_binding.checkpoints.iter().any(|next| next.name == template.name) { return Err("retained admitted input collides with a new template".into()); }
         next_binding.checkpoints.push(template);
@@ -663,6 +750,23 @@ pub(crate) fn build_chat_run_record(
             owner: InterfaceId::new(door),source:InterfaceId::new(door),door:InterfaceId::new(&owner.authoring_environment),tool:owner.authoring_tool.clone(),call_label:config.artifact_labels.tool_call.clone(),result_label:format!("{}.result",owner.authoring_tool),
         });
         next_binding.checkpoints.push(returned);
+    }
+    let post_authoring_names = retained_outputs
+        .iter()
+        .filter(|out| out.after_authoring)
+        .map(|out| out.template.name.clone())
+        .collect::<BTreeSet<_>>();
+    if !post_authoring_names.is_empty() {
+        let mut tail = Vec::new();
+        next_binding.checkpoints.retain(|cp| {
+            if post_authoring_names.contains(&cp.name) {
+                tail.push(cp.clone());
+                false
+            } else {
+                true
+            }
+        });
+        next_binding.checkpoints.extend(tail);
     }
 
     let mut interface_state = existing

@@ -254,13 +254,29 @@ pub(crate) fn plan_operator_chat_topology_files_for_source(
         request.existing_run_record.as_ref(), &identity, Some(&previous_authoring_profile),
         &request.external_inputs, &request.external_relays, &request.model_outputs,
     )?;
-    let retained_policy = retained_connections::policy(
+    let mut retained_policy = retained_connections::policy(
         &interface_root, &identity, &retained_connections,
     )?;
     external_interfaces.extend(retained_policy.keys().map(ToString::to_string));
     external_interfaces.sort();
     external_interfaces.dedup();
     ensure_external_interfaces_admitted_by_ee(&topology, &external_interfaces)?;
+    let retained_outputs = retained_connections::selected_artifact_outputs(
+        request.existing_run_record.as_ref(),
+        &identity,
+    )?;
+    let retained_return_policy = retained_connections::artifact_output_return_policy(
+        &interface_root,
+        request.existing_run_record.as_ref(),
+        &identity,
+        &retained_outputs,
+    )?;
+    for (id, values) in retained_return_policy {
+        external_interfaces.push(id.to_string());
+        retained_policy.entry(id).or_insert(values);
+    }
+    external_interfaces.sort();
+    external_interfaces.dedup();
     let worker_relays: Vec<String> = topology
         .worker_relays
         .keys()
@@ -311,7 +327,12 @@ pub(crate) fn plan_operator_chat_topology_files_for_source(
         current_worker.as_ref().map(|current| &current.policy),
         &mut writes,
     )?;
-    retained_connections::preserve_policy(&identity, &retained_policy, &mut writes)?;
+    retained_connections::preserve_policy(
+        &identity,
+        &retained_policy,
+        current_worker.as_ref().map(|current| &current.policy),
+        &mut writes,
+    )?;
     let role_dependency_workers = worker_role_dependency_interfaces(
         &interface_root,
         topology.worker_relays.keys(),

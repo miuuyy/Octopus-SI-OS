@@ -197,15 +197,31 @@ pub(super) fn policy(
 pub(super) fn preserve_policy(
     identity: &PlannedIdentity,
     retained: &octopus_policy::InterfacePolicyOverrideLayer,
+    current: Option<&WorkerInterfacePolicy>,
     writes: &mut [PlannedClientWrite],
 ) -> Result<(), String> {
     if retained.is_empty() {
         return Ok(());
     }
-    let write = writes
+    let Some(write) = writes
         .iter_mut()
         .find(|write| write.tag == format!("policy:{}", identity.worker_interface_id))
-        .ok_or("retained connections have no planned worker ceiling")?;
+    else {
+        let current = current
+            .filter(|policy| policy.id.as_str() == identity.worker_interface_id)
+            .ok_or("retained connections have no planned or current worker ceiling")?;
+        for (id, values) in retained {
+            let held = current.ceiling.interface_policy.get(id);
+            if values.is_empty() && held.is_some_and(|held| !held.is_empty())
+                || !values.is_empty() && held != Some(values)
+            {
+                return Err(format!(
+                    "retained connection '{id}' differs from the unchanged worker ceiling"
+                ));
+            }
+        }
+        return Ok(());
+    };
     let mut policy: serde_json::Value =
         serde_json::from_str(&write.content).map_err(|e| e.to_string())?;
     let ceiling = policy
@@ -231,4 +247,165 @@ pub(super) fn preserve_policy(
         serde_json::from_value(policy.clone()).map_err(|e| e.to_string())?;
     write.content = pretty_json(&policy)?;
     Ok(())
+}
+
+pub(super) struct RetainedArtifactOutput {
+    pub template: BoundCheckpointTemplate,
+    pub after_authoring: bool,
+}
+
+pub(super) fn selected_artifact_outputs(
+    existing: Option<&serde_json::Value>,
+    identity: &PlannedIdentity,
+) -> Result<Vec<RetainedArtifactOutput>, String> {
+    if identity.native_communication.is_some() {
+        return Ok(Vec::new());
+    }
+    let Some(topology) = existing_bound_run_authoring_topology(existing, identity)? else {
+        return Ok(Vec::new());
+    };
+    let mut names = BTreeSet::new();
+    let mut outputs = Vec::new();
+    let mut seen_authoring = false;
+    for template in topology.checkpoints {
+        if !names.insert(template.name.clone()) {
+            return Err("existing run authoring binding repeats a template name".into());
+        }
+        if matches!(
+            template.role,
+            BoundCheckpointRole::AuthoringCall | BoundCheckpointRole::AuthoringResult
+        ) {
+            seen_authoring = true;
+            continue;
+        }
+        if template.role != BoundCheckpointRole::ProviderArtifactOutput
+            || !template.required_verified_artifacts.is_empty()
+        {
+            continue;
+        }
+        template.interface_binding.validate()?;
+        if template.interface_binding.interface.as_str() != identity.model_interface_id
+            || template.include_context
+            || template.owner_authoring.is_some()
+            || !template.result_receiving.is_empty()
+            || !template.static_artifact_bindings.is_empty()
+        {
+            return Err(
+                "retained artifact output changed its exact provider or boundary contract".into(),
+            );
+        }
+        let mut targets = BTreeSet::new();
+        for target in &template.outbound_interface_bindings {
+            target.validate()?;
+            if target.interface == template.interface_binding.interface
+                || !targets.insert(target.interface.as_str())
+            {
+                return Err(
+                    "retained artifact output repeats or loops an outbound interface".into(),
+                );
+            }
+        }
+        outputs.push(RetainedArtifactOutput {
+            template,
+            after_authoring: seen_authoring,
+        });
+    }
+    let default_tpl = bound_checkpoint_template(
+        BoundCheckpointRole::ProviderArtifactOutput,
+        AuthoredInterfaceBinding::all(InterfaceId::new(&identity.model_interface_id)),
+        vec![AuthoredInterfaceBinding::all(InterfaceId::new(
+            &identity.chat_interface_id,
+        ))],
+        Vec::new(),
+    )?;
+    if outputs.len() == 1 && !outputs[0].after_authoring && outputs[0].template == default_tpl {
+        return Ok(Vec::new());
+    }
+    let observer_relay = existing
+        .and_then(|record| record.get("interface_state"))
+        .and_then(|states| states.get(&identity.model_interface_id))
+        .and_then(|state| state.get("maintenance_observer"))
+        .and_then(|declaration| declaration.get("source_relay_interface"))
+        .and_then(serde_json::Value::as_str);
+    if let Some(relay) = observer_relay {
+        let terminal_name = format!("{}__memory_terminal", default_tpl.name);
+        let recorded_name = format!("{}__memory_recorded", default_tpl.name);
+        let is_default_observer_split = !outputs.is_empty()
+            && outputs.len() <= 2
+            && outputs.iter().all(|out| out.after_authoring)
+            && outputs[0].template.name == terminal_name
+            && outputs[0]
+                .template
+                .outbound_interface_bindings
+                .iter()
+                .filter(|b| b.interface.as_str() != relay)
+                .cloned()
+                .eq(default_tpl.outbound_interface_bindings.iter().cloned())
+            && outputs.get(1).is_none_or(|rec| {
+                rec.template.name == recorded_name
+                    && rec.template.outbound_interface_bindings
+                        == default_tpl.outbound_interface_bindings
+            });
+        if is_default_observer_split {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(outputs)
+}
+
+pub(super) fn artifact_output_return_policy(
+    interface_root: &Path,
+    existing: Option<&serde_json::Value>,
+    identity: &PlannedIdentity,
+    outputs: &[RetainedArtifactOutput],
+) -> Result<octopus_policy::InterfacePolicyOverrideLayer, String> {
+    let observer_relay = existing
+        .and_then(|record| record.get("interface_state"))
+        .and_then(|states| states.get(&identity.model_interface_id))
+        .and_then(|state| state.get("maintenance_observer"))
+        .and_then(|declaration| declaration.get("source_relay_interface"))
+        .and_then(serde_json::Value::as_str);
+    let targets = outputs
+        .iter()
+        .flat_map(|out| out.template.outbound_interface_bindings.iter())
+        .map(|binding| &binding.interface)
+        .filter(|id| {
+            id.as_str() != identity.chat_interface_id && Some(id.as_str()) != observer_relay
+        })
+        .collect::<BTreeSet<_>>();
+    if targets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let path = interface_root
+        .join(&identity.worker_interface_id)
+        .join("policy.json");
+    let current: WorkerInterfacePolicy = serde_json::from_slice(
+        &std::fs::read(&path)
+            .map_err(|e| format!("retained output ceiling '{}': {e}", path.display()))?,
+    )
+    .map_err(|e| e.to_string())?;
+    if current.id.as_str() != identity.worker_interface_id {
+        return Err("retained output ceiling changed its exact worker identity".into());
+    }
+    let mut policies = BTreeMap::new();
+    for id in targets {
+        let descriptor = load_interface_descriptor(interface_root, id.as_str())?;
+        if descriptor.interface_type != octopus_interfaces::InterfaceType::System
+            || !current.ceiling.interfaces.contains(id)
+        {
+            return Err(format!(
+                "retained return interface '{id}' is not an existing exact System ceiling entry"
+            ));
+        }
+        policies.insert(
+            id.clone(),
+            current
+                .ceiling
+                .interface_policy
+                .get(id)
+                .cloned()
+                .unwrap_or_default(),
+        );
+    }
+    Ok(policies)
 }
