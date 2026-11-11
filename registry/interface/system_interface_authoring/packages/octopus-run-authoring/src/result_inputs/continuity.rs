@@ -28,18 +28,18 @@ pub(crate) fn result_rebase(
     row: &octopus_run_record::CheckpointRecord,
 ) -> Result<Vec<ArtifactRef>, String> {
     let call = correspondence(template)?.call_artifact;
-    let evidence = template.static_artifact_bindings.contains(&call.id);
     let context = effective_context_bindings(record, &config.checkpoints, &config.provider_interface)?;
     let instructions = instruction_ids(record, config, template, &context, &call)?;
+    let compared = |binding: &&ArtifactBinding| binding.id != call.id && !instructions.contains(&binding.id);
     let admitted = row
         .artifact_bindings
         .iter()
-        .filter(|binding| !(evidence && binding.id == call.id) && !instructions.contains(&binding.id))
+        .filter(compared)
         .map(|binding| &binding.id)
         .collect::<Vec<_>>();
     let mut position = 0;
     let mut rebase = Vec::new();
-    for binding in context.iter().filter(|binding| !instructions.contains(&binding.id)) {
+    for binding in context.iter().filter(compared) {
         if admitted.get(position) == Some(&&binding.id) {
             position += 1;
             continue;
@@ -376,5 +376,60 @@ impl ProviderOutputHandoff {
         self.require_carried_admitted_context(state, &rebase)?;
         self.apply_result_rebase(state, &rebase)?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn address(label: &str, body: &[u8]) -> ArtifactRef {
+        let content = ContentHash::of_bytes(body);
+        ArtifactRef { id: ArtifactId::new(format!("{label}:{}", content.to_hex())), content }
+    }
+
+    #[test]
+    fn waiting_call_is_its_own_evidence_and_never_context_that_left_the_run() {
+        let binding = |id: &str| json!(AuthoredInterfaceBinding::all(InterfaceId::new(id)));
+        let template = |name: &str, role: &str, source: &str, target: &str| json!({
+            "name":name,"role":role,"interface_binding":binding(source),"outbound_interface_bindings":[binding(target)],
+            "include_context":role == "stable","required_verified_artifacts":[],
+        });
+        let call = address("tool.call", b"exec");
+        let mut wait = template("wait", "result_input", "room", "provider");
+        wait["include_context"] = json!(true);
+        wait["required_verified_artifacts"] = json!([{"mark":"tool.result.corresponds","artifact_label":"exec.result",
+            "verifier":"tool_result_correspondence","params":{"call_artifact":call,"tool":"exec","correlation_id":"c1","params":{}}}]);
+        let config: RunAuthoringConfig = serde_json::from_value(json!({"run":"run","worker":"worker","provider_interface":"provider",
+            "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result",
+            "result_timeout_ms":1000,"checkpoints":[template("input","stable","client","provider"),
+                template("writer_call","authoring_call","writer","writer_room"),
+                template("writer_result","authoring_result","writer_room","provider"), wait]})).unwrap();
+        let earlier = address("operator.message", b"start");
+        let steer = address("turn.control.acknowledged", b"steer");
+        let roles = [json!({"id":"role"})];
+        let rows = |context: &[&ArtifactRef], waiting: &[&ArtifactRef]| {
+            let mut rows = config.checkpoints[..3].iter().map(|cp| materialize_checkpoint(cp, &cp.name, &config.run, &roles)).collect::<Vec<_>>();
+            rows[0]["artifact_bindings"] = json!(context.iter().map(|artifact| json!({"id":artifact.id})).collect::<Vec<_>>());
+            let row = waiting.iter().map(|artifact| json!({"id":artifact.id})).collect::<Vec<_>>();
+            rows.push(materialize_checkpoint(&config.checkpoints[3], "wait", &config.run, &row));
+            RunRecord::from_bytes(&serde_json::to_vec(&json!({"id":"run","ee":"ee","worker":"worker","trace":"run","status":"running",
+                "checkpoints":rows,"active_checkpoints":["input","writer_call","writer_result","wait"],
+                "interface_state":{"provider":{"context_generation":1,"authoring_generation":1,
+                    "frontier_checkpoint_ids":["writer_call","writer_result"]}}})).unwrap()).unwrap()
+        };
+        let template = &config.checkpoints[3];
+        let waited = rows(&[&earlier, &steer], &[&earlier, &call]);
+        let row = waited.checkpoint(&CheckpointId::new("wait")).unwrap();
+        assert_eq!(result_rebase(&waited, &config, template, row).unwrap(), vec![steer.clone()]);
+        let joined = rows(&[&earlier, &call, &steer], &[&earlier, &call]);
+        let row = joined.checkpoint(&CheckpointId::new("wait")).unwrap();
+        assert_eq!(result_rebase(&joined, &config, template, row).unwrap(), vec![steer.clone()]);
+        let first = address("operator.message", b"first");
+        let lost = rows(&[&first, &steer], &[&first, &earlier, &call]);
+        let row = lost.checkpoint(&CheckpointId::new("wait")).unwrap();
+        let error = result_rebase(&lost, &config, template, row).unwrap_err();
+        assert!(error.contains(&format!("context '{}' left the run", earlier.id.as_str())), "{error}");
     }
 }
