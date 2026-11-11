@@ -1645,15 +1645,18 @@ impl ProviderOutputHandoff {
             }
             let original = RunRecord::from_bytes(&before).map_err(|error| error.to_string())?;
             let original_config = attempt_config(&original, &self.config)?;
-            if !result_inputs::saved_definition_transition(&original, &record, &original_config)? {
-                source_settlement::validate_transition(&original, &record, &original_config)?;
-                source_continuation::validate_transition(&original, &record, &original_config)?;
-                source_withdrawal::validate_saved_attempt(&self.ctx, &before, prospective.as_bytes(), &original_config)?;
-                rejected_final::validate_saved_attempt(&self.ctx, &before, prospective.as_bytes(), &original_config)?;
+            let stepped_bytes = capability_amendment::saved_ordinary(&before, prospective.as_bytes(), &original_config)?
+                .unwrap_or_else(|| prospective.as_bytes().to_vec());
+            let stepped = RunRecord::from_bytes(&stepped_bytes).map_err(|e| e.to_string())?;
+            if !result_inputs::saved_definition_transition(&original, &stepped, &original_config)? {
+                source_settlement::validate_transition(&original, &stepped, &original_config)?;
+                source_continuation::validate_transition(&original, &stepped, &original_config)?;
+                source_withdrawal::validate_saved_attempt(&self.ctx, &before, &stepped_bytes, &original_config)?;
+                rejected_final::validate_saved_attempt(&self.ctx, &before, &stepped_bytes, &original_config)?;
             }
             let candidate_config = result_inputs::saved_attempt_config(&record, &original_config)?;
             validate_bound_run_authoring_topology(&record, &candidate_config, None)?;
-            result_inputs::validate_saved(&self.ctx, &original, &record, &original_config)?;
+            result_inputs::validate_saved(&self.ctx, &original, &stepped, &original_config)?;
             let source_movement_seq = pending.source_movement_seq;
             let result_template = original_config
                 .checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult)?;

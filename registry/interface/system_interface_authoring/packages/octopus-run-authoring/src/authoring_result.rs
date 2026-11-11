@@ -682,11 +682,14 @@ pub(crate) fn validate_authoring_attempt_source(
     let candidate = RunRecord::from_bytes(content.as_bytes()).map_err(|error| {
         format!("provider authoring failure source call carries a malformed run: {error}")
     })?;
-    if !result_inputs::saved_definition_transition(record, &candidate, config)? {
-        source_settlement::validate_transition(record, &candidate, config)?;
-        source_continuation::validate_transition(record, &candidate, config)?;
-        source_withdrawal::validate_saved_attempt(ctx, record_bytes, content.as_bytes(), config)?;
-        rejected_final::validate_saved_attempt(ctx, record_bytes, content.as_bytes(), config)?;
+    let stepped_bytes = capability_amendment::saved_ordinary(record_bytes, content.as_bytes(), config)?
+        .unwrap_or_else(|| content.as_bytes().to_vec());
+    let stepped = RunRecord::from_bytes(&stepped_bytes).map_err(|error| error.to_string())?;
+    if !result_inputs::saved_definition_transition(record, &stepped, config)? {
+        source_settlement::validate_transition(record, &stepped, config)?;
+        source_continuation::validate_transition(record, &stepped, config)?;
+        source_withdrawal::validate_saved_attempt(ctx, record_bytes, &stepped_bytes, config)?;
+        rejected_final::validate_saved_attempt(ctx, record_bytes, &stepped_bytes, config)?;
     }
     if candidate.id != record.id || candidate.worker != record.worker {
         return Err(
@@ -716,7 +719,7 @@ pub(crate) fn validate_authoring_attempt_source(
     validate_pending_items_are_active(&candidate, &config.provider_interface, &pending)?;
     let candidate_config = result_inputs::saved_attempt_config(&candidate, config)?;
     validate_bound_run_authoring_topology(&candidate, &candidate_config, None)?;
-    result_inputs::validate_saved(ctx, record, &candidate, config)?;
+    result_inputs::validate_saved(ctx, record, &stepped, config)?;
     let authoring_result_checkpoint = active_checkpoint_for_role(
         &candidate,
         &candidate_config,

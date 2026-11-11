@@ -679,39 +679,53 @@ pub(super) fn checked_topology_advance(
 }
 
 pub(super) fn validate_transition(transition: &CheckedRunTransition) -> Result<bool, String> {
-    let before = RunRecord::from_bytes(&transition.before).map_err(|e| e.to_string())?;
-    let after = RunRecord::from_bytes(&transition.after).map_err(|e| e.to_string())?;
-    let provider = &transition.writer.owner;
-    let prior = before.interface_state.get(provider).and_then(|state| state.get(AMENDMENT));
-    let next = after.interface_state.get(provider).and_then(|state| state.get(AMENDMENT));
-    if prior == next { return Ok(false); }
-    let proof: AppliedAmendment = serde_json::from_value(next.cloned().ok_or("checked provider removed its capability transition evidence")?).map_err(|e| e.to_string())?;
-    exact(&proof.amendment_key, "key")?;
     let profile = RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
         file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
     };
+    let Some(ordinary) = amended_ordinary(&transition.before, &transition.after, &transition.writer.owner, &profile)? else { return Ok(false); };
+    let mut base = transition.clone();
+    base.after = ordinary;
+    validate_checked_provider_transition(&base)?;
+    Ok(true)
+}
+
+pub(super) fn saved_ordinary(before: &[u8], after: &[u8], config: &RunAuthoringConfig) -> Result<Option<Vec<u8>>, String> {
+    let profile = RunAuthoringProfile {
+        file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
+        file_write_result_label: config.file_write_result_label.clone(), result_timeout_ms: 1,
+    };
+    amended_ordinary(before, after, &config.provider_interface, &profile)
+}
+
+fn amended_ordinary(before_bytes: &[u8], after_bytes: &[u8], provider: &InterfaceId, profile: &RunAuthoringProfile) -> Result<Option<Vec<u8>>, String> {
+    let before = RunRecord::from_bytes(before_bytes).map_err(|e| e.to_string())?;
+    let after = RunRecord::from_bytes(after_bytes).map_err(|e| e.to_string())?;
+    let prior = before.interface_state.get(provider).and_then(|state| state.get(AMENDMENT));
+    let next = after.interface_state.get(provider).and_then(|state| state.get(AMENDMENT));
+    if prior == next { return Ok(None); }
+    let proof: AppliedAmendment = serde_json::from_value(next.cloned().ok_or("checked provider removed its capability transition evidence")?).map_err(|e| e.to_string())?;
+    exact(&proof.amendment_key, "key")?;
+    let profile = profile.clone();
     validate_delta(&before, &proof.delta, &profile)?;
     validate_effect(&after, &proof.bridge, &proof.effect, provider)?;
     if !same_future_contract(&topology(&before, provider)?, &proof.delta.before)
         || !same_future_contract(&topology(&after, provider)?, &proof.delta.after) {
         return Err("checked capability transition has stale topology evidence".into());
     }
-    let mut ordinary: Value = serde_json::from_slice(&transition.before).map_err(|e| e.to_string())?;
+    let mut ordinary: Value = serde_json::from_slice(before_bytes).map_err(|e| e.to_string())?;
     json_patch::patch(&mut ordinary, &proof.ordinary_patch).map_err(|e| e.to_string())?;
     if ordinary.get("interface_state").and_then(|state| state.get(provider.as_str())).and_then(|state| state.get(AMENDMENT)) != prior {
         return Err("ordinary provider step changed its amendment evidence".into());
     }
-    let mut base = transition.clone();
-    base.after = JsonFormat::Compact.encode(&ordinary)?;
-    validate_checked_provider_transition(&base)?;
+    let base = JsonFormat::Compact.encode(&ordinary)?;
     let config = proof.delta.before.config(&profile);
     apply_delta(&before, &mut ordinary, &proof.delta, &config, &proof.amendment_key)?;
     ordinary["interface_state"][provider.as_str()][AMENDMENT] = json!(proof);
-    if JsonFormat::Compact.encode(&ordinary)? != transition.after {
+    if JsonFormat::Compact.encode(&ordinary)? != after_bytes {
         return Err("checked capability transition changed fields outside its exact future contract".into());
     }
     validate_tool_continuation(&before, provider, &proof.bridge.tool, &proof.bridge.return_interface)?;
     validate_tool_continuation(&after, provider, &proof.bridge.tool, &proof.bridge.return_interface)?;
-    Ok(true)
+    Ok(Some(base))
 }

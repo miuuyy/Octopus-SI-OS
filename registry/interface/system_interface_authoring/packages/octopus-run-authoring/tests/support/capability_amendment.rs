@@ -289,6 +289,9 @@ fn capability_plan_rejects_bridge_narrowing_and_private_or_accepted_contract_cha
     assert!(!captured.iter().any(|binding|binding["id"]=="new_context"));
     validate_installed(&installed,&amendment).unwrap();
     validate_checked_provider_transition(&transition(&before,&authored)).unwrap();
+    assert!(result_inputs::validate_transition(&record(&before).unwrap(),&installed,&config).is_err());
+    let stepped=saved_ordinary(&serde_json::to_vec(&before).unwrap(),authored.content.as_bytes(),&config).unwrap().unwrap();
+    result_inputs::validate_transition(&record(&before).unwrap(),&RunRecord::from_bytes(&stepped).unwrap(),&config).unwrap();
     let mut widened=amendment.clone();
     widened.after["interface_state"]["provider"][RUN_AUTHORING_BINDING]["checkpoints"][1]["result_receiving"]["read"]["params"]=json!({"changed":true});
     assert!(validate_plan(&widened).is_err());

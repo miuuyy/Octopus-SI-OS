@@ -532,7 +532,11 @@ A model amends its own run while its turn waits on that amendment call. The
 selection is planned against the frontier the turn will rearm, keeping the
 retained templates' static context order, and rebased onto the current record:
 the pending effect and its checkpoints stay exactly as admitted, and only the
-template change and the new routes are applied.
+template change and the new routes are applied. A result wait the same step opens
+keeps the context it captured; context the amendment adds reaches the model
+through the amended context route. Every reader of that write, live or checked,
+validates the ordinary step the amendment carries as its own patch and the
+amendment as an exact transformation of it.
 
 A change may remove a standing external input: a requirement-free stable input
 with no owner and no result receiving, such as a trigger the run no longer
