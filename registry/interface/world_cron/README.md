@@ -3,7 +3,10 @@
 `world_cron` is the clock interface. When its condition holds it sends one
 `cron.current_time` artifact, and every run whose checkpoint pins the folder
 receives it. A requirement-free checkpoint is a standing route: one binding
-receives every firing, and the interface never edits or creates a run.
+receives every firing, and the interface never edits or creates a run. A
+firing that comes due while a run pinning the folder is working (its record's
+`status` is `running`) waits until no pinning run works, then is sent once;
+ticks missed meanwhile are not replayed.
 
 A time trigger is a copy of this folder: `interface.json` with
 `copy_of: "world_cron"`, `life.json` and an `activation.json` whose `cron_life`

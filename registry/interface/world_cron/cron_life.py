@@ -40,6 +40,7 @@ INACTIVITY_STATE_PATH = os.path.join(VAR_DIR, "cron-inactivity-state.json")
 ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*\Z")
 REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 TIME_LABEL = "cron.current_time"
+HOLD_POLL_SECONDS = 1.0
 
 _NEXT_REQUEST_ID = 1
 _TEMP_SEQUENCE = 1
@@ -1094,6 +1095,46 @@ def deliver_time_artifact(schedule, label, manifest_path, manifest_hash):
     return hand_artifact_idempotent(manifest_path, label, manifest_hash)
 
 
+def working_pinning_runs():
+    working = []
+    root = root_slots()["run_records_root"]
+    for entry in sorted(os.scandir(root), key=lambda entry: entry.name):
+        if not entry.name.endswith(".json"):
+            continue
+        try:
+            run = load_json_object(entry.path, "pinning run", MAX_RUN_RECORD_BYTES)
+            active = run.get("active_checkpoints")
+            checkpoints = run.get("checkpoints")
+            if run.get("id") != entry.name[:-5] or not isinstance(active, list) or not isinstance(checkpoints, list):
+                raise ValueError("invalid run identity")
+            pinned = any(
+                isinstance(checkpoint, dict)
+                and checkpoint.get("id") in active
+                and isinstance(checkpoint.get("interface_binding"), dict)
+                and checkpoint["interface_binding"].get("interface") == INTERFACE_ID
+                for checkpoint in checkpoints
+            )
+            if pinned and run.get("status") == "running":
+                working.append(run["id"])
+        except (OSError, ValueError) as error:
+            sys.stderr.write(f"pinning run contributes no hold: {entry.path}: {error}\n")
+            sys.stderr.flush()
+    return working
+
+
+def hold_while_pinning_runs_work():
+    reported = None
+    while True:
+        working = working_pinning_runs()
+        if not working:
+            return
+        if working != reported:
+            reported = working
+            sys.stderr.write(f"cron firing held while pinning runs work: {', '.join(working)}\n")
+            sys.stderr.flush()
+        time.sleep(HOLD_POLL_SECONDS)
+
+
 def emit_time_artifact(moment, reminder, schedule_kind, schedule):
     label, manifest_path, manifest_hash = prepare_time_artifact(
         schedule,
@@ -1158,6 +1199,7 @@ def run_one_shot(schedule, reminder):
             if remaining <= 0:
                 break
             time.sleep(remaining)
+        hold_while_pinning_runs_work()
         label, manifest_path, manifest_hash = prepare_time_artifact(
             schedule, now(schedule), reminder, "one_shot", schedule["due_unix_ns"],
             due_at=schedule["due_at"],
@@ -1195,6 +1237,7 @@ def emit_interval_due(schedule, reminder, state):
         manifest_hash = state["manifest_hash"]
         manifest_path = prepared_manifest_path(label, manifest_hash)
     else:
+        hold_while_pinning_runs_work()
         label, manifest_path, manifest_hash = prepare_time_artifact(
             schedule,
             now(schedule),
@@ -1231,6 +1274,7 @@ def emit_fire_on_start(moment, reminder, schedule_kind, schedule):
         manifest_hash = state["manifest_hash"]
         manifest_path = prepared_manifest_path(label, manifest_hash)
     else:
+        hold_while_pinning_runs_work()
         label, manifest_path, manifest_hash = prepare_time_artifact(
             schedule,
             moment,
@@ -1311,6 +1355,7 @@ def run_cron(schedule, reminder):
         minute = moment.replace(second=0, microsecond=0)
         minute_key = minute.isoformat(timespec="minutes")
         if cron_due(compiled, minute, minute_before(minute)) and minute_key != last_minute:
+            hold_while_pinning_runs_work()
             emit_time_artifact(minute, reminder, "cron", schedule)
             last_minute = minute_key
             commit_last_fired_minute(minute_key)
@@ -1552,6 +1597,8 @@ class InactivityTrigger:
             self.save()
         if time.time_ns() // 1_000_000 < due:
             return due
+        if working_pinning_runs():
+            return time.time_ns() // 1_000_000 + round(HOLD_POLL_SECONDS * 1000)
         window = {"after_seq": state["consumed_seq"] if state["consumed_seq"] >= 0 else None, "through_seq": latest["seq"]}
         label, _, manifest_hash = prepare_time_artifact(self.schedule, now(self.schedule), self.reminder, "inactivity", due * 1_000_000, activity=latest, window=window)
         state.update(status="prepared", manifest_hash=manifest_hash, artifact_label=label)

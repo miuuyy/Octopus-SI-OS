@@ -980,8 +980,10 @@ receives it. A requirement-free checkpoint is a standing route, so one binding
 receives every firing and nothing re-authors the run. A time trigger is a copy
 of the clock interface `world_cron`: its descriptor declares `copy_of`, and its
 activation holds only the schedule — an interval, a cron expression, a due time
-or a quiet period — after which it sends `cron.current_time`. The interface never
-edits a run and never creates one.
+or a quiet period — after which it sends `cron.current_time`. A firing that
+comes due while a run pinning the folder is working waits until no pinning run
+is working, then is sent once; the missed ticks are not replayed. The interface
+never edits a run and never creates one.
 
 The clock interface supports inactivity: selected runs' artifact movements
 restart a declared quiet period, after which one artifact wakes the runs that

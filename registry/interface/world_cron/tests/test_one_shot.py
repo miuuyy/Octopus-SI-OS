@@ -115,6 +115,23 @@ class OneShotContract(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recorded arrival evidence"):
             self.execute()
 
+    def test_firing_is_held_while_a_pinning_run_works(self):
+        def run(status):
+            pin = {"id": "standing", "interface_binding": {"interface": "world_cron"}}
+            (self.runs / "pinning.json").write_text(json.dumps({"id": "pinning", "status": status, "checkpoints": [pin], "active_checkpoints": ["standing"]}))
+        run("running")
+        (self.runs / "elsewhere.json").write_text(json.dumps({"id": "elsewhere", "status": "running", "checkpoints": [], "active_checkpoints": []}))
+        held = []
+        def sleep(duration):
+            self.sleep(duration)
+            if duration == self.module.HOLD_POLL_SECONDS:
+                held.append(len(self.emissions))
+                run("idle")
+        with patch.object(self.module.time, "time_ns", lambda: self.clock), patch.object(self.module.time, "sleep", sleep), patch.object(self.module, "hand_artifact_with_evidence", self.admit):
+            self.assertEqual(self.module.run_one_shot(self.schedule(), "Check result"), 7)
+        self.assertEqual(held, [0])
+        self.assertEqual(len(self.emissions), 1)
+
     def test_crash_after_admission_reuses_prepared_payload_and_exact_ledger_evidence(self):
         def lost_ack(manifest, evidence):
             self.admit(manifest, evidence)
