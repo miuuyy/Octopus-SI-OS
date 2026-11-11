@@ -277,6 +277,32 @@ test("gemini generateContent streams through the bridge", async () => {
   expect(result.text).toContain("response.completed");
 });
 
+test("a reasoning-only completion is retried once as the identical turn instead of passing as an empty success", async () => {
+  const bodies: string[] = [];
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      bodies.push(await request.text());
+      return bodies.length === 1
+        ? sse([[null, { candidates: [{ index: 0, content: { role: "model", parts: [{ text: "thinking only", thought: true }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2, totalTokenCount: 5 } }]])
+        : sse([[null, { candidates: [{ index: 0, content: { role: "model", parts: [{ text: "the retried answer" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 3, totalTokenCount: 6 } }]]);
+    },
+  });
+  servers.push(upstream);
+  const bridge = await spawnBridge(config(`http://127.0.0.1:${upstream.port}`, { adapter: "google", auth_header: "x-goog-api-key", auth_value_prefix: "" }));
+  const response = await fetch(`${bridge.origin}/v1/responses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "test-model", stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }] }),
+  });
+  const text = await response.text();
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).toBe(bodies[0]);
+  expect(text).toContain("the retried answer");
+  expect(text).toContain("response.completed");
+});
+
 function responsesStream(text: string): Response {
   const item = { id: "msg_1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
   return sse([

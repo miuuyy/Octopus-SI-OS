@@ -13,6 +13,7 @@ import {
 import { PROVIDER_REGISTRY } from "../node_modules/@bitkyc08/opencodex/src/providers/registry.ts";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../node_modules/@bitkyc08/opencodex/src/providers/derive.ts";
 import { buildToolBridgeMaps } from "../node_modules/@bitkyc08/opencodex/src/server/responses/collaboration.ts";
+import { guardEmptyCompletionEventStream } from "../node_modules/@bitkyc08/opencodex/src/server/responses/empty-completion-guard.ts";
 import {
   createTranslatorBudget,
   isTranslatorBudgetExceededError,
@@ -646,8 +647,36 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
     return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort, stallTimeoutSec, cleanup);
   }
   if (adapter.runTurn !== undefined) {
-    return deliver(parsed, responseModel, turnEvents(adapter, parsed, budget, abort), maps, budget, abort, stallTimeoutSec, cleanup);
+    return deliver(parsed, responseModel, guardEmptyCompletionEventStream({
+      firstEvents: turnEvents(adapter, parsed, budget, abort),
+      continuation: () => turnEvents(adapter, parsed, budget, abort),
+    }), maps, budget, abort, stallTimeoutSec, cleanup);
   }
+  const first = await upstreamAttempt(config, request, adapter, parsed, budget, abort);
+  if (first instanceof Response) {
+    cleanup();
+    budget.dispose();
+    return first;
+  }
+  clearTimeout(timer);
+  return deliver(parsed, responseModel, guardEmptyCompletionEventStream({
+    firstEvents: first,
+    continuation: async () => {
+      const retried = await upstreamAttempt(config, request, adapter, parsed, budget, abort);
+      if (retried instanceof Response) throw new Error(`retry of an empty completion failed upstream with ${retried.status}`);
+      return retried;
+    },
+  }), maps, budget, abort, stallTimeoutSec, cleanup);
+}
+
+async function upstreamAttempt(
+  config: BridgeConfig,
+  request: Request,
+  adapter: ProviderAdapter,
+  parsed: OcxParsedRequest,
+  budget: TranslatorBudget,
+  abort: AbortController,
+): Promise<Response | AsyncIterable<AdapterEvent>> {
   let upstream: Response;
   let built: Awaited<ReturnType<ProviderAdapter["buildRequest"]>> | undefined;
   try {
@@ -670,15 +699,12 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
         redirect: "error",
       });
   } catch (error) {
-    cleanup();
     built?.releaseBodyObservation?.();
-    budget.dispose();
     const message = error instanceof Error ? error.message : "provider request failed";
     return isTranslatorBudgetExceededError(error)
       ? formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the configured limit")
       : formatErrorResponse(built ? 502 : 400, built ? "upstream_error" : "invalid_request_error", message);
   }
-  clearTimeout(timer);
   built.releaseBodyObservation?.();
   if (!upstream.ok) {
     try {
@@ -689,22 +715,17 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
       });
     } catch (error) {
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider error body was unreadable");
-    } finally {
-      cleanup();
-      budget.dispose();
     }
   }
   const bounded = boundedStream(upstream, config.limits.max_response_bytes, abort);
   if (!parsed.stream && adapter.parseResponse) {
     try {
-      return deliver(parsed, responseModel, await adapter.parseResponse(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec, cleanup);
+      return listedEvents(await adapter.parseResponse(bounded, budget, built.tierLog));
     } catch (error) {
-      cleanup();
-      budget.dispose();
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider response translation failed");
     }
   }
-  return deliver(parsed, responseModel, adapter.parseStream(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec, cleanup);
+  return adapter.parseStream(bounded, budget, built.tierLog);
 }
 
 function turnEvents(

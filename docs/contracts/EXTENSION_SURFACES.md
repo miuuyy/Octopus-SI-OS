@@ -625,7 +625,11 @@ content gets the wire's placeholder, images are fitted to a provider's limits,
 and a Gemini tool call without a thought signature carries Google's validator
 sentinel, so a history a provider would refuse does not end the task. The
 OpenCodex router, failover selection, automatic continuation and shared account
-store are outside this boundary. The request deadline bounds the wait for the
+store are outside this boundary. A turn that ends with no output text and no
+tool call, or that the upstream fails replay-safely before any output (a dropped
+malformed function call), is run once more as the identical request through
+OpenCodex's empty-completion guard; a second empty turn is a stated failure, never
+a completed turn without an answer. The request deadline bounds the wait for the
 upstream's answer; the stream that follows is bounded by the stall clock.
 Generated OpenCodex descriptors send peer and lifecycle arrivals through their
 ordinary input contract and do not declare `retained_tool_output`: an unpaired

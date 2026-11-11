@@ -28,6 +28,7 @@
     "src/bridge.ts#bridgeToResponsesSSE,buildResponseJSON,formatErrorResponse",
     "src/providers/registry.ts#PROVIDER_REGISTRY",
     "src/providers/derive.ts#enrichProviderFromRegistry,providerConfigSeed",
+    "src/server/responses/empty-completion-guard.ts#guardEmptyCompletionEventStream",
     "src/server/responses/collaboration.ts#buildToolBridgeMaps",
     "src/lib/destination-policy.ts#assertProviderDestinationAllowed,providerDestinationResolvedError",
     "src/lib/local-upstream.ts#isLocalUpstream",
