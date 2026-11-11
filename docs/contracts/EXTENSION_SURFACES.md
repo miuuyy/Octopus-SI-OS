@@ -697,7 +697,10 @@ fields, and the alternatives are stated in the tool's description; some
 upstreams refuse root combinators, and the tool's owner still validates the
 call against its declared schema. When an upstream answers with an error, the
 error Codex receives carries the upstream's own reason when the body names one
-(`error.metadata.raw`), not only the gateway's summary. A Chat Completions upstream's complete `reasoning_details`, encrypted entries included, travel in the Responses reasoning carrier with their assistant output. The next request restores them from that history, including after a bridge restart. Replay belongs to the exact interface, model and wire format; no process-wide tool-call cache supplies missing history. History from another model or interface, or history that no longer matches its carrier, is sent as the caller holds it, without those details. The managed Codex CLI pin lists every app-server notification Octopus
+(`error.metadata.raw`), not only the gateway's summary. A Chat Completions upstream's complete `reasoning_details`, encrypted entries included, travel in the Responses reasoning carrier with their assistant output. The next request restores them from that history, including after a bridge restart. Replay belongs to the exact interface, model and wire format; no process-wide tool-call cache supplies missing history. History from another model or interface, or history that no longer matches its carrier, is sent as the caller holds it, without those details. Every provider life starts the managed Codex CLI from its
+`interface://world_provider_codex/packages/bin/codex` import, granted as that exact
+registry path; no provider resolves `codex` through `PATH`, so the shell a
+runtime was started from cannot hide it. The managed Codex CLI pin lists every app-server notification Octopus
 decodes and the ones it opts out of; installing a binary that sends any other
 notification fails closed and names it. The provider descriptor also pins
 which Codex features are on and which are off; a binary that reports a

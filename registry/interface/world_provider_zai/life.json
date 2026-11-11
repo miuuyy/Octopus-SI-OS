@@ -63,9 +63,7 @@
             "relative_path": "world_provider_codex/packages/octopus-provider-codex/opencodex-bridge/bin/octopus-opencodex-bridge"
           }
         ],
-        "executable_commands": [
-          "codex"
-        ],
+        "executable_commands": [],
         "read_env_paths": [],
         "write_env_paths": [],
         "executable_env_paths": [],

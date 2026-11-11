@@ -61,9 +61,7 @@
             "relative_path": "world_provider_codex/packages/bin/codex-code-mode-host"
           }
         ],
-        "executable_commands": [
-          "codex"
-        ],
+        "executable_commands": [],
         "read_env_paths": [
           "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
         ],
