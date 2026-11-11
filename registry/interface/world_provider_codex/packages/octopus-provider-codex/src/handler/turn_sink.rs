@@ -284,7 +284,10 @@ impl TurnSink<'_> {
                 })
             })
             .transpose()?;
-        if let Some(continuity) = continuity.filter(|_| !lifecycle_payload_label(&output.label)) {
+        if let Some(continuity) = continuity.filter(|_| {
+            !lifecycle_payload_label(&output.label)
+                && !matches!(output.route, ProviderEmissionRoute::Operation { .. })
+        }) {
             output
                 .value
                 .as_object_mut()
