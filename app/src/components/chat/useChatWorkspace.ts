@@ -2711,6 +2711,10 @@ export function useChatWorkspace(
     if (!target) return;
     const previous = pendingTurnControlsRef.current[target.runId];
     if (previous?.action === "resume" || previous?.requestPending) return;
+    if (!deliveryContextRef.current.runtimeReady) {
+      setError("The runtime is not running, so Stop was not sent. Start the runtime, then press Stop again.");
+      return;
+    }
     const controlId = previous?.controlId ?? `control_${randomId()}`;
     const afterMovementSeq = previous?.afterMovementSeq ?? knownMovementSeq(target.runId);
     setPendingTurnControls((current) => ({ ...current, [target.runId]: { action: "stop", controlId, afterMovementSeq, requestPending: true } }));
@@ -2743,7 +2747,8 @@ export function useChatWorkspace(
   }
 
   async function resumeActiveTurn() {
-    const blocked = deliveryContextRef.current.storageBlockReason || interfaceFailureReason(activeRunIdRef.current);
+    const blocked = deliveryContextRef.current.storageBlockReason || interfaceFailureReason(activeRunIdRef.current)
+      || (deliveryContextRef.current.runtimeReady ? "" : "The runtime is not running, so Resume was not sent. Start the runtime, then press Resume again.");
     if (blocked) { setError(blocked); return; }
     const run = activeRun;
     if (
