@@ -29,6 +29,7 @@ type ProviderSpec = {
   account?: { provider: string; client_module: string; disclosure: string[] };
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
+  model_guide?: string;
 };
 
 type Spec = { schema_version: 1; template_interface: string; providers: ProviderSpec[] };
@@ -253,6 +254,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   config.supported_reasoning_efforts = EFFORT_ORDER.filter((effort) => rows.some((row) => selectableEfforts(row).includes(effort)));
   privateConfig.model_catalog = rows.map((row) => pickerModel(row, description(row)));
   privateConfig.process_env_names = [];
+  if (spec.model_guide) privateConfig.run_affordance_profile.catalog.text += ` ${spec.model_guide}`;
   privateConfig.opencodex = {
     schema_version: 1,
     adapter,
