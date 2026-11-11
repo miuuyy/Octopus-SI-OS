@@ -1582,6 +1582,11 @@ function ChatTurn({
     && (activityPresentation === "ledger" || !endResourceIds.has(message.artifactId ?? ""))
     && !(message.eventKind === "message_delta" && successfulResponse && successfulResponse.eventKind !== "message_delta")
   ));
+  const revealFindMessage = findState.query ? activities.find((message) => {
+    const start = findState.offsets.get(message.id);
+    if (start === undefined) return false;
+    return findActiveIndex >= start && findActiveIndex < start + countSearchMatches(searchableMessageText(message.text), findState.query);
+  }) : undefined;
   const findOf = (message: ChatRenderMessage): MessageFind | undefined => findState.query ? {
     activeIndex: findActiveIndex,
     offset: findState.offsets.get(message.id) ?? 0,
@@ -1655,6 +1660,7 @@ function ChatTurn({
         finalStartedAtMs={finalStartedAtMs}
         presentation={activityPresentation}
         response={response}
+        revealFind={revealFindMessage ? { messageId: revealFindMessage.id, index: findActiveIndex } : undefined}
         startedAtMs={user?.createdAtMs ?? assistants[0]?.createdAtMs ?? Date.now()}
         renderActivity={assistant}
         toolPresentations={toolPresentations}

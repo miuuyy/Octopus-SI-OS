@@ -36,6 +36,7 @@ type Props = {
   toolPresentations: ChatToolPresentationIndex;
   turnInProgress?: boolean;
   blockingReason?: string;
+  revealFind?: { messageId: string; index: number };
 };
 
 type ActivityFamily =
@@ -91,7 +92,7 @@ type CompletedGroupSegment = {
   leading: string;
 };
 
-export function TurnActivity({ activityWindow = "all", activities, finalStartedAtMs, presentation, renderActivity, response, statusBoundaryVisible = true, startedAtMs, toolPresentations, turnInProgress, blockingReason = "" }: Props) {
+export function TurnActivity({ activityWindow = "all", activities, finalStartedAtMs, presentation, renderActivity, response, revealFind, statusBoundaryVisible = true, startedAtMs, toolPresentations, turnInProgress, blockingReason = "" }: Props) {
   const reducedMotion = useShouldReduceMotion();
   const syntheticSubmitting = activities.some((message) => message.eventData?.work_status === "submitting");
   const syntheticWorking = activities.some((message) => message.eventData?.work_status === "working");
@@ -155,6 +156,7 @@ export function TurnActivity({ activityWindow = "all", activities, finalStartedA
   const [historyDisclosureState, setHistoryDisclosureState] = useState<DisclosureState>("collapsed");
   const [, setClock] = useState(0);
   const historyOpeningFrameRef = useRef<number | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const stableStartedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -257,8 +259,26 @@ export function TurnActivity({ activityWindow = "all", activities, finalStartedA
   );
   const collapsibleHistory = statusBoundaryVisible && finalStarted && !failed && !stopped && hasWork;
   const contentsExpanded = !collapsibleHistory || historyFullyExpanded;
+  const revealInHistory = Boolean(revealFind && collapsibleHistory && activities.some((message) => message.id === revealFind.messageId));
+  const pendingFindRevealRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!revealInHistory || !revealFind) return;
+    pendingFindRevealRef.current = revealFind.index;
+    setHistoryDisclosureState("expanded");
+  }, [revealFind?.index, revealFind?.messageId, revealInHistory]);
+  useEffect(() => {
+    const index = pendingFindRevealRef.current;
+    if (index === null || !historyFullyExpanded) return;
+    const frame = window.requestAnimationFrame(() => {
+      pendingFindRevealRef.current = null;
+      sectionRef.current?.querySelector<HTMLElement>(`[data-octopus-thread-find-index="${index}"]`)
+        ?.scrollIntoView({ block: "center", behavior: reducedMotion ? "instant" : "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [historyFullyExpanded, reducedMotion, revealFind?.index]);
   return (
     <section
+      ref={sectionRef}
       className="octopus-turn-activity flex min-h-0 min-w-0 flex-col text-token-text-secondary"
       data-state={blocked ? "blocked" : working ? "working" : stopped ? "stopped" : failed ? "failed" : "complete"}
       onClickCapture={(event) => {
