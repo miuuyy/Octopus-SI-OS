@@ -249,6 +249,7 @@ class LegacyWatchLifeTest(unittest.TestCase):
         self.assertEqual(set(notice), {"trigger", "from_owner", "message"})
         self.assertEqual(set(notice["trigger"]), {"event", "watched_fields", "watched_words", "matched_words"})
         self.assertEqual(notice["trigger"]["matched_words"], ["Digital Legacy"])
+        self.assertTrue(notice["trigger"]["event"].startswith("A new letter arrived"))
         self.assertEqual(notice["trigger"]["watched_fields"], ["subject", "body"])
         self.assertIn("Legacy Contact", notice["trigger"]["watched_words"])
         with open(os.path.join(SENSOR_DIR, "watch.json"), encoding="utf-8") as handle:
@@ -266,6 +267,25 @@ class LegacyWatchLifeTest(unittest.TestCase):
         runtime.expect_no_frame()
         fired = runtime.fired()
         self.assertEqual((fired["status"], fired["admitted_seq"], fired["manifest_path"]), ("admitted", seq, frame["artifact_manifest_path"]))
+
+    def test_a_declared_event_replaces_the_trigger_text_and_a_blank_one_stops_the_life(self):
+        runtime = self.runtime
+        path = os.path.join(runtime.interface, "watch.json")
+        with open(path, encoding="utf-8") as handle:
+            watch = json.load(handle)
+        for event, fires in (("The trigger was armed again and fired on a later letter.", True), (" ", False)):
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({**watch, "event": event}, handle)
+            runtime.start(ready=fires)
+            if fires:
+                runtime.letter("deceased", "Matching letter.")
+                payload = runtime.admit(runtime.expect_frame("arrival"))[2]
+                self.assertEqual(json.loads(payload)["trigger"]["event"], event)
+                runtime.stop()
+            else:
+                self.assertEqual(runtime.process.wait(timeout=10), 1)
+                time.sleep(0.1)
+                self.assertIn("watch.json event", "".join(runtime.stderr))
 
     def test_a_restart_while_prepared_hands_the_identical_manifest_again(self):
         runtime = self.runtime

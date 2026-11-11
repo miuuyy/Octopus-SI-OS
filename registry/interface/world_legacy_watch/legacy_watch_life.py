@@ -217,9 +217,10 @@ def load_watch():
     watch = require_keys(
         json.loads(stable_read(WATCH_PATH, MAX_WATCH_BYTES, "watch.json")),
         {"terms", "match_fields", "instructions", "notice_label"},
-        set(),
+        {"event"},
         "watch.json",
     )
+    require_string(watch.setdefault("event", TRIGGER_EVENT), "watch.json event")
     terms = watch["terms"]
     if not isinstance(terms, list) or not terms:
         raise ValueError("watch.json terms must be a non-empty list")
@@ -457,7 +458,7 @@ def private_file(path, content, maximum, name):
 def prepare_notice(watch, letter, matched):
     payload = canonical_json({
         "trigger": {
-            "event": TRIGGER_EVENT,
+            "event": watch["event"],
             "watched_fields": watch["match_fields"],
             "watched_words": watch["terms"],
             "matched_words": matched,

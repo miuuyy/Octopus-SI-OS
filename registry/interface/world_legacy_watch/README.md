@@ -22,6 +22,8 @@ the package library as the optional **Legacy watch** application.
 - `world_legacy_watch/` (this folder) — the sensor (world, sensor, inbound).
   - `watch.json` holds the watched terms, the fields searched (`subject`,
     `body`), the owner's prompt (`instructions`) and the notice label.
+    An optional `event` replaces the notice's `trigger.event` sentence, for
+    a trigger armed again whose firing is no longer the first letter.
   - `legacy_watch_life.py` reads only the `InterfaceOutbound` ledger rows
     addressed to itself and checks every blob against its BLAKE3 hash.
 - `../system_worker_legacy_relay/` — the relay worker pin. Its ceiling is
