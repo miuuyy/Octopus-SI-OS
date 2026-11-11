@@ -1311,6 +1311,11 @@ pub(crate) fn validate_verified_input_change(before: &BoundRunAuthoringTopology,
 }
 
 pub(crate) fn validate_verified_input_transition(reader: &mut impl CheckedRunEvidenceReader, transition: &CheckedRunTransition) -> Result<(), String> {
+    if let Some(ordinary) = capability_amendment::checked_ordinary(transition)? {
+        let mut base = transition.clone();
+        base.after = ordinary;
+        return validate_verified_input_transition(reader, &base);
+    }
     result_inputs::validate_checked(reader, transition)?;
     let before = RunRecord::from_bytes(&transition.before).map_err(|e| e.to_string())?;
     let after = RunRecord::from_bytes(&transition.after).map_err(|e| e.to_string())?;

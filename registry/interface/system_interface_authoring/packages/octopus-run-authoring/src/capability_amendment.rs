@@ -679,15 +679,19 @@ pub(super) fn checked_topology_advance(
 }
 
 pub(super) fn validate_transition(transition: &CheckedRunTransition) -> Result<bool, String> {
-    let profile = RunAuthoringProfile {
-        file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
-        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
-    };
-    let Some(ordinary) = amended_ordinary(&transition.before, &transition.after, &transition.writer.owner, &profile)? else { return Ok(false); };
+    let Some(ordinary) = checked_ordinary(transition)? else { return Ok(false); };
     let mut base = transition.clone();
     base.after = ordinary;
     validate_checked_provider_transition(&base)?;
     Ok(true)
+}
+
+pub(super) fn checked_ordinary(transition: &CheckedRunTransition) -> Result<Option<Vec<u8>>, String> {
+    let profile = RunAuthoringProfile {
+        file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
+        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
+    };
+    amended_ordinary(&transition.before, &transition.after, &transition.writer.owner, &profile)
 }
 
 pub(super) fn saved_ordinary(before: &[u8], after: &[u8], config: &RunAuthoringConfig) -> Result<Option<Vec<u8>>, String> {
