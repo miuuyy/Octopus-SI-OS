@@ -40,7 +40,7 @@
       "shell": {"type": "string", "enum": ["sh", "bash", "zsh"]},
       "login": {"type": "boolean"},
       "workdir": {"type": "string"},
-      "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000},
+      "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 1800000, "description": "Execution deadline. Defaults to 600000 ms, at most 1800000 ms; the call returns when the command exits or the deadline stops it."},
       "max_output_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576}
     },
     "required": ["command"],

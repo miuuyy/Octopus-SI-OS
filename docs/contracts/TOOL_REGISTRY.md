@@ -150,9 +150,12 @@ Workspace command tools declare their output wait limits in
 `handler_config.max_yield_time_ms`. A longer requested wait is capped to the
 configured window instead of rejecting the command: 30,000 ms for
 `workspace.exec` and 300,000 ms for `workspace.write_stdin`. Both return early
-when the command exits. The process deadline is separate; subsequent reads
-continue the same process. Descriptor changes take effect without restarting
-the runtime or replaying commands.
+when the command exits. The command keeper holds its answer for the whole
+granted window, so the declared cap is the wait a caller actually gets. The
+process deadline is separate; subsequent reads continue the same process. The
+argument schema states each wait cap and deadline with its default, so the
+model sees the limits it works under. Descriptor changes take effect without
+restarting the runtime or replaying commands.
 
 `process.interrupted_effect_recovery` controls whether an invocation whose
 outcome is unknown may be executed again. `reinvoke_exact_artifact` requires the

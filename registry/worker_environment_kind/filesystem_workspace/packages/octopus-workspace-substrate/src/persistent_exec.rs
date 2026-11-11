@@ -617,6 +617,15 @@ impl KeeperRequest {
             Self::Info | Self::Release => None,
         }
     }
+
+    fn answer_window(&self, spec: &KeeperSpec) -> Duration {
+        let held = match self {
+            Self::Poll { wait_ms, .. } | Self::Interrupt { wait_ms, .. } => *wait_ms,
+            Self::Terminate { wait_ms, .. } => wait_ms.saturating_add(spec.cleanup_timeout_ms),
+            Self::Info | Self::Release => 0,
+        };
+        KEEPER_CONNECTION_TIMEOUT.saturating_add(Duration::from_millis(held))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -728,7 +737,7 @@ async fn ask_keeper(
         serde_json::from_str::<KeeperResponse>(&line)
             .map_err(|error| format!("keeper response is malformed: {error}"))
     };
-    tokio::time::timeout(KEEPER_CONNECTION_TIMEOUT, exchange)
+    tokio::time::timeout(request.answer_window(spec), exchange)
         .await
         .map_err(|_| {
             KeeperFailure::Failed(format!(

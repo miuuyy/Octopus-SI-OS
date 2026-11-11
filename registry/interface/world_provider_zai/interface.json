@@ -3235,7 +3235,8 @@
                   "timeout_ms": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 60000
+                    "maximum": 60000,
+                    "description": "Longest wait of this call, at most 60000 ms. Call wait_for_runs again to keep waiting."
                   }
                 }
               }
