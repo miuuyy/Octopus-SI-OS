@@ -184,6 +184,25 @@ impl ProviderOutputHandoff {
         }
     }
 
+    pub(crate) fn require_carried_admitted_context(&self, state: &HandoffState, rebase: &[ArtifactRef]) -> Result<(), String> {
+        let Some(first) = rebase.first() else { return Ok(()); };
+        if state.session_context.artifacts.iter().any(|entry| &entry.source_artifact == first) {
+            return Ok(());
+        }
+        let (manifest, _) = read_pinned_artifact_from_cache(&self.ctx.blobs_dir, self.ctx.required_host_io_limits()?, first)?;
+        if self.session_snapshot_labels.contains(&manifest.label) {
+            return Ok(());
+        }
+        let mut next = state.clone();
+        take_unpublished_context_inputs(&mut next, self.source_movement_seq)?;
+        if !next.session_context.artifacts.is_empty()
+            && !next.session_context.artifacts.iter().any(|entry| next.context_artifacts.contains(&entry.source_artifact.id))
+        {
+            return Err("the admitted context left the run while its call waited and no session snapshot replaced it".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn apply_result_rebase(
         &self,
         state: &mut HandoffState,
@@ -231,12 +250,6 @@ impl ProviderOutputHandoff {
                     &self.config.provider_interface,
                 )?;
                 continue;
-            }
-            if index == 0
-                && !next.session_context.artifacts.is_empty()
-                && !next.session_context.artifacts.iter().any(|entry| next.context_artifacts.contains(&entry.source_artifact.id))
-            {
-                return Err("the admitted context left the run while its call waited and no session snapshot replaced it".into());
             }
             collect_bound_context(
                 &self.ctx,
@@ -360,6 +373,7 @@ impl ProviderOutputHandoff {
             .ok_or("result lost its receiving row")?
             .clone();
         let rebase = result_rebase(&current, &active.config, &original, &checkpoint)?;
+        self.require_carried_admitted_context(state, &rebase)?;
         self.apply_result_rebase(state, &rebase)?;
         Ok(true)
     }

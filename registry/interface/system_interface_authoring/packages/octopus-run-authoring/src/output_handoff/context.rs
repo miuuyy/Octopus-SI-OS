@@ -226,6 +226,7 @@ impl ProviderOutputHandoff {
         if extended == recorded {
             return Ok(());
         }
+        self.require_carried_admitted_context(state, &extended)?;
         self.apply_result_rebase(state, &extended)
     }
 
