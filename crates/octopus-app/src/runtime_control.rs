@@ -64,7 +64,7 @@ pub fn socket_path(octopus_home: &Path) -> PathBuf {
 
 pub struct RuntimeControl {
     path: PathBuf,
-    listener: tokio::net::UnixListener,
+    listener: std::os::unix::net::UnixListener,
     stopping: Arc<std::sync::Mutex<Option<RuntimeControlRequest>>>,
     interface_failures: Arc<OnceLock<InterfaceFailures>>,
 }
@@ -77,12 +77,14 @@ impl RuntimeControl {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        let listener = tokio::net::UnixListener::bind(&path).map_err(|error| {
-            format!(
-                "runtime control socket '{}' cannot be bound: {error}",
-                path.display()
-            )
-        })?;
+        let listener = std::os::unix::net::UnixListener::bind(&path)
+            .and_then(|listener| listener.set_nonblocking(true).map(|()| listener))
+            .map_err(|error| {
+                format!(
+                    "runtime control socket '{}' cannot be bound: {error}",
+                    path.display()
+                )
+            })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -104,14 +106,50 @@ impl RuntimeControl {
         self.interface_failures.clone()
     }
 
-    pub async fn serve(
+    pub fn serve_on_own_thread(
+        self,
+        octopus_home: PathBuf,
+        cancel: CancellationToken,
+        restart: Arc<AtomicBool>,
+    ) -> Result<ControlThread, String> {
+        let shutdown = CancellationToken::new();
+        let stop = shutdown.clone();
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("runtime control executor cannot start: {error}"))?;
+        let handle = std::thread::Builder::new()
+            .name("octopus-runtime-control".into())
+            .spawn(move || {
+                executor.block_on(async move {
+                    tokio::select! {
+                        () = self.serve(octopus_home, cancel, restart) => {}
+                        () = stop.cancelled() => {}
+                    }
+                });
+            })
+            .map_err(|error| format!("runtime control thread cannot start: {error}"))?;
+        Ok(ControlThread { shutdown, handle: Some(handle) })
+    }
+
+    async fn serve(
         self,
         octopus_home: PathBuf,
         cancel: CancellationToken,
         restart: Arc<AtomicBool>,
     ) {
+        let listener = match tokio::net::UnixListener::from_std(self.listener) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!(
+                    "octopus: runtime control socket '{}' cannot be served: {error}",
+                    self.path.display()
+                );
+                return;
+            }
+        };
         loop {
-            let (stream, _) = match self.listener.accept().await {
+            let (stream, _) = match listener.accept().await {
                 Ok(accepted) => accepted,
                 Err(error) => {
                     eprintln!(
@@ -138,6 +176,22 @@ impl RuntimeControl {
                     eprintln!("octopus: runtime control request failed: {error}");
                 }
             });
+        }
+    }
+}
+
+pub struct ControlThread {
+    shutdown: CancellationToken,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for ControlThread {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        if let Some(handle) = self.handle.take() {
+            if handle.join().is_err() {
+                eprintln!("octopus: runtime control thread panicked");
+            }
         }
     }
 }
@@ -359,8 +413,8 @@ pub fn await_successor(
 mod tests {
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn control_socket_path_is_the_right_to_stop_and_restart_the_instance() {
+    #[test]
+    fn control_socket_path_is_the_right_to_stop_and_restart_the_instance() {
         let temporary = tempfile::tempdir().unwrap();
         let home = std::fs::canonicalize(temporary.path()).unwrap();
         let instance = crate::runtime_instance::RuntimeInstance::acquire(&home).unwrap();
@@ -370,12 +424,9 @@ mod tests {
         control.interface_failures().set(observed).unwrap();
         let cancel = CancellationToken::new();
         let restart = Arc::new(AtomicBool::new(false));
-        let server = tokio::spawn(control.serve(home.clone(), cancel.clone(), restart.clone()));
-        let ask = |request| {
-            let home = home.clone();
-            tokio::task::spawn_blocking(move || super::request(&home, request))
-        };
-        let Answer::Status(status) = ask(RuntimeControlRequest::Status).await.unwrap().unwrap() else {
+        let server = control.serve_on_own_thread(home.clone(), cancel.clone(), restart.clone()).unwrap();
+        let ask = |request| super::request(&home, request);
+        let Answer::Status(status) = ask(RuntimeControlRequest::Status).unwrap() else {
             panic!("a live instance answers its control socket");
         };
         assert_eq!((status.pid, status.phase.as_str(), status.stopping), (std::process::id(), "starting", None));
@@ -383,7 +434,7 @@ mod tests {
         failures.send_modify(|values| {
             values.insert(octopus_descriptors::InterfaceId::new("provider"), "No space left on device".to_string());
         });
-        let Answer::Status(failed) = ask(RuntimeControlRequest::Status).await.unwrap().unwrap() else {
+        let Answer::Status(failed) = ask(RuntimeControlRequest::Status).unwrap() else {
             panic!("life failures remain observable without writing the ledger");
         };
         assert_eq!(failed.interface_failures, vec![RuntimeInterfaceFailure {
@@ -391,20 +442,19 @@ mod tests {
         }]);
         failures.send_modify(|values| values.clear());
         assert!(!cancel.is_cancelled());
-        let Answer::Status(accepted) = ask(RuntimeControlRequest::Restart).await.unwrap().unwrap() else {
+        let Answer::Status(accepted) = ask(RuntimeControlRequest::Restart).unwrap() else {
             panic!("restart is answered");
         };
         assert_eq!(accepted.stopping, Some(RuntimeControlRequest::Restart));
         assert!(accepted.interface_failures.is_empty());
         assert!(cancel.is_cancelled() && restart.load(Ordering::SeqCst));
-        let Answer::Status(repeated) = ask(RuntimeControlRequest::Stop).await.unwrap().unwrap() else {
+        let Answer::Status(repeated) = ask(RuntimeControlRequest::Stop).unwrap() else {
             panic!("a stopping instance still answers");
         };
         assert_eq!(repeated.stopping, Some(RuntimeControlRequest::Restart));
-        server.abort();
+        drop(server);
         drop(instance);
-        assert!(matches!(ask(RuntimeControlRequest::Status).await.unwrap().unwrap(), Answer::Unreachable(_)));
-        let stopped_home = home.clone();
-        tokio::task::spawn_blocking(move || await_departure(&stopped_home, Instant::now())).await.unwrap().unwrap();
+        assert!(matches!(ask(RuntimeControlRequest::Status).unwrap(), Answer::Unreachable(_)));
+        await_departure(&home, Instant::now()).unwrap();
     }
 }

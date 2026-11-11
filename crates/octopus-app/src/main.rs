@@ -21,14 +21,6 @@ mod runtime_control;
 mod runtime_instance;
 pub use daemon::run_daemon;
 
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 fn installed_source_registry_root(
     installation_root: &Path,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -417,11 +409,8 @@ async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn s
     let runtime_control = runtime_control::RuntimeControl::bind(&octopus_home)?;
     let interface_failure_status = runtime_control.interface_failures();
     boot.stage("control", runtime_control.path().display());
-    let _runtime_control_task = AbortOnDrop(tokio::spawn(runtime_control.serve(
-        octopus_home.clone(),
-        cancel.clone(),
-        restart,
-    )));
+    let _runtime_control_thread =
+        runtime_control.serve_on_own_thread(octopus_home.clone(), cancel.clone(), restart)?;
     if cancel.is_cancelled() {
         return Ok(());
     }
