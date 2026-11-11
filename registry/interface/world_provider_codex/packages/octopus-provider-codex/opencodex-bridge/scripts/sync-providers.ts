@@ -26,7 +26,7 @@ type ProviderSpec = {
   base_url?: { env: string; label: string };
   model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
   cli?: { commands: string[]; env: string[]; home_read: string[]; home_write: string[] };
-  account?: { provider: string; client_module: string; help: string };
+  account?: { provider: string; client_module: string; disclosure: string[] };
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
 };
@@ -342,7 +342,7 @@ function application(spec: ProviderSpec, logos: { logo?: string; logo_dark?: str
     ...logos,
     interfaces: [spec.interface],
     ...(fields.length || spec.account ? { setup: { fields } } : {}),
-    ...(spec.account ? { connection: { help: spec.account.help } } : {}),
+    ...(spec.account ? { connection: { disclosure: spec.account.disclosure } } : {}),
   };
 }
 

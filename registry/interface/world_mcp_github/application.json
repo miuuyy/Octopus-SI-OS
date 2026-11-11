@@ -30,7 +30,7 @@
     "disclosure": [
       "Connect uses the GitHub account linked to your ChatGPT account, or opens ChatGPT to link one. Octopus reads your ChatGPT sign-in and keeps no GitHub token.",
       "Tasks you connect can read the repositories, code, issues, pull requests and workflow runs the GitHub app can reach, and pass what they read to their model.",
-      "Those tasks can also create, update and delete files, and create branches, commits, issues and pull requests; they can comment, review, label, merge and rerun workflows when their work calls for it.",
+      "Those tasks can also change files, branches, commits, issues and pull requests, and comment, review, label, merge and rerun workflows when their work needs it.",
       "GitHub stays linked in ChatGPT: Disconnect in Octopus cannot unlink it. Choose the repositories the app reaches, or unlink it, with Manage in ChatGPT."
     ]
   }

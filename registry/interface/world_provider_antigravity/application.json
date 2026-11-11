@@ -15,6 +15,8 @@
     "fields": []
   },
   "connection": {
-    "help": "Connect your Google account to use your Antigravity subscription."
+    "disclosure": [
+      "Connect signs in with your Google account; model calls of this provider use its Antigravity subscription."
+    ]
   }
 }
