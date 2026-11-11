@@ -624,7 +624,7 @@ ordinary input contract and do not declare `retained_tool_output`: an unpaired
 native Responses tool output has no equivalent on every translated wire.
 
 An account provider declares `account` in `providers.json` in place of a key:
-its OAuth provider, its connection module and the Connect help line. Its models
+its OAuth provider, its connection module and the Connect disclosure. Its models
 come from the registry entry or an explicit `models` list, like any other
 provider. The Application connection module performs sign-in, status and
 sign-out through the bridge's account command. Antigravity keeps its Google

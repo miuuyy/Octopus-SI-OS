@@ -12,6 +12,7 @@
       "world_provider_custom",
       "world_provider_deepseek",
       "world_provider_gemini",
+      "world_provider_antigravity",
       "world_provider_groq",
       "world_provider_huggingface",
       "world_provider_kilocode",
