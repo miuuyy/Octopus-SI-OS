@@ -51,6 +51,30 @@ fn validation_report_retains_failures_without_repeating_registry_snapshots() {
 }
 
 #[test]
+fn defaulted_door_slots_follow_the_selected_tools_while_explicit_slots_stay_exact() {
+    let temp = tempfile::tempdir().unwrap();
+    let request = support::fixture(temp.path());
+    let (mut affordances, metadata) = exact_affordances(&request);
+    let slot = || BTreeMap::from([("workspace_root".to_string(), temp.path().to_path_buf())]);
+    let selected = BTreeMap::from([("system_room".to_string(), slot())]);
+    let mut slots = selected.clone();
+    slots.insert("system_unselected_door".into(), slot());
+    affordances.config.defaults = Some(serde_json::from_value(json!({"worker_template_interface_id":request.worker_template_interface_id,
+        "provider_interface_id":request.provider_interface_id, "model":request.model, "reasoning_effort":request.reasoning_effort,
+        "authoring":request.authoring, "worker_environment_kinds":request.selected_worker_environment_kinds,
+        "tools":request.selected_tools, "door_host_slots":slots})).unwrap());
+    let omitted = affordances.composition_request(&metadata, &request.admitted_parent_record, "defaulted",
+        serde_json::from_value(json!({"text":"Use authored tools"})).unwrap()).unwrap();
+    assert_eq!(omitted.door_host_slots, selected);
+    let narrowed = affordances.composition_request(&metadata, &request.admitted_parent_record, "narrowed",
+        serde_json::from_value(json!({"text":"No tools", "tools":[]})).unwrap()).unwrap();
+    assert!(narrowed.door_host_slots.is_empty());
+    let explicit = affordances.composition_request(&metadata, &request.admitted_parent_record, "explicit",
+        serde_json::from_value(json!({"text":"Exact slots", "tools":[], "door_host_slots":slots})).unwrap()).unwrap();
+    assert_eq!(explicit.door_host_slots, slots);
+}
+
+#[test]
 fn native_creation_routes_use_authored_defaults_and_explicit_empty_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let request = support::fixture(temp.path());

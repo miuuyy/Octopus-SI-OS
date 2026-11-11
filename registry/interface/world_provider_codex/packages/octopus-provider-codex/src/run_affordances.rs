@@ -1194,6 +1194,15 @@ impl RunAffordances {
         let contexts = merge_refs(&defaults.context_artifacts, &args.context_artifacts)?;
         require_readable_refs(metadata, &contexts)?;
         let publications = args.publications.unwrap_or_else(|| defaults.publications.clone());
+        let selected_tools = args.tools.unwrap_or_else(|| defaults.tools.clone());
+        let door_host_slots = args.door_host_slots.unwrap_or_else(|| {
+            defaults
+                .door_host_slots
+                .iter()
+                .filter(|(door, _)| selected_tools.iter().any(|tool| &tool.interface == *door))
+                .map(|(door, slots)| (door.clone(), slots.clone()))
+                .collect()
+        });
         for publication in &publications {
             require_readable_refs(metadata, std::slice::from_ref(&publication.source))?;
         }
@@ -1249,10 +1258,8 @@ impl RunAffordances {
             selected_worker_environment_kinds: args
                 .worker_environment_kinds
                 .unwrap_or_else(|| defaults.worker_environment_kinds.clone()),
-            selected_tools: args.tools.unwrap_or_else(|| defaults.tools.clone()),
-            door_host_slots: args
-                .door_host_slots
-                .unwrap_or_else(|| defaults.door_host_slots.clone()),
+            selected_tools,
+            door_host_slots,
             external_inputs: args.external_inputs.unwrap_or_else(|| defaults.external_inputs.clone()),
             external_relays: args.external_relays.unwrap_or_else(|| defaults.external_relays.clone()),
             model_outputs: args.model_outputs.unwrap_or_else(|| defaults.model_outputs.clone()),
