@@ -21,6 +21,15 @@ type Props = {
   mode: "instances" | "routeSets";
   selected: SelectionRef | null;
   onSelect: (selection: SelectionRef) => void;
+  text?: WorldProjectionText;
+};
+
+export type WorldProjectionText = {
+  zone?: (environment: EnvironmentNode) => string;
+  run?: (run: EnvironmentNode["runs"][number]) => string;
+  world?: (node: { id: string; members: string[] }) => string;
+  worldCaption?: (counts: { nodes: number; bound: number }) => string;
+  systemCaption?: string;
 };
 
 type WorldNode = {
@@ -60,7 +69,7 @@ const WORLD_GRID_GAP_Y = 104;
 const WORLD_SURFACE_PAD = 86;
 const WORLD_SURFACE_MIN_HALF = 280;
 
-export const WorldProjection = memo(function WorldProjection({ environments, registeredWorldInterfaces, interfaceIndex, transferFeed, mode, selected, onSelect }: Props) {
+export const WorldProjection = memo(function WorldProjection({ environments, registeredWorldInterfaces, interfaceIndex, transferFeed, mode, selected, onSelect, text }: Props) {
   const [yawDeg, setYawDeg] = useState(DEFAULT_YAW);
   const [pitchDeg, setPitchDeg] = useState(DEFAULT_PITCH);
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
@@ -183,8 +192,18 @@ export const WorldProjection = memo(function WorldProjection({ environments, reg
       >
         <g transform={`scale(${zoom})`}>
           {scene.zones.map((zone) => (
-            <ZoneShape zone={zone} project={project} selected={selected} onSelect={onSelect} key={zone.env.id} />
+            <ZoneShape zone={zone} project={project} selected={selected} onSelect={onSelect} label={text?.zone?.(zone.env)} key={zone.env.id} />
           ))}
+          {text?.systemCaption && scene.zones.length ? (
+            <SurfaceLabel
+              project={project}
+              x={-scene.systemHalfWidth + 30}
+              y={scene.systemHalfDepth - 26}
+              z={0}
+              text={text.systemCaption}
+              className="wp-surface-caption is-system"
+            />
+          ) : null}
 
           {worldDots.length > 0 ? (
             <>
@@ -194,7 +213,9 @@ export const WorldProjection = memo(function WorldProjection({ environments, reg
                 x={-worldSurfaceHalfExtent + 30}
                 y={worldSurfaceHalfExtent - 26}
                 z={worldElevation}
-                text={mode === "routeSets"
+                text={text?.worldCaption
+                  ? text.worldCaption({ nodes: worldDots.length, bound: mode === "routeSets" ? boundNodeCount : scene.boundWorldInterfaces.size })
+                  : mode === "routeSets"
                   ? `World Surface · ${worldDots.length} route sets · ${boundNodeCount} bound`
                   : `World Surface · ${worldDots.length} registered · ${scene.boundWorldInterfaces.size} bound`}
                 className="wp-surface-caption is-world"
@@ -204,7 +225,7 @@ export const WorldProjection = memo(function WorldProjection({ environments, reg
 
           {scene.zones.flatMap((zone) => zoneRoutes(zone, project, worldDotByName))}
           <WorldArtifactTransfers feed={transferFeed} interfaces={interfaceIndex} runs={transferRuns} worldDots={worldDotByName} />
-          {scene.zones.flatMap((zone) => zoneRuns(zone, project, selected, onSelect))}
+          {scene.zones.flatMap((zone) => zoneRuns(zone, project, selected, onSelect, text?.run))}
 
           {worldDots.map((dot) => (
             <g
@@ -217,7 +238,7 @@ export const WorldProjection = memo(function WorldProjection({ environments, reg
             >
               <circle cx={dot.point.x} cy={dot.point.y} r={7} />
               <circle className="wp-world-dot-core" cx={dot.point.x} cy={dot.point.y} r={3.2} />
-              <DashboardSvgLabel text={dot.label}
+              <DashboardSvgLabel text={text?.world?.(dot) ?? dot.label}
                 tooltip={mode === "routeSets" ? `${dot.id}\n${dot.members.join("\n")}` : dot.id}
                 x={dot.point.x} y={dot.point.y - 16} centered />
             </g>
@@ -515,8 +536,9 @@ function SurfaceLabel({ project, x, y, z, text, className }: {
   return <text className={className} x={point.x} y={point.y}>{text}</text>;
 }
 
-function ZoneShape({ zone, project, selected, onSelect }: {
+function ZoneShape({ zone, project, selected, onSelect, label }: {
   zone: ZoneAbs;
+  label?: string;
   project: Projector;
   selected: SelectionRef | null;
   onSelect: (selection: SelectionRef) => void;
@@ -542,7 +564,7 @@ function ZoneShape({ zone, project, selected, onSelect }: {
       }}
     >
       <polygon points={points.map((point) => `${point.x},${point.y}`).join(" ")} />
-      <DashboardSvgLabel text={zone.env.name} x={labelPoint.x} y={labelPoint.y} width={Math.min(180, zone.width - 32)} />
+      <DashboardSvgLabel text={label ?? zone.env.name} x={labelPoint.x} y={labelPoint.y} width={Math.min(180, zone.width - 32)} />
     </g>
   );
 }
@@ -587,6 +609,7 @@ function zoneRuns(
   project: Projector,
   selected: SelectionRef | null,
   onSelect: (selection: SelectionRef) => void,
+  runText?: (run: EnvironmentNode["runs"][number]) => string,
 ): ReactElement[] {
   return zone.runs.map((run) => {
     const point = project(run.x, run.y, 0);
@@ -602,7 +625,7 @@ function zoneRuns(
       >
         <circle className="wp-run-dot" cx={point.x} cy={point.y} r={8} />
         <circle className="wp-run-core" cx={point.x} cy={point.y} r={3.4} />
-        <DashboardSvgLabel text={run.run.worker} tooltip={`${run.run.worker}\n${run.run.id}`}
+        <DashboardSvgLabel text={runText?.(run.run) ?? run.run.worker} tooltip={`${run.run.worker}\n${run.run.id}`}
           x={point.x} y={point.y + 20} centered width={RUN_CELL - 8} limit={18} />
       </g>
     );
