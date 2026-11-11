@@ -84,7 +84,7 @@ test("actual Stop and Resume retain unknown identity, release known rejection, f
   const create = Function("submitOperatorTurnControl", "options", `${actions}
     let activeTurnControlTarget = {runId:'r',interfaceId:'i'}, activeRun = {...activeTurnControlTarget,writable:true,chatInterfaceId:'i'};
     const resumeAvailable=true,queuedTurnsRef={current:options?.queued??[]},chatDraftKey=x=>x;
-    const deliveryContextRef={current:{storageBlockReason:options?.storageBlockReason??''}},interfaceFailureReason=()=>options?.providerFailureReason??'';
+    const deliveryContextRef={current:{storageBlockReason:options?.storageBlockReason??'',runtimeReady:options?.runtimeReady??true}},interfaceFailureReason=()=>options?.providerFailureReason??'';
     const activeRunIdRef={get current(){return activeRun.runId}};
     const replacePausedQueueRunKeys=options?.pause??(async()=>{});
     const randomId=()=> 'fixed',formatRuntimeError=e=>e.message,projectedRunsRef={current:[]},messageCacheRef={current:new Map()};
@@ -116,6 +116,12 @@ test("actual Stop and Resume retain unknown identity, release known rejection, f
     let resolve; const switched = create(() => new Promise((done) => { resolve = done; }));
     const pending = switched[action](); switched.switchHome(); resolve({deliveryError:{stage:"not-sent",message:"old"}}); await pending;
     assert.deepEqual(switched.state(), {pendingTurnControl:null,error:"",reads:0});
+  }
+  for (const action of ["stop", "resume"]) {
+    const stopped = create(async () => assert.fail("a stopped runtime must not be asked"), { runtimeReady: false });
+    await stopped[action]();
+    assert.equal(stopped.state().pendingTurnControl, null);
+    assert.match(stopped.state().error, /runtime is not running, so (Stop|Resume) was not sent/);
   }
   let calls=0;
   const multiple=create(async()=>{calls++;return{deliveryError:{stage:"outcome-unknown",message:"lost"}}});
