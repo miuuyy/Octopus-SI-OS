@@ -26,6 +26,7 @@
       "models": {
         "reduce": "intersection",
         "default": [
+          "claude-fable-5-2",
           "claude-fable-5-1",
           "claude-fable-5",
           "claude-sonnet-5-5",
@@ -3664,14 +3665,6 @@
         "name": "formed_interfaces",
         "description": "Tools admitted through exact Octopus interface grants. Use their advertised methods and schemas. A native Code Mode result is a string: first line compact JSON, then optional image data URLs. Split at the first newline before JSON.parse; forward subsequent image URLs with image(). Tool result JSON carries tool, correlation_id, ok, body and error; interface operations use their declared schema. Inspect the complete returned value in JavaScript and emit selected evidence with text(). Transport failures are errors, never partial success. A model_projection head_tail preview lacks omitted fields. Artifact references do not grant reads, and payload paths are not an access shortcut. Code Mode store/load retain serializable values within the live session; no app/browser SDK is installed here."
       },
-      "retained_tool_output": {
-        "name": "octopus_instruction",
-        "arrival_labels": [
-          "provider.peer.message",
-          "lifecycle.handler.prompt",
-          "lifecycle.handler.task"
-        ]
-      },
       "operator_continuity": {
         "replay_timeout_ms": 30000,
         "approval": {
@@ -3704,6 +3697,45 @@
         }
       },
       "model_catalog": [
+        {
+          "model": "claude-fable-5-2",
+          "display_name": "Claude Fable 5.2",
+          "description": "Claude Fable 5.2 through Anthropic API.",
+          "context_window": 1000000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true
+        },
         {
           "model": "claude-fable-5-1",
           "display_name": "Claude Fable 5.1",
@@ -4324,6 +4356,57 @@
         "model_catalog": {
           "models": [
             {
+              "slug": "claude-fable-5-2",
+              "display_name": "Claude Fable 5.2",
+              "description": "Claude Fable 5.2 through Anthropic API.",
+              "default_reasoning_level": "medium",
+              "supported_reasoning_levels": [
+                {
+                  "effort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "effort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "effort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "effort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "effort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                }
+              ],
+              "shell_type": "shell_command",
+              "visibility": "list",
+              "supported_in_api": true,
+              "priority": 0,
+              "base_instructions": "",
+              "supports_reasoning_summaries": true,
+              "default_reasoning_summary": "auto",
+              "support_verbosity": false,
+              "truncation_policy": {
+                "mode": "tokens",
+                "limit": 10000
+              },
+              "supports_parallel_tool_calls": false,
+              "context_window": 700000,
+              "max_context_window": 1000000,
+              "effective_context_window_percent": 95,
+              "experimental_supported_tools": [],
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "supports_search_tool": false,
+              "use_responses_lite": false
+            },
+            {
               "slug": "claude-fable-5-1",
               "display_name": "Claude Fable 5.1",
               "description": "Claude Fable 5.1 through Anthropic API.",
@@ -4353,7 +4436,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 0,
+              "priority": 1,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4404,7 +4487,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 1,
+              "priority": 2,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4455,7 +4538,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 2,
+              "priority": 3,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4506,7 +4589,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 3,
+              "priority": 4,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4557,7 +4640,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 4,
+              "priority": 5,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4608,7 +4691,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 5,
+              "priority": 6,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4659,7 +4742,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 6,
+              "priority": 7,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4710,7 +4793,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 7,
+              "priority": 8,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4761,7 +4844,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 8,
+              "priority": 9,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4812,7 +4895,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 9,
+              "priority": 10,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4863,7 +4946,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 10,
+              "priority": 11,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4914,7 +4997,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 11,
+              "priority": 12,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -4956,8 +5039,7 @@
             "incremental_tools": true,
             "instant_interrupt": true,
             "plugin_discovery_prefetch": false,
-            "reasoning_effort_override": true,
-            "retain_client_tool_outputs": true
+            "reasoning_effort_override": true
           }
         },
         "extra_argv": [],

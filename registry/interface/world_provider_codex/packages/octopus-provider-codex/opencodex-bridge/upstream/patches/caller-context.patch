@@ -1,0 +1,187 @@
+diff --git a/src/adapters/anthropic.ts b/src/adapters/anthropic.ts
+index 87a4071..869ac7c 100644
+--- a/src/adapters/anthropic.ts
++++ b/src/adapters/anthropic.ts
+@@ -784,7 +784,9 @@ function messagesToAnthropicFormat(
+       callIds.reserve((message as OcxToolResultMessage).toolCallId);
+     }
+   }
+-  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(
++  const preserve = parsed.context.preserveCallerContext === true;
++  const identity = (text: string) => preserve ? text : identifyRoutedModel(text, parsed.modelId);
++  const toolCatalogNudge = preserve ? undefined : buildNonOpenAIToolCatalogNudgeForTools(
+     anthropicDeclaredTools(parsed),
+     undefined,
+     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
+@@ -792,12 +794,12 @@ function messagesToAnthropicFormat(
+   const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
+   // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
+   const prefix = parsed._anthropicSystemCachePrefix
+-    ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
+-  const head = prefix && systemParts[0] ? identifyRoutedModel(systemParts[0], parsed.modelId) : systemParts[0];
++    ? identity(parsed._anthropicSystemCachePrefix) : undefined;
++  const head = prefix && systemParts[0] ? identity(systemParts[0]) : systemParts[0];
+   const texts = prefix && head?.startsWith(`${prefix}\n\n`)
+     ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
+     : [systemParts.join("\n\n")];
+-  const system = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
++  const system = texts.map(identity).filter(Boolean);
+   const messages: unknown[] = [];
+ 
+   for (let i = 0; i < parsed.context.messages.length; i++) {
+diff --git a/src/adapters/google.ts b/src/adapters/google.ts
+index 97d6167..9066c96 100644
+--- a/src/adapters/google.ts
++++ b/src/adapters/google.ts
+@@ -385,8 +385,9 @@ function messagesToGeminiFormat(
+ ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
+   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
+   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
+-  const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
+-  const identifiedSystemText = identifyRoutedModel([
++  const preserve = parsed.context.preserveCallerContext === true;
++  const toolCatalogNudge = preserve ? undefined : buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
++  const identifiedSystemText = preserve ? (parsed.context.systemPrompt ?? []).join("\n\n") : identifyRoutedModel([
+     ...(parsed.context.systemPrompt ?? []),
+     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
+     GOOGLE_BREVITY_INSTRUCTION,
+@@ -397,7 +398,7 @@ function messagesToGeminiFormat(
+   if (stripRejectedClaudeSdkParagraph) {
+     systemText = stripAntigravityRejectedClaudeSdkParagraph(systemText);
+   }
+-  const systemInstruction = { parts: [{ text: systemText }] };
++  const systemInstruction = preserve && !systemText ? undefined : { parts: [{ text: systemText }] };
+ 
+   const contents: unknown[] = [];
+   const replayedCallIds: string[] = [];
+@@ -481,7 +482,7 @@ function messagesToGeminiFormat(
+         const toolCalls: Array<{ wireCallId: string; wireName: string }> = [];
+         // Progress text before a Gemini tool call replays as its lead sentence, so planning the
+         // model leaked into visible text is not copied forward (google-progress-history.ts).
+-        const trimProgress = trimsGeminiProgressHistory(identityModelId)
++        const trimProgress = !preserve && trimsGeminiProgressHistory(identityModelId)
+           && aMsg.phase !== "final_answer"
+           && aMsg.content.some(part => part.type === "toolCall");
+         let progressLeadKept = false;
+diff --git a/src/adapters/openai-chat/messages.ts b/src/adapters/openai-chat/messages.ts
+index f4c1f3e..ac65ab6 100644
+--- a/src/adapters/openai-chat/messages.ts
++++ b/src/adapters/openai-chat/messages.ts
+@@ -210,7 +210,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
+   // id, because hoisting a newly appended reminder rewrites the reusable prompt prefix. That is
+   // a property of prompt-prefix caching rather than of that destination, and it is now what
+   // every destination gets.
+-  const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
++  const toolCatalogNudge = !context.preserveCallerContext && shouldInjectNonOpenAIToolCatalogNudge(provider)
+     ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
+     : undefined;
+   const systemParts = [
+@@ -221,7 +221,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
+     const wireModelId = provider.modelSuffixBracketStrip
+       ? stripBracketedModelSuffix(parsed.modelId)
+       : parsed.modelId;
+-    const sys = identifyRoutedModel(systemParts.join("\n\n"), wireModelId);
++    const sys = context.preserveCallerContext ? systemParts.join("\n\n") : identifyRoutedModel(systemParts.join("\n\n"), wireModelId);
+     out.push({ role: "system", content: sys });
+   }
+ 
+diff --git a/src/adapters/openai-responses/passthrough.ts b/src/adapters/openai-responses/passthrough.ts
+index 0484f2f..56579ad 100644
+--- a/src/adapters/openai-responses/passthrough.ts
++++ b/src/adapters/openai-responses/passthrough.ts
+@@ -207,7 +207,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig):
+       // destination our sentence is dropped, because Codex's own identity wording (sent in the
+       // client's model_switch block) is the correct one there. Text the proxy did not generate —
+       // user turns, tool output, fenced code, provider-native blocks — is untouched.
+-      outBody = repairIdentityInResponsesBody(
++      if (!parsed.context.preserveCallerContext) outBody = repairIdentityInResponsesBody(
+         outBody,
+         forward ? stripRoutedIdentity : (text: string) => nameRoutedIdentity(text, parsed.modelId),
+       );
+diff --git a/src/adapters/responses-code-mode.ts b/src/adapters/responses-code-mode.ts
+index 8e53481..581d24a 100644
+--- a/src/adapters/responses-code-mode.ts
++++ b/src/adapters/responses-code-mode.ts
+@@ -39,6 +39,7 @@ function appendMissing(instructions: string, sentences: readonly string[]): stri
+ 
+ /** Native routed Responses needs the same first-call/output contract as translated adapters. */
+ export function normalizeResponsesCodeMode(body: unknown, parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown {
++  if (parsed.context.preserveCallerContext) return body;
+   if (!record(body) || parsed._compactionRequest || isOpenAiOperatedResponsesDestination(provider)) return body;
+   const visible = parsed.context.tools?.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
+   if (!visible?.some(isCodexCodeModeExecTool) || visible.some(isBareShellBridgeTool)) return body;
+diff --git a/src/responses/parser.ts b/src/responses/parser.ts
+index 2f9355e..e39d946 100644
+--- a/src/responses/parser.ts
++++ b/src/responses/parser.ts
+@@ -225,8 +225,9 @@ function nameDestinationContent(
+  */
+ export function parseRequest(
+   body: unknown,
+-  parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef },
++  parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef; preserveCallerContext?: boolean },
+ ): OcxParsedRequest {
++  const preserveCallerContext = parseOptions?.preserveCallerContext === true;
+   const replayCacheScope = parseOptions?.replayCacheScope;
+   const replayedInputPrefixLength = previousResponseReplayPrefixLength(body);
+   const parsed = responsesRequestSchema.safeParse(body);
+@@ -281,7 +282,7 @@ export function parseRequest(
+     // #5217: this is the stored session instruction block. A sub-agent spawned on a DIFFERENT model
+     // receives the parent's copy verbatim, so the identity sentence inside it names the parent
+     // unless it is renamed here, where the destination model is known.
+-    systemPrompt.push(nameDestinationText(data.instructions, data.model));
++    systemPrompt.push(preserveCallerContext ? data.instructions : nameDestinationText(data.instructions, data.model));
+   }
+ 
+   if (typeof data.input === "string") {
+@@ -409,7 +410,7 @@ export function parseRequest(
+             // #5217: a system-role item is instruction text, exactly like `instructions` and a
+             // developer item, so it needs the same request-time naming — it lands in the system
+             // block verbatim, and Codex replays the parent's copy to a sub-agent on another model.
+-            if (flat.length > 0) systemPrompt.push(nameDestinationText(flat, data.model));
++            if (flat.length > 0) systemPrompt.push(preserveCallerContext ? flat : nameDestinationText(flat, data.model));
+             break;
+           }
+           case "user":
+@@ -422,7 +423,7 @@ export function parseRequest(
+               // developer message, so a sub-agent on another model inherits an identity sentence
+               // naming the parent. Only this proxy's own sentence is rewritten, and only on a
+               // developer item; user turns are the caller's content and stay byte-identical.
+-              content: msg.role === "developer" ? nameDestinationContent(content, data.model) : content,
++              content: msg.role === "developer" && !preserveCallerContext ? nameDestinationContent(content, data.model) : content,
+               timestamp: now,
+             });
+             break;
+@@ -694,6 +695,7 @@ export function parseRequest(
+   // A compaction request is a summarizer turn and must not be told to continue.
+   if (decodedCheckpoint && !compactionRequest) systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
+   const context: OcxContext = {
++    ...(preserveCallerContext ? { preserveCallerContext } : {}),
+     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
+     messages,
+     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
+diff --git a/src/responses/visualization-directives.ts b/src/responses/visualization-directives.ts
+index 01e64c9..7ff5f2b 100644
+--- a/src/responses/visualization-directives.ts
++++ b/src/responses/visualization-directives.ts
+@@ -166,6 +166,7 @@ function normalizeMessage(message: OcxMessage): OcxMessage {
+  * unchanged when no text changed.
+  */
+ export function normalizeVisualizationContext(context: OcxContext): OcxContext {
++  if (context.preserveCallerContext) return context;
+   let changed = false;
+   const systemPrompt = context.systemPrompt?.map((text) => {
+     const normalized = normalizeVisualizationText(text);
+diff --git a/src/types/request.ts b/src/types/request.ts
+index 227625b..e60ca9f 100644
+--- a/src/types/request.ts
++++ b/src/types/request.ts
+@@ -234,6 +234,8 @@ export interface OcxParsedRequest {
+ }
+ 
+ export interface OcxContext {
++  /** The embedding caller owns instructions and history: no prompt is added, renamed or trimmed. */
++  preserveCallerContext?: boolean;
+   systemPrompt?: string[];
+   messages: OcxMessage[];
+   tools?: OcxTool[];

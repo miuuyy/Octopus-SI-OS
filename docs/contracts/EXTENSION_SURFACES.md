@@ -585,8 +585,9 @@ with the room's reason on every pass, after a restart too, instead of retrying
 it or waiting for evidence that cannot arrive.
 
 Claude Code replay carries user attachments and tool screenshots as native image
-blocks in conversation order. Whole-message history cuts remove their images
-together with the message. Invalid image carriers fail before the CLI starts;
+blocks in conversation order. The bridge preserves the complete caller history;
+its request bounds refuse oversized input instead of silently cutting messages.
+Invalid image carriers fail before the CLI starts;
 images are never replaced by captions or a text-only request. Native tool schemas
 make types implied by `const` and `enum` explicit without coercing arguments or
 rewriting literal data.
@@ -601,6 +602,45 @@ uses these per-model values without global context or compaction overrides.
 A setup model offers the reasoning efforts its `providers.json` entry declares,
 with `none` as the default; Custom offers `none` through `xhigh`, and `none`
 sends no reasoning effort upstream.
+
+The bridge serves OpenCodex's registered adapters through one request factory,
+taking each model's wire from the pinned registry; `src/adapters.ts` holds the
+one list of adapters it serves, and Rust carries the declared adapter name
+without a second list. The upstream dependency gains one option,
+`preserveCallerContext`, from the pinned patches listed in `upstream.json`;
+installation and build refuse a patch that no longer applies. With it OpenCodex
+sends the caller's instructions and tool descriptions as written: it adds no
+tool-catalogue or output-style prompt, renames no identity sentence, rewrites no
+visualization directive or code-mode tool, and trims no assistant history. Wire
+compatibility stays OpenCodex's: reasoning a wire cannot carry is dropped, empty
+content gets the wire's placeholder, images are fitted to a provider's limits,
+and a Gemini tool call without a thought signature carries Google's validator
+sentinel, so a history a provider would refuse does not end the task. The
+OpenCodex router, failover selection, automatic continuation and shared account
+store are outside this boundary. The request deadline bounds the wait for the
+upstream's answer; the stream that follows is bounded by the stall clock.
+Generated OpenCodex descriptors send peer and lifecycle arrivals through their
+ordinary input contract and do not declare `retained_tool_output`: an unpaired
+native Responses tool output has no equivalent on every translated wire.
+
+An account provider declares `account` in `providers.json` in place of a key:
+its OAuth provider, its connection module and the Connect help line. Its models
+come from the registry entry or an explicit `models` list, like any other
+provider. The Application connection module performs sign-in, status and
+sign-out through the bridge's account command. Antigravity keeps its Google
+credential in its owner's `opencodex-account/credential.json`: a private file,
+atomic writes and one cross-process refresh lock; OpenCodex's own state for that
+account lives in the same directory. Task-private copies receive that exact
+directory as a writable `provider_account_root`; credentials are not copied into
+descriptors or task folders. Each request reads the current sign-in, so signing
+in again takes effect without restarting the provider.
+
+Antigravity is OpenCodex's `google-antigravity` registry entry, served by its
+Cloud Code Assist adapter with the connected account's token and project.
+OpenCodex chooses the wire model for the selected reasoning effort, compiles tool
+schemas for that endpoint and retries transient refusals. It starts no IDE or
+CLI, and the only system text is the caller's. This subscription transport is
+unofficial; Google may restrict access independently of the local contract.
 
 The curated OpenCodex home keeps Codex's own retries at Codex's defaults. A
 dropped response stream is retried up to five times (`stream_max_retries = 5`):
@@ -643,7 +683,7 @@ fields, and the alternatives are stated in the tool's description; some
 upstreams refuse root combinators, and the tool's owner still validates the
 call against its declared schema. When an upstream answers with an error, the
 error Codex receives carries the upstream's own reason when the body names one
-(`error.metadata.raw`), not only the gateway's summary. A Chat Completions upstream's `reasoning_details` from an assistant message that called tools, its encrypted entries included, go back unchanged with that message in the next request, matched by the message's tool call ids, so a model that signs its reasoning keeps reasoning after each tool result. The managed Codex CLI pin lists every app-server notification Octopus
+(`error.metadata.raw`), not only the gateway's summary. A Chat Completions upstream's complete `reasoning_details`, encrypted entries included, travel in the Responses reasoning carrier with their assistant output. The next request restores them from that history, including after a bridge restart. Replay belongs to the exact interface, model and wire format; no process-wide tool-call cache supplies missing history. History from another model or interface, or history that no longer matches its carrier, is sent as the caller holds it, without those details. The managed Codex CLI pin lists every app-server notification Octopus
 decodes and the ones it opts out of; installing a binary that sends any other
 notification fails closed and names it. The provider descriptor also pins
 which Codex features are on and which are off; a binary that reports a

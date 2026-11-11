@@ -1,0 +1,20 @@
+{
+  "schema_version": 3,
+  "id": "world_provider_antigravity",
+  "name": "Antigravity",
+  "description": "Gemini and Claude through your Antigravity subscription.",
+  "category": "provider",
+  "developer": "Google",
+  "version": "1.0.0",
+  "icon": "sparkles",
+  "logo": "application-logo.svg",
+  "interfaces": [
+    "world_provider_antigravity"
+  ],
+  "setup": {
+    "fields": []
+  },
+  "connection": {
+    "help": "Connect your Google account to use your Antigravity subscription."
+  }
+}

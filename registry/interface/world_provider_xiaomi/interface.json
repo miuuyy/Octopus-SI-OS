@@ -3655,14 +3655,6 @@
         "name": "formed_interfaces",
         "description": "Tools admitted through exact Octopus interface grants. Use their advertised methods and schemas. A native Code Mode result is a string: first line compact JSON, then optional image data URLs. Split at the first newline before JSON.parse; forward subsequent image URLs with image(). Tool result JSON carries tool, correlation_id, ok, body and error; interface operations use their declared schema. Inspect the complete returned value in JavaScript and emit selected evidence with text(). Transport failures are errors, never partial success. A model_projection head_tail preview lacks omitted fields. Artifact references do not grant reads, and payload paths are not an access shortcut. Code Mode store/load retain serializable values within the live session; no app/browser SDK is installed here."
       },
-      "retained_tool_output": {
-        "name": "octopus_instruction",
-        "arrival_labels": [
-          "provider.peer.message",
-          "lifecycle.handler.prompt",
-          "lifecycle.handler.task"
-        ]
-      },
       "operator_continuity": {
         "replay_timeout_ms": 30000,
         "approval": {
@@ -4122,8 +4114,7 @@
             "incremental_tools": true,
             "instant_interrupt": true,
             "plugin_discovery_prefetch": false,
-            "reasoning_effort_override": true,
-            "retain_client_tool_outputs": true
+            "reasoning_effort_override": true
           }
         },
         "extra_argv": [],

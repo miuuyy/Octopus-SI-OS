@@ -33,7 +33,11 @@
   },
   "interface_driver_config": {
     "supported_reasoning_efforts": [
-      "none"
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
     ],
     "private_config": {
       "instruction_artifacts": [],
@@ -3649,14 +3653,6 @@
         "name": "formed_interfaces",
         "description": "Tools admitted through exact Octopus interface grants. Use their advertised methods and schemas. A native Code Mode result is a string: first line compact JSON, then optional image data URLs. Split at the first newline before JSON.parse; forward subsequent image URLs with image(). Tool result JSON carries tool, correlation_id, ok, body and error; interface operations use their declared schema. Inspect the complete returned value in JavaScript and emit selected evidence with text(). Transport failures are errors, never partial success. A model_projection head_tail preview lacks omitted fields. Artifact references do not grant reads, and payload paths are not an access shortcut. Code Mode store/load retain serializable values within the live session; no app/browser SDK is installed here."
       },
-      "retained_tool_output": {
-        "name": "octopus_instruction",
-        "arrival_labels": [
-          "provider.peer.message",
-          "lifecycle.handler.prompt",
-          "lifecycle.handler.task"
-        ]
-      },
       "operator_continuity": {
         "replay_timeout_ms": 30000,
         "approval": {
@@ -3700,12 +3696,28 @@
             "text"
           ],
           "supports_tools": true,
-          "supports_reasoning": false,
+          "supports_reasoning": true,
           "default_reasoning_effort": "none",
           "supported_reasoning_efforts": [
             {
               "effort": "none",
               "description": "No reasoning"
+            },
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
             }
           ],
           "show_in_picker": true
@@ -3870,6 +3882,22 @@
                 {
                   "effort": "none",
                   "description": "No reasoning"
+                },
+                {
+                  "effort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "effort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "effort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "effort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
                 }
               ],
               "shell_type": "shell_command",
@@ -3877,7 +3905,7 @@
               "supported_in_api": true,
               "priority": 0,
               "base_instructions": "",
-              "supports_reasoning_summaries": false,
+              "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
               "support_verbosity": false,
               "truncation_policy": {
@@ -3915,8 +3943,7 @@
             "incremental_tools": true,
             "instant_interrupt": true,
             "plugin_discovery_prefetch": false,
-            "reasoning_effort_override": true,
-            "retain_client_tool_outputs": true
+            "reasoning_effort_override": true
           }
         },
         "extra_argv": [],

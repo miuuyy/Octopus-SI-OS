@@ -43,8 +43,10 @@ products. [OpenCodex](https://github.com/lidge-jun/opencodex) is the example:
 it lets Codex run models from many providers. In the registry each such
 provider is its own interface folder that reuses the Codex provider's OpenCodex
 driver, generated from one list so every provider follows the same OpenCodex
-release. This is a quiet center of the UX: Codex stays the way you work, and
-the set of models behind it can grow.
+release. A provider is reached with an API key, a signed-in CLI or a
+subscription account, and whichever one serves a task, the model receives
+Octopus's own instructions, history and tools. This is a quiet center of the
+UX: Codex stays the way you work, and the set of models behind it can grow.
 
 Earlier integrations borrowed from other agent projects are kept where they
 are cheap to maintain and dropped where they are not: Slack stays as a

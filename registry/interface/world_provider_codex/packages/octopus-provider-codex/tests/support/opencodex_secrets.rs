@@ -208,3 +208,100 @@ fn opencodex_claude_cli_keeps_its_sign_in_inside_the_cli() {
         .unwrap();
     assert!(transport.auth_env_key.is_none() && transport.auth_secret_ref.is_none());
 }
+
+#[test]
+fn opencodex_account_roots_stay_in_the_selected_home() {
+    let root = tempfile::tempdir().unwrap();
+    let mut descriptor: InterfaceDescriptor = serde_json::from_str(include_str!(
+        "../../../../../world_provider_antigravity/interface.json"
+    ))
+    .unwrap();
+    let config = descriptor_config(&descriptor).unwrap().unwrap();
+    let owner = root
+        .path()
+        .join("interfaces")
+        .join(&config.credential_owner_interface);
+    let directory = owner.join("opencodex-account");
+    std::fs::create_dir_all(&directory).unwrap();
+    let (arrivals, _) = tokio::sync::mpsc::channel(1);
+    let mut ctx = InterfaceLiftContext::unprivileged(
+        descriptor.id.clone(),
+        owner.clone(),
+        None,
+        owner.clone(),
+        root.path().join("movements"),
+        root.path().join("blobs"),
+        root.path().join("index"),
+        BTreeMap::new(),
+        arrivals,
+        Default::default(),
+    );
+    assert_eq!(
+        resolve_account(&ctx, &descriptor, &config)
+            .unwrap()
+            .unwrap()
+            .directory,
+        directory.canonicalize().unwrap()
+    );
+    descriptor.id = octopus_descriptors::InterfaceId::new("account_task");
+    ctx.interface = descriptor.id.clone();
+    ctx.var_dir = root.path().join("interfaces/account_task");
+    ctx.root_slots.clear();
+    assert!(
+        resolve_account(&ctx, &descriptor, &config)
+            .err()
+            .unwrap()
+            .contains("unbound root slot")
+    );
+    ctx.root_slots
+        .insert(PROVIDER_ACCOUNT_ROOT_SLOT.into(), directory.clone());
+    assert_eq!(
+        resolve_account(&ctx, &descriptor, &config)
+            .unwrap()
+            .unwrap()
+            .directory,
+        directory.canonicalize().unwrap()
+    );
+    let other = root
+        .path()
+        .join("other/interfaces")
+        .join(&config.credential_owner_interface)
+        .join("opencodex-account");
+    std::fs::create_dir_all(&other).unwrap();
+    ctx.root_slots
+        .insert(PROVIDER_ACCOUNT_ROOT_SLOT.into(), other);
+    assert!(
+        resolve_account(&ctx, &descriptor, &config)
+            .err()
+            .unwrap()
+            .contains("selected Home")
+    );
+    ctx.root_slots
+        .insert(PROVIDER_ACCOUNT_ROOT_SLOT.into(), directory.clone());
+    std::fs::remove_dir(&directory).unwrap();
+    assert!(
+        resolve_account(&ctx, &descriptor, &config)
+            .err()
+            .unwrap()
+            .contains("connect the provider first")
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&owner, &directory).unwrap();
+        assert!(
+            resolve_account(&ctx, &descriptor, &config)
+                .err()
+                .unwrap()
+                .contains("regular owned directory")
+        );
+    }
+    let driver = descriptor.interface_driver_config.as_mut().unwrap();
+    driver.transport.as_mut().unwrap().auth_env_key =
+        Some("OCTOPUS_MACHINE_CODEX_AUTH_FILE".into());
+    assert!(
+        descriptor_config(&descriptor)
+            .err()
+            .unwrap()
+            .contains("only from its owned account store")
+    );
+}

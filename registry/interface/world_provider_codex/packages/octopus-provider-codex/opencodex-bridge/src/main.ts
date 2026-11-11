@@ -1,14 +1,9 @@
-import { spawn } from "node:child_process";
-import { createAnthropicAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/anthropic.ts";
-import { createAzureAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/azure.ts";
+import { createProviderAdapter, supportsAdapter } from "./adapters.ts";
+import { isAbsolute } from "node:path";
+import { accountStatus, loginOAuthAccount, logoutOAuthAccount, resolveOAuthAccount, OAuthAccountError, type OAuthAccountConfig } from "./account.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
-import { createClaudeCliAdapter } from "./claude-cli.ts";
-import { createReasoningDetailsReplay } from "./reasoning-details.ts";
-import { createGrokCliAdapter, runGrokCaptureMcpServer } from "./grok-cli.ts";
+import { runGrokCaptureMcpServer } from "./grok-cli.ts";
 import { runCodeBuddyMcpServer } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/mcp-server.ts";
-import { createGoogleAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/google.ts";
-import { createOpenAIChatAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/openai-chat.ts";
-import { createResponsesPassthroughAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/openai-responses.ts";
 import { COALESCE_MAX_CHUNK_LENGTH, createAdapterEventQueue } from "../node_modules/@bitkyc08/opencodex/src/adapters/run-turn-queue.ts";
 import {
   bridgeToResponsesSSE,
@@ -36,7 +31,7 @@ import type {
   OcxProviderConfig,
 } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 
-type AdapterName = "anthropic" | "azure" | "claude-cli" | "google" | "grok-cli" | "openai-chat" | "openai-responses";
+type AdapterName = string;
 
 type ProviderOptions = {
   annotate_empty_tool_outputs?: boolean;
@@ -68,6 +63,7 @@ type RuntimeProvider = {
   models: string[];
   options: ProviderOptions;
   registry_entry?: string;
+  account?: OAuthAccountConfig;
 };
 
 type BridgeConfig = {
@@ -82,16 +78,6 @@ type BridgeConfig = {
   provider: RuntimeProvider;
   schema_version: 1;
 };
-
-const adapterNames = new Set<AdapterName>([
-  "anthropic",
-  "azure",
-  "claude-cli",
-  "google",
-  "grok-cli",
-  "openai-chat",
-  "openai-responses",
-]);
 
 const optionNames = new Set([
   "annotate_empty_tool_outputs",
@@ -123,6 +109,15 @@ function stringValue(value: unknown, path: string): string {
     throw new Error(`${path} must be a non-empty trimmed string`);
   }
   return value;
+}
+
+function accountValue(value: unknown): OAuthAccountConfig {
+  if (!isObject(value)) throw new Error("provider.account must be an object");
+  exactKeys(value, ["provider", "directory"], "provider.account");
+  if (value.provider !== "google-antigravity") throw new Error("provider.account.provider is unsupported");
+  const directory = stringValue(value.directory, "provider.account.directory");
+  if (!isAbsolute(directory) || directory.includes("\0")) throw new Error("provider.account.directory must be absolute");
+  return { provider: value.provider, directory };
 }
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number, path: string): number {
@@ -223,10 +218,11 @@ function parseConfig(value: unknown): BridgeConfig {
     "cache_retention",
     "options",
     "registry_entry",
+    "account",
     "model_aliases",
   ], "provider");
   const adapter = stringValue(value.provider.adapter, "provider.adapter") as AdapterName;
-  if (!adapterNames.has(adapter)) throw new Error(`provider.adapter '${adapter}' is unsupported`);
+  if (!supportsAdapter(adapter)) throw new Error(`provider.adapter '${adapter}' is unsupported`);
   const baseUrl = stringValue(value.provider.base_url, "provider.base_url");
   const parsedUrl = new URL(baseUrl);
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") throw new Error("provider.base_url must use http or https");
@@ -241,6 +237,8 @@ function parseConfig(value: unknown): BridgeConfig {
   });
   const models = stringSet(value.provider.models, "provider.models");
   const defaultModel = stringValue(value.provider.default_model, "provider.default_model");
+  const account = value.provider.account === undefined ? undefined : accountValue(value.provider.account);
+  if (account && value.provider.api_key !== undefined) throw new Error("An account provider cannot also declare an API key");
   if (!models.includes(defaultModel)) throw new Error("provider.default_model is outside provider.models");
   const registryEntry = value.provider.registry_entry === undefined
     ? undefined
@@ -276,6 +274,7 @@ function parseConfig(value: unknown): BridgeConfig {
       id: stringValue(value.provider.id, "provider.id"),
       adapter,
       ...(registryEntry === undefined ? {} : { registry_entry: registryEntry }),
+      ...(account === undefined ? {} : { account }),
       model_aliases: modelAliases,
       base_url: baseUrl,
       models,
@@ -314,7 +313,7 @@ function upstreamProvider(config: RuntimeProvider): OcxProviderConfig {
   const models = config.models.map((model) => upstreamModel(config, model));
   const provider: OcxProviderConfig = {
     ...seed,
-    adapter: seed.adapter ?? config.adapter,
+    adapter: config.adapter,
     baseUrl: config.base_url,
     models,
     selectedModels: [...models],
@@ -341,24 +340,22 @@ function upstreamProvider(config: RuntimeProvider): OcxProviderConfig {
   return provider;
 }
 
-function adapterFor(config: RuntimeProvider): ProviderAdapter {
-  const provider = upstreamProvider(config);
-  if (config.adapter === "anthropic") return createAnthropicAdapter(provider, config.cache_retention);
-  if (config.adapter === "azure") return createAzureAdapter(provider);
-  if (config.adapter === "claude-cli") {
-    const temporaryDirectory = stringValue(process.env.TMPDIR, "CLI private temporary directory");
-    return createClaudeCliAdapter(provider, {
-      spawn: (command, args, options) => spawn(command, args, {
-        ...options, env: { ...options.env, CLAUDE_CODE_TMPDIR: temporaryDirectory },
-      }),
-      usageAdmission: async () => ({ state: "unknown", checkedAt: Date.now() }),
-      usageRefusal: () => undefined,
-    });
+async function adapterFor(config: BridgeConfig, request: Request, modelId: string, budget: TranslatorBudget, signal = request.signal): Promise<ProviderAdapter> {
+  const provider = upstreamProvider(config.provider);
+  if (config.provider.account) {
+    const account = await resolveOAuthAccount(config.provider.account, signal);
+    provider.apiKey = account.accessToken;
+    provider.project = account.projectId;
   }
-  if (config.adapter === "google") return createGoogleAdapter(provider);
-  if (config.adapter === "grok-cli") return createGrokCliAdapter(provider);
-  if (config.adapter === "openai-chat") return createOpenAIChatAdapter(provider);
-  return createResponsesPassthroughAdapter(provider);
+  return createProviderAdapter(provider, {
+    adapter: config.provider.adapter,
+    providerId: config.provider.registry_entry ?? config.provider.id,
+    ownerId: config.interface_id,
+    modelId,
+    request,
+    cacheRetention: config.provider.cache_retention,
+    budget,
+  });
 }
 
 async function boundedBody(request: Request, limit: number): Promise<Uint8Array> {
@@ -443,12 +440,13 @@ function boundedStream(response: Response, limit: number, abort: AbortController
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
-function disposingStream(stream: ReadableStream<Uint8Array>, budget: TranslatorBudget, abort: AbortController): ReadableStream<Uint8Array> {
+function disposingStream(stream: ReadableStream<Uint8Array>, budget: TranslatorBudget, abort: AbortController, cleanup: () => void): ReadableStream<Uint8Array> {
   const reader = stream.getReader();
   let settled = false;
   const settle = () => {
     if (settled) return;
     settled = true;
+    cleanup();
     budget.dispose();
   };
   return new ReadableStream<Uint8Array>({
@@ -493,6 +491,7 @@ function deliver(
   budget: TranslatorBudget,
   abort: AbortController,
   stallTimeoutSec: number | undefined,
+  cleanup: () => void,
 ): Promise<Response> | Response {
   const options = {
     translatorBudget: budget,
@@ -516,7 +515,7 @@ function deliver(
       2000,
       { ...options, stallTimeoutSec },
     );
-    return new Response(disposingStream(stream, budget, abort), { headers: SSE_HEADERS });
+    return new Response(disposingStream(stream, budget, abort, cleanup), { headers: SSE_HEADERS });
   }
   return (async () => {
     try {
@@ -532,6 +531,7 @@ function deliver(
     } catch (error) {
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider response translation failed");
     } finally {
+      cleanup();
       budget.dispose();
     }
   })();
@@ -576,31 +576,25 @@ function stringList(value: unknown): string[] {
 
 function upstreamErrorReason(text: string, detail: string): string {
   let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    return detail;
-  }
+  try { body = JSON.parse(text); } catch { return detail; }
   const metadata = isObject(body) && isObject(body.error) && isObject(body.error.metadata) ? body.error.metadata : undefined;
   const raw = typeof metadata?.raw === "string" ? metadata.raw.trim() : "";
-  if (!raw) return detail;
-  let reason = raw;
-  try {
-    const inner: unknown = JSON.parse(raw);
-    const message = isObject(inner) && isObject(inner.error) && typeof inner.error.message === "string"
-      ? inner.error.message
-      : isObject(inner) && typeof inner.message === "string" ? inner.message : undefined;
-    if (message) reason = message;
-  } catch {
-    reason = raw;
+  let reason = raw || (isObject(body) && isObject(body.error) && typeof body.error.message === "string" ? body.error.message
+    : isObject(body) && typeof body.message === "string" ? body.message : detail);
+  for (let depth = 0; depth < 3; depth++) {
+    try {
+      const inner: unknown = JSON.parse(reason);
+      const message = isObject(inner) && isObject(inner.error) && typeof inner.error.message === "string" ? inner.error.message
+        : isObject(inner) && typeof inner.message === "string" ? inner.message : undefined;
+      if (!message || message === reason) break;
+      reason = message;
+    } catch { break; }
   }
   reason = redactSecretString(reason).slice(0, 600);
-  return detail && detail !== reason ? `${detail}: ${reason}` : reason;
+  return raw && detail && detail !== reason ? `${detail}: ${reason}` : reason;
 }
 
-const reasoningDetailsReplay = createReasoningDetailsReplay(4096);
-
-async function responsesRequest(request: Request, config: BridgeConfig, adapter: ProviderAdapter): Promise<Response> {
+async function responsesRequest(request: Request, config: BridgeConfig): Promise<Response> {
   let raw: unknown;
   try {
     const bytes = await boundedBody(request, config.limits.max_request_bytes);
@@ -614,40 +608,51 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
   }
   const responseModel = raw.model;
   const modelId = upstreamModel(config.provider, responseModel);
+  const abort = new AbortController();
+  const cancel = () => abort.abort(request.signal.reason);
+  request.signal.addEventListener("abort", cancel, { once: true });
+  if (request.signal.aborted) cancel();
+  const timer = setTimeout(() => abort.abort("request timeout"), config.limits.request_timeout_ms);
+  const cleanup = () => {
+    clearTimeout(timer);
+    request.signal.removeEventListener("abort", cancel);
+  };
   let parsed: OcxParsedRequest;
   const budget = createTranslatorBudget({
     maxCallArgumentBytes: config.limits.max_translated_call_bytes,
     maxTurnBytes: config.limits.max_translated_turn_bytes,
   });
   let maps: ReturnType<typeof buildToolBridgeMaps>;
+  let adapter: ProviderAdapter;
   try {
-    parsed = parseRequest(modelId === responseModel ? raw : { ...raw, model: modelId });
+    parsed = parseRequest(modelId === responseModel ? raw : { ...raw, model: modelId }, { preserveCallerContext: true });
     if (parsed.modelId !== modelId) throw new Error("parsed model disagrees with the exact interface model grant");
     flattenRootSchemaAlternatives(parsed);
     maps = buildToolBridgeMaps(parsed, budget);
+    adapter = await adapterFor(config, request, modelId, budget, abort.signal);
   } catch (error) {
+    cleanup();
     budget.dispose();
     const message = isTranslatorBudgetExceededError(error)
       ? "request translation buffer exceeded the configured limit"
       : error instanceof Error ? error.message : "request parsing failed";
-    return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : 400, "invalid_request_error", message);
+    return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : error instanceof OAuthAccountError ? 401 : 400,
+      error instanceof OAuthAccountError ? "authentication_error" : "invalid_request_error", message);
   }
-  const abort = new AbortController();
   const stallTimeoutSec = isLocalUpstream(config.provider.base_url)
     ? Math.ceil(config.limits.request_timeout_ms / 1000)
     : undefined;
   if (adapter.localTerminal?.(parsed)) {
-    return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort, stallTimeoutSec);
+    return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort, stallTimeoutSec, cleanup);
   }
   if (adapter.runTurn !== undefined) {
-    return deliver(parsed, responseModel, turnEvents(adapter, parsed, budget, abort, config.limits.request_timeout_ms), maps, budget, abort, stallTimeoutSec);
+    return deliver(parsed, responseModel, turnEvents(adapter, parsed, budget, abort), maps, budget, abort, stallTimeoutSec, cleanup);
   }
-  const timer = setTimeout(() => abort.abort("request timeout"), config.limits.request_timeout_ms);
   let upstream: Response;
   let built: Awaited<ReturnType<ProviderAdapter["buildRequest"]>> | undefined;
   try {
     built = await adapter.buildRequest(parsed, {
-      headers: new Headers(),
+      headers: request.headers,
       providerName: config.provider.registry_entry ?? config.provider.id,
       translatorBudget: budget,
       abortSignal: abort.signal,
@@ -655,24 +660,17 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
     const target = new URL(built.url);
     const declared = new URL(config.provider.base_url);
     if (target.origin !== declared.origin) throw new Error("adapter target escaped the declared provider origin");
-    const replaysReasoning = config.provider.adapter === "openai-chat";
-    const body = replaysReasoning ? reasoningDetailsReplay.restore(built.body) : built.body;
-    const headers = new Headers(built.headers);
-    if (body !== built.body) headers.delete("content-length");
-    upstream = await fetch(target, {
-      method: built.method,
-      headers,
-      body,
-      signal: abort.signal,
-      redirect: "error",
-    });
-    if (replaysReasoning && upstream.ok && upstream.body) {
-      const [forAdapter, forReplay] = upstream.body.tee();
-      reasoningDetailsReplay.observe(forReplay, parsed.stream).catch(() => {});
-      upstream = new Response(forAdapter, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
-    }
+    upstream = adapter.fetchResponse
+      ? await adapter.fetchResponse(built, { abortSignal: abort.signal, stream: parsed.stream, returnRawErrors: true })
+      : await fetch(target, {
+        method: built.method,
+        headers: built.headers,
+        body: built.body,
+        signal: abort.signal,
+        redirect: "error",
+      });
   } catch (error) {
-    clearTimeout(timer);
+    cleanup();
     built?.releaseBodyObservation?.();
     budget.dispose();
     const message = error instanceof Error ? error.message : "provider request failed";
@@ -692,19 +690,21 @@ async function responsesRequest(request: Request, config: BridgeConfig, adapter:
     } catch (error) {
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider error body was unreadable");
     } finally {
+      cleanup();
       budget.dispose();
     }
   }
   const bounded = boundedStream(upstream, config.limits.max_response_bytes, abort);
   if (!parsed.stream && adapter.parseResponse) {
     try {
-      return deliver(parsed, responseModel, await adapter.parseResponse(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec);
+      return deliver(parsed, responseModel, await adapter.parseResponse(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec, cleanup);
     } catch (error) {
+      cleanup();
       budget.dispose();
       return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider response translation failed");
     }
   }
-  return deliver(parsed, responseModel, adapter.parseStream(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec);
+  return deliver(parsed, responseModel, adapter.parseStream(bounded, budget, built.tierLog), maps, budget, abort, stallTimeoutSec, cleanup);
 }
 
 function turnEvents(
@@ -712,7 +712,6 @@ function turnEvents(
   parsed: OcxParsedRequest,
   budget: TranslatorBudget,
   abort: AbortController,
-  timeoutMs: number,
 ): AsyncIterable<AdapterEvent> {
   const queue = createAdapterEventQueue({ onBacklogExceeded: () => abort.abort("adapter event backlog exceeded") });
   let pendingArguments = "";
@@ -743,13 +742,11 @@ function turnEvents(
       });
     }
   };
-  const timer = setTimeout(() => abort.abort("request timeout"), timeoutMs);
   adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: budget, abortSignal: abort.signal }, emit)
     .catch((error) => {
       emit({ type: "error", message: error instanceof Error ? error.message : "provider turn failed", retryable: false });
     })
     .finally(() => {
-      clearTimeout(timer);
       flushArguments();
       queue.close();
     });
@@ -757,9 +754,10 @@ function turnEvents(
 }
 
 async function serve(config: BridgeConfig): Promise<void> {
-  if (adapterFor(config.provider).fetchResponse !== undefined) {
-    throw new Error(`adapter ${config.provider.adapter} requires an undeclared retry surface`);
-  }
+  const budget = createTranslatorBudget();
+  try {
+    await adapterFor(config, new Request("http://127.0.0.1/health"), upstreamModel(config.provider, config.provider.default_model), budget);
+  } finally { budget.dispose(); }
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -775,7 +773,7 @@ async function serve(config: BridgeConfig): Promise<void> {
         });
       }
       if (request.method === "POST" && url.pathname === "/v1/responses") {
-        return responsesRequest(request, config, adapterFor(config.provider));
+        return responsesRequest(request, config);
       }
       return formatErrorResponse(404, "not_found", "route is not declared by this provider interface");
     },
@@ -803,14 +801,42 @@ if (process.argv[2] === "__grok-mcp") {
 try {
   const source = await Bun.stdin.text();
   if (Buffer.byteLength(source) > 1024 * 1024) throw new Error("bridge config exceeds 1 MiB");
-  const config = parseConfig(JSON.parse(source));
+  const raw: unknown = JSON.parse(source);
+  if (process.argv[2] === "__account") {
+    if (!isObject(raw)) throw new Error("Account request must be an object");
+    exactKeys(raw, ["operation", "account"], "account request");
+    const account = accountValue(raw.account);
+    const publish = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(event)}\n`);
+    const abort = new AbortController();
+    process.on("SIGTERM", () => abort.abort());
+    process.on("SIGINT", () => abort.abort());
+    let result: unknown;
+    switch (raw.operation) {
+      case "status": result = await accountStatus(account); break;
+      case "login": result = await loginOAuthAccount(account, {
+        signal: abort.signal,
+        onAuth: ({ url }) => { publish({ event: "auth", url }); },
+        onProgress: (message) => { publish({ event: "progress", message }); },
+      }); break;
+      case "logout": result = await logoutOAuthAccount(account); break;
+      default: throw new Error("Unsupported account operation");
+    }
+    publish({ event: "result", result });
+    process.exit(0);
+  }
+  const config = parseConfig(raw);
   const destinationError = await providerDestinationResolvedError(config.provider.id, {
     baseUrl: config.provider.base_url,
     allowPrivateNetwork: config.provider.allow_private_network,
   });
   if (destinationError) throw new Error(`provider ${config.provider.id} ${destinationError}`);
+  if (config.provider.account) process.env.OPENCODEX_HOME = config.provider.account.directory;
   await serve(config);
 } catch (error) {
-  process.stderr.write(`opencodex bridge failed closed: ${error instanceof Error ? error.message : "unknown error"}\n`);
+  const message = redactSecretString(error instanceof Error ? error.message : "unknown error").slice(0, 600);
+  if (process.argv[2] === "__account") {
+    process.stdout.write(`${JSON.stringify({ event: "error", code: error instanceof OAuthAccountError ? error.code : "account_error", message })}\n`);
+  }
+  process.stderr.write(`opencodex bridge failed closed: ${message}\n`);
   process.exit(1);
 }

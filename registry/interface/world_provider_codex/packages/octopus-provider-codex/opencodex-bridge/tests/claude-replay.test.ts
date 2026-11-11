@@ -30,6 +30,11 @@ test("whole-message truncation removes historical images with their message and 
   expect(content.some((block: any) => block.source?.data === "b2xk")).toBe(false);
   expect(content.some((block: any) => block.source?.data === "bmV3")).toBe(true);
   expect(content.some((block: any) => block.text?.includes("view_image"))).toBe(true);
+  const strict = request(messages);
+  strict.context.preserveCallerContext = true;
+  const whole = JSON.parse(buildClaudeConversationInput(strict, { maxHistoryChars: 0 })[0]!).message.content;
+  expect(whole.some((block: any) => block.source?.data === "b2xk")).toBe(true);
+  expect(whole.some((block: any) => block.text?.includes("omitted"))).toBe(false);
 });
 
 test("invalid image carriers fail instead of becoming a text marker", () => {

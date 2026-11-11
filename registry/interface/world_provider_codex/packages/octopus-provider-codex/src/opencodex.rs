@@ -26,6 +26,7 @@ use octopus_interface_transport::{InterfaceLiftContext, read_private_environment
 
 const OPENCODEX_CONFIG_KEY: &str = "opencodex";
 const PROVIDER_SECRET_OWNER_ROOT_SLOT: &str = "provider_secret_owner_root";
+const PROVIDER_ACCOUNT_ROOT_SLOT: &str = "provider_account_root";
 const REGISTRY_INTERFACE_ROOT_SLOT: &str = "registry_interface_root";
 const OPENCODEX_OWNER_INTERFACE: &str = "world_provider_codex";
 const BRIDGE_RELATIVE_ROOT: &str = "packages/octopus-provider-codex/opencodex-bridge";
@@ -33,18 +34,6 @@ const BRIDGE_EXECUTABLE: &str = "bin/octopus-opencodex-bridge";
 const BRIDGE_BUILD_RECEIPT: &str = "build-receipt.json";
 const BRIDGE_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const BRIDGE_READY_MAX_BYTES: usize = 64 * 1024;
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum OpenCodexAdapter {
-    Anthropic,
-    Azure,
-    ClaudeCli,
-    Google,
-    GrokCli,
-    OpenaiChat,
-    OpenaiResponses,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -143,10 +132,12 @@ impl Default for OpenCodexLimits {
 #[serde(deny_unknown_fields)]
 pub(crate) struct OpenCodexDescriptorConfig {
     pub schema_version: u32,
-    pub adapter: OpenCodexAdapter,
+    pub adapter: String,
     pub credential_owner_interface: String,
     #[serde(default)]
     pub registry_entry: Option<String>,
+    #[serde(default)]
+    pub oauth_provider: Option<String>,
     #[serde(default)]
     pub model_env: Option<String>,
     #[serde(default)]
@@ -174,9 +165,11 @@ struct BridgeConfig {
 #[derive(Serialize)]
 struct BridgeProvider {
     id: String,
-    adapter: OpenCodexAdapter,
+    adapter: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     registry_entry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<BridgeAccount>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     model_aliases: BTreeMap<String, String>,
     base_url: String,
@@ -192,6 +185,12 @@ struct BridgeProvider {
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_retention: Option<OpenCodexCacheRetention>,
     options: OpenCodexProviderOptions,
+}
+
+#[derive(Serialize)]
+struct BridgeAccount {
+    provider: String,
+    directory: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -250,6 +249,26 @@ pub(crate) fn descriptor_config(
         &parsed.credential_owner_interface,
         "opencodex credential_owner_interface",
     )?;
+    validate_interface_segment(&parsed.adapter, "opencodex adapter")?;
+    if let Some(provider) = parsed.oauth_provider.as_deref() {
+        validate_interface_segment(provider, "opencodex oauth_provider")?;
+        let driver = descriptor.interface_driver_config.as_ref().unwrap();
+        if parsed.model_env.is_some()
+            || !parsed.bridge_env_names.is_empty()
+            || driver.transport.as_ref().is_some_and(|transport| {
+                transport.auth_env_key.is_some()
+                    || transport.auth_secret_ref.is_some()
+                    || transport.auth_header.is_some()
+                    || transport.auth_value_prefix.is_some()
+            })
+            || driver
+                .residual_ambient
+                .as_ref()
+                .is_some_and(|ambient| ambient.get("private_auth_store").is_some())
+        {
+            return Err("OpenCodex account authentication must come only from its owned account store".to_string());
+        }
+    }
     if let Some(entry) = parsed.registry_entry.as_deref() {
         validate_interface_segment(entry, "opencodex registry_entry")?;
     }
@@ -324,6 +343,7 @@ pub(crate) async fn connect_interface_driver(
     let base_url = resolve_base_url(transport, config.allow_private_network, &private_values)?;
     validate_static_headers(transport)?;
     let api_key = resolve_api_key(ctx, descriptor, transport, config, &private_values)?;
+    let account = resolve_account(ctx, descriptor, config)?;
     if let Some(name) = transport.auth_env_key.as_deref()
         && config.bridge_env_names.iter().any(|candidate| candidate == name)
     {
@@ -382,6 +402,7 @@ pub(crate) async fn connect_interface_driver(
             id: descriptor.id.as_str().to_string(),
             adapter: config.adapter.clone(),
             registry_entry: config.registry_entry.clone(),
+            account,
             model_aliases,
             base_url,
             models,
@@ -586,6 +607,83 @@ fn credential_owner_root(
             owner_root.display()
         )
     })
+}
+
+fn resolve_account(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    config: &OpenCodexDescriptorConfig,
+) -> Result<Option<BridgeAccount>, String> {
+    let Some(provider) = &config.oauth_provider else {
+        return Ok(None);
+    };
+    let private = ctx.interface_var_dir();
+    if ctx.interface != descriptor.id
+        || !private.is_absolute()
+        || private.file_name().and_then(|value| value.to_str()) != Some(descriptor.id.as_str())
+    {
+        return Err(
+            "OpenCodex account context does not name its exact private interface".to_string(),
+        );
+    }
+    let private_root = std::fs::canonicalize(
+        private
+            .parent()
+            .ok_or("OpenCodex private interface has no parent")?,
+    )
+    .map_err(|error| format!("OpenCodex private interfaces root cannot be resolved: {error}"))?;
+    let expected = private_root
+        .join(&config.credential_owner_interface)
+        .join("opencodex-account");
+    let directory = if config.credential_owner_interface == descriptor.id.as_str() {
+        private.join("opencodex-account")
+    } else {
+        if descriptor
+            .interface_driver_config
+            .as_ref()
+            .and_then(|driver| driver.host_slots.get(PROVIDER_ACCOUNT_ROOT_SLOT))
+            .is_some_and(|slot| !slot.additional_paths.is_empty())
+        {
+            return Err("OpenCodex account root cannot grant additional paths".to_string());
+        }
+        ctx.root_slot(PROVIDER_ACCOUNT_ROOT_SLOT)?.to_path_buf()
+    };
+    if !directory.is_absolute()
+        || directory.file_name().and_then(|name| name.to_str()) != Some("opencodex-account")
+        || directory
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            != Some(config.credential_owner_interface.as_str())
+        || directory
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(
+            "OpenCodex account directory does not name its exact credential owner".to_string(),
+        );
+    }
+    for path in [directory.parent().unwrap(), directory.as_path()] {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| format!("OpenCodex account directory '{}' is unavailable; connect the provider first: {error}", path.display()))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(
+                "OpenCodex account directory must be a regular owned directory".to_string(),
+            );
+        }
+    }
+    let directory = std::fs::canonicalize(&directory)
+        .map_err(|error| format!("OpenCodex account directory cannot be resolved: {error}"))?;
+    if directory != expected {
+        return Err(
+            "OpenCodex account directory is outside its credential owner in the selected Home"
+                .to_string(),
+        );
+    }
+    Ok(Some(BridgeAccount {
+        provider: provider.clone(),
+        directory,
+    }))
 }
 
 fn resolve_model_aliases(
@@ -910,6 +1008,11 @@ async fn spawn_bridge(
     mut config: BridgeConfig,
     environment: &[String],
 ) -> Result<(Child, u16), String> {
+    let ready_timeout = if config.provider.account.is_some() {
+        Duration::from_secs(120)
+    } else {
+        BRIDGE_READY_TIMEOUT
+    };
     let mut payload = serde_json::to_vec(&config)
         .map_err(|error| format!("OpenCodex bridge config could not be encoded: {error}"))?;
     if let Some(value) = config.provider.api_key.as_mut() {
@@ -961,7 +1064,7 @@ async fn spawn_bridge(
         .stdout
         .take()
         .ok_or_else(|| "OpenCodex bridge did not expose readiness stdout".to_string())?;
-    let line = match timeout(BRIDGE_READY_TIMEOUT, read_ready_line(&mut stdout)).await {
+    let line = match timeout(ready_timeout, read_ready_line(&mut stdout)).await {
         Ok(result) => result,
         Err(_) => Err("OpenCodex bridge readiness timed out".to_string()),
     };

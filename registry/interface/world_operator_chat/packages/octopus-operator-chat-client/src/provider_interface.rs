@@ -137,7 +137,7 @@ pub(crate) fn plan_provider_interface(
         }),
     );
     configure_provider_private_auth_store(&mut driver_config, provider.interface.id.as_str())?;
-    let shares_provider_secret_store = configure_provider_secret_owner_root(
+    let life_root_slots = configure_provider_owner_roots(
         &mut driver_config,
         provider.interface.id.as_str(),
         &identity.model_interface_id,
@@ -157,10 +157,6 @@ pub(crate) fn plan_provider_interface(
         format!("interface:{}", identity.model_interface_id),
         writes,
     )?;
-    let mut life_root_slots = Vec::new();
-    if shares_provider_secret_store {
-        life_root_slots.push(("provider_secret_owner_root", false));
-    }
     if life_root_slots.is_empty() {
         plan_interface_life(
             interface_root,
@@ -269,6 +265,11 @@ pub(crate) fn configure_provider_private_auth_store(
     let Some(store) = residual.get_mut("private_auth_store") else {
         return Ok(());
     };
+    if driver_config.private_config.contains_key("opencodex") {
+        return Err(format!(
+            "OpenCodex provider '{source_interface_id}' cannot import the machine ChatGPT account"
+        ));
+    }
     let store = store
         .as_object_mut()
         .ok_or_else(|| "private_auth_store must be a JSON object".to_string())?;
@@ -289,14 +290,14 @@ pub(crate) fn configure_provider_private_auth_store(
     Ok(())
 }
 
-pub(crate) fn configure_provider_secret_owner_root(
+pub(crate) fn configure_provider_owner_roots(
     driver_config: &mut octopus_interfaces::InterfaceDriverConfig,
     source_interface_id: &str,
     target_interface_id: &str,
     interface_private_state_root: Option<&Path>,
-) -> Result<bool, String> {
+) -> Result<Vec<(&'static str, bool)>, String> {
     let Some(opencodex) = driver_config.private_config.get("opencodex") else {
-        return Ok(false);
+        return Ok(Vec::new());
     };
     let opencodex = opencodex.as_object().ok_or_else(|| {
         format!(
@@ -317,6 +318,9 @@ pub(crate) fn configure_provider_secret_owner_root(
             "provider interface '{source_interface_id}' must own its OpenCodex credential boundary"
         ));
     }
+    if safe_segment(credential_owner, "provider credential owner")? != credential_owner {
+        return Err("provider credential owner must be an exact interface id".to_string());
+    }
     let owner_private_env = opencodex
         .get("model_env")
         .is_some_and(|value| !value.is_null());
@@ -324,15 +328,34 @@ pub(crate) fn configure_provider_secret_owner_root(
         .transport
         .as_ref()
         .ok_or_else(|| format!("provider interface '{source_interface_id}' has no transport"))?;
-    if transport.auth_secret_ref.is_none()
-        && transport.auth_env_key.is_none()
-        && transport.base_url_env.is_none()
-        && !owner_private_env
+    let secrets = transport.auth_secret_ref.is_some()
+        || transport.auth_env_key.is_some()
+        || transport.base_url_env.is_some()
+        || owner_private_env;
+    let account = match opencodex.get("oauth_provider") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::String(value))
+            if safe_segment(value, "OAuth provider")? == *value =>
+        {
+            true
+        }
+        Some(_) => return Err("OAuth provider must be an exact provider id".to_string()),
+    };
+    if account
+        && (transport.auth_secret_ref.is_some()
+            || transport.auth_env_key.is_some()
+            || owner_private_env)
     {
-        return Ok(false);
+        return Err(
+            "an account provider cannot also declare key or model environment credentials"
+                .to_string(),
+        );
+    }
+    if !secrets && !account {
+        return Ok(Vec::new());
     }
     if target_interface_id == credential_owner {
-        return Ok(false);
+        return Ok(Vec::new());
     }
     let private_root = interface_private_state_root.ok_or_else(|| {
         format!(
@@ -340,12 +363,56 @@ pub(crate) fn configure_provider_secret_owner_root(
         )
     })?;
     require_absolute("interface_private_state_root", private_root)?;
-    driver_config.host_slots.insert(
-        "provider_secret_owner_root".to_string(),
-        octopus_interfaces::HostSlotOverride {
-            additional_paths: Vec::new(),
-            path: private_root.join(credential_owner),
-        },
-    );
-    Ok(true)
+    let owner = private_root.join(credential_owner);
+    let mut roots = Vec::new();
+    if secrets {
+        driver_config.host_slots.insert(
+            "provider_secret_owner_root".to_string(),
+            octopus_interfaces::HostSlotOverride {
+                additional_paths: Vec::new(),
+                path: owner.clone(),
+            },
+        );
+        roots.push(("provider_secret_owner_root", false));
+    }
+    if account {
+        let private_root = std::fs::canonicalize(private_root)
+            .map_err(|error| format!("provider private interfaces root is unavailable: {error}"))?;
+        let owner = private_root.join(credential_owner);
+        let directory = owner.join("opencodex-account");
+        for path in [&owner, &directory] {
+            let metadata = std::fs::symlink_metadata(path)
+                .map_err(|error| format!("provider '{source_interface_id}' requires a connected account at '{}': {error}", path.display()))?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(
+                    "provider account storage must use regular owned directories".to_string(),
+                );
+            }
+        }
+        if std::fs::canonicalize(&directory).map_err(|error| error.to_string())? != directory {
+            return Err("provider account directory escaped its owner".to_string());
+        }
+        if driver_config
+            .host_slots
+            .get("provider_account_root")
+            .is_some_and(|slot| slot.path != directory || !slot.additional_paths.is_empty())
+        {
+            return Err(
+                "provider account root conflicts with its exact owned directory".to_string(),
+            );
+        }
+        driver_config.host_slots.insert(
+            "provider_account_root".to_string(),
+            octopus_interfaces::HostSlotOverride {
+                additional_paths: Vec::new(),
+                path: directory,
+            },
+        );
+        roots.push(("provider_account_root", true));
+    }
+    Ok(roots)
 }
+
+#[cfg(test)]
+#[path = "../tests/support/provider_accounts.rs"]
+mod tests;

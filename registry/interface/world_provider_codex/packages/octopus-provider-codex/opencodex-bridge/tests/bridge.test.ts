@@ -596,3 +596,40 @@ test("provider descriptors match providers.json and the pinned OpenCodex registr
   expect(new TextDecoder().decode(result.stderr)).toBe("");
   expect(result.exitCode).toBe(0);
 });
+
+test("an account provider serves Cloud Code Assist turns with its stored sign-in and only the caller's prompt", async () => {
+  const home = mkdtempSync(join(tmpdir(), "octopus-account-"));
+  directories.push(home);
+  const directory = join(home, "opencodex-account");
+  mkdirSync(directory, { mode: 0o700 });
+  writeFileSync(join(directory, "credential.json"), `${JSON.stringify({
+    version: 1, provider: "google-antigravity", accessToken: "account-token", refreshToken: "refresh-token",
+    expiresAt: Date.now() + 3_600_000, projectId: "account-project", accountId: "subject", accountLabel: "owner@example.test",
+  })}\n`, { mode: 0o600 });
+  const account = {
+    adapter: "google", registry_entry: "google-antigravity", base_url: "", api_key: undefined, auth_header: undefined, auth_value_prefix: undefined,
+    headers: {}, models: ["gemini-3.8-flash", "claude-opus-5-5"], default_model: "gemini-3.8-flash", account: { provider: "google-antigravity", directory },
+  };
+  const reply = () => sse([[null, { response: { candidates: [{ content: { role: "model", parts: [{ text: "antigravity says hi" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 3, totalTokenCount: 6 } } }]]);
+  const gemini = await exchange(account, reply(), "gemini-3.8-flash", [exactTool]);
+  expect(gemini.status).toBe(200);
+  expect(gemini.text).toContain("antigravity says hi");
+  expect(gemini.text).toContain("response.completed");
+  expect(gemini.observed.path).toBe("/v1internal:streamGenerateContent");
+  expect(gemini.observed.headers.get("authorization")).toBe("Bearer account-token");
+  expect(gemini.observed.body).toMatchObject({ model: "gemini-3.8-flash-medium", project: "account-project", requestType: "agent" });
+  const request = gemini.observed.body.request as Record<string, any>;
+  expect(request.systemInstruction).toBeUndefined();
+  expect(request.contents).toEqual([{ role: "user", parts: [{ text: "hi" }] }]);
+  expect(request.tools[0].functionDeclarations[0]).toEqual({ name: "exact_tool", description: "Exact", parameters: { type: "object", properties: {} } });
+  const claude = await exchange(account, reply(), "claude-opus-5-5", [exactTool]);
+  expect(claude.observed.body.model).toBe("claude-opus-5-5-medium");
+  expect((claude.observed.body.request as Record<string, any>).toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } });
+  rmSync(join(directory, "credential.json"));
+  const child = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.push(child);
+  child.stdin.write(JSON.stringify(config("http://127.0.0.1:9", { ...account, base_url: "http://127.0.0.1:9" })));
+  child.stdin.end();
+  expect(await child.exited).toBe(1);
+  expect(await new Response(child.stderr).text()).toContain("Antigravity is not signed in");
+});

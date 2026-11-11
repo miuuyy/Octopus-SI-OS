@@ -127,6 +127,20 @@
       }
     },
     {
+      "interface": "world_provider_antigravity",
+      "source_name": "antigravity",
+      "registry_entry": "google-antigravity",
+      "name": "Antigravity",
+      "developer": "Google",
+      "description": "Gemini and Claude through your Antigravity subscription.",
+      "icon": "antigravity-color.svg",
+      "account": {
+        "provider": "google-antigravity",
+        "client_module": "packages/account-client.cjs",
+        "help": "Connect your Google account to use your Antigravity subscription."
+      }
+    },
+    {
       "interface": "world_provider_xai",
       "source_name": "xai",
       "registry_entry": "xai",
@@ -420,7 +434,8 @@
         "env": "OCTOPUS_PROVIDER_OPENCODE_GO_MODEL",
         "label": "Model id, for example kimi-k2.7-code",
         "slug": "opencode-go-model",
-        "display_name": "OpenCode Go model"
+        "display_name": "OpenCode Go model",
+        "efforts": ["none", "low", "medium", "high", "xhigh"]
       }
     },
     {

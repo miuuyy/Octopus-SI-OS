@@ -144,7 +144,7 @@ const drift = [
 if (drift.length) throw new Error(`upstream.json used_surfaces drifted from the bridge sources:\n${drift.join("\n")}`);
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const inputs = ["package.json", "package-lock.json", "upstream.json", ...bridgeInputs];
+const inputs = ["package.json", "package-lock.json", "upstream.json", "scripts/prepare-upstream.mjs", ...(upstream.patches ?? []), ...bridgeInputs];
 const files = Object.fromEntries(inputs.map((name) => [name, digest(readFileSync(resolve(root, name)))]));
 const binaryBytes = readFileSync(binary);
 const receipt = {

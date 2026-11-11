@@ -1,3 +1,4 @@
+import { supportsAdapter } from "../src/adapters.ts";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -25,6 +26,7 @@ type ProviderSpec = {
   base_url?: { env: string; label: string };
   model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
   cli?: { commands: string[]; env: string[]; home_read: string[]; home_write: string[] };
+  account?: { provider: string; client_module: string; help: string };
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
 };
@@ -52,8 +54,7 @@ const EFFORT_DESCRIPTIONS: Record<Effort, string> = {
   max: "Maximum reasoning depth for the hardest problems",
 };
 const THINKING_TOGGLE_DESCRIPTIONS: Partial<Record<Effort, string>> = { none: "Thinking off", high: "Thinking on" };
-const ADAPTERS = new Set(["anthropic", "azure", "claude-cli", "google", "grok-cli", "openai-chat", "openai-responses"]);
-const CODEX_ONLY_PRIVATE_CONFIG = ["provider_operations", "web_search", "client_metadata"];
+const CODEX_ONLY_PRIVATE_CONFIG = ["provider_operations", "web_search", "client_metadata", "retained_tool_output"];
 const CODEX_NATIVE_SEARCH_TOOLS = ["web.search", "web.extract"];
 const CODEX_ONLY_OVERRIDES = [/^model_context_window=/, /^model_auto_compact_token_limit=/];
 const DEFAULT_CONTEXT_WINDOW = 400000;
@@ -257,6 +258,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     adapter,
     credential_owner_interface: spec.interface,
     ...(spec.registry_entry ? { registry_entry: spec.registry_entry } : {}),
+    ...(spec.account ? { oauth_provider: spec.account.provider } : {}),
     ...(spec.model ? { model_env: spec.model.env } : {}),
     ...(spec.cli ? { bridge_env_names: spec.cli.env } : {}),
     allow_private_network: spec.local === true || spec.allow_private_network === true,
@@ -268,6 +270,10 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     },
     model_catalog: { models: rows.map((row, index) => codexModelInfo(row, index, description(row), spec.default_context_window ?? DEFAULT_CONTEXT_WINDOW)) },
   };
+  if (spec.account) {
+    privateConfig.client_connection = { schema_version: 1, module: `interface://${spec.interface}/${spec.account.client_module}` };
+    privateConfig.account_bridge = `interface://${BRIDGE_SUBPATH}`;
+  }
   config.transport = {
     base_url: baseUrl,
     ...(spec.base_url ? { base_url_env: spec.base_url.env } : {}),
@@ -278,6 +284,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   };
   const ambient = config.residual_ambient;
   delete ambient.private_auth_store;
+  delete ambient.spawn.compatibility.required_features.retain_client_tool_outputs;
   ambient.spawn.isolation_overrides = [
     ...ambient.spawn.isolation_overrides.filter((value: string) => !CODEX_ONLY_OVERRIDES.some((pattern) => pattern.test(value))),
     "web_search=disabled",
@@ -334,7 +341,8 @@ function application(spec: ProviderSpec, logos: { logo?: string; logo_dark?: str
     icon: "sparkles",
     ...logos,
     interfaces: [spec.interface],
-    ...(fields.length ? { setup: { fields } } : {}),
+    ...(fields.length || spec.account ? { setup: { fields } } : {}),
+    ...(spec.account ? { connection: { help: spec.account.help } } : {}),
   };
 }
 
@@ -384,9 +392,11 @@ for (const provider of spec.providers) {
   if (entry?.deprecated) throw new Error(`${provider.interface}: OpenCodex registry entry ${provider.registry_entry} is deprecated: ${entry.deprecated}`);
   const seed = entry ? providerConfigSeed(entry) : undefined;
   const adapter = provider.adapter ?? seed?.adapter;
-  if (!ADAPTERS.has(adapter)) throw new Error(`${provider.interface}: adapter ${adapter} is not served by the bridge`);
-  if (!provider.key && !provider.local && !provider.cli) throw new Error(`${provider.interface}: a remote provider needs a key field or a signed-in CLI`);
+  if (typeof adapter !== "string" || !supportsAdapter(adapter)) throw new Error(`${provider.interface}: adapter ${adapter} is not served by the bridge`);
+  if (!provider.key && !provider.local && !provider.cli && !provider.account) throw new Error(`${provider.interface}: a remote provider needs a key field, an account or a signed-in CLI`);
   if (provider.cli && provider.key) throw new Error(`${provider.interface}: a CLI provider keeps its sign-in inside the CLI`);
+  if (provider.account && (provider.key || provider.cli || provider.local || provider.model)) throw new Error(`${provider.interface}: an account is the provider's only credential`);
+  if (provider.account && !/^packages\/[A-Za-z0-9_-]+\.cjs$/.test(provider.account.client_module)) throw new Error(`${provider.interface}: the account module is a .cjs file in the interface's packages folder`);
   if (provider.models && provider.model) throw new Error(`${provider.interface}: declare a model catalog or a model setup field, not both`);
   if (provider.endpoint && entry) throw new Error(`${provider.interface}: a registry entry already names its endpoint`);
   const baseUrl = provider.base_url ? "" : seed?.baseUrl ?? provider.endpoint;

@@ -1,0 +1,55 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_provider_antigravity",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_provider_antigravity",
+  "release_status": "optional",
+  "display": {
+    "name": "Antigravity",
+    "description": "Gemini and Claude through your Antigravity subscription.",
+    "developer": "Google",
+    "category": "provider",
+    "icon": "sparkles"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_provider_antigravity",
+      "primary": true,
+      "configuration": [
+        {
+          "path": "interface.json",
+          "fields": [
+            {
+              "pointer": "/interface_driver_config/private_config/model",
+              "schema": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            {
+              "pointer": "/interface_driver_config/private_config/reasoning_effort",
+              "schema": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "required_packages": [
+    "world_provider_codex"
+  ]
+}
