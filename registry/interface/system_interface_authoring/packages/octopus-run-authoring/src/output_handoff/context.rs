@@ -166,8 +166,13 @@ impl ProviderOutputHandoff {
         if recovered.is_empty() { return Ok(()); }
         let mut next = state.clone();
         for (sequence, (context, rebase)) in recovered {
-            let merged = merge_failed_source_context(&next.session_context.artifacts, &context.artifacts, sequence, Some(self.source_movement_seq), &rebase)?;
-            next.session_context.artifacts = merged;
+            let pinned = unpublished_context_start(&next)?;
+            let recovered = context.artifacts.iter()
+                .filter(|entry| !next.session_context.artifacts[..pinned].iter().any(|kept| kept.source_artifact == entry.source_artifact))
+                .cloned().collect::<Vec<_>>();
+            let merged = merge_failed_source_context(&next.session_context.artifacts[pinned..], &recovered, sequence, Some(self.source_movement_seq), &rebase)?;
+            next.session_context.artifacts.truncate(pinned);
+            next.session_context.artifacts.extend(merged);
             reconcile_resolved_session_snapshot_head(&next.session_context, &mut next.session_snapshot_head)?;
         }
         validate_session_context_evidence(&mut next.session_context, SessionContextEvidenceScope {

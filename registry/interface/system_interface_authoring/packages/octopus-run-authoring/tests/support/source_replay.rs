@@ -2256,6 +2256,56 @@ async fn parallel_results_consume_through_recorded_rebase() {
 }
 
 #[tokio::test]
+async fn a_snapshot_published_while_a_sibling_call_waits_replaces_the_context_it_carries() {
+    let mut fixture = parallel_call_fixture();
+    fixture.handoff.context_output_labels.insert("turn.interrupted.result".into());
+    fixture.handoff.session_snapshot_labels.insert("turn.interrupted.result".into());
+    let calls = [("tool", "read", "read-a"), ("search", "search", "search-b")].iter()
+        .map(|call| fixture.calls(std::slice::from_ref(call)).1.remove(0)).collect::<Vec<_>>();
+    let (a, a_result) = fixture.admit_result(&calls[0], "read", "read-a");
+    let (b, b_result) = fixture.admit_result(&calls[1], "search", "search-b");
+    fixture.select_source(a);
+    assert_eq!(fixture.handoff.recover_source().await.unwrap(), ProviderSourceRecovery::Process);
+    let rebase = fixture.handoff.state.try_lock().unwrap().result_rebase.clone().unwrap();
+    let limits = fixture.handoff.ctx.required_host_io_limits().unwrap();
+    let before = std::fs::read(&fixture.handoff.run_path).unwrap();
+    let before_record = RunRecord::from_bytes(&before).unwrap();
+    let (captured, _, _) = recover_source_session_context_from_cache(&fixture.handoff.ctx.blobs_dir, limits, &fixture.handoff.session, &before_record,
+        &fixture.handoff.config, a, &rebase, &fixture.handoff.context_output_labels, &fixture.handoff.session_snapshot_labels).unwrap();
+    let closure = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("closure"), "turn.interrupted.result",
+        br#"{"label":"turn.interrupted.result","returned_to_model":false}"#).unwrap();
+    let snapshot = materialize_session_snapshot(&closure, &captured, None).unwrap();
+    let identity = artifact_identity(&snapshot, &fixture.handoff.var_dir).unwrap();
+    let carrier = identity.artifact.clone();
+    let authored = fixture.handoff.author_run_with_bindings(&before, &[carrier.id.clone()], &[PreparedHandoff {
+        identity, output_checkpoint: fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone(), verified_inputs: Vec::new(),
+    }], true, None, false, true, &[]).unwrap();
+    fixture.install(&authored);
+    fixture.edge(authored.content.as_bytes(), &authored.pending_handoff.items[0].checkpoint.id, &snapshot, "worker".into(), MovementKind::InterfaceArrival);
+    result_inputs::validate_saved(&fixture.handoff.ctx, &before_record, &RunRecord::from_bytes(authored.content.as_bytes()).unwrap(), &fixture.handoff.config).unwrap();
+    fixture.publish(&authored);
+    fixture.reload_definition();
+    assert_eq!(fixture.result_inputs().len(), 1, "the closure of one late result leaves its sibling call outstanding");
+
+    fixture.select_source(b);
+    assert_eq!(fixture.handoff.recover_source().await.unwrap(), ProviderSourceRecovery::Process,
+        "a sibling result waiting across the snapshot is consumed through its own admitted movement");
+    assert_eq!(fixture.handoff.state.try_lock().unwrap().result_rebase, Some(vec![carrier.clone()]),
+        "the rebase starts with the snapshot that replaced the admitted context");
+    let consumed = fixture.consume_result(&b_result, "interface.context.updated", true);
+    assert_eq!(consumed.pending_handoff.rebase, vec![carrier.clone()]);
+    let record = fixture.reload_definition();
+    let read = |rebase: &[ArtifactRef]| recover_source_session_context_from_cache(&fixture.handoff.ctx.blobs_dir, limits, &fixture.handoff.session, &record,
+        &fixture.handoff.config, b, rebase, &fixture.handoff.context_output_labels, &fixture.handoff.session_snapshot_labels);
+    let (replayed, head, _) = read(std::slice::from_ref(&carrier)).unwrap();
+    assert_eq!(head.map(|head| head.artifact), Some(carrier.clone()));
+    let positions = [&fixture.input, &a_result, &carrier, &b_result].map(|reference| replayed.artifacts.iter()
+        .position(|entry| &entry.source_artifact == reference).unwrap());
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "the snapshot carries the admitted context and precedes the result");
+    assert!(read(&[a_result.clone(), carrier.clone()]).is_err(), "a snapshot later in a rebase replaces nothing");
+}
+
+#[tokio::test]
 async fn a_foreign_advance_is_consumed_in_one_write_and_an_unproven_one_fails_closed() {
     let mut fixture = parallel_call_fixture();
     let (_, read) = fixture.calls(&[("tool", "read", "read-a")]);

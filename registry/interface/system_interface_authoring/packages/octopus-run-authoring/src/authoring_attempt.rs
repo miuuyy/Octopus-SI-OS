@@ -614,13 +614,27 @@ pub(crate) fn recover_source_session_context_with_static_correction(
         )?;
     }
     let rebase_provenance = session.index()?.bound_provenance(&record.id, &config.provider_interface, rebase.iter())?;
-    for reference in rebase {
+    for (index, reference) in rebase.iter().enumerate() {
         if session_context.artifacts.iter().any(|entry| &entry.source_artifact == reference) {
             continue;
         }
         let (manifest, payload) = read_pinned_artifact_from_cache(blobs_dir, limits, reference)?;
         if session_snapshot_labels.contains(&manifest.label) {
-            return Err("a recorded result rebase cannot carry a session snapshot".into());
+            if index != 0 {
+                return Err("a recorded result rebase carries a session snapshot only as the context it replaces".into());
+            }
+            replace_admitted_session_context(
+                blobs_dir, limits,
+                &mut static_context_artifacts,
+                &mut session_context,
+                &mut session_snapshot_head,
+                reference,
+                &payload,
+                rebase_provenance.get(&artifact_ref_key(reference)).cloned().unwrap_or_default(),
+                session_snapshot_labels,
+                &config.provider_interface,
+            )?;
+            continue;
         }
         collect_bound_context_from_cache(
             blobs_dir, limits,

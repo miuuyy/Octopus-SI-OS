@@ -473,7 +473,11 @@ reader rebuilds the result's session context as its admitted context, then the
 rebase, then the result. Instructions and role artifacts are not part of it; the
 native turn refreshes them. Context that left the run while the call waited, or
 a change without checked writer evidence, fails closed. A result is never
-delivered twice.
+delivered twice. A session snapshot the provider published while the call waited,
+such as the closure of a sibling call's late result, replaces the context it
+carries: the rebase then starts with that snapshot, and every reader proves that
+the snapshot carries the whole admitted context before building on it. Admitted
+context that no snapshot carries has left the run.
 
 The provider declares conversational input formats in `private_config.input_messages`.
 Each label names the payload fields that carry its text, client observations,
@@ -783,6 +787,8 @@ Session snapshots retain their immutable parent prefix when ledger validation
 fills previously absent movement coordinates. Prefix identity includes labels,
 payloads and exact artifact references; every movement coordinate is validated
 separately. Appending recovered history does not force another full-history copy.
+History recovered from a failed source joins the context after the pinned
+snapshot; entries the snapshot already carries stay where the snapshot has them.
 
 A deterministic projection package may explicitly replace a final artifact that
 its verifier rejected. The checked writer proves the exact predecessor record,

@@ -332,6 +332,42 @@ pub(crate) fn collect_bound_context(
     collect_bound_context_from_cache(&ctx.blobs_dir, ctx.required_host_io_limits()?, static_context_artifacts, session_context, session_snapshot_head, artifact, payload, provenance, session_snapshot_labels, provider)
 }
 
+pub(crate) fn replace_admitted_session_context(
+    blobs_dir: &Path,
+    limits: InterfaceHostIoLimits,
+    static_context_artifacts: &mut Vec<ArtifactId>,
+    session_context: &mut ResolvedSessionContext,
+    session_snapshot_head: &mut Option<SessionSnapshotHead>,
+    snapshot: &ArtifactRef,
+    payload: &[u8],
+    provenance: BoundArtifactProvenance,
+    session_snapshot_labels: &BTreeSet<String>,
+    provider: &InterfaceId,
+) -> Result<(), String> {
+    let admitted = std::mem::take(&mut session_context.artifacts);
+    *session_snapshot_head = None;
+    collect_bound_context_from_cache(
+        blobs_dir, limits, static_context_artifacts, session_context, session_snapshot_head,
+        snapshot, payload, provenance, session_snapshot_labels, provider,
+    )?;
+    if session_snapshot_head.as_ref().map(|head| &head.artifact) != Some(snapshot) {
+        return Err(format!(
+            "result rebase artifact '{}' replaces the admitted context without carrying a session snapshot",
+            snapshot.id.as_str()
+        ));
+    }
+    if let Some(lost) = admitted.iter().find(|entry| {
+        !session_context.artifacts.iter().any(|carried| carried.source_artifact == entry.source_artifact)
+    }) {
+        return Err(format!(
+            "context '{}' left the run while its call waited: session snapshot '{}' does not carry it",
+            lost.source_artifact.id.as_str(),
+            snapshot.id.as_str()
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn collect_bound_context_from_cache(
     blobs_dir: &Path,
     limits: InterfaceHostIoLimits,

@@ -52,6 +52,9 @@ pub(crate) fn result_rebase(
         })?);
     }
     if let Some(lost) = admitted.get(position) {
+        if position == 0 && !rebase.is_empty() {
+            return Ok(rebase);
+        }
         return Err(format!(
             "context '{}' left the run while call '{}' waited for its result",
             lost.as_str(),
@@ -198,7 +201,7 @@ impl ProviderOutputHandoff {
             rebase.iter(),
         )?;
         let limits = self.ctx.required_host_io_limits()?;
-        for reference in rebase {
+        for (index, reference) in rebase.iter().enumerate() {
             if next
                 .session_context
                 .artifacts
@@ -209,7 +212,31 @@ impl ProviderOutputHandoff {
             }
             let (manifest, payload) = read_pinned_artifact_from_cache(&self.ctx.blobs_dir, limits, reference)?;
             if self.session_snapshot_labels.contains(&manifest.label) {
-                return Err("a result rebase cannot carry a session snapshot".into());
+                if index != 0 {
+                    return Err("a result rebase carries a session snapshot only as the context it replaces".into());
+                }
+                replace_admitted_session_context(
+                    &self.ctx.blobs_dir,
+                    limits,
+                    &mut next.static_context_artifacts,
+                    &mut next.session_context,
+                    &mut next.session_snapshot_head,
+                    reference,
+                    &payload,
+                    provenance
+                        .get(&artifact_ref_key(reference))
+                        .cloned()
+                        .unwrap_or_default(),
+                    &self.session_snapshot_labels,
+                    &self.config.provider_interface,
+                )?;
+                continue;
+            }
+            if index == 0
+                && !next.session_context.artifacts.is_empty()
+                && !next.session_context.artifacts.iter().any(|entry| next.context_artifacts.contains(&entry.source_artifact.id))
+            {
+                return Err("the admitted context left the run while its call waited and no session snapshot replaced it".into());
             }
             collect_bound_context(
                 &self.ctx,
