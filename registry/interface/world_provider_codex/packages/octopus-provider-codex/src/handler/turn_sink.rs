@@ -59,6 +59,9 @@ pub(crate) fn normalize_output_identity(
     output: &mut CodexTurnOutput,
     turn_input: Option<&ArtifactRef>,
 ) -> Result<(), InterfaceDriverError> {
+    if matches!(output.route, ProviderEmissionRoute::Operation { .. }) {
+        return Ok(());
+    }
     let object = output.value.as_object_mut().ok_or_else(|| {
         InterfaceDriverError::Protocol(
             "Codex provider output must be a self-identifying JSON object".to_string(),

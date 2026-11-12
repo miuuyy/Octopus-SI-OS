@@ -4451,14 +4451,39 @@ while IFS= read -r _; do :; done
             operation.interface,
             InterfaceId::new("world_mcp_drive_exact")
         );
-        let output = CodexTurnOutput::interface_operation_call(
+        let mut output = CodexTurnOutput::interface_operation_call(
             operation,
             serde_json::json!({"uri": "drive://document"}),
             "call-1".to_string(),
             Some("never"),
         );
+        let turn_input = ArtifactRef { id: "provider.peer.input:1".into(), content: octopus_ledger::ContentHash::of_bytes(b"in") };
+        crate::handler::turn_sink::normalize_output_identity(&mut output, Some(&turn_input)).unwrap();
         assert_eq!(output.label, "mcp.operation.request");
-        assert_eq!(output.value["approval_policy"], "never");
+        assert_eq!(
+            output.value,
+            serde_json::json!({
+                "operation": "google_drive.read_resource",
+                "arguments": {"uri": "drive://document"},
+                "correlation_id": "call-1",
+                "approval_policy": "never",
+            })
+        );
+        let mut without_approval = CodexTurnOutput::interface_operation_call(
+            operation,
+            serde_json::json!({"uri": "drive://document"}),
+            "call-2".to_string(),
+            None,
+        );
+        crate::handler::turn_sink::normalize_output_identity(&mut without_approval, Some(&turn_input)).unwrap();
+        assert_eq!(
+            without_approval.value,
+            serde_json::json!({
+                "operation": "google_drive.read_resource",
+                "arguments": {"uri": "drive://document"},
+                "correlation_id": "call-2",
+            })
+        );
         assert_eq!(
             output.route,
             ProviderEmissionRoute::Operation {

@@ -19,6 +19,8 @@ struct OperationCall {
     #[serde(rename = "arguments")]
     _arguments: serde_json::Value,
     correlation_id: String,
+    #[serde(default, rename = "approval_policy")]
+    _approval_policy: Option<String>,
 }
 
 fn call_identity(bytes: &[u8]) -> Result<(String, Option<String>), String> {

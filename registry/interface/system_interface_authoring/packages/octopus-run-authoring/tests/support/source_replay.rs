@@ -2493,6 +2493,21 @@ async fn operation_results_wait_per_call_and_a_gated_answer_rearms_the_same_wait
     assert!(result_inputs::select_call_result(&mut selected.clone(), &ProviderHandoffRoute::Interface { interface: "world_app".into() }).is_err());
     assert!(result_inputs::select_call_result(&mut selected.clone(), &ProviderHandoffRoute::Operation { interface: "world_app".into(), result_label: "app.other".into() }).is_err());
     result_inputs::select_call_result(&mut selected, &ProviderHandoffRoute::Operation { interface: "world_app".into(), result_label: "app.result".into() }).unwrap();
+    let approval_call = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("mcp-call"), "app.request",
+        br#"{"operation":"app.send","arguments":{"to":"a"},"correlation_id":"call-mcp","approval_policy":"on-request"}"#).unwrap();
+    let approval_id = artifact_identity(&approval_call, &fixture.handoff.var_dir).unwrap();
+    let mut approval_ctx = current_context_artifacts(&RunRecord::from_bytes(&initial).unwrap(), &fixture.handoff.config).unwrap();
+    append_artifact(&mut approval_ctx, fixture.input.id.clone());
+    append_artifact(&mut approval_ctx, approval_id.artifact.id.clone());
+    fixture.handoff.author_run_with_bindings(&initial, &approval_ctx, &[PreparedHandoff {
+        identity: approval_id, output_checkpoint: selected.clone(), verified_inputs: Vec::new(),
+    }], true, None, false, false, &[]).unwrap();
+    let labeled_call = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("bad-call"), "app.request",
+        br#"{"label":"app.request","operation":"app.send","arguments":{"to":"a"},"correlation_id":"call-bad"}"#).unwrap();
+    let labeled_id = artifact_identity(&labeled_call, &fixture.handoff.var_dir).unwrap();
+    assert!(fixture.handoff.author_run_with_bindings(&initial, &approval_ctx, &[PreparedHandoff {
+        identity: labeled_id, output_checkpoint: selected.clone(), verified_inputs: Vec::new(),
+    }], true, None, false, false, &[]).is_err());
     let call_file = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("app-call"), "app.request",
         br#"{"operation":"app.send","arguments":{"to":"a"},"correlation_id":"call-1"}"#).unwrap();
     let call = artifact_identity(&call_file, &fixture.handoff.var_dir).unwrap();
