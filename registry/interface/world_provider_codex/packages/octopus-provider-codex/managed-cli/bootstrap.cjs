@@ -381,7 +381,7 @@ function copyInstallation(source, destination) {
   const receipt = verifyInstallation(source);
   fs.mkdirSync(destination, { recursive: true });
   for (const { executable } of executableReceipts(receipt)) {
-    fs.copyFileSync(path.join(source, executable), path.join(destination, executable));
+    fs.copyFileSync(path.join(source, executable), path.join(destination, executable), fs.constants.COPYFILE_FICLONE);
     fs.chmodSync(path.join(destination, executable), 0o755);
   }
   fs.copyFileSync(path.join(source, RECEIPT), path.join(destination, RECEIPT));
