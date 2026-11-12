@@ -31,11 +31,13 @@ import { buildWebSearchTool } from "../node_modules/@bitkyc08/opencodex/src/web-
 import { toolChoiceToolPredicate } from "../node_modules/@bitkyc08/opencodex/src/types/tools.ts";
 import type {
   AdapterEvent,
+  OcxMessage,
   OcxParsedRequest,
   OcxProviderConfig,
 } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 
 type AdapterName = string;
+type AdapterError = Extract<AdapterEvent, { type: "error" }>;
 
 type ProviderOptions = {
   annotate_empty_tool_outputs?: boolean;
@@ -695,14 +697,50 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
     return first;
   }
   clearTimeout(timer);
-  return deliver(parsed, responseModel, guardEmptyCompletionEventStream({
-    firstEvents: first,
+  let dropped: AdapterError | undefined;
+  const watched = async function* (events: AsyncIterable<AdapterEvent>): AsyncGenerator<AdapterEvent> {
+    for await (const event of events) {
+      if (isDroppedOutput(event)) dropped = event;
+      yield event;
+    }
+  };
+  return deliver(parsed, responseModel, endDroppedOutput(guardEmptyCompletionEventStream({
+    firstEvents: watched(first),
     continuation: async () => {
-      const retried = await upstreamAttempt(config, request, adapter, parsed, budget, abort);
+      const retry = dropped
+        ? { ...parsed, context: { ...parsed.context, messages: [...parsed.context.messages, droppedOutput.note(dropped)] } }
+        : parsed;
+      const retried = await upstreamAttempt(config, request, adapter, retry, budget, abort);
       if (retried instanceof Response) throw new Error(`retry of an empty completion failed upstream with ${retried.status}`);
-      return retried;
+      return watched(retried);
     },
-  }), maps, budget, abort, stallTimeoutSec, cleanup);
+  })), maps, budget, abort, stallTimeoutSec, cleanup);
+}
+
+const droppedOutput = {
+  note: (event: AdapterError): OcxMessage => ({
+    role: "developer",
+    content: `The provider dropped your previous response before any of it was delivered: ${event.message}. No tool ran. `
+      + "Respond again; the provider drops a tool call it cannot parse, most often one with a very large argument, "
+      + "so split large content across several smaller calls.",
+    timestamp: Date.now(),
+  }),
+  failure: (event: AdapterError): AdapterError => ({
+    type: "error",
+    status: 400,
+    errorType: "invalid_request_error",
+    code: "invalid_prompt",
+    message: `The provider dropped the model's response before any output: ${event.message}. The turn stops instead of resending it.`,
+    ...(event.usage ? { usage: event.usage } : {}),
+  }),
+};
+
+function isDroppedOutput(event: AdapterEvent): event is AdapterError {
+  return event.type === "error" && event.replaySafeBeforeOutput === true;
+}
+
+async function* endDroppedOutput(events: AsyncIterable<AdapterEvent>): AsyncGenerator<AdapterEvent> {
+  for await (const event of events) yield isDroppedOutput(event) ? droppedOutput.failure(event) : event;
 }
 
 const WEB_SEARCH_REASONING = "low";
@@ -747,6 +785,7 @@ async function webSearchTurn(
       maxSearches: WEB_SEARCH_MAX_SEARCHES,
       terminalRefusalAsFailed: true,
       abortSignal: abort.signal,
+      droppedOutput,
       ...(stallTimeoutSec === undefined ? {} : { stallTimeoutSec }),
     });
   } catch (error) {

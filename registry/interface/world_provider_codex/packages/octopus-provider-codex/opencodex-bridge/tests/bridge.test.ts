@@ -640,6 +640,27 @@ function signedInAntigravity() {
   return { directory, account, reply };
 }
 
+test("a response the provider drops before any output is answered once with the model told why, then ends the turn", async () => {
+  const { account } = signedInAntigravity();
+  const drop = () => sse([[null, { response: { candidates: [{ finishReason: "MALFORMED_FUNCTION_CALL" }] } }]]);
+  const call = () => sse([[null, { response: { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: "exact_tool", args: {} } }] }, finishReason: "STOP" }] } }]]);
+  const replies = [drop, call];
+  const sent: string[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    sent.push((await request.json()).request.contents.at(-1).parts[0].text);
+    return (replies.shift() ?? drop)();
+  } });
+  servers.push(upstream);
+  const origin = `http://127.0.0.1:${upstream.port}`;
+  const bridge = await spawnBridge(config(origin, { ...account, base_url: origin, web_search: { backend: "gemini", model: "gemini-3.8-flash" } }));
+  const turn = async (tools: unknown[]) => (await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "gemini-3.8-flash", stream: true, input: userInput, tools }) })).text();
+  const hosted = [{ type: "web_search", external_web_access: true }, exactTool];
+  expect(await turn(hosted)).toContain("\"name\":\"exact_tool\"");
+  for (const failed of [await turn(hosted), await turn([exactTool])]) expect(failed).toContain("\"code\":\"invalid_prompt\"");
+  expect(sent.map(text => text.includes("No tool ran"))).toEqual([false, true, false, true, false, true]);
+});
+
 test("a hosted web_search runs only through the search backend its provider names", async () => {
   const { account, reply } = signedInAntigravity();
   const hosted = [{ type: "web_search", external_web_access: true }];

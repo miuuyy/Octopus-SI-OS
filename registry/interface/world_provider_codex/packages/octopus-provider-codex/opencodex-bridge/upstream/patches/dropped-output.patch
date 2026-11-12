@@ -1,0 +1,52 @@
+diff --git a/src/web-search/loop.ts b/src/web-search/loop.ts
+index e993f8b..09d3b79 100644
+--- a/src/web-search/loop.ts
++++ b/src/web-search/loop.ts
+@@ -461,6 +461,10 @@ export interface WebSearchLoopDeps {
+   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
+   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
+   onCompletedResponse?: (response: Record<string, unknown>) => void;
++  droppedOutput?: {
++    note: (event: Extract<AdapterEvent, { type: "error" }>) => OcxMessage;
++    failure: (event: Extract<AdapterEvent, { type: "error" }>) => Extract<AdapterEvent, { type: "error" }>;
++  };
+ }
+ 
+ /**
+@@ -514,6 +518,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
+   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
+   const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+   let emptyAnswerRetries = 0;
++  let droppedOutputNoted = false;
+   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
+   // Search-calling passes and the discarded empty forced answer are summed here and added to what
+   // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
+@@ -877,7 +882,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
+         signal,
+         inactivityTimeoutMs: routedModelStallTimeoutMs,
+         translatorBudget,
+-        preserveAdapterError: deps.thinkingRecovery !== undefined,
++        preserveAdapterError: deps.thinkingRecovery !== undefined || deps.droppedOutput !== undefined,
+         // A pass that fails was still billed; the error path reports it with the hidden passes.
+         onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
+       })) {
+@@ -1290,8 +1295,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
+           }
+           if (split.calls.some(call => call.kind === "advisor")) yield { type: "assistant_boundary" };
+         } catch (e) {
++          const dropped = e instanceof LoopError && deps.droppedOutput && e.event?.replaySafeBeforeOutput === true
++            && e.event.retryable !== false ? e.event : undefined;
++          if (dropped && !droppedOutputNoted) {
++            droppedOutputNoted = true;
++            messages.push(deps.droppedOutput!.note(dropped));
++            continue;
++          }
+           // The bridge reports no usage for either error; the iterations already sent still count.
+           if (hiddenUsage) deps.onUsage?.(hiddenUsage);
++          if (dropped) {
++            yield deps.droppedOutput!.failure(dropped);
++            return;
++          }
+           if (isTranslatorBudgetExceededError(e)) {
+             yield {
+               type: "error",

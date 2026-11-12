@@ -130,7 +130,7 @@
       "interface": "world_provider_antigravity",
       "source_name": "antigravity",
       "registry_entry": "google-antigravity",
-      "model_guide": "Choosing a model for a run you create here: gemini-4-carbon at low reasoning effort is the default for ordinary work; do not create runs on gemini-3.8-flash, which is too weak for unattended work, recurring checks included; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5, since Claude models are not reliable through this provider.",
+      "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheap and capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5, since Claude models are not reliable through this provider.",
       "name": "Antigravity",
       "developer": "Google",
       "description": "Gemini and Claude through your Antigravity subscription.",
@@ -140,7 +140,7 @@
         "client_module": "packages/account-client.cjs",
         "disclosure": ["Connect signs in with your Google account; model calls of this provider use its Antigravity subscription."]
       },
-      "web_search": { "backend": "gemini", "model": "gemini-3.8-flash" }
+      "web_search": { "backend": "gemini", "model": "gemini-4-hydrogen" }
     },
     {
       "interface": "world_provider_xai",

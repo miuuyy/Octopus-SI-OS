@@ -614,23 +614,29 @@ sends no reasoning effort upstream.
 The bridge serves OpenCodex's registered adapters through one request factory,
 taking each model's wire from the pinned registry; `src/adapters.ts` holds the
 one list of adapters it serves, and Rust carries the declared adapter name
-without a second list. The upstream dependency gains one option,
-`preserveCallerContext`, from the pinned patches listed in `upstream.json`;
-installation and build refuse a patch that no longer applies. With it OpenCodex
-sends the caller's instructions and tool descriptions as written: it adds no
-tool-catalogue or output-style prompt, renames no identity sentence, rewrites no
-visualization directive or code-mode tool, and trims no assistant history. Wire
+without a second list. The upstream dependency gains two options,
+`preserveCallerContext` and the web search loop's `droppedOutput`, from the pinned
+patches listed in `upstream.json`; installation and build refuse a patch that no
+longer applies. With `preserveCallerContext` OpenCodex sends the caller's
+instructions and tool descriptions as written: it adds no tool-catalogue or
+output-style prompt, renames no identity sentence, rewrites no visualization
+directive or code-mode tool, and trims no assistant history. Wire
 compatibility stays OpenCodex's: reasoning a wire cannot carry is dropped, empty
 content gets the wire's placeholder, images are fitted to a provider's limits,
 and a Gemini tool call without a thought signature carries Google's validator
 sentinel, so a history a provider would refuse does not end the task. The
 OpenCodex router, failover selection, automatic continuation and shared account
 store are outside this boundary. A turn that ends with no output text and no
-tool call, or that the upstream fails replay-safely before any output (a dropped
-malformed function call), is run once more as the identical request through
-OpenCodex's empty-completion guard; a second empty turn is a stated failure, never
-a completed turn without an answer. The request deadline bounds the wait for the
-upstream's answer; the stream that follows is bounded by the stall clock.
+tool call is run once more as the identical request through OpenCodex's
+empty-completion guard; a second empty turn is a stated failure, never a
+completed turn without an answer. A response the upstream drops before any output
+(a function call the provider could not parse) is not resent as it was: in an
+ordinary turn and in a hosted web search turn alike, the bridge sends it once more
+with a developer message that gives the upstream's reason, says that no tool ran
+and asks for smaller calls, so the model can change the call. A second drop ends
+the turn as an `invalid_prompt` failure naming that reason, which Codex does not
+retry. The request deadline bounds the wait for the upstream's answer; the
+stream that follows is bounded by the stall clock.
 Generated OpenCodex descriptors send peer and lifecycle arrivals through their
 ordinary input contract and do not declare `retained_tool_output`: an unpaired
 native Responses tool output has no equivalent on every translated wire.
