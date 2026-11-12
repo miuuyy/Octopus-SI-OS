@@ -139,7 +139,8 @@
         "provider": "google-antigravity",
         "client_module": "packages/account-client.cjs",
         "disclosure": ["Connect signs in with your Google account; model calls of this provider use its Antigravity subscription."]
-      }
+      },
+      "web_search": { "backend": "gemini", "model": "gemini-3.8-flash" }
     },
     {
       "interface": "world_provider_xai",

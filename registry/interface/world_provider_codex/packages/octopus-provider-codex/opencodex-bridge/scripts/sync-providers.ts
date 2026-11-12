@@ -30,6 +30,7 @@ type ProviderSpec = {
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
   model_guide?: string;
+  web_search?: { backend: "gemini"; model: string };
 };
 
 type Spec = { schema_version: 1; template_interface: string; providers: ProviderSpec[] };
@@ -246,7 +247,8 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   const config = out.interface_driver_config;
   const privateConfig = config.private_config;
   for (const key of CODEX_ONLY_PRIVATE_CONFIG) delete privateConfig[key];
-  privateConfig.model_hidden_tools = privateConfig.model_hidden_tools.filter((tool: string) => !CODEX_NATIVE_SEARCH_TOOLS.includes(tool));
+  if (spec.web_search) privateConfig.web_search = "live";
+  else privateConfig.model_hidden_tools = privateConfig.model_hidden_tools.filter((tool: string) => !CODEX_NATIVE_SEARCH_TOOLS.includes(tool));
   const preferred = spec.model ? rows[0] : rows.find((row) => row.slug === spec.default_model) ?? rows[0];
   const description = (row: ModelRow) => `${row.display_name} through ${spec.name}.`;
   privateConfig.model = preferred.slug;
@@ -265,6 +267,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     ...(spec.cli ? { bridge_env_names: spec.cli.env } : {}),
     allow_private_network: spec.local === true || spec.allow_private_network === true,
     ...(adapter === "anthropic" ? { cache_retention: "short" } : {}),
+    ...(spec.web_search ? { web_search: spec.web_search } : {}),
     limits: {
       max_request_bytes: 33554432,
       max_translated_call_bytes: 2097152,
@@ -289,11 +292,11 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   delete ambient.spawn.compatibility.required_features.retain_client_tool_outputs;
   ambient.spawn.isolation_overrides = [
     ...ambient.spawn.isolation_overrides.filter((value: string) => !CODEX_ONLY_OVERRIDES.some((pattern) => pattern.test(value))),
-    "web_search=disabled",
+    ...(spec.web_search ? [] : ["web_search=disabled"]),
   ];
   const variables = out.interface_policy.variables;
   variables.models.default = rows.map((row) => row.slug);
-  if (variables.web_search_modes) variables.web_search_modes.default = ["disabled"];
+  if (variables.web_search_modes) variables.web_search_modes.default = spec.web_search ? ["disabled", "live"] : ["disabled"];
   return out;
 }
 
@@ -400,6 +403,9 @@ for (const provider of spec.providers) {
   if (provider.account && (provider.key || provider.cli || provider.local || provider.model)) throw new Error(`${provider.interface}: an account is the provider's only credential`);
   if (provider.account && !/^packages\/[A-Za-z0-9_-]+\.cjs$/.test(provider.account.client_module)) throw new Error(`${provider.interface}: the account module is a .cjs file in the interface's packages folder`);
   if (provider.models && provider.model) throw new Error(`${provider.interface}: declare a model catalog or a model setup field, not both`);
+  if (provider.web_search && (provider.web_search.backend !== "gemini" || provider.account?.provider !== "google-antigravity" || !provider.web_search.model)) {
+    throw new Error(`${provider.interface}: web_search runs only through OpenCodex's gemini backend on the provider's own Antigravity account, with a declared search model`);
+  }
   if (provider.endpoint && entry) throw new Error(`${provider.interface}: a registry entry already names its endpoint`);
   const baseUrl = provider.base_url ? "" : seed?.baseUrl ?? provider.endpoint;
   if (!provider.base_url && !baseUrl) throw new Error(`${provider.interface}: no base URL`);

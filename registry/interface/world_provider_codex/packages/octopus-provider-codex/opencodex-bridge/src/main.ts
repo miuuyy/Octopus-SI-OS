@@ -26,6 +26,9 @@ import {
 import { isLocalUpstream } from "../node_modules/@bitkyc08/opencodex/src/lib/local-upstream.ts";
 import { redactSecretString } from "../node_modules/@bitkyc08/opencodex/src/lib/redact.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
+import { runWithWebSearch } from "../node_modules/@bitkyc08/opencodex/src/web-search/loop.ts";
+import { buildWebSearchTool } from "../node_modules/@bitkyc08/opencodex/src/web-search/synthetic-tool.ts";
+import { toolChoiceToolPredicate } from "../node_modules/@bitkyc08/opencodex/src/types/tools.ts";
 import type {
   AdapterEvent,
   OcxParsedRequest,
@@ -49,6 +52,8 @@ type ProviderOptions = {
   upstream_http_version?: "auto" | "h1" | "h2" | "http1.1" | "http2";
 };
 
+type WebSearch = { backend: "gemini"; model: string };
+
 type RuntimeProvider = {
   adapter: AdapterName;
   allow_private_network: boolean;
@@ -65,6 +70,7 @@ type RuntimeProvider = {
   options: ProviderOptions;
   registry_entry?: string;
   account?: OAuthAccountConfig;
+  web_search?: WebSearch;
 };
 
 type BridgeConfig = {
@@ -119,6 +125,16 @@ function accountValue(value: unknown): OAuthAccountConfig {
   const directory = stringValue(value.directory, "provider.account.directory");
   if (!isAbsolute(directory) || directory.includes("\0")) throw new Error("provider.account.directory must be absolute");
   return { provider: value.provider, directory };
+}
+
+function webSearchValue(value: unknown, account: OAuthAccountConfig | undefined): WebSearch {
+  if (!isObject(value)) throw new Error("provider.web_search must be an object");
+  exactKeys(value, ["backend", "model"], "provider.web_search");
+  if (value.backend !== "gemini") throw new Error("provider.web_search.backend is unsupported");
+  if (account?.provider !== "google-antigravity") {
+    throw new Error("provider.web_search.backend 'gemini' searches through the provider's own Antigravity account");
+  }
+  return { backend: value.backend, model: stringValue(value.model, "provider.web_search.model") };
 }
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number, path: string): number {
@@ -221,6 +237,7 @@ function parseConfig(value: unknown): BridgeConfig {
     "registry_entry",
     "account",
     "model_aliases",
+    "web_search",
   ], "provider");
   const adapter = stringValue(value.provider.adapter, "provider.adapter") as AdapterName;
   if (!supportsAdapter(adapter)) throw new Error(`provider.adapter '${adapter}' is unsupported`);
@@ -241,6 +258,7 @@ function parseConfig(value: unknown): BridgeConfig {
   const account = value.provider.account === undefined ? undefined : accountValue(value.provider.account);
   if (account && value.provider.api_key !== undefined) throw new Error("An account provider cannot also declare an API key");
   if (!models.includes(defaultModel)) throw new Error("provider.default_model is outside provider.models");
+  const webSearch = value.provider.web_search === undefined ? undefined : webSearchValue(value.provider.web_search, account);
   const registryEntry = value.provider.registry_entry === undefined
     ? undefined
     : stringValue(value.provider.registry_entry, "provider.registry_entry");
@@ -276,6 +294,7 @@ function parseConfig(value: unknown): BridgeConfig {
       adapter,
       ...(registryEntry === undefined ? {} : { registry_entry: registryEntry }),
       ...(account === undefined ? {} : { account }),
+      ...(webSearch === undefined ? {} : { web_search: webSearch }),
       model_aliases: modelAliases,
       base_url: baseUrl,
       models,
@@ -341,14 +360,14 @@ function upstreamProvider(config: RuntimeProvider): OcxProviderConfig {
   return provider;
 }
 
-async function adapterFor(config: BridgeConfig, request: Request, modelId: string, budget: TranslatorBudget, signal = request.signal): Promise<ProviderAdapter> {
+async function adapterFor(config: BridgeConfig, request: Request, modelId: string, budget: TranslatorBudget, signal = request.signal): Promise<{ adapter: ProviderAdapter; provider: OcxProviderConfig }> {
   const provider = upstreamProvider(config.provider);
   if (config.provider.account) {
     const account = await resolveOAuthAccount(config.provider.account, signal);
     provider.apiKey = account.accessToken;
     provider.project = account.projectId;
   }
-  return createProviderAdapter(provider, {
+  const adapter = createProviderAdapter(provider, {
     adapter: config.provider.adapter,
     providerId: config.provider.registry_entry ?? config.provider.id,
     ownerId: config.interface_id,
@@ -357,6 +376,7 @@ async function adapterFor(config: BridgeConfig, request: Request, modelId: strin
     cacheRetention: config.provider.cache_retention,
     budget,
   });
+  return { adapter, provider };
 }
 
 async function boundedBody(request: Request, limit: number): Promise<Uint8Array> {
@@ -625,12 +645,13 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
   });
   let maps: ReturnType<typeof buildToolBridgeMaps>;
   let adapter: ProviderAdapter;
+  let provider: OcxProviderConfig;
   try {
     parsed = parseRequest(modelId === responseModel ? raw : { ...raw, model: modelId }, { preserveCallerContext: true });
     if (parsed.modelId !== modelId) throw new Error("parsed model disagrees with the exact interface model grant");
     flattenRootSchemaAlternatives(parsed);
     maps = buildToolBridgeMaps(parsed, budget);
-    adapter = await adapterFor(config, request, modelId, budget, abort.signal);
+    ({ adapter, provider } = await adapterFor(config, request, modelId, budget, abort.signal));
   } catch (error) {
     cleanup();
     budget.dispose();
@@ -644,6 +665,20 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
   const stallTimeoutSec = isLocalUpstream(config.provider.base_url)
     ? Math.ceil(config.limits.request_timeout_ms / 1000)
     : undefined;
+  if (parsed._webSearch && toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) {
+    if (!config.provider.web_search) {
+      cleanup();
+      budget.dispose();
+      return formatErrorResponse(400, "invalid_request_error", "this provider interface declares no web search backend, so its hosted web_search tool cannot run");
+    }
+    if (!parsed.stream || adapter.runTurn !== undefined || adapter.localTerminal !== undefined) {
+      cleanup();
+      budget.dispose();
+      return formatErrorResponse(400, "invalid_request_error", "hosted web_search runs only in a streamed turn of a request-building adapter");
+    }
+    parsed._responseModelId = responseModel;
+    return webSearchTurn(config, parsed, adapter, provider, budget, abort, stallTimeoutSec, timer, cleanup);
+  }
   if (adapter.localTerminal?.(parsed)) {
     return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort, stallTimeoutSec, cleanup);
   }
@@ -668,6 +703,66 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
       return retried;
     },
   }), maps, budget, abort, stallTimeoutSec, cleanup);
+}
+
+const WEB_SEARCH_REASONING = "low";
+const WEB_SEARCH_TIMEOUT_MS = 60_000;
+const WEB_SEARCH_MAX_SEARCHES = 3;
+
+async function webSearchTurn(
+  config: BridgeConfig,
+  parsed: OcxParsedRequest,
+  adapter: ProviderAdapter,
+  provider: OcxProviderConfig,
+  budget: TranslatorBudget,
+  abort: AbortController,
+  stallTimeoutSec: number | undefined,
+  timer: ReturnType<typeof setTimeout>,
+  cleanup: () => void,
+): Promise<Response> {
+  const search = config.provider.web_search!;
+  const declared = new URL(config.provider.base_url);
+  parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
+  let response: Response;
+  try {
+    response = await runWithWebSearch({
+      parsed,
+      adapter,
+      incomingMeta: {
+        headers: new Headers(),
+        providerName: config.provider.registry_entry ?? config.provider.id,
+        abortSignal: abort.signal,
+        translatorBudget: budget,
+      },
+      fetchForRequest: (built) => {
+        if (new URL(built.url).origin !== declared.origin) throw new Error("adapter target escaped the declared provider origin");
+        return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+          boundedStream(await fetch(input, { ...init, redirect: "error" }), config.limits.max_response_bytes, abort)) as typeof fetch;
+      },
+      backend: search.backend,
+      geminiSidecar: { providerName: "google-antigravity", provider },
+      hostedTool: parsed._webSearch!,
+      selectedForwardHeaders: new Headers(),
+      settings: { model: search.model, reasoning: WEB_SEARCH_REASONING, timeoutMs: WEB_SEARCH_TIMEOUT_MS, describeImages: false },
+      maxSearches: WEB_SEARCH_MAX_SEARCHES,
+      terminalRefusalAsFailed: true,
+      abortSignal: abort.signal,
+      ...(stallTimeoutSec === undefined ? {} : { stallTimeoutSec }),
+    });
+  } catch (error) {
+    cleanup();
+    budget.dispose();
+    return isTranslatorBudgetExceededError(error)
+      ? formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the configured limit")
+      : formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "web search turn failed");
+  }
+  clearTimeout(timer);
+  if (response.body === null) {
+    cleanup();
+    budget.dispose();
+    return response;
+  }
+  return new Response(disposingStream(response.body, budget, abort, cleanup), { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 async function upstreamAttempt(

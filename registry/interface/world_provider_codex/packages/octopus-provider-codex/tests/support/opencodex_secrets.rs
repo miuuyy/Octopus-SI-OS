@@ -305,3 +305,26 @@ fn opencodex_account_roots_stay_in_the_selected_home() {
             .contains("only from its owned account store")
     );
 }
+
+#[test]
+fn opencodex_web_search_names_the_backend_that_runs_it() {
+    let mut descriptor: InterfaceDescriptor = serde_json::from_str(include_str!(
+        "../../../../../world_provider_antigravity/interface.json"
+    ))
+    .unwrap();
+    let search = descriptor_config(&descriptor).unwrap().unwrap().web_search.unwrap();
+    assert_eq!((search.backend.as_str(), search.model.as_str()), ("gemini", "gemini-3.8-flash"));
+    descriptor
+        .interface_driver_config
+        .as_mut()
+        .unwrap()
+        .private_config
+        .get_mut(OPENCODEX_CONFIG_KEY)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("web_search");
+    assert!(descriptor_config(&descriptor)
+        .unwrap_err()
+        .contains("names no OpenCodex search backend"));
+}

@@ -152,6 +152,15 @@ pub(crate) struct OpenCodexDescriptorConfig {
     pub options: OpenCodexProviderOptions,
     #[serde(default)]
     pub limits: OpenCodexLimits,
+    #[serde(default)]
+    pub web_search: Option<OpenCodexWebSearch>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenCodexWebSearch {
+    pub backend: String,
+    pub model: String,
 }
 
 #[derive(Serialize)]
@@ -185,6 +194,8 @@ struct BridgeProvider {
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_retention: Option<OpenCodexCacheRetention>,
     options: OpenCodexProviderOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    web_search: Option<OpenCodexWebSearch>,
 }
 
 #[derive(Serialize)]
@@ -300,6 +311,22 @@ pub(crate) fn descriptor_config(
             }
         }
     }
+    let native_search = descriptor
+        .interface_driver_config
+        .as_ref()
+        .and_then(|driver| driver.private_config.get("web_search"))
+        .is_some_and(|mode| mode != "disabled");
+    if native_search && parsed.web_search.is_none() {
+        return Err(format!(
+            "interface '{}' enables Codex web_search but private_config.{OPENCODEX_CONFIG_KEY}.web_search names no OpenCodex search backend to run it",
+            descriptor.id
+        ));
+    }
+    if parsed.web_search.as_ref().is_some_and(|search| {
+        !valid_text_atom(&search.backend) || !valid_text_atom(&search.model)
+    }) {
+        return Err("opencodex web_search requires a backend and a search model".to_string());
+    }
     if let Some(path) = parsed.options.responses_path.as_deref() {
         if !path.starts_with('/') || path.contains(['?', '#']) || path.contains("://") {
             return Err(
@@ -414,6 +441,7 @@ pub(crate) async fn connect_interface_driver(
             allow_private_network: config.allow_private_network,
             cache_retention: config.cache_retention.clone(),
             options: config.options.clone(),
+            web_search: config.web_search.clone(),
         },
         limits: BridgeLimits {
             max_request_bytes: config.limits.max_request_bytes,

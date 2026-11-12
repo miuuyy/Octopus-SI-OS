@@ -20,7 +20,8 @@
       "web_search_modes": {
         "reduce": "intersection",
         "default": [
-          "disabled"
+          "disabled",
+          "live"
         ]
       },
       "models": {
@@ -3648,6 +3649,8 @@
       },
       "model_hidden_tools": [
         "file.write",
+        "web.search",
+        "web.extract",
         "gui.app_resume",
         "browser.filechooser_resume",
         "code_mode.resume"
@@ -3979,6 +3982,7 @@
         "turn.interrupted.result",
         "turn.error"
       ],
+      "web_search": "live",
       "process_env_names": [],
       "opencodex": {
         "schema_version": 1,
@@ -3987,6 +3991,10 @@
         "registry_entry": "google-antigravity",
         "oauth_provider": "google-antigravity",
         "allow_private_network": false,
+        "web_search": {
+          "backend": "gemini",
+          "model": "gemini-3.8-flash"
+        },
         "limits": {
           "max_request_bytes": 33554432,
           "max_translated_call_bytes": 2097152,
@@ -4292,8 +4300,7 @@
           "features.sleep_tool=false",
           "features.current_time_reminder=false",
           "tools.experimental_request_user_input.enabled=true",
-          "features.default_mode_request_user_input=true",
-          "web_search=disabled"
+          "features.default_mode_request_user_input=true"
         ],
         "home_env": "CODEX_HOME",
         "isolated_cwd": "codex-cwd",

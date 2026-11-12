@@ -623,7 +623,7 @@ test("provider descriptors match providers.json and the pinned OpenCodex registr
   expect(result.exitCode).toBe(0);
 });
 
-test("an account provider serves Cloud Code Assist turns with its stored sign-in and only the caller's prompt", async () => {
+function signedInAntigravity() {
   const home = mkdtempSync(join(tmpdir(), "octopus-account-"));
   directories.push(home);
   const directory = join(home, "opencodex-account");
@@ -637,6 +637,32 @@ test("an account provider serves Cloud Code Assist turns with its stored sign-in
     headers: {}, models: ["gemini-3.8-flash", "claude-opus-5-5"], default_model: "gemini-3.8-flash", account: { provider: "google-antigravity", directory },
   };
   const reply = () => sse([[null, { response: { candidates: [{ content: { role: "model", parts: [{ text: "antigravity says hi" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 3, totalTokenCount: 6 } } }]]);
+  return { directory, account, reply };
+}
+
+test("a hosted web_search runs only through the search backend its provider names", async () => {
+  const { account, reply } = signedInAntigravity();
+  const hosted = [{ type: "web_search", external_web_access: true }];
+  const searching = await exchange({ ...account, web_search: { backend: "gemini", model: "gemini-3.8-flash" } }, reply(), "gemini-3.8-flash", hosted);
+  expect(searching.status).toBe(200);
+  expect(searching.text).toContain("antigravity says hi");
+  expect(searching.text).toContain("response.completed");
+  const declarations = (searching.observed.body.request as Record<string, any>).tools[0].functionDeclarations;
+  expect(declarations.map((declaration: { name: string }) => declaration.name)).toEqual(["web_search"]);
+  const unarmed = await exchange(account, reply(), "gemini-3.8-flash", hosted);
+  expect(unarmed.status).toBe(400);
+  expect(unarmed.observed).toBeUndefined();
+  expect(unarmed.text).toContain("declares no web search backend");
+  const keyed = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.push(keyed);
+  keyed.stdin.write(JSON.stringify(config("http://127.0.0.1:9/v1", { web_search: { backend: "gemini", model: "gemini-3.8-flash" } })));
+  keyed.stdin.end();
+  expect(await keyed.exited).toBe(1);
+  expect(await new Response(keyed.stderr).text()).toContain("searches through the provider's own Antigravity account");
+});
+
+test("an account provider serves Cloud Code Assist turns with its stored sign-in and only the caller's prompt", async () => {
+  const { directory, account, reply } = signedInAntigravity();
   const gemini = await exchange(account, reply(), "gemini-3.8-flash", [exactTool]);
   expect(gemini.status).toBe(200);
   expect(gemini.text).toContain("antigravity says hi");

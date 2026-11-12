@@ -34,8 +34,10 @@
     "src/lib/local-upstream.ts#isLocalUpstream",
     "src/lib/redact.ts#redactSecretString",
     "src/responses/parser.ts#parseRequest",
+    "src/web-search/loop.ts#runWithWebSearch",
+    "src/web-search/synthetic-tool.ts#buildWebSearchTool",
     "src/lib/json-byte-size.ts#jsonUtf8Bytes",
-    "src/types/tools.ts#namespacedToolName",
+    "src/types/tools.ts#namespacedToolName,toolChoiceToolPredicate",
     "src/lib/sse-decoder.ts#decodeServerSentEvents",
     "src/lib/standalone.ts#isStandaloneBinary",
     "gui/dist/provider-icons"
@@ -45,12 +47,12 @@
     "src/server/responses/core.ts",
     "src/router.ts",
     "src/combos",
-    "src/web-search",
     "src/images",
     "src/oauth/store.ts"
   ],
   "patches": [
     "upstream/patches/caller-context.patch",
-    "upstream/patches/antigravity-carbon.patch"
+    "upstream/patches/antigravity-carbon.patch",
+    "upstream/patches/gemini-search-credential.patch"
   ]
 }

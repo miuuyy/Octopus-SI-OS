@@ -656,6 +656,18 @@ schemas for that endpoint and retries transient refusals. It starts no IDE or
 CLI, and the only system text is the caller's. This subscription transport is
 unofficial; Google may restrict access independently of the local contract.
 
+Web search is declared per provider in `providers.json` as `web_search`: the
+OpenCodex search backend and the model that runs each search. Antigravity names
+OpenCodex's `gemini` backend, so its runs have Codex's hosted `web_search` live,
+like native Codex runs, and Octopus's own `web.search` and `web.extract` stay
+hidden from the model. The bridge hands the hosted tool to OpenCodex's search
+loop: the model calls `web_search` as a function, each query runs as a Gemini
+`google_search` grounding on the same Cloud Code Assist account and token as the
+turn, at most three per turn, and the turn continues with the grounded results
+and their sources. A provider without `web_search` keeps Codex web search
+disabled, and a hosted `web_search` that reaches its bridge anyway is refused
+instead of being dropped.
+
 The curated OpenCodex home keeps Codex's own retries at Codex's defaults. A
 dropped response stream is retried up to five times (`stream_max_retries = 5`):
 Codex samples the step again with the outputs of tools it already executed, so
