@@ -634,7 +634,7 @@ function signedInAntigravity() {
   })}\n`, { mode: 0o600 });
   const account = {
     adapter: "google", registry_entry: "google-antigravity", base_url: "", api_key: undefined, auth_header: undefined, auth_value_prefix: undefined,
-    headers: {}, models: ["gemini-3.8-flash", "claude-opus-5-5"], default_model: "gemini-3.8-flash", account: { provider: "google-antigravity", directory },
+    headers: {}, models: ["gemini-4-hydrogen", "claude-opus-5-5"], default_model: "gemini-4-hydrogen", account: { provider: "google-antigravity", directory },
   };
   const reply = () => sse([[null, { response: { candidates: [{ content: { role: "model", parts: [{ text: "antigravity says hi" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 3, totalTokenCount: 6 } } }]]);
   return { directory, account, reply };
@@ -652,9 +652,9 @@ test("a response the provider drops before any output is answered once with the 
   } });
   servers.push(upstream);
   const origin = `http://127.0.0.1:${upstream.port}`;
-  const bridge = await spawnBridge(config(origin, { ...account, base_url: origin, web_search: { backend: "gemini", model: "gemini-3.8-flash" } }));
+  const bridge = await spawnBridge(config(origin, { ...account, base_url: origin, web_search: { backend: "gemini", model: "gemini-4-hydrogen" } }));
   const turn = async (tools: unknown[]) => (await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "gemini-3.8-flash", stream: true, input: userInput, tools }) })).text();
+    body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, input: userInput, tools }) })).text();
   const hosted = [{ type: "web_search", external_web_access: true }, exactTool];
   expect(await turn(hosted)).toContain("\"name\":\"exact_tool\"");
   for (const failed of [await turn(hosted), await turn([exactTool])]) expect(failed).toContain("\"code\":\"invalid_prompt\"");
@@ -664,19 +664,19 @@ test("a response the provider drops before any output is answered once with the 
 test("a hosted web_search runs only through the search backend its provider names", async () => {
   const { account, reply } = signedInAntigravity();
   const hosted = [{ type: "web_search", external_web_access: true }];
-  const searching = await exchange({ ...account, web_search: { backend: "gemini", model: "gemini-3.8-flash" } }, reply(), "gemini-3.8-flash", hosted);
+  const searching = await exchange({ ...account, web_search: { backend: "gemini", model: "gemini-4-hydrogen" } }, reply(), "gemini-4-hydrogen", hosted);
   expect(searching.status).toBe(200);
   expect(searching.text).toContain("antigravity says hi");
   expect(searching.text).toContain("response.completed");
   const declarations = (searching.observed.body.request as Record<string, any>).tools[0].functionDeclarations;
   expect(declarations.map((declaration: { name: string }) => declaration.name)).toEqual(["web_search"]);
-  const unarmed = await exchange(account, reply(), "gemini-3.8-flash", hosted);
+  const unarmed = await exchange(account, reply(), "gemini-4-hydrogen", hosted);
   expect(unarmed.status).toBe(400);
   expect(unarmed.observed).toBeUndefined();
   expect(unarmed.text).toContain("declares no web search backend");
   const keyed = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   children.push(keyed);
-  keyed.stdin.write(JSON.stringify(config("http://127.0.0.1:9/v1", { web_search: { backend: "gemini", model: "gemini-3.8-flash" } })));
+  keyed.stdin.write(JSON.stringify(config("http://127.0.0.1:9/v1", { web_search: { backend: "gemini", model: "gemini-4-hydrogen" } })));
   keyed.stdin.end();
   expect(await keyed.exited).toBe(1);
   expect(await new Response(keyed.stderr).text()).toContain("searches through the provider's own Antigravity account");
@@ -684,13 +684,13 @@ test("a hosted web_search runs only through the search backend its provider name
 
 test("an account provider serves Cloud Code Assist turns with its stored sign-in and only the caller's prompt", async () => {
   const { directory, account, reply } = signedInAntigravity();
-  const gemini = await exchange(account, reply(), "gemini-3.8-flash", [exactTool]);
+  const gemini = await exchange(account, reply(), "gemini-4-hydrogen", [exactTool]);
   expect(gemini.status).toBe(200);
   expect(gemini.text).toContain("antigravity says hi");
   expect(gemini.text).toContain("response.completed");
   expect(gemini.observed.path).toBe("/v1internal:streamGenerateContent");
   expect(gemini.observed.headers.get("authorization")).toBe("Bearer account-token");
-  expect(gemini.observed.body).toMatchObject({ model: "gemini-3.8-flash-medium", project: "account-project", requestType: "agent" });
+  expect(gemini.observed.body).toMatchObject({ model: "gemini-4-hydrogen-high", project: "account-project", requestType: "agent" });
   const request = gemini.observed.body.request as Record<string, any>;
   expect(request.systemInstruction).toBeUndefined();
   expect(request.contents).toEqual([{ role: "user", parts: [{ text: "hi" }] }]);
