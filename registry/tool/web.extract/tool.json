@@ -189,7 +189,8 @@
         },
         "query": {
           "argument_fields": {
-            "url": "url"
+            "url": "url",
+            "max_chars": "max_chars"
           }
         },
         "body": {},

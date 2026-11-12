@@ -432,6 +432,7 @@ async fn web_search_keenable_provider_maps_snippets_from_the_keyless_route() {
             "url": "https://octopus.example",
             "description": "",
             "snippet": "artifact-native page text",
+            "published_at": "2026-10-30T12:00:00Z",
             "acquired_at": "2026-11-01T00:00:00Z"
         }]})
         .to_string();
@@ -465,10 +466,16 @@ async fn web_search_keenable_provider_maps_snippets_from_the_keyless_route() {
         searched["body"]["candidates"][0]["snippet"],
         "artifact-native page text"
     );
+    assert_eq!(
+        searched["body"]["candidates"][0]["published_at"],
+        "2026-10-30T12:00:00Z"
+    );
     let request = server.join().unwrap();
     assert!(request.starts_with("POST /v1/search/public "), "{request}");
     assert!(
-        request.to_ascii_lowercase().contains("x-keenable-title: octopus"),
+        request
+            .to_ascii_lowercase()
+            .contains("x-keenable-title: octopus"),
         "{request}"
     );
     assert!(request.contains("\"max_results\":3"), "{request}");
@@ -506,7 +513,7 @@ async fn web_extract_keenable_provider_reads_one_page_per_url() {
         root.path(),
         1,
         "web.extract",
-        json!({"urls": ["https://octopus.example/docs"], "provider": "keenable"}),
+        json!({"urls": ["https://octopus.example/docs"], "provider": "keenable", "max_chars": 1000}),
         &tools,
         &formation,
         &kind,
@@ -521,12 +528,84 @@ async fn web_extract_keenable_provider_reads_one_page_per_url() {
         "# Octopus\n\nartifact-native content"
     );
     let request = server.join().unwrap();
+    let request_line = request.lines().next().unwrap_or_default();
     assert!(
-        request.starts_with("GET /v1/fetch/public?url=https%3A%2F%2Foctopus.example%2Fdocs "),
+        request_line.starts_with("GET /v1/fetch/public?"),
         "{request}"
     );
     assert!(
-        request.to_ascii_lowercase().contains("x-keenable-title: octopus"),
+        request_line.contains("url=https%3A%2F%2Foctopus.example%2Fdocs"),
         "{request}"
     );
+    assert!(request_line.contains("max_chars=1000"), "{request}");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("x-keenable-title: octopus"),
+        "{request}"
+    );
+}
+
+#[tokio::test]
+async fn web_search_clamps_limit_to_the_provider_max_limit() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let read = stream.read(&mut request).unwrap();
+        let body = json!({"results": [{"title": "Octopus", "url": "https://octopus.example", "snippet": "artifact-native"}]}).to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        String::from_utf8_lossy(&request[..read]).to_string()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let room = WebSearchRoom;
+    let tools = vec!["web.search".to_string()];
+    let (formation, kind) = formation("web_search", &tools, "web.search");
+    let mut call = invocation(
+        root.path(),
+        1,
+        "web.search",
+        json!({"query": "artifact architecture", "limit": 100, "provider": "keenable"}),
+        &tools,
+        &formation,
+        &kind,
+    );
+    call.descriptor.handler_config = keenable_catalog("web.search", &base_url);
+    let searched = response(received(room.receive(call, &TestLifecycleSink).await));
+    assert_eq!(searched["ok"], true, "{searched}");
+    assert_eq!(searched["body"]["candidate_count"], 1);
+    let request = server.join().unwrap();
+    assert!(request.contains("\"max_results\":50"), "{request}");
+}
+
+#[tokio::test]
+async fn web_search_rejects_a_zero_provider_max_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let room = WebSearchRoom;
+    let tools = vec!["web.search".to_string()];
+    let (formation, kind) = formation("web_search", &tools, "web.search");
+    let mut call = invocation(
+        root.path(),
+        1,
+        "web.search",
+        json!({"query": "artifact architecture", "provider": "keenable"}),
+        &tools,
+        &formation,
+        &kind,
+    );
+    let mut config = keenable_catalog("web.search", "http://127.0.0.1:9");
+    config["providers"]["keenable"]["max_limit"] = json!(0);
+    call.descriptor.handler_config = config;
+    let searched = response(received(room.receive(call, &TestLifecycleSink).await));
+    assert_eq!(searched["ok"], false, "{searched}");
+    assert!(searched["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("max_limit must be at least 1"));
 }

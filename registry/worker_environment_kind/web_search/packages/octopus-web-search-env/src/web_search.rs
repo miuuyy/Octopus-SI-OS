@@ -150,6 +150,8 @@ struct HttpProvider {
     #[serde(default)]
     extraction_mode: Option<String>,
     #[serde(default)]
+    max_limit: Option<u64>,
+    #[serde(default)]
     retry: RetryProjection,
 }
 
@@ -243,8 +245,11 @@ async fn execute_search(call: &ToolCall) -> Result<Value, String> {
     let limit = bounded_optional_u64(object, "limit", 1, 100)?.unwrap_or(5);
     let catalog = parse_catalog(&call.handler_config, "web.search")?;
     let (provider_id, provider) = select_provider(&catalog, object)?;
+    let request_limit = provider
+        .max_limit
+        .map_or(limit, |max_limit| limit.min(max_limit));
     let mut arguments = object.clone();
-    arguments.insert("limit".to_string(), json!(limit));
+    arguments.insert("limit".to_string(), json!(request_limit));
     let parsed = request_json(&catalog, &provider_id, provider, &arguments).await?;
     let items = response_items(&parsed, provider.response.items_path.as_deref())?;
     let candidates = items
@@ -352,6 +357,15 @@ fn validate_limits(catalog: &ProviderCatalog) -> Result<(), String> {
         .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES);
     if max_response_bytes == 0 || max_response_bytes > 20_000_000 {
         return Err("web provider max_response_bytes must be between 1 and 20000000".to_string());
+    }
+    if let Some(provider_id) = catalog
+        .providers
+        .iter()
+        .find_map(|(provider_id, provider)| (provider.max_limit == Some(0)).then_some(provider_id))
+    {
+        return Err(format!(
+            "web provider '{provider_id}' max_limit must be at least 1"
+        ));
     }
     Ok(())
 }

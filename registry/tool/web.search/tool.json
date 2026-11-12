@@ -274,9 +274,10 @@
           "title_paths": ["title"],
           "url_paths": ["url"],
           "snippet_paths": ["snippet", "description"],
-          "published_paths": [],
+          "published_paths": ["published_at"],
           "image_paths": []
         },
+        "max_limit": 50,
         "retry": {}
       }
     }
