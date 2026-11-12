@@ -790,7 +790,8 @@ export function useChatWorkspace(
   );
   const activeRunInFlight = inFlightRunKeySet.has(activeRunKey);
   const activeRunSteeringPending = steeringComposerPendingRunKeySet.has(activeRunKey);
-  const replyOpen = activeRunInFlight || turnOpen;
+  const turnStoppedByRuntime = enabled && turnOpen && !runtimeReady;
+  const replyOpen = activeRunInFlight || (turnOpen && !turnStoppedByRuntime);
   const replyRunKey = replyOpen ? activeRunKey : "";
   const applicationSelectionLocked = Boolean(activeRunId) && !(
     accessProfile === "live"
@@ -1083,8 +1084,19 @@ export function useChatWorkspace(
       .map((entry) => entry.message);
     const visibleSteering = [...new Map([...rememberedSteering, ...pendingQueueSteering(queuedTurns, activeRunKey)]
       .map((message) => [message.id, message])).values()];
-    return withRunOperationTargets(mergeRenderedMessages(projected, visiblePending, visibleSteering, showPending), runs);
-  }, [activeRunInFlight, activeRunKey, messages, pendingByRunKey, pendingSteeringMessages, queuedTurns, runs]);
+    const merged = mergeRenderedMessages(projected, visiblePending, visibleSteering, showPending);
+    const stopped: ChatRenderMessage[] = turnStoppedByRuntime && activeRunId ? [{
+      id: `runtime-stopped:${activeRunId}`,
+      runId: activeRunId,
+      role: "assistant",
+      eventKind: "error",
+      error: true,
+      terminal: true,
+      text: "The Octopus runtime stopped, so this task stopped.",
+      createdAtMs: (merged[merged.length - 1]?.createdAtMs ?? 0) + 1,
+    }] : [];
+    return withRunOperationTargets([...merged, ...stopped], runs);
+  }, [activeRunId, activeRunInFlight, activeRunKey, messages, pendingByRunKey, pendingSteeringMessages, queuedTurns, runs, turnStoppedByRuntime]);
 
   const activeMessageCount = renderedMessages.length;
   const submitting = renderedMessages.some((message) => (
