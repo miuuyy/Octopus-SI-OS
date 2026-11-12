@@ -15,6 +15,7 @@
       "BRAVE_SEARCH_BASE_URL",
       "BRAVE_SEARCH_API_KEY",
       "SEARXNG_BASE_URL",
+      "KEENABLE_BASE_URL",
       "OCTOPUS_WEB_PROXY"
     ],
     "authority": {
@@ -252,6 +253,32 @@
           "image_paths": ["thumbnail"]
         },
         "retry": {}
+      },
+      "keenable": {
+        "base_url": "https://api.keenable.ai",
+        "base_url_env": "KEENABLE_BASE_URL",
+        "path": "/v1/search/public",
+        "method": "POST",
+        "headers": {
+          "X-Keenable-Title": "Octopus"
+        },
+        "query": {},
+        "body": {
+          "argument_fields": {
+            "query": "query",
+            "limit": "max_results"
+          }
+        },
+        "response": {
+          "items_path": "results",
+          "title_paths": ["title"],
+          "url_paths": ["url"],
+          "snippet_paths": ["snippet", "description"],
+          "published_paths": ["published_at"],
+          "image_paths": []
+        },
+        "max_limit": 50,
+        "retry": {}
       }
     }
   },
@@ -272,7 +299,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["custom", "tavily", "exa", "firecrawl", "brave", "searxng"]
+        "enum": ["custom", "tavily", "exa", "firecrawl", "brave", "searxng", "keenable"]
       },
       "include_domains": {
         "type": "array",

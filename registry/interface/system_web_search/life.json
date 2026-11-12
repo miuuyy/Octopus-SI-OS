@@ -16,6 +16,7 @@
         "EXA_BASE_URL",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
+        "KEENABLE_BASE_URL",
         "OCTOPUS_WEB_EXTRACT_URL",
         "OCTOPUS_WEB_PROXY",
         "OCTOPUS_WEB_SEARCH_API_KEY",
