@@ -9,11 +9,6 @@ The trigger is a sensor interface and a relay worker: folders of JSON and one
 small life script, a relay run record, and an ordinary client task. It ships in
 the package library as the optional **Legacy watch** application.
 
-> **Run it only in a disposable virtual machine or a fresh user account.** The
-> woken task is told that everything on the machine is its own, and with
-> `--full-access` it gets the whole file system. Never author it into a Home on
-> a machine you care about.
-
 ## What is in this folder
 
 - `legacy-watch.octopus-setup.json` — a Home for it: the default space, the
@@ -67,12 +62,11 @@ whose sender the mail server did not verify, turn on
 `--any-sender` opens Email to every sender, automated mail included
 (`authz.allow_all_senders=true`, `authz.ignore_automated=false`), so a death
 notice from any service or person fires. Anyone who knows the address can then
-wake the task with a single word, which is one more reason to keep this in a
-VM.
+wake the task with a single word.
 
 ## Set it up
 
-1. In a disposable VM, install Octopus and open it. On the first step of the
+1. Install Octopus and open it. On the first step of the
    setup wizard choose **Import setup…** and pick
    `legacy-watch.octopus-setup.json`. Check each step and select **Set up
    Octopus**.
@@ -95,9 +89,7 @@ python3 /Applications/Octopus.app/Contents/Resources/app/local-packages/registry
   --home ~/.octopus --app /Applications/Octopus.app --full-access
 ```
 
-6. To fire it, send the mailbox a letter from an allowed sender with a watched
-   term, for example the subject `Digital Legacy`. This spends the only firing;
-   run `author.py` with `--rearm` to arm it again.
+6. The trigger fires once; run `author.py` with `--rearm` to arm it again.
 
 ### Flags
 

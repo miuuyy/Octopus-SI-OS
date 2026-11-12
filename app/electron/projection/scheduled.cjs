@@ -8,7 +8,7 @@ const { undoChangeJournal } = require("./changeJournal.cjs");
 const { scheduleEditTails } = require("./constants.cjs");
 const { parseCronActivationDocument, validateCronExpression, validateCronSchedule } = require("./cronActivation.cjs");
 const { readOptionalRegularJsonDocument, readRegularJsonDocument, requirePlainDirectory, requireUnchangedJsonDigest } = require("./jsonFiles.cjs");
-const { runInterfaceReferences } = require("./taskDeletion.cjs");
+const { requirePrivatePublicationDirectory, runInterfaceReferences } = require("./taskDeletion.cjs");
 const { arrayValue, atomicWriteJson, exactObjectKeys, requiredDigest, requiredSafeRegistryId, stringValue } = require("./values.cjs");
 
 async function mutateScheduledInterface(registryRoot, octopusHomeRoot, request, hooks = {}) {
@@ -52,6 +52,7 @@ async function deleteTrigger(interfaceDirectory, interfaceId, commitClientAuthor
   if (typeof commitClientAuthoring !== "function") throw new Error("client authoring transaction is unavailable");
   const writes = [];
   for (const entry of await fs.readdir(interfaceDirectory, { withFileTypes: true })) {
+    if (entry.name === ".octopus-publication") { await requirePrivatePublicationDirectory(path.join(interfaceDirectory, entry.name)); continue; }
     if (!entry.isFile()) throw new Error(`trigger ${interfaceId} holds ${entry.name}, which is not a regular file`);
     const file = path.join(interfaceDirectory, entry.name);
     writes.push({ file, beforeDigest: crypto.createHash("sha256").update(await fs.readFile(file)).digest("hex"), next: null });

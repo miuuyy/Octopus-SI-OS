@@ -507,7 +507,7 @@ def task_capabilities(layout, home, profile, drivers, applications, notice_label
     drivers, without_folder, source_folders, host_workspace = working_folder_drivers(layout, home, profile, drivers, full_access)
     kinds = {driver["name"] for driver in drivers}
     left_out = [
-        (f"Worker Environment {kind}", "it needs a working folder and the root EE has none (choose one, or --full-access in a disposable VM)")
+        (f"Worker Environment {kind}", "it needs a working folder and the root EE has none (choose one, or --full-access)")
         for kind in without_folder
     ]
     for application in [row for row in applications if not {tool["worker_environment_kind"] for tool in row["tools"]} <= kinds]:
@@ -1152,8 +1152,8 @@ def main():
     parser.add_argument("--app", help="the installed Octopus.app whose bundled planner and runtime are used, e.g. /Applications/Octopus.app")
     parser.add_argument("--planner", help="the task topology planner; overrides the one in --app")
     parser.add_argument("--runtime", help="the octopus binary whose project-ee-policies forms the root EE policy; overrides the one in --app")
-    parser.add_argument("--full-access", action="store_true", help="grant the woken task the whole machine (host filesystem root); for a disposable VM only")
-    parser.add_argument("--any-sender", action="store_true", help="open this Home's Email to every sender, automated mail included, so a matching letter from anyone fires the trigger; for a disposable VM only")
+    parser.add_argument("--full-access", action="store_true", help="grant the woken task the whole machine (host filesystem root)")
+    parser.add_argument("--any-sender", action="store_true", help="open this Home's Email to every sender, automated mail included, so a matching letter from anyone fires the trigger")
     arguments = parser.parse_args()
     try:
         author(arguments)
