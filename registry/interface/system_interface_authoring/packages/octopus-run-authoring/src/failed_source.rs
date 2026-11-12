@@ -505,6 +505,7 @@ impl ProviderOutputHandoff {
                 }
                 self.validate_refused_source_handoff(&record, &pending).map_err(Unavailable)?;
             }
+            self.recover_authoring_attempt(&record, &state.run_record_bytes).map_err(Unavailable)?;
             let identity =
                 artifact_identity(&emission.artifact, &self.var_dir).map_err(Unavailable)?;
             let output_checkpoint = self

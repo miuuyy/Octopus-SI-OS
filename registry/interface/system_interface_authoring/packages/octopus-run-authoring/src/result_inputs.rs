@@ -157,22 +157,38 @@ pub(super) fn cancel_pending_inputs(value: &mut serde_json::Value, config: &RunA
 
 pub(super) fn saved_attempt_config(
     record: &RunRecord,
+    step: &RunRecord,
     declared: &RunAuthoringConfig,
 ) -> Result<RunAuthoringConfig, String> {
     let actual = attempt_config(record, declared)?;
-    let mut expected = declared.clone();
-    let mut observed = actual.clone();
-    expected
-        .checkpoints
-        .retain(|template| template.role != RunAuthoringCheckpointRole::ResultInput);
-    observed
-        .checkpoints
-        .retain(|template| template.role != RunAuthoringCheckpointRole::ResultInput);
-    if expected != observed {
+    let provider = &declared.provider_interface;
+    let stepped: BoundRunAuthoringTopology = serde_json::from_value(
+        step.interface_state
+            .get(provider)
+            .and_then(|state| state.get(RUN_AUTHORING_BINDING))
+            .cloned()
+            .ok_or("saved authoring attempt has no provider topology")?,
+    )
+    .map_err(|error| error.to_string())?;
+    stepped.validate_identity(step, provider)?;
+    let prior = BoundRunAuthoringTopology {
+        schema_version: stepped.schema_version,
+        run: declared.run.clone(),
+        worker: declared.worker.clone(),
+        provider_interface: declared.provider_interface.clone(),
+        authoring_source_interface: declared.authoring_source_interface.clone(),
+        payload_artifact_bindings: declared.payload_artifact_bindings.clone(),
+        writer_run: declared.writer_run.clone(),
+        checkpoints: declared.checkpoints.clone(),
+    };
+    if !preserves_provider_topology(&prior, &stepped) {
         return Err(
-            "saved authoring attempt changed its declared contract outside result inputs".into(),
+            "saved authoring attempt changed its declared contract beyond a provider step".into(),
         );
     }
+    let pending = persisted_pending_handoff(step, provider)?
+        .ok_or("saved authoring attempt has no pending handoff")?;
+    validate_verified_input_change(&prior, &stepped, &pending)?;
     Ok(actual)
 }
 

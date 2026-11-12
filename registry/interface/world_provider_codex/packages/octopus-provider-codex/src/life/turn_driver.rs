@@ -71,8 +71,11 @@ pub(crate) async fn drive_turn_with_retries_inner(
             return Ok(());
         }
     };
-    validate_saved_source_withdrawal(ctx, descriptor, run, &turn, &handoff).await?;
-    let (source_recovery, recovered_outcomes) = match handoff.recover_source_with_outcomes().await {
+    let saved = async {
+        validate_saved_source_withdrawal(ctx, descriptor, run, &turn, &handoff).await?;
+        handoff.recover_source_with_outcomes().await
+    }.await;
+    let (source_recovery, recovered_outcomes) = match saved {
         Ok(recovered) => recovered,
         Err(error) if ctx.cancel.is_cancelled() => return Err(error),
         Err(error) => {

@@ -1654,7 +1654,7 @@ impl ProviderOutputHandoff {
                 source_withdrawal::validate_saved_attempt(&self.ctx, &before, &stepped_bytes, &original_config)?;
                 rejected_final::validate_saved_attempt(&self.ctx, &before, &stepped_bytes, &original_config)?;
             }
-            let candidate_config = result_inputs::saved_attempt_config(&record, &original_config)?;
+            let candidate_config = result_inputs::saved_attempt_config(&record, &stepped, &original_config)?;
             validate_bound_run_authoring_topology(&record, &candidate_config, None)?;
             result_inputs::validate_saved(&self.ctx, &original, &stepped, &original_config)?;
             let source_movement_seq = pending.source_movement_seq;

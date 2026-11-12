@@ -717,7 +717,7 @@ pub(crate) fn validate_authoring_attempt_source(
         return Err("provider authoring source candidate has invalid pending evidence".to_string());
     }
     validate_pending_items_are_active(&candidate, &config.provider_interface, &pending)?;
-    let candidate_config = result_inputs::saved_attempt_config(&candidate, config)?;
+    let candidate_config = result_inputs::saved_attempt_config(&candidate, &stepped, config)?;
     validate_bound_run_authoring_topology(&candidate, &candidate_config, None)?;
     result_inputs::validate_saved(ctx, record, &stepped, config)?;
     let authoring_result_checkpoint = active_checkpoint_for_role(

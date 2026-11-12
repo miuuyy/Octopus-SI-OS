@@ -292,10 +292,33 @@ fn capability_plan_rejects_bridge_narrowing_and_private_or_accepted_contract_cha
     assert!(result_inputs::validate_transition(&record(&before).unwrap(),&installed,&config).is_err());
     let stepped=saved_ordinary(&serde_json::to_vec(&before).unwrap(),authored.content.as_bytes(),&config).unwrap().unwrap();
     result_inputs::validate_transition(&record(&before).unwrap(),&RunRecord::from_bytes(&stepped).unwrap(),&config).unwrap();
+    result_inputs::saved_attempt_config(&installed,&RunRecord::from_bytes(&stepped).unwrap(),&config).unwrap();
+    let mut advanced=before.clone();advanced["interface_state"]["peer"]=json!({"advanced":true});
+    let retried=authoring_retry::rebase_authored_run(&serde_json::to_vec(&before).unwrap(),&serde_json::to_vec(&advanced).unwrap(),&authored,&topology(&installed,&config.provider_interface).unwrap().config(&amendment.authoring_profile),Some(JsonFormat::Compact)).unwrap();
+    validate_checked_provider_transition(&transition(&advanced,&retried)).unwrap();
     let mut widened=amendment.clone();
     widened.after["interface_state"]["provider"][RUN_AUTHORING_BINDING]["checkpoints"][1]["result_receiving"]["read"]["params"]=json!({"changed":true});
     assert!(validate_plan(&widened).is_err());
     let mut ambiguous=before.clone();
     ambiguous["interface_state"]["provider"][RUN_AUTHORING_BINDING]["checkpoints"][0]["interface_binding"]["interface"]=json!("room");
     assert!(validate_tool_continuation(&record(&ambiguous).unwrap(),&config.provider_interface,"read",&"room".into()).is_err());
+}
+
+#[test]
+fn saved_attempt_reads_through_the_provider_step_its_checked_reader_admits() {
+    let (config,before)=fixture(); let temp=tempfile::tempdir().unwrap(); let mut authored=ordinary_effect(&config,&before,temp.path(),None,true);
+    let mut value:Value=serde_json::from_str(&authored.content).unwrap(); let policy=json!({"artifact_policy":{"mode":"allow","names":["peer.message"],"namespaces":[]}});
+    let outgoing:RunAuthoringCheckpoint=serde_json::from_value(json!({"name":"outgoing_peer","role":"provider_interface_output","include_context":false,"required_verified_artifacts":[],
+        "interface_binding":{"interface":"provider","config":policy},"outbound_interface_bindings":[{"interface":"peer_input","config":policy}]})).unwrap();
+    value["checkpoints"].as_array_mut().unwrap().push(materialize_checkpoint(&outgoing,"outgoing_peer",&config.run,&[json!({"id":"role"})]));
+    for pointer in ["/active_checkpoints".to_string(),format!("/interface_state/provider/{FRONTIER_CHECKPOINT_IDS}")] { value.pointer_mut(&pointer).unwrap().as_array_mut().unwrap().push(json!("outgoing_peer")); }
+    value["interface_state"]["provider"][RUN_AUTHORING_BINDING]["checkpoints"].as_array_mut().unwrap().push(json!(outgoing));
+    authored.patch=json_patch::diff(&before,&value);authored.content=value.to_string();authored.after_hash=ContentHash::of_bytes(authored.content.as_bytes()).to_hex();
+    let saved=record(&value).unwrap();
+    assert_eq!(result_inputs::saved_attempt_config(&saved,&saved,&config).unwrap().checkpoints.last(),Some(&outgoing));
+    let mut advanced=before.clone();advanced["interface_state"]["peer"]=json!({"advanced":true});
+    let retried=authoring_retry::rebase_authored_run(&serde_json::to_vec(&before).unwrap(),&serde_json::to_vec(&advanced).unwrap(),&authored,&config,Some(JsonFormat::Compact)).unwrap();
+    validate_checked_provider_transition(&transition(&advanced,&retried)).unwrap();
+    let narrowed=RunAuthoringConfig {checkpoints:config.checkpoints[..2].to_vec(),..config.clone()};
+    assert!(result_inputs::saved_attempt_config(&saved,&saved,&narrowed).unwrap_err().contains("beyond a provider step"));
 }

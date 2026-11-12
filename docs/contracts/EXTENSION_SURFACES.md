@@ -840,6 +840,13 @@ timeout; a waiting result's rebase grows by the context that advance added. An
 advance without checked writer evidence, or a record still moving at the
 timeout, fails closed with the original error.
 
+A provider's saved attempt is read the way a checked reader reads the step it
+carries. Its own step may add outgoing connections and replace its verified
+inputs in a terminal handoff, and an amendment is proved as an exact
+transformation of that step. A retry after another declared writer advanced the
+record, and a wake that finds the attempt in flight, continue the same step. A
+change beyond a provider step is refused.
+
 The result wait binds its exact original call as read-only evidence. Provider
 continuity reads that call independently of model-context filtering. An older
 conversation context may be superseded only by the newer pending state in
@@ -904,6 +911,9 @@ that cannot be handed closes its source through the declared failure route
 instead of ending the provider life. A failed source with neither a failed-source
 handoff nor a proven standing route is recorded as the interface's admitted
 failure of that movement, and the life keeps serving its other sources. A
+saved attempt or withdrawal of one run that does not read is that run's
+failure: at wake, before its next turn and while the failure itself is authored,
+it closes through these routes. A
 stream sealed with another terminal, or for another source, is not the terminal
 a recovery looks for; an unsealed terminal boundary still fails. A source whose stream was already sealed with
 its `turn.error` is never dispatched again: on restart the provider hands that

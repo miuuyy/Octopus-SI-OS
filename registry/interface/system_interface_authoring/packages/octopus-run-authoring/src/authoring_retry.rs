@@ -849,7 +849,7 @@ pub(super) fn rebase_authored_run(
     } else {
         config.clone()
     };
-    if let Some(extension) = extension {
+    if let Some(extension) = &extension {
         extension.restore(&mut merged, &config.provider_interface)?;
     }
     let revised_generation = revision.as_ref().map(|revision| revision.restore(&mut merged, &config.provider_interface)).transpose()?;
@@ -864,10 +864,17 @@ pub(super) fn rebase_authored_run(
         let topology: BoundRunAuthoringTopology = serde_json::from_value(merged["interface_state"][config.provider_interface.as_str()][RUN_AUTHORING_BINDING].clone()).map_err(|error| error.to_string())?;
         declared_config.checkpoints = topology.checkpoints;
     }
-    let effective_config = result_inputs::saved_attempt_config(&candidate, &declared_config)?;
+    let stepped = match capability_amendment::saved_ordinary(protected, content.as_bytes(), config)? {
+        Some(step) => {
+            declared_config = attempt_config(&actual, config)?;
+            RunRecord::from_bytes(&step).map_err(|error| error.to_string())?
+        }
+        None => candidate.clone(),
+    };
+    let effective_config = result_inputs::saved_attempt_config(&candidate, &stepped, &declared_config)?;
     validate_bound_run_authoring_topology(&candidate, &effective_config, None)?;
-    if !result_inputs::saved_definition_transition(&actual, &candidate, &effective_config)? {
-        result_inputs::validate_transition(&actual, &candidate, &effective_config)?;
+    if !result_inputs::saved_definition_transition(&actual, &stepped, &effective_config)? {
+        result_inputs::validate_transition(&actual, &stepped, &effective_config)?;
     }
     let mut rebased = authored.clone();
     if let Some(generation) = revised_generation { rebased.correlation_id = format!("provider-run-authoring:{}:{generation}", config.run); }

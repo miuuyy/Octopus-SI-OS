@@ -291,8 +291,17 @@ pub(crate) async fn restore_completed_provider_sources(
     for (run, source) in session.completed_source_candidates(ctx)? {
         let turn = replay_provider_source(ctx, &run, source)?.ok_or("completed result source lost its original admitted input")?;
         let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
-        let handoff = match wait_for_provider_handoff(ctx, descriptor, session, &run, &turn.envelope, source, &pinned).await {
-            Ok(handoff) => handoff,
+        let saved = async {
+            let handoff = wait_for_provider_handoff(ctx, descriptor, session, &run, &turn.envelope, source, &pinned).await?;
+            let intent = handoff.pending_source_intent().await?;
+            let withdrawn = if intent.is_none() {
+                validate_saved_source_withdrawal(ctx, descriptor, &run, &turn, &handoff).await?;
+                handoff.pending_source_withdrawal().await?.is_some()
+            } else { false };
+            Ok::<_, String>((handoff, intent, withdrawn))
+        }.await;
+        let (handoff, intent, withdrawn) = match saved {
+            Ok(saved) => saved,
             Err(error) if ctx.cancel.is_cancelled() => return Err(error),
             Err(error) => {
                 let message = format!(
@@ -311,7 +320,7 @@ pub(crate) async fn restore_completed_provider_sources(
                 continue;
             }
         };
-        if let Some(intent) = handoff.pending_source_intent().await? {
+        if let Some(intent) = intent {
             let continuity = crate::handler::stopped_result::intent_control_continuity(descriptor, &turn.envelope, intent, &handoff.current_session_context_artifacts().await)
                 .map_err(|error| error.to_string())?;
             if driver.is_none() {
@@ -322,8 +331,7 @@ pub(crate) async fn restore_completed_provider_sources(
             active_controls.lock().await.insert(run.to_string(), broker);
             continue;
         }
-        validate_saved_source_withdrawal(ctx, descriptor, &run, &turn, &handoff).await?;
-        if handoff.pending_source_withdrawal().await?.is_some() {
+        if withdrawn {
             let broker = CodexTurnControlBroker::new(Some(source));
             broker.finish();
             active_controls.lock().await.insert(run.to_string(), broker);
