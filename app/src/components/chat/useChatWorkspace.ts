@@ -685,10 +685,13 @@ export function useChatWorkspace(
       ? { interfaceId: projectedActiveRun.chatInterfaceId, runId: projectedActiveRun.runId }
       : null
   );
-  const turnOpen = Boolean(activeTurnControlTarget);
+  const ledgerTurnOpen = Boolean(activeTurnControlTarget);
+  const turnStoppedByRuntime = enabled && ledgerTurnOpen && !runtimeReady;
+  const turnOpen = ledgerTurnOpen && !turnStoppedByRuntime;
   const resumeAvailable = Boolean(
     activeRun?.writable
     && activeRun.chatInterfaceId
+    && runtimeReady
     && operatorTurnResumeAvailable(messages, turnOpen)
   );
   useEffect(() => {
@@ -790,8 +793,7 @@ export function useChatWorkspace(
   );
   const activeRunInFlight = inFlightRunKeySet.has(activeRunKey);
   const activeRunSteeringPending = steeringComposerPendingRunKeySet.has(activeRunKey);
-  const turnStoppedByRuntime = enabled && turnOpen && !runtimeReady;
-  const replyOpen = activeRunInFlight || (turnOpen && !turnStoppedByRuntime);
+  const replyOpen = activeRunInFlight || turnOpen;
   const replyRunKey = replyOpen ? activeRunKey : "";
   const applicationSelectionLocked = Boolean(activeRunId) && !(
     accessProfile === "live"
@@ -1089,10 +1091,9 @@ export function useChatWorkspace(
       id: `runtime-stopped:${activeRunId}`,
       runId: activeRunId,
       role: "assistant",
-      eventKind: "error",
-      error: true,
+      eventKind: "interrupted_result",
       terminal: true,
-      text: "The Octopus runtime stopped, so this task stopped.",
+      text: "",
       createdAtMs: (merged[merged.length - 1]?.createdAtMs ?? 0) + 1,
     }] : [];
     return withRunOperationTargets([...merged, ...stopped], runs);
@@ -3144,7 +3145,7 @@ export function useChatWorkspace(
     steerableMessageId,
     endpoint,
     eeId,
-    error: error || providerUsageError,
+    error: error || providerUsageError || (turnStoppedByRuntime ? "The Octopus runtime is not running, so this task stopped." : ""),
     executionContextError,
     fullAccessUnavailableReason,
     executionContexts,
