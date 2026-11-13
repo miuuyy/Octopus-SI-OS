@@ -537,6 +537,7 @@ async fn run_admission_loop(
     arrivals.close();
     emissions.close();
     inflight.abort_all();
+    octopus_verifiers::cancel_running_verifier_processes();
     while let Some(completed) = inflight.join_next().await {
         if let Err(error) = completed {
             if !error.is_cancelled() && result.is_ok() {

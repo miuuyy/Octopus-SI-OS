@@ -32,6 +32,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 octopus-interface-transport = { path = "../octopus-interface-transport" }
 octopus-interface-projection = { path = "../octopus-interface-projection" }
 octopus-tool-registry = { path = "../octopus-tool-registry" }
+octopus-verifiers = { path = "../octopus-verifiers" }
 fs2 = "0.4"
 notify.workspace = true
 
@@ -42,7 +43,6 @@ rustix = { version = "1", features = ["fs", "process", "stdio"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net"] }
 tempfile = "3"
 octopus-worker-env = { path = "../octopus-worker-env" }
-octopus-verifiers = { path = "../octopus-verifiers" }
 
 [lints.rust]
 unsafe_code = "forbid"

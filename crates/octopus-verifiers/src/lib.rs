@@ -11,7 +11,14 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+static CANCELLATION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn cancel_running_verifier_processes() {
+    CANCELLATION_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
 
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -400,7 +407,19 @@ pub fn run_pinned_verifier_process(
     input: &VerificationInput,
     payload_bytes: Vec<u8>,
 ) -> VerificationVerdict {
-    match run_package_process(ctx, input, payload_bytes) {
+    let generation = CANCELLATION_GENERATION.load(Ordering::SeqCst);
+    run_pinned_verifier_process_until(ctx, input, payload_bytes, &|| {
+        CANCELLATION_GENERATION.load(Ordering::SeqCst) != generation
+    })
+}
+
+pub fn run_pinned_verifier_process_until(
+    ctx: &PinnedVerifierPackage,
+    input: &VerificationInput,
+    payload_bytes: Vec<u8>,
+    cancelled: &dyn Fn() -> bool,
+) -> VerificationVerdict {
+    match run_package_process(ctx, input, payload_bytes, cancelled) {
         Ok(verdict) => verdict,
         Err(details) => VerificationVerdict::failed(details),
     }
@@ -410,6 +429,7 @@ fn run_package_process(
     ctx: &PinnedVerifierPackage,
     input: &VerificationInput,
     payload_bytes: Vec<u8>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<VerificationVerdict, serde_json::Value> {
     let scratch_dir = create_scratch_dir(&ctx.descriptor, &ctx.scratch_root, input)?;
     let script_path = materialize_pinned_package(ctx)?;
@@ -489,6 +509,7 @@ fn run_package_process(
         &environment,
         &scratch_dir.path,
         timeout,
+        cancelled,
         Some(&request_bytes),
     );
     match result {
@@ -760,6 +781,7 @@ fn run_process_with_timeout(
     environment: &BTreeMap<String, OsString>,
     cwd: &Path,
     timeout: Option<Duration>,
+    cancelled: &dyn Fn() -> bool,
     stdin_bytes: Option<&[u8]>,
 ) -> Result<(bool, String, String), serde_json::Value> {
     let executable = prepared.executable.display().to_string();
@@ -785,33 +807,44 @@ fn run_process_with_timeout(
                 "source": e.to_string()
             })
         })?;
-
-    let mut stdin_error = None;
-    if let Some(bytes) = stdin_bytes {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin_error = stdin.write_all(bytes).err();
-            if stdin_error.is_none() {
-                stdin_error = stdin.write_all(b"\n").err();
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
             }
-        }
-    }
+            text
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let collect = |stdout: std::thread::JoinHandle<String>, stderr: std::thread::JoinHandle<String>| {
+        (stdout.join().unwrap_or_default(), stderr.join().unwrap_or_default())
+    };
+
+    let stdin = child.stdin.take().zip(stdin_bytes.map(<[u8]>::to_vec)).map(|(mut stdin, bytes)| {
+        std::thread::spawn(move || stdin.write_all(&bytes).and_then(|()| stdin.write_all(b"\n")).err())
+    });
 
     let started = Instant::now();
     loop {
-        if let Some(status) = child.try_wait().map_err(|e| {
+        let status = child.try_wait().map_err(|e| {
             serde_json::json!({
                 "error": "failed to poll verifier process",
                 "source": e.to_string()
             })
-        })? {
-            let mut stdout = String::new();
-            if let Some(mut pipe) = child.stdout.take() {
-                let _ = pipe.read_to_string(&mut stdout);
+        });
+        let status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
             }
-            let mut stderr = String::new();
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_string(&mut stderr);
-            }
+        };
+        if let Some(status) = status {
+            let (stdout, stderr) = collect(stdout, stderr);
+            let stdin_error = stdin.and_then(|writer| writer.join().ok().flatten());
             if let Some(error) = stdin_error {
                 return Err(serde_json::json!({
                     "error": "failed to write verifier process stdin",
@@ -822,13 +855,18 @@ fn run_process_with_timeout(
             }
             return Ok((status.success(), stdout, stderr));
         }
-        if let Some(timeout) = timeout.filter(|timeout| started.elapsed() >= *timeout) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(serde_json::json!({
+        let ended = if cancelled() {
+            Some(serde_json::json!({"error": "verifier process was cancelled"}))
+        } else {
+            timeout.filter(|timeout| started.elapsed() >= *timeout).map(|timeout| serde_json::json!({
                 "error": "verifier process timed out",
                 "timeout_ms": timeout.as_millis()
-            }));
+            }))
+        };
+        if let Some(error) = ended {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -1147,6 +1185,35 @@ mod tests {
         );
         assert_eq!(verdict.details["exit_code"], 23);
         assert_eq!(verdict.details["stderr"], "verifier launch failed");
+    }
+
+    #[test]
+    fn verifier_process_drains_its_pipes_and_ends_on_cancellation() {
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let run = |name: &str, script: &str| {
+            let package = tempfile::tempdir().unwrap();
+            std::fs::write(package.path().join("verify.sh"), script).unwrap();
+            let mut ctx = package_ctx(name);
+            ctx.descriptor.script = "verify.sh".to_string();
+            ctx.package_dir = Some(package.path().to_path_buf());
+            ctx.repository_root = package.path().to_path_buf();
+            ctx.scratch_root = package.path().join("scratch");
+            let (_, artifact) = blob(b"payload");
+            run_pinned_verifier_process_until(&pin_verifier_package(&ctx).unwrap(),
+                &test_input(artifact, serde_json::json!({})), b"payload".to_vec(),
+                &|| cancelled.load(Ordering::SeqCst))
+        };
+        let loud = run("loud", "#!/bin/sh\ni=0\nwhile [ $i -lt 4000 ]; do printf '%064d\\n' 0 >&2; i=$((i+1)); done\nprintf '{\"passed\":true}'\n");
+        assert!(loud.passed, "{}", loud.details);
+        let flag = cancelled.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let hung = run("hung", "#!/bin/sh\nwhile :; do :; done\n");
+        canceller.join().unwrap();
+        assert!(!hung.passed);
+        assert_eq!(hung.details["error"], "verifier process was cancelled");
     }
 
     #[test]
