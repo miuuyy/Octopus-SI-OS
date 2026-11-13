@@ -239,6 +239,7 @@ struct LiftedInterfaceLife {
     restart_attempt: u32,
     retry_not_before: Option<Instant>,
     waking: bool,
+    ended: bool,
     sleeping: bool,
     woken: bool,
     asleep_through: Option<u64>,
@@ -602,7 +603,7 @@ impl InterfaceActivationReconciler {
                 .map(|lifted| {
                     !lifted.sleeping
                         && (fingerprint_changed
-                            || lifted.handle.is_finished()
+                            || (lifted.ended || lifted.handle.is_finished())
                                 && lifted
                                     .retry_not_before
                                     .is_none_or(|not_before| Instant::now() >= not_before))
@@ -677,7 +678,7 @@ impl InterfaceActivationReconciler {
             let life_cancel = cancel.clone();
             let handle = tokio::spawn(async move {
                 let result = life(ctx).await;
-                if result.is_ok() && !life_cancel.is_cancelled() {
+                if result.is_ok() && !life_cancel.is_cancelled() && readiness.signaled() {
                     if let Some(declaration) = life_sleep.declared() {
                         let _ = life_exit_tx.send(InterfaceLifeEvent::Asleep {
                             interface: lifted_interface,
@@ -736,6 +737,7 @@ impl InterfaceActivationReconciler {
                     restart_attempt,
                     retry_not_before: None,
                     waking: true,
+                    ended: false,
                     sleeping: false,
                     woken: false,
                     asleep_through: None,
@@ -917,6 +919,7 @@ impl InterfaceActivationReconciler {
                     life.lift_id == lift_id && !life.cancel.is_cancelled()
                 })?;
                 let was_waking = std::mem::replace(&mut current.waking, false);
+                current.ended = true;
                 self.record_failure(&interface, &error);
                 self.schedule_life_retry(&interface, lift_id);
                 if was_waking {
@@ -974,6 +977,7 @@ impl InterfaceActivationReconciler {
                     .get_mut(&interface)
                     .filter(|life| life.lift_id == lift_id && !life.cancel.is_cancelled())?;
                 let was_waking = std::mem::replace(&mut current.waking, false);
+                current.ended = true;
                 current.sleeping = true;
                 current.asleep_through = declaration.through_seq;
                 current.restart_attempt = 0;
@@ -2077,6 +2081,7 @@ mod interface_life_switch_tests {
                     restart_attempt: 0,
                     retry_not_before: None,
                     waking: true,
+                    ended: false,
                     sleeping: false,
                     woken: false,
                     asleep_through: None,
