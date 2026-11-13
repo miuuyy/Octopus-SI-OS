@@ -149,6 +149,10 @@ app-server activation transport) offers sleep after two minutes in which it
 received and answered no frame, with no open connection and no hand-in in
 flight.
 
+The host closes the life's input as soon as it reads `asleep`, since nothing
+crosses the protocol after it; a life still reading its input, as every life
+bridge does, sees the input end and exits.
+
 That is sleep, not coma: no failure is recorded and no backoff applies. When
 the runtime records a movement for that folder at or past `through_seq`, it
 lifts the life again, and the life catches up from its cursor. A frame after

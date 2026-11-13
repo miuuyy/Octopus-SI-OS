@@ -3170,10 +3170,12 @@ fn spawn_process_command_life(
         })));
         let mut stderr_open = true;
 
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "life stdin unavailable".to_string())?;
+        let mut stdin = Some(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| "life stdin unavailable".to_string())?,
+        );
         let stdout = child
             .stdout
             .take()
@@ -3215,16 +3217,23 @@ fn spawn_process_command_life(
                         Ok(output) => output,
                         Err(error) => break Err(format!("life stdout is not a protocol emission: {error}")),
                     };
+                    let Some(input) = stdin.as_mut() else {
+                        break Err("life spoke after it declared sleep".to_string());
+                    };
+                    let falls_asleep = matches!(output, SpawnedLifeOutput::Asleep { .. });
                     if let Err(error) = handle_spawned_life_output(
                         &ctx,
                         &var_dir,
                         host_io_limits,
-                        &mut stdin,
+                        input,
                         output,
                     )
                     .await
                     {
                         break Err(error);
+                    }
+                    if falls_asleep {
+                        stdin = None;
                     }
                 }
             }

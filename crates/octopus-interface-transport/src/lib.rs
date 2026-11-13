@@ -2579,7 +2579,7 @@ mod interface_life_switch_tests {
         let lifts = lives.var_dir(name).join("lifts");
         lives.life(
             name,
-            &format!("echo lift >> '{}'; printf '%s\\n' \"$1\" \"$2\"", lifts.display()),
+            &format!("echo lift >> '{}'; printf '%s\\n' \"$1\" \"$2\"; while IFS= read -r ignored; do :; done", lifts.display()),
             &[ready_frame(), serde_json::json!({"kind": "asleep", "through_seq": 5})],
             &[&lifts],
         );
@@ -2593,7 +2593,7 @@ mod interface_life_switch_tests {
         };
         pump_life_events(
             &mut reconciler,
-            "a life that declares sleep and exits cleanly is asleep",
+            "a life that declares sleep while it still reads its input ends once the host closes that input, and is asleep",
             |reconciler| asleep(reconciler).is_some(),
         )
         .await;
