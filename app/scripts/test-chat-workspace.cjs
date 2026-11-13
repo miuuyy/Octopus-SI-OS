@@ -944,15 +944,16 @@ test("an Agent's task choices stay inside its template, a missing Worker Environ
   await until(() => view.current.providerModel === "model-a", "the model choice was not taken");
   assert.deepEqual([view.current.agentPresetId, view.current.canSubmit], ["agent-research", true], "another admitted model keeps the chosen Agent");
   view.current.toggleDriver("system_shell");
+  await until(() => view.current.submitBlockReason === "Full access requires a selected Worker Environment that declares the host filesystem root.",
+    () => `full access without a host-root Worker Environment must be refused, never silently narrowed: ${view.current.submitBlockReason}`);
+  assert.equal(view.current.agentPresetId, "agent-research");
+  view.current.setAccessMode("project_access");
   await until(() => view.current.submitBlockReason === "Application 'Notes' requires Worker Environment 'system_shell'. Select that Worker Environment or remove the Application.",
     () => `unexpected block: ${view.current.submitBlockReason}`);
-  assert.equal(view.current.agentPresetId, "agent-research");
-  view.current.toggleApplication("app.notes");
-  await until(() => view.current.canSubmit, () => `still blocked: ${view.current.submitBlockReason}`);
-  assert.equal(view.current.fullAccessUnavailableReason, "", "full access without a host-root Worker Environment adds nothing and blocks nothing");
   view.current.toggleDriver("system_shell");
   await until(() => view.current.driverNames.includes("system_shell"), "the host-root Worker Environment was not selected again");
-  assert.equal(view.current.accessMode, "full_access");
+  view.current.setAccessMode("full_access");
+  await until(() => view.current.accessMode === "full_access" && view.current.canSubmit, () => `full access was not taken: ${view.current.accessMode} ${view.current.submitBlockReason}`);
   void view.current.submit();
   await until(() => host.turns.length === 1, "the task was not created");
   assert.deepEqual([host.turns[0].providerModel, host.turns[0].reasoningEffort, host.turns[0].doorHostSlots], ["model-a", "medium", { "door.shell": { host_filesystem_root: "/" } }]);

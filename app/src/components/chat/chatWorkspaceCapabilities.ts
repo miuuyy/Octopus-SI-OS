@@ -191,6 +191,7 @@ export function taskCapabilitySelectionFailure(
   worker: ChatWorkerChoice | null,
   applicationIds: readonly string[],
   driverNames: readonly string[],
+  accessMode: TaskAccessMode = "project_access",
 ): string {
   if (!worker) return "The selected Agent worker template is not projected.";
   const applicationById = new Map(worker.applications.map((application) => [application.id, application]));
@@ -200,6 +201,9 @@ export function taskCapabilitySelectionFailure(
   const unavailableDriverName = driverNames.find((name) => !driverByName.has(name));
   if (unavailableDriverName) return `Worker Environment '${unavailableDriverName}' is not available to this task.`;
   const selectedDriverNames = new Set(driverNames);
+  if (accessMode === "full_access" && !carriesHostRoot(worker, driverNames)) {
+    return "Full access requires a selected Worker Environment that declares the host filesystem root.";
+  }
   for (const applicationId of applicationIds) {
     const application = applicationById.get(applicationId);
     const missingKind = application?.taskCapabilities.tools
@@ -210,6 +214,24 @@ export function taskCapabilitySelectionFailure(
     }
   }
   return "";
+}
+
+function carriesHostRoot(worker: ChatWorkerChoice, driverNames: readonly string[]): boolean {
+  return worker.drivers.some((driver) => (
+    driverNames.includes(driver.name)
+    && driver.rootSlots.includes(HOST_FILESYSTEM_ROOT_SLOT)
+    && driver.doorInterfaces.length > 0
+  ));
+}
+
+export function agentTaskAccessMode(
+  context: ChatExecutionContext | null | undefined,
+  workerInterfaceId: string,
+  driverNames: readonly string[],
+  requested: TaskAccessMode,
+): TaskAccessMode {
+  const worker = context?.workers.find((candidate) => candidate.id === workerInterfaceId);
+  return requested === "full_access" && worker && !carriesHostRoot(worker, driverNames) ? "project_access" : requested;
 }
 
 export function taskFullAccessSelectionFailure(
@@ -240,7 +262,7 @@ export function executionContextTaskCapabilities(
   if (!worker) {
     throw new Error(`Agent worker template '${workerInterfaceId}' is not projected in EE '${eeId}'.`);
   }
-  const selectionFailure = taskCapabilitySelectionFailure(worker, applicationIds, driverNames);
+  const selectionFailure = taskCapabilitySelectionFailure(worker, applicationIds, driverNames, accessMode);
   if (selectionFailure) throw new Error(selectionFailure);
   const applicationById = new Map(worker.applications.map((application) => [application.id, application]));
   const driverByName = new Map(worker.drivers.map((driver) => [driver.name, driver]));

@@ -91,6 +91,7 @@ import {
   providerSelectedServiceTier,
   resolveNewTaskDefaults,
   taskCapabilitySelectionFailure,
+  agentTaskAccessMode,
   taskFullAccessSelectionFailure,
 } from "./chatWorkspaceCapabilities";
 import {
@@ -859,6 +860,7 @@ export function useChatWorkspace(
         selectedWorker,
         applicationIds,
         driverNames,
+        accessMode,
       )
     : "";
   const workspaceSelectionError = useMemo(() => {
@@ -999,6 +1001,12 @@ export function useChatWorkspace(
     );
     if (matchingAgent) {
       setAgentPresetId(matchingAgent.id);
+      setAccessMode((current) => agentTaskAccessMode(
+        executionContexts.find((context) => context.eeId === matchingAgent.projectEeId),
+        matchingAgent.workerInterfaceId,
+        matchingAgent.driverNames,
+        current,
+      ));
       setNewTaskTargetResolutionBlocked(false);
       setError("");
       return;
@@ -1393,7 +1401,8 @@ export function useChatWorkspace(
       serviceTier: usableAgent?.serviceTier ?? defaults?.serviceTier ?? "",
       applicationIds: usableAgent?.applicationIds ?? capabilityDefaults.applicationIds,
       driverNames: usableAgent?.driverNames ?? capabilityDefaults.driverNames,
-      accessMode: requestedContext?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE,
+      accessMode: agentTaskAccessMode(requestedContext, nextWorkerInterfaceId, usableAgent?.driverNames ?? capabilityDefaults.driverNames,
+        requestedContext?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE),
       continuation: null,
     });
     setNewTaskTargetResolutionBlocked(Boolean(
@@ -1782,9 +1791,9 @@ export function useChatWorkspace(
             ? `reasoning level '${preset.reasoningEffort}' is unavailable to that model interface`
             : "";
     if (unavailable || !worker) return unavailable;
-    const requestedAccessMode = preset.projectEeId === eeId
+    const requestedAccessMode = agentTaskAccessMode(context, preset.workerInterfaceId, preset.driverNames, preset.projectEeId === eeId
       ? accessMode
-      : context?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE;
+      : context?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE);
     try {
       executionContextTaskCapabilities(
         executionContexts,
@@ -1826,9 +1835,9 @@ export function useChatWorkspace(
       return;
     }
     const presetContext = executionContexts.find((context) => context.eeId === preset.projectEeId);
-    const nextAccessMode = preset.projectEeId === eeId
+    const nextAccessMode = agentTaskAccessMode(presetContext, preset.workerInterfaceId, preset.driverNames, preset.projectEeId === eeId
       ? accessMode
-      : presetContext?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE;
+      : presetContext?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE);
     const unavailable = clientAgentSelectionFailure(preset);
     if (unavailable) {
       setAgentPresetId(preset.id);
@@ -3286,12 +3295,13 @@ function clientAgentCapabilitySelectionFailure(
   worker: ChatWorkerChoice | null,
   applicationIds: readonly string[],
   driverNames: readonly string[],
+  accessMode: TaskAccessMode,
 ): string {
   const applicationId = applicationIds.find((id) => !agent.applicationIds.includes(id));
   if (applicationId) return `Application '${applicationId}' is not provided by ${agent.name}.`;
   const driverName = driverNames.find((name) => !agent.driverNames.includes(name));
   if (driverName) return `Worker Environment '${driverName}' is not provided by ${agent.name}.`;
-  return taskCapabilitySelectionFailure(worker, applicationIds, driverNames);
+  return taskCapabilitySelectionFailure(worker, applicationIds, driverNames, accessMode);
 }
 
 function latestSteerableUserMessageId(messages: readonly ChatRenderMessage[], runId: string, canSteer: boolean): string {

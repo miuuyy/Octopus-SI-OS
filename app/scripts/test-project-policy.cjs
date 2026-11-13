@@ -47,16 +47,14 @@ test("Full access waits for matching loaded selections and still refuses unsuppo
     assert.equal(state.mode, "project_access"); assert.equal(state.error, "");
   }
   const valid = selection(); valid.chooseTaskAccessMode("full_access"); assert.equal(valid.mode, "full_access");
-  for (const mutate of [s => { s.executionContexts[0].fullAccessRoot = ""; }, s => { s.selectedWorker.drivers[0].hostSlots = { host_filesystem_root: "/limited" }; }]) {
+  for (const mutate of [s => { s.driverNames = []; }, s => { s.selectedWorker.drivers[0].rootSlots = []; }, s => { s.executionContexts[0].fullAccessRoot = ""; }, s => { s.selectedWorker.drivers[0].hostSlots = { host_filesystem_root: "/limited" }; }]) {
     const state = selection(); mutate(state); state.chooseTaskAccessMode("full_access");
     assert.equal(state.mode, "project_access"); assert.ok(state.error);
     assert.ok(capabilities.taskFullAccessSelectionFailure(state.executionContexts[0], state.selectedWorker, [], state.driverNames));
   }
-  for (const mutate of [s => { s.driverNames = []; }, s => { s.selectedWorker.drivers[0].rootSlots = []; }]) {
-    const state = selection(); mutate(state); state.chooseTaskAccessMode("full_access");
-    assert.deepEqual([state.mode, state.error], ["full_access", ""], "full access without a host-root Worker Environment adds nothing and blocks nothing");
-    assert.equal(capabilities.taskFullAccessSelectionFailure(state.executionContexts[0], state.selectedWorker, [], state.driverNames), "");
-  }
+  const context = { workers: [{ id: "worker", drivers: [{ name: "files", rootSlots: ["host_filesystem_root"], doorInterfaces: ["door"] }, { name: "browser", rootSlots: [], doorInterfaces: ["door.browser"] }] }] };
+  assert.equal(capabilities.agentTaskAccessMode(context, "worker", ["files"], "full_access"), "full_access");
+  assert.equal(capabilities.agentTaskAccessMode(context, "worker", ["browser"], "full_access"), "project_access", "an Agent without a host-root Worker Environment starts visibly in project access");
 });
 
 test("tasks require an explicit working folder without blocking access-mode selection", () => {

@@ -583,6 +583,7 @@ def task_capabilities(layout, home, profile, drivers, applications, notice_label
                 slots[door] = {**slots.get(door, {}), WORKSPACE_ROOT: source_folders[0]}
     host_root = os.path.splitdrive(layout["home"])[0] + os.sep
     full = [driver for driver in drivers if HOST_FILESYSTEM_ROOT in driver["root_slots"] and driver["doors"]] if full_access else []
+    require(full or not full_access, "full access requires an offered Worker Environment that declares the host filesystem root (filesystem_workspace); pass --project-access for the root task profile's own slots")
     for driver in full:
         for door in driver["doors"]:
             row = slots.get(door, {})
