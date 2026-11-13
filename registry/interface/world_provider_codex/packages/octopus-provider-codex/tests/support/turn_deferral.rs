@@ -48,6 +48,15 @@ fn inbound_artifact_defers_against_current_admitted_pending_call() {
             serde_json::from_slice(&pending.read_payload_bytes().unwrap()).unwrap(), pending_ref, 1)).unwrap(),
     ];
     assert!(operator_turn_requires_deferral(&ctx, &descriptor, &run, &turn, &current).unwrap());
+    let ended = artifact(&temp.path().join("ended"), "turn.agent_message", json!({
+        "label":"turn.agent_message", "codex_continuity":continuity(10, None),
+    }));
+    let ended_ref = cache_artifact(&ctx, &ended);
+    let mut after_turn = current.clone();
+    after_turn.push(serde_json::from_value(session_entry("turn.agent_message",
+        serde_json::from_slice(&ended.read_payload_bytes().unwrap()).unwrap(), ended_ref, 3)).unwrap());
+    assert!(!operator_turn_requires_deferral(&ctx, &descriptor, &run, &turn, &after_turn).unwrap(),
+        "an input deferred behind a call no longer waits once that turn has ended in the session");
     current[1].payload["codex_continuity"]["run"] = json!("unrelated-run");
     assert!(operator_turn_requires_deferral(&ctx, &descriptor, &run, &turn, &current).is_err());
 }

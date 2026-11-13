@@ -476,6 +476,28 @@ pub(crate) async fn run_holds_open_request(driver: Option<&CodexAppServerInterfa
     }
 }
 
+pub(crate) async fn deferred_turn_no_longer_waits(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    run: &RunId,
+    turn: &QueuedTurn,
+) -> bool {
+    let decided = async {
+        let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
+        let handoff = ProviderHandoffSession::new(ctx)?
+            .from_invocation(ctx, descriptor, run, &turn.envelope, turn.seq, &pinned)?;
+        operator_turn_requires_deferral(ctx, descriptor, run, turn, &handoff.current_session_context_artifacts().await)
+    }.await;
+    match decided {
+        Ok(required) => !required,
+        Err(error) => {
+            tracing::warn!(interface = ctx.interface.as_str(), run = run.as_str(), seq = turn.seq,
+                error = %error, "deferred provider turn cannot yet be checked against its settled session");
+            false
+        }
+    }
+}
+
 pub(crate) fn input_awaits_open_handoff(ctx: &InterfaceLiftContext, run: &RunId, turn: &QueuedTurn) -> Result<bool, String> {
     let path = ctx.root_slot("run_records_root")?.join(format!("{}.json", run.as_str()));
     let bytes = std::fs::read(&path)
@@ -642,6 +664,9 @@ pub(crate) async fn prepare_deferred_provider_turn(
     if let Some(observed_ledger_next_seq) = settled_envelope_prefix(ctx, descriptor, run, &deferred.turn, None)? {
         let release = DeferredProviderTurnRelease::SettledEnvelope { observed_ledger_next_seq };
         persist_deferred_provider_turn_release(ctx, descriptor, run, &deferred.turn, &release)?;
+        return Ok(DeferredTurnReadiness::Ready(deferred.turn.clone()));
+    }
+    if !has_carrier && deferred_turn_no_longer_waits(ctx, descriptor, run, &deferred.turn).await {
         return Ok(DeferredTurnReadiness::Ready(deferred.turn.clone()));
     }
     Ok(DeferredTurnReadiness::AwaitingSessionSettlement)
