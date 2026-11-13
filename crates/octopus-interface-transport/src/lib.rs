@@ -56,6 +56,7 @@ pub fn movement_readers(movement: &octopus_ledger::Movement) -> Vec<InterfaceId>
     }
     readers
 }
+
 pub(crate) const INTERFACE_LOCAL_IPC_ROOT_SLOT: &str = "interface_local_ipc_root";
 const APP_SERVER_CONTROL_ROOT_SLOT: &str = "app_server_control_root";
 
@@ -239,6 +240,7 @@ struct LiftedInterfaceLife {
     retry_not_before: Option<Instant>,
     waking: bool,
     sleeping: bool,
+    woken: bool,
     asleep_through: Option<u64>,
     socket_roots: Vec<PathBuf>,
     #[cfg(unix)]
@@ -609,16 +611,7 @@ impl InterfaceActivationReconciler {
             if !restart {
                 continue;
             }
-            let waking = self
-                .lifted
-                .iter()
-                .filter(|(lifted, life)| {
-                    *lifted != &interface
-                        && life.waking
-                        && life.started_at.elapsed() < LIFE_WAKING_SLOT
-                })
-                .count();
-            if waking >= self.waking_limit {
+            if self.free_waking_slots(Some(&interface)) == 0 {
                 self.deferred_lifts.insert(interface);
                 continue;
             }
@@ -744,6 +737,7 @@ impl InterfaceActivationReconciler {
                     retry_not_before: None,
                     waking: true,
                     sleeping: false,
+                    woken: false,
                     asleep_through: None,
                     socket_roots,
                     #[cfg(unix)]
@@ -751,7 +745,11 @@ impl InterfaceActivationReconciler {
                 },
             );
         }
-        verification.finish_pass();
+        if scope.is_none() {
+            verification.finish_pass();
+            self.latest_movements
+                .retain(|interface, _| mentioned.contains(interface));
+        }
         self.imported_executables = verification;
         if !self.deferred_lifts.is_empty() && !self.deferred_wake_scheduled {
             self.deferred_wake_scheduled = true;
@@ -776,6 +774,19 @@ impl InterfaceActivationReconciler {
             );
         }
         Ok(())
+    }
+
+    fn free_waking_slots(&self, lifting: Option<&InterfaceId>) -> usize {
+        let waking = self
+            .lifted
+            .iter()
+            .filter(|(interface, life)| {
+                Some(*interface) != lifting
+                    && life.waking
+                    && life.started_at.elapsed() < LIFE_WAKING_SLOT
+            })
+            .count();
+        self.waking_limit.saturating_sub(waking)
     }
 
     fn schedule_life_retry(&mut self, interface: &InterfaceId, lift_id: u64) {
@@ -919,7 +930,8 @@ impl InterfaceActivationReconciler {
                     .get(&interface)
                     .is_some_and(|lifted| lifted.lift_id == lift_id);
                 if current {
-                    if let Err(error) = self.reconcile_once().await {
+                    let scope = BTreeSet::from([interface.clone()]);
+                    if let Err(error) = self.reconcile_scope(Some(&scope)).await {
                         eprintln!(
                             "interface life '{}' could not be lifted again: {error}",
                             interface.as_str()
@@ -1030,6 +1042,7 @@ impl InterfaceActivationReconciler {
             return;
         };
         life.sleeping = false;
+        life.woken = true;
         life.asleep_through = None;
         let scope = BTreeSet::from([interface.clone()]);
         if let Err(error) = self.reconcile_scope(Some(&scope)).await {
@@ -1042,15 +1055,33 @@ impl InterfaceActivationReconciler {
     }
 
     async fn lift_deferred(&mut self) {
-        if self.deferred_lifts.is_empty() {
-            return;
-        }
-        let scope = self.deferred_lifts.clone();
-        if let Err(error) = self.reconcile_scope(Some(&scope)).await {
-            tracing::warn!(
-                error = %error,
-                "interface life reconciliation failed closed while lifting deferred lives"
-            );
+        loop {
+            let free = self.free_waking_slots(None);
+            if free == 0 || self.deferred_lifts.is_empty() {
+                return;
+            }
+            let woken = |interface: &&InterfaceId| {
+                self.lifted.get(*interface).is_some_and(|life| life.woken)
+            };
+            let scope = self
+                .deferred_lifts
+                .iter()
+                .filter(woken)
+                .chain(self.deferred_lifts.iter().filter(|interface| !woken(interface)))
+                .take(free)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let deferred = self.deferred_lifts.len();
+            if let Err(error) = self.reconcile_scope(Some(&scope)).await {
+                tracing::warn!(
+                    error = %error,
+                    "interface life reconciliation failed closed while lifting deferred lives"
+                );
+                return;
+            }
+            if self.deferred_lifts.len() >= deferred {
+                return;
+            }
         }
     }
 
@@ -2047,6 +2078,7 @@ mod interface_life_switch_tests {
                     retry_not_before: None,
                     waking: true,
                     sleeping: false,
+                    woken: false,
                     asleep_through: None,
                     socket_roots: Vec::new(),
                     #[cfg(unix)]
