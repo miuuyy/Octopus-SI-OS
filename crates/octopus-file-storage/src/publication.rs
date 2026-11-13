@@ -3,7 +3,6 @@ use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -129,33 +128,17 @@ impl FileVersion {
 
 impl HeldFile {
     fn acquire(path: PathBuf, exclusive: bool, wait: bool) -> io::Result<Self> {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let mut options = OpenOptions::new();
-            options.read(true).write(true).create(true).truncate(false);
-            secure_options(&mut options);
-            let file = options.open(&path)?;
-            if !file.metadata()?.is_file() {
-                return Err(invalid("publication lock is not a regular file"));
-            }
-            let locked = if exclusive {
-                file.try_lock_exclusive()
-            } else {
-                FileExt::try_lock_shared(&file)
-            };
-            match locked {
-                Ok(()) => {
-                    let held = Self { file, path, directory: false, version: None };
-                    held.verify()?;
-                    return Ok(held);
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock
-                    && wait && Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => return Err(error),
-            }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        secure_options(&mut options);
+        let file = options.open(&path)?;
+        if !file.metadata()?.is_file() {
+            return Err(invalid("publication lock is not a regular file"));
         }
+        take_lock(&file, exclusive, wait)?;
+        let held = Self { file, path, directory: false, version: None };
+        held.verify()?;
+        Ok(held)
     }
 
     fn verify(&self) -> io::Result<()> {
@@ -174,23 +157,21 @@ impl HeldFile {
     }
 
     fn existing(path: PathBuf, exclusive: bool, directory: bool, wait: bool) -> io::Result<Self> {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let file = if directory { File::open(&path)? } else { open_regular(&path)? };
-            let result = if exclusive { file.try_lock_exclusive() } else { FileExt::try_lock_shared(&file) };
-            match result {
-                Ok(()) => {
-                    let version = if directory || exclusive { None } else { Some(FileVersion::of(&file.metadata()?)?) };
-                    let held = Self { file, path, directory, version };
-                    held.verify()?;
-                    return Ok(held);
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock && wait && Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        let file = if directory { File::open(&path)? } else { open_regular(&path)? };
+        take_lock(&file, exclusive, wait)?;
+        let version = if directory || exclusive { None } else { Some(FileVersion::of(&file.metadata()?)?) };
+        let held = Self { file, path, directory, version };
+        held.verify()?;
+        Ok(held)
+    }
+}
+
+fn take_lock(file: &File, exclusive: bool, wait: bool) -> io::Result<()> {
+    match (exclusive, wait) {
+        (true, true) => FileExt::lock_exclusive(file),
+        (false, true) => FileExt::lock_shared(file),
+        (true, false) => FileExt::try_lock_exclusive(file),
+        (false, false) => FileExt::try_lock_shared(file),
     }
 }
 

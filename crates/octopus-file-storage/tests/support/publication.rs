@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 fn interrupted(path: &Path, operation: &str, before: &str, boundary: Interruption) {
     INTERRUPTION.with(|selected| selected.set(Some(boundary)));
