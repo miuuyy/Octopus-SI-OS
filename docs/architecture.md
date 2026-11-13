@@ -453,8 +453,11 @@ catches up on its own movements from its own cursor. The cursor is written to
 disk when the interface settles one of its own movements; reading past other
 interfaces' movements stays in memory, so a busy ledger does not make every
 live interface flush the disk on every append. An interface whose life dies,
-even before it is ready, is lifted again with backoff; the runtime log says
-when it falls into coma and when it wakes. Interfaces wake in no promised
+even before it is ready, is lifted again with backoff that doubles up to five
+minutes and returns to its shortest step only after the life has stayed alive
+for ten minutes, so a life that keeps crashing sleeps longer instead of being
+lifted every few seconds forever; the runtime log says when it falls into coma
+and when it wakes. Interfaces wake in no promised
 order: one that hands work to a sibling still waking up waits for it for as long
 as the hand-in is not cancelled. A stopped interface loses nothing; an unread result is an ordinary consequence of the architecture, not a
 loss to be repaired with leases and retries.

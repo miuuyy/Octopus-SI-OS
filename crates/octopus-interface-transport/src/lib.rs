@@ -198,8 +198,8 @@ enum InterfaceLifeEvent {
 }
 
 const LIFE_RESTART_BASE_DELAY: Duration = Duration::from_millis(250);
-const LIFE_RESTART_MAX_DELAY: Duration = Duration::from_secs(30);
-const LIFE_RESTART_STABLE_AFTER: Duration = Duration::from_secs(30);
+const LIFE_RESTART_MAX_DELAY: Duration = Duration::from_secs(300);
+const LIFE_RESTART_STABLE_AFTER: Duration = Duration::from_secs(600);
 const INTERFACE_WATCH_EVENT_BATCH_LIMIT: usize = 256;
 
 fn interface_life_restart_delay(attempt: u32) -> Duration {
@@ -1594,7 +1594,7 @@ mod interface_life_switch_tests {
     fn repeated_interface_life_failure_uses_bounded_backoff() {
         assert_eq!(interface_life_restart_delay(1), Duration::from_millis(250));
         assert_eq!(interface_life_restart_delay(2), Duration::from_millis(500));
-        assert_eq!(interface_life_restart_delay(32), Duration::from_secs(30));
+        assert_eq!(interface_life_restart_delay(32), Duration::from_secs(300));
     }
 
     #[test]
