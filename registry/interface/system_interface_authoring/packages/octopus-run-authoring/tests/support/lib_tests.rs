@@ -3079,7 +3079,7 @@
             probe_state.run_record_bytes = rearmed.content.as_bytes().to_vec();
             let before = session_artifacts_fingerprint(&probe_state.session_context.artifacts).unwrap();
             let error = probe.restore_failed_context(&mut probe_state, &[]).unwrap_err();
-            assert!(error.contains("no declared checked owner writers"), "{error}");
+            assert!(error.contains("complete admitted checked file.write chain"), "{error}");
             assert_eq!(session_artifacts_fingerprint(&probe_state.session_context.artifacts).unwrap(), before);
             probe.source_carries_context = false;
             assert!(probe.checked_failed_source_contexts(&probe_state.run_record_bytes, &[], None).unwrap().is_empty());

@@ -446,16 +446,23 @@ impl ProviderOutputHandoff {
             }
             let Some(index) = references.iter().position(|reference| movement.artifact.as_ref() == Some(reference)) else { continue; };
             if movement.from != Endpoint::Interface(self.config.provider_interface.clone()) { continue; }
+            let failed_verification = movement.invocation_metadata.as_ref().and_then(|metadata| metadata.invocation())
+                .is_some_and(|metadata| metadata.verification_failure.is_some());
+            if movement.kind == MovementKind::InterfaceArrival && failed_verification { continue; }
             if matches!(movement.kind, MovementKind::InterfaceArrival | MovementKind::InterfaceOutbound) {
                 return Ok(false);
             }
-            if movement.kind != MovementKind::DeliveryRefused { continue; }
+            let refusal = match movement.kind {
+                MovementKind::DeliveryRefused => true,
+                MovementKind::VerificationFailed if failed_verification => false,
+                _ => continue,
+            };
             let runtime = movement.runtime().ok_or("pending refusal has no exact runtime coordinate")?;
             let item = &pending.items[index];
             if runtime.checkpoint != item.checkpoint.id || runtime.epoch != item.checkpoint.epoch { continue; }
             if runtime.interface != self.config.provider_interface || runtime.worker != record.worker
                 || movement.to != Endpoint::Interface(record.worker.clone())
-                || !matches!(movement.invocation_metadata.as_ref().and_then(|metadata| metadata.delivery_verdict()), Some(DeliveryVerdict::Refused { .. }))
+                || (refusal && !matches!(movement.invocation_metadata.as_ref().and_then(|metadata| metadata.delivery_verdict()), Some(DeliveryVerdict::Refused { .. })))
             {
                 return Err("pending refusal changed its exact interface or run scope".into());
             }

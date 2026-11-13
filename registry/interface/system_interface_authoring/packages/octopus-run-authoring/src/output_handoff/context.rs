@@ -83,10 +83,7 @@ impl ProviderOutputHandoff {
                     return Err("failed context source has no exact pinned input contract".into());
                 }
                 if !templates[0].include_context { continue; }
-                if !config.checkpoints.iter().any(|template| template.owner_authoring.is_some()) {
-                    return Err("failed context recovery has no declared checked owner writers".into());
-                }
-                let chain = checked_selected_run_advance_state(
+                let chain = checked_provider_run_advance_state(
                     &self.ctx, &self.run_path, &before, current, sequence, &config,
                 )?;
                 let mut terminal = None;

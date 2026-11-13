@@ -932,7 +932,11 @@ result no turn will consume, and a late result arrives as an ordinary input. A t
 that cannot be handed closes its source through the declared failure route
 instead of ending the provider life. That route writes the context the run has
 published, a deferred publication whose evidence is admitted included, so a
-failed result does not drop what its call's wait already joined. A failed source with neither a failed-source
+failed result does not drop what its call's wait already joined. A pending
+artifact whose verifier rejected it at its own checkpoint is refused as surely as
+one whose delivery was refused, so the failure closes that handoff. A later turn
+proves the failed source's context through the provider's own checked writes,
+whether or not the run has owner writers. A failed source with neither a failed-source
 handoff nor a proven standing route is recorded as the interface's admitted
 failure of that movement, and the life keeps serving its other sources. A
 saved attempt or withdrawal of one run that does not read is that run's

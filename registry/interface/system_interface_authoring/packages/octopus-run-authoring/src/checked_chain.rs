@@ -924,7 +924,7 @@ pub(crate) fn checked_selected_run_advance_state(
     ctx: &InterfaceLiftContext, path: &Path, before: &[u8], after: &[u8], after_seq: u64,
     config: &RunAuthoringConfig,
 ) -> Result<Vec<CheckedRunTransition>, CheckedRunError> {
-    let mut writers = config.checkpoints.iter().filter_map(|cp| cp.owner_authoring.clone()).collect::<Vec<_>>();
+    let writers = config.checkpoints.iter().filter_map(|cp| cp.owner_authoring.clone()).collect::<Vec<_>>();
     let original = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
     let current = RunRecord::from_bytes(after).map_err(|error| error.to_string())?;
     let payload_revision = input_revision::is_payload_revision(&original, &current, &config.provider_interface)?;
@@ -938,6 +938,14 @@ pub(crate) fn checked_selected_run_advance_state(
         }
         return Ok(Vec::new());
     }
+    checked_provider_run_advance_state(ctx, path, before, after, after_seq, config)
+}
+
+pub(crate) fn checked_provider_run_advance_state(
+    ctx: &InterfaceLiftContext, path: &Path, before: &[u8], after: &[u8], after_seq: u64,
+    config: &RunAuthoringConfig,
+) -> Result<Vec<CheckedRunTransition>, CheckedRunError> {
+    let mut writers = config.checkpoints.iter().filter_map(|cp| cp.owner_authoring.clone()).collect::<Vec<_>>();
     let provider_writer = CheckedRunWriter {
         owner:config.provider_interface.clone(),source:config.authoring_source_interface.clone(),
         door:config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult)?.interface().clone(),
