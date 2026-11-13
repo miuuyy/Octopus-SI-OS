@@ -1853,9 +1853,6 @@ fn validate_defaults(defaults: &RunDefaults) -> Result<(), String> {
     ] {
         exact_string(value, field)?;
     }
-    if defaults.authoring.result_timeout_ms == 0 {
-        return Err("authoring timeout must be positive".into());
-    }
     for paths in defaults.door_host_slots.values() {
         for path in paths.values() {
             absolute_path(path)?;

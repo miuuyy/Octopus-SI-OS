@@ -175,7 +175,7 @@ pub fn fixture(root: &Path) -> RunCompositionRequest {
         admitted_parent_record: parent, identity_seed:"call/first".into(), ee_id:"ee_existence".into(),
         worker_template_interface_id:"system_worker_template".into(), provider_interface_id:"world_provider_fixture".into(),
         model:"fixture-a".into(), reasoning_effort:"xhigh".into(), service_tier:None,
-        authoring: CompositionAuthoring { source_interface_id:"system_interface_authoring".into(),room_interface_id:"system_room".into(),tool_id:"file.write".into(),tool_call_label:"tool.call".into(),tool_call_mark:"tool.call.allowed".into(),tool_call_verifier:"tool_call_allowed".into(),result_timeout_ms:30000 },
+        authoring: CompositionAuthoring { source_interface_id:"system_interface_authoring".into(),room_interface_id:"system_room".into(),tool_id:"file.write".into(),tool_call_label:"tool.call".into(),tool_call_mark:"tool.call.allowed".into(),tool_call_verifier:"tool_call_allowed".into() },
         communication: CompositionCommunication { client_template_interface_id:None, client_title:None, receive_interface_id:"system_worker_private_first".into(),return_interface_ids:vec!["system_worker_parent".into()],client_interface_id:None,output_selection:None },
         selected_worker_environment_kinds:vec![], selected_tools:vec![SelectedToolSeed { tool:"file.write".into(),interface:"system_room".into(),worker_environment_kind:"system_room".into() }, SelectedToolSeed { tool:"artifact.send".into(),interface:"system_room".into(),worker_environment_kind:"system_room".into() }],
         door_host_slots:BTreeMap::new(),external_inputs:vec![],external_relays:vec![],model_outputs:vec![],publications:vec![],context_artifact_bindings:vec![],payload_artifact_bindings:vec![],

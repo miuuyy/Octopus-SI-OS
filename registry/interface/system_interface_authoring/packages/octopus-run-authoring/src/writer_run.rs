@@ -251,7 +251,6 @@ fn owner_config(
                 file_write_tool: writer.tool.clone(),
                 file_write_label: writer.call_label.clone(),
                 file_write_result_label: writer.result_label.clone(),
-                result_timeout_ms: 1,
             },
         ));
     }
@@ -308,7 +307,6 @@ fn owner_config(
         payload_artifact_bindings: vec![],
         writer_run: Some(bound),
         checkpoints: templates,
-        result_timeout_ms: 1,
     })
 }
 
@@ -1796,14 +1794,11 @@ impl ProviderOutputHandoff {
         authored: &AuthoredRun,
     ) -> Result<AuthoredRunInstallOutcome, String> {
         let maximum = self.ctx.required_host_io_limits()?.max_payload_bytes;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(self.config.result_timeout_ms))
-            .ok_or("writer deadline overflow")?;
         let mut planned = authored.clone();
         let mut known: Option<(String, InterfaceArtifactFile, OrderedArguments, u64)> = None;
         loop {
-            if Instant::now() >= deadline {
-                return Err("provider ordered file write awaits its admitted result".into());
+            if self.ctx.cancel.is_cancelled() {
+                return Err("provider ordered file write was cancelled while it awaited its admitted result".into());
             }
             let progress = history(&self.ctx, &self.session.writer_history, &self.config)?;
             if let Some(refusal) = progress.refused.get(&planned.after_hash) {
@@ -1829,11 +1824,7 @@ impl ProviderOutputHandoff {
                 let (_, _, args, _) = known.as_ref().ok_or("refused ordered write lost its private call")?;
                 let before_content = args.writes[1].before(maximum)?;
                 let before = before_content.as_bytes();
-                let remaining = deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis()
-                    .min(u64::MAX as u128) as u64;
-                let (current, chain) = await_checked_evidence(&self.ctx, remaining, || {
+                let (current, chain) = await_checked_evidence(&self.ctx, || {
                     checked_live_run_advance(
                         &self.ctx,
                         &self.run_path,
@@ -1927,7 +1918,10 @@ impl ProviderOutputHandoff {
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::select! {
+                _ = self.ctx.cancel.cancelled() => {}
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
         }
     }
 }

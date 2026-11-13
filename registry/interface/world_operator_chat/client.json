@@ -146,8 +146,7 @@
   "authoring": {
     "source_interface": "system_interface_authoring",
     "room_interface": "system_room",
-    "tool": "file.write",
-    "result_timeout_ms": 120000
+    "tool": "file.write"
   },
   "run": {
     "interface_prefix": "world_operator_chat_",

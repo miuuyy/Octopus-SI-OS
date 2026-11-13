@@ -13,7 +13,7 @@ fn authored_run_checks_provider_frontiers_without_treating_other_writers_as_prov
     let room_path = "registry/interface/system_room/interface.json";
     let mut room: Value = serde_json::from_slice(&std::fs::read(temp.path().join(room_path)).unwrap()).unwrap();
     room["interface_driver_config"]["private_config"]["run_authoring_profile"] = json!({
-        "file_write_tool":"file.write", "file_write_label":"tool.call", "file_write_result_label":"file.write.result", "result_timeout_ms":30000
+        "file_write_tool":"file.write", "file_write_label":"tool.call", "file_write_result_label":"file.write.result"
     });
     write(temp.path(), room_path, room);
     let plan = plan_run_composition(&request).unwrap();

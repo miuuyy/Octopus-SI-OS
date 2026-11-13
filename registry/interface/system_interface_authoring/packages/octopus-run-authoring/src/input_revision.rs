@@ -164,7 +164,6 @@ fn profile(writer: &CheckedRunWriter) -> RunAuthoringProfile {
         file_write_tool: writer.tool.clone(),
         file_write_label: writer.call_label.clone(),
         file_write_result_label: writer.result_label.clone(),
-        result_timeout_ms: 1,
     }
 }
 

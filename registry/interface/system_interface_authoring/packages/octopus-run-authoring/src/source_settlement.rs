@@ -42,7 +42,6 @@ pub(super) fn validate_checked_transition(
             file_write_tool: writer.tool.clone(),
             file_write_label: writer.call_label.clone(),
             file_write_result_label: writer.result_label.clone(),
-            result_timeout_ms: 1,
         },
     )?;
     validate_transition(before, after, &config)
@@ -549,7 +548,6 @@ impl ProviderOutputHandoff {
                 file_write_tool: self.config.file_write_tool.clone(),
                 file_write_label: self.config.file_write_label.clone(),
                 file_write_result_label: self.config.file_write_result_label.clone(),
-                result_timeout_ms: self.config.result_timeout_ms,
             },
         )?;
         let provider_writer = CheckedRunWriter {

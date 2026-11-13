@@ -778,11 +778,12 @@ restored. Snapshot recovery proves inserted history entries through the checked
 source and output publications, preserving their content and order.
 
 A retained output whose original edges are still pending remains the same
-hand-in. The provider captures its artifact once and waits within its declared
-result timeout, retrying only that retained delivery identity and scope. Pending
-admission does not end the native turn. Cancellation, an expired timeout, a
-changed scope or a definitive refusal remains an explicit failure; completed
-edges are never executed again.
+hand-in. The provider captures its artifact once and waits until the runtime
+decides it, retrying only that retained delivery identity and scope. Pending
+admission does not end the native turn. A hand-in to the local runtime has no
+wall-clock limit: a slow or suspended machine is not a failed delivery.
+Cancellation, a lost connection to the runtime, a changed scope or a definitive
+refusal remains an explicit failure; completed edges are never executed again.
 
 A completed source continues only explicitly. When a provider owes further
 outputs to an arrival whose terminal batch is already handed and fully admitted,
@@ -841,10 +842,10 @@ state; a later record never substitutes for an earlier attempt's preimage.
 A provider handoff reads its run through the record it last proved. Execution
 is concurrent: when another declared writer advances the record while the
 handoff observes it, the observation is not a verdict. The handoff adopts the
-advance through the checked writer chain and observes again within its result
-timeout; a waiting result's rebase grows by the context that advance added. An
-advance without checked writer evidence, or a record still moving at the
-timeout, fails closed with the original error.
+advance through the checked writer chain and observes again for as long as the
+record keeps advancing; a waiting result's rebase grows by the context that
+advance added. An advance without checked writer evidence, or an observation
+that fails against an unchanged record, fails closed with the original error.
 
 A provider's saved attempt is read the way a checked reader reads the step it
 carries. Its own step may add outgoing connections and replace its verified

@@ -34,7 +34,6 @@ pub struct CompositionAuthoring {
     pub tool_call_label: String,
     pub tool_call_mark: String,
     pub tool_call_verifier: String,
-    pub result_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -932,7 +931,6 @@ fn composition_config(request: &RunCompositionRequest) -> ClientConfig {
             source_interface: request.authoring.source_interface_id.clone(),
             room_interface: request.authoring.room_interface_id.clone(),
             tool: request.authoring.tool_id.clone(),
-            result_timeout_ms: request.authoring.result_timeout_ms,
             _rest: Default::default(),
         },
         run: ClientRunConfig {
@@ -1039,7 +1037,6 @@ fn validate_request(request: &RunCompositionRequest) -> Result<(), String> {
     }
     if request.reasoning_effort.trim() != request.reasoning_effort
         || request.reasoning_effort.contains(['\r', '\n', '\0'])
-        || request.authoring.result_timeout_ms == 0
     {
         return Err("malformed reasoning effort or authoring timeout".into());
     }

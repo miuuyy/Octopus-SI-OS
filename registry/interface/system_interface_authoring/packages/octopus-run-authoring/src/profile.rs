@@ -12,23 +12,19 @@ pub(crate) async fn send_authoring_manifest(
     }
     let text = std::str::from_utf8(manifest_bytes)
         .map_err(|error| format!("interface authoring manifest is not UTF-8: {error}"))?.to_owned();
-    let timeout = Duration::from_millis(config.result_timeout_ms);
     let control_root = ctx.root_slot("app_server_control_root")?;
     let socket =
         octopus_app_server_interface::interface_control_socket_path_from_root(
             control_root,
             &config.authoring_source_interface,
         );
-    let mut unavailable = None;
-    tokio::time::timeout(timeout, async {
-      loop {
+    loop {
         if ctx.cancel.is_cancelled() {
             return Err("interface authoring hand-in was cancelled".into());
         }
         let stream = match tokio::net::UnixStream::connect(&socket).await {
             Ok(stream) => stream,
             Err(error) if matches!(error.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound) => {
-                unavailable = Some(error.to_string());
                 tokio::select! {
                     _ = ctx.cancel.cancelled() => return Err("interface authoring hand-in was cancelled".into()),
                     _ = tokio::time::sleep(Duration::from_millis(20)) => {}
@@ -68,20 +64,7 @@ pub(crate) async fn send_authoring_manifest(
             _ = ctx.cancel.cancelled() => return Err("interface authoring hand-in was cancelled".into()),
             _ = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
-      }
-    })
-    .await
-    .map_err(|_| match &unavailable {
-        Some(error) => format!(
-            "interface authoring socket '{}' stayed unavailable for {}ms: {error}",
-            socket.display(),
-            config.result_timeout_ms
-        ),
-        None => format!(
-            "interface authoring hand-in timed out after {}ms",
-            config.result_timeout_ms
-        ),
-    })?
+    }
 }
 
 pub(crate) fn run_authoring_profile(descriptor: &InterfaceDescriptor) -> Result<RunAuthoringProfile, String> {
@@ -115,7 +98,7 @@ pub(crate) fn run_authoring_profile(descriptor: &InterfaceDescriptor) -> Result<
             descriptor.id.as_str()
         )
     })?;
-    profile.validate(&descriptor.id)?;
+    profile.validate()?;
     let hidden_tools = interface_config
         .private_config
         .get("model_hidden_tools")
@@ -159,13 +142,7 @@ pub(crate) fn run_authoring_profile(descriptor: &InterfaceDescriptor) -> Result<
 }
 
 impl RunAuthoringProfile {
-    pub(crate) fn validate(&self, provider: &InterfaceId) -> Result<(), String> {
-        if self.result_timeout_ms == 0 {
-            return Err(format!(
-                "provider interface '{}' run_authoring_profile.result_timeout_ms must be positive",
-                provider.as_str()
-            ));
-        }
+    pub(crate) fn validate(&self) -> Result<(), String> {
         for (name, value) in [
             ("file_write_tool", self.file_write_tool.as_str()),
             ("file_write_label", self.file_write_label.as_str()),
@@ -233,7 +210,7 @@ pub(crate) fn validate_declared_provider_writer(record: &RunRecord, writer: &Che
     }
     topology.config(&RunAuthoringProfile {
         file_write_tool:writer.tool.clone(), file_write_label:writer.call_label.clone(),
-        file_write_result_label:writer.result_label.clone(), result_timeout_ms:1,
+        file_write_result_label:writer.result_label.clone(),
     }).validate(&writer.owner, &record.id)?;
     Ok(topology)
 }
@@ -251,7 +228,6 @@ impl BoundRunAuthoringTopology {
             payload_artifact_bindings: self.payload_artifact_bindings.clone(),
             writer_run: self.writer_run.clone(),
             checkpoints: self.checkpoints.clone(),
-            result_timeout_ms: profile.result_timeout_ms,
         }
     }
 
@@ -347,7 +323,7 @@ pub(crate) fn resolve_profile_invocation(
     record: &RunRecord,
     source_checkpoint: Option<&CheckpointId>,
 ) -> Result<(RunAuthoringConfig, BoundRunAuthoringTopology), String> {
-    profile.validate(provider)?;
+    profile.validate()?;
     if record.id != *run {
         return Err(format!(
             "run_authoring_profile invocation belongs to run '{}', pinned run is '{}'",

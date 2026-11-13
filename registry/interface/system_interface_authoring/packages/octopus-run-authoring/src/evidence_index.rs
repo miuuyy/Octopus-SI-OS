@@ -39,8 +39,8 @@ impl ProviderHandoffSession {
         &self, ctx: &InterfaceLiftContext, descriptor: &InterfaceDescriptor, run: &RunId,
         input: &InterfaceInvocationEnvelope, source_movement_seq: u64, pinned_run_record: &[u8],
     ) -> Result<ProviderOutputHandoff, CheckedRunError> {
-        let profile = run_authoring_profile(descriptor)?;
-        await_checked_evidence(ctx, profile.result_timeout_ms, || {
+        run_authoring_profile(descriptor)?;
+        await_checked_evidence(ctx, || {
             self.from_invocation_state(ctx, descriptor, run, input, source_movement_seq, pinned_run_record)
         }).await
     }

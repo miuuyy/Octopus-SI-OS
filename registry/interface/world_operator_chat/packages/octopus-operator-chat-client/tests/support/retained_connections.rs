@@ -51,7 +51,7 @@ fn client_continuation_retains_exact_peer_but_removes_selected_capability() {
         "metadata":{"runtime":{"run":first.run_id,"ee":"ee_operator_space","worker":first.worker_interface_id,"interface":first.model_interface_id,"checkpoint":"cp_operator_input_first","epoch":0,"run_record_hash":record_hash}},
         "admitted_parent_record":prior,"identity_seed":"peer-create","ee_id":"ee_operator_space","worker_template_interface_id":peer_template,
         "provider_interface_id":"world_provider_ollama","model":first.model,"reasoning_effort":first.reasoning_effort,
-        "authoring":{"source_interface_id":"system_interface_authoring","room_interface_id":"system_room","tool_id":"file.write","tool_call_label":"tool.call","tool_call_mark":"tool.call.allowed","tool_call_verifier":"tool_call_allowed","result_timeout_ms":30000},
+        "authoring":{"source_interface_id":"system_interface_authoring","room_interface_id":"system_room","tool_id":"file.write","tool_call_label":"tool.call","tool_call_mark":"tool.call.allowed","tool_call_verifier":"tool_call_allowed"},
         "communication":{"receive_interface_id":peer,"return_interface_ids":[first.worker_interface_id],"client_interface_id":null},
         "selected_worker_environment_kinds":[],"selected_tools":[],"door_host_slots":{},"context_artifact_bindings":[],"payload_artifact_bindings":[],
         "seed":{"label":"provider.peer.message","payload":{"text":"fixture task"}}

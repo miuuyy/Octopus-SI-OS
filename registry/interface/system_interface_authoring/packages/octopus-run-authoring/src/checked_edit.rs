@@ -76,7 +76,6 @@ impl CheckedRunEdit {
         if profile.file_write_tool.is_empty()
             || profile.file_write_label.is_empty()
             || profile.file_write_result_label.is_empty()
-            || profile.result_timeout_ms == 0
         {
             return Err("checked file-write profile is incomplete".into());
         }

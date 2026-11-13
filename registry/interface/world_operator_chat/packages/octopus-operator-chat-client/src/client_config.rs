@@ -55,9 +55,6 @@ pub(crate) fn load_named_client_config(interface_root: &Path, source: &str) -> R
             return Err(format!("client config field {field} is empty"));
         }
     }
-    if config.authoring.result_timeout_ms == 0 {
-        return Err("client config authoring.result_timeout_ms must be positive".to_string());
-    }
     if let Some(result) = &config.run.tool_result_receiving { result.requirement(&config.authoring.tool)?; }
     let mut predecessors = BTreeSet::new();
     for prior in &config.result_receiving_updates {

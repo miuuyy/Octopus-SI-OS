@@ -2054,8 +2054,7 @@
             "file_write_tool": "file.write",
             "file_write_label": "tool.call",
             "file_write_result_label": "file.write.result",
-            "checkpoints": checkpoints,
-            "result_timeout_ms": 1000
+            "checkpoints": checkpoints
         }))
         .unwrap()
     }
@@ -3556,7 +3555,6 @@
             file_write_tool: writer.tool.clone(),
             file_write_label: writer.call_label.clone(),
             file_write_result_label: writer.result_label.clone(),
-            result_timeout_ms: 1000,
         };
         let file = edit
             .materialize(&ctx.var_dir.join("checked-gate"), &profile)

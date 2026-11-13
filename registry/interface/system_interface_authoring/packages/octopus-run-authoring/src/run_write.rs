@@ -139,7 +139,6 @@ pub(crate) fn validate_write_result_evidence(
             file_write_tool: config.file_write_tool.clone(),
             file_write_label: config.file_write_label.clone(),
             file_write_result_label: config.file_write_result_label.clone(),
-            result_timeout_ms: config.result_timeout_ms,
         },
         run_path,
         result,

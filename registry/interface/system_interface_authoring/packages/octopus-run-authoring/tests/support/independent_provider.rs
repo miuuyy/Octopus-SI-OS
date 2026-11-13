@@ -102,7 +102,6 @@ fn exercise_independent_provider_owner(handoff: &ProviderOutputHandoff, initial:
         file_write_tool: handoff.config.file_write_tool.clone(),
         file_write_label: handoff.config.file_write_label.clone(),
         file_write_result_label: handoff.config.file_write_result_label.clone(),
-        result_timeout_ms: 1000,
     };
     receiver
         .config(&profile)

@@ -253,7 +253,6 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
     let mut evidence = EvidenceTail::open(&ctx)?;
     let writer_evidence = OwnerWriterEvidence::default();
     let output = ctx.var_dir.join("input-artifacts");
-    let mut awaiting: Option<(u64, tokio::time::Instant)> = None;
     let mut validated_source = None;
     let mut validated_edit = false;
     let mut delivery_artifact: Option<PreparedIntakeArtifact> = None;
@@ -368,29 +367,11 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
             state.pending = None;
             save_state(&state_path, &state, state_limit)?;
             evidence.rows.clear();
-            awaiting = None;
             validated_source = None;
             validated_edit = false;
             delivery_artifact = None;
             writer_artifact = None;
             continue;
-        }
-        if awaiting
-            .as_ref()
-            .is_none_or(|(id, _)| *id != pending.source.seq.0)
-        {
-            awaiting = Some((
-                pending.source.seq.0,
-                tokio::time::Instant::now()
-                    + std::time::Duration::from_millis(config.profile.result_timeout_ms),
-            ));
-        }
-        let deadline = awaiting
-            .as_ref()
-            .ok_or("intake evidence deadline disappeared")?
-            .1;
-        if tokio::time::Instant::now() >= deadline {
-            return Err("input remains durably retained; checked write deadline expired".into());
         }
         let current =
             octopus_interfaces::read_artifact_carrier_file_bounded(&path, limits.max_payload_bytes)
@@ -468,15 +449,7 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
         let ordered_result = pending_edit.ordered.as_ref().map(|attempt|writer_evidence.result(&ctx,attempt)).transpose()?.flatten();
         let result = if pending_edit.ordered.is_some() { None } else {checked_input_result(&ctx, &config, pending_edit, &evidence.rows)?};
         if ordered_result == Some(true) || result.as_ref().is_some_and(|result| result.ok) {
-            await_evidence(
-                &mut reader,
-                &ctx,
-                deadline,
-                chain
-                    .err()
-                    .unwrap_or_else(|| "exact write is absent".into()),
-            )
-            .await?;
+            await_evidence(&mut reader, &ctx).await?;
             continue;
         }
         let rejected = ordered_result == Some(false) || result.is_some()
@@ -513,8 +486,8 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
         if rejected || (!sent && current != pending_edit.before.as_bytes()) {
             let chain = match chain {
                 Ok(chain) => chain,
-                Err(error) => {
-                    await_evidence(&mut reader, &ctx, deadline, error).await?;
+                Err(_) => {
+                    await_evidence(&mut reader, &ctx).await?;
                     continue;
                 }
             };
@@ -560,24 +533,13 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
             }
             continue;
         }
-        await_evidence(
-            &mut reader,
-            &ctx,
-            deadline,
-            "checked file result is absent".into(),
-        )
-        .await?;
+        await_evidence(&mut reader, &ctx).await?;
     }
 }
 
 async fn await_evidence(
     reader: &mut LedgerTailReader,
     ctx: &InterfaceLiftContext,
-    deadline: tokio::time::Instant,
-    reason: String,
 ) -> Result<(), String> {
-    tokio::select! {
-        result = reader.wait_for_change(&ctx.cancel) => result,
-        _ = tokio::time::sleep_until(deadline) => Err(format!("input remains durably retained; checked evidence did not become complete: {reason}")),
-    }
+    reader.wait_for_change(&ctx.cancel).await
 }

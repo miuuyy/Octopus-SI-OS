@@ -61,7 +61,6 @@ impl InputIntakeConfig {
             || self.profile.file_write_tool != self.writer.tool
             || self.profile.file_write_label != self.writer.call_label
             || self.profile.file_write_result_label != self.writer.result_label
-            || self.profile.result_timeout_ms == 0
             || self.writer.call_label == self.input_label
         {
             return Err(
@@ -211,7 +210,6 @@ pub(crate) fn wire(
             file_write_tool: tool.clone(),
             file_write_label: profile.file_write_label.clone(),
             file_write_result_label: format!("{tool}.result"),
-            result_timeout_ms: profile.result_timeout_ms,
         },
         provider_profile: profile,
         input_label: INPUT_INTAKE_LABEL.into(),

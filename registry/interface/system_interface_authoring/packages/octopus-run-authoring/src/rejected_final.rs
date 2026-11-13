@@ -232,7 +232,7 @@ pub(super) fn validate_evidence(reader: &mut impl CheckedRunEvidenceReader, tran
     if persisted_pending_handoff(&before, &transition.writer.owner)?.as_ref() == Some(&next) { return Ok(()); }
     let config = config_from_persisted_profile(&before, &transition.writer.owner, &RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
-        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: transition.writer.result_label.clone(),
     })?;
     validate_transition(&before, &after, &config)?;
     if proof.predecessor_record != ContentHash::of_bytes(&transition.before).to_hex()

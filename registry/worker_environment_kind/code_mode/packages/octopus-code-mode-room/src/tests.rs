@@ -2015,14 +2015,14 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
         }
     }
     let durable = door.durable_dir(&formation).unwrap();
-    let descriptor:octopus_interfaces::InterfaceDescriptor=serde_json::from_value(json!({"id":DOOR,"interface_type":"system","role":"system","direction":"bidirectional","source_names":["code_mode"],"interface_driver_ref":"code_mode_env","interface_driver_config":{"private_config":{"run_authoring_profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result","result_timeout_ms":30000}}}})).unwrap();
+    let descriptor:octopus_interfaces::InterfaceDescriptor=serde_json::from_value(json!({"id":DOOR,"interface_type":"system","role":"system","direction":"bidirectional","source_names":["code_mode"],"interface_driver_ref":"code_mode_env","interface_driver_config":{"private_config":{"run_authoring_profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"}}}})).unwrap();
     let mut transport = door.configure_owner_transport(
         BTreeMap::from([("run_records_root".into(), records.clone())]),
         descriptor,
     );
     let provider_directory = root.join("provider-interface");
     std::fs::create_dir_all(&provider_directory).unwrap();
-    let mut provider_descriptor:octopus_interfaces::InterfaceDescriptor=serde_json::from_value(json!({"id":"world_provider_test","interface_type":"world","role":"provider","direction":"bidirectional","source_names":["fixture"],"interface_driver_ref":"fixture","interface_driver_config":{"private_config":{"model_hidden_tools":["file.write.provider"],"run_authoring_profile":{"file_write_tool":"file.write.provider","file_write_label":"tool.call","file_write_result_label":"file.write.provider.result","result_timeout_ms":30000},"context_output_labels":["provider.fixture.snapshot"],"session_snapshot_labels":["provider.fixture.snapshot"]}}})).unwrap();
+    let mut provider_descriptor:octopus_interfaces::InterfaceDescriptor=serde_json::from_value(json!({"id":"world_provider_test","interface_type":"world","role":"provider","direction":"bidirectional","source_names":["fixture"],"interface_driver_ref":"fixture","interface_driver_config":{"private_config":{"model_hidden_tools":["file.write.provider"],"run_authoring_profile":{"file_write_tool":"file.write.provider","file_write_label":"tool.call","file_write_result_label":"file.write.provider.result"},"context_output_labels":["provider.fixture.snapshot"],"session_snapshot_labels":["provider.fixture.snapshot"]}}})).unwrap();
     if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure | FrontierCase::NestedFailure) {
         provider_descriptor.interface_driver_config.as_mut().unwrap().private_config["context_output_labels"] = json!(["provider.fixture.snapshot", "tool.call"]);
     }

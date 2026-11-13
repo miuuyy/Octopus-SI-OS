@@ -62,7 +62,7 @@ pub(super) fn validate_checked_transition(before: &RunRecord, after: &RunRecord,
     if proof(after, &writer.owner)?.is_none() { return Ok(()); }
     let config = config_from_persisted_profile(before, &writer.owner, &RunAuthoringProfile {
         file_write_tool: writer.tool.clone(), file_write_label: writer.call_label.clone(),
-        file_write_result_label: writer.result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: writer.result_label.clone(),
     })?;
     validate_transition(before, after, &config)
 }
@@ -208,7 +208,7 @@ pub(super) fn source_snapshot_from_evidence(
         let (_, pinned) = pinned_run_record_from_cache(evidence.blobs_dir, limits, &hash, "withdrawal source")?;
         let source_config = config_from_persisted_profile(&pinned, &config.provider_interface, &RunAuthoringProfile {
             file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
-            file_write_result_label: config.file_write_result_label.clone(), result_timeout_ms: config.result_timeout_ms,
+            file_write_result_label: config.file_write_result_label.clone(),
         })?;
         let (coordinate, _) = session.index()?.exact_provider_source_outbound(&record.id, &record.worker, &config.provider_interface, source)?;
         let checkpoint = pinned.checkpoint(&CheckpointId::new(&coordinate.checkpoint)).ok_or("withdrawal source checkpoint is absent")?;
@@ -280,7 +280,7 @@ pub(super) fn validate_evidence(reader: &mut impl CheckedRunEvidenceReader, tran
     let prior = persisted_pending_handoff(&before, &transition.writer.owner)?.ok_or("withdrawal predecessor missing")?;
     let config = config_from_persisted_profile(&before, &transition.writer.owner, &RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
-        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: transition.writer.result_label.clone(),
     })?;
     validate_snapshot_evidence(reader, &before, &config, &next)?;
     if context_publication::is_publication_completion(&prior, &next) { return Ok(()); }

@@ -9,8 +9,7 @@ fn fixture() -> (RunAuthoringConfig, Value) {
         })]).unwrap_or_default(),
     });
     let config: RunAuthoringConfig = serde_json::from_value(json!({"run":"run","worker":"worker","provider_interface":"provider",
-        "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result",
-        "result_timeout_ms":1000,"checkpoints":[
+        "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result","checkpoints":[
             row("input","stable","room","provider",None), row("output","provider_tool_output","provider","room",Some(vec!["read","write"])),
             row("client","provider_artifact_output","provider","client",None),
             row("writer_call","authoring_call","writer","writer_room",Some(vec!["write"])),
@@ -53,7 +52,7 @@ fn proposal(config: &RunAuthoringConfig, before: &Value) -> ProviderCapabilityAm
     after["checkpoints"][0]["artifact_bindings"].as_array_mut().unwrap().push(json!({"id":"new_context"}));
     ProviderCapabilityAmendment { amendment_key:"attach".into(),provider_interface:config.provider_interface.clone(),before:before.clone(),after,
         authoring_profile:RunAuthoringProfile {file_write_tool:config.file_write_tool.clone(),file_write_label:config.file_write_label.clone(),
-            file_write_result_label:config.file_write_result_label.clone(),result_timeout_ms:config.result_timeout_ms},
+            file_write_result_label:config.file_write_result_label.clone()},
         bridge:ProviderCapabilityBridge { tool:"read".into(),correlation_id:"bridge-call".into(),
             arguments_hash:ContentHash::of_bytes(b"{}").to_hex(),return_interface:"room".into() } }
 }

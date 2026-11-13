@@ -570,7 +570,7 @@ impl ProviderOutputHandoff {
             .run_record_evidence_seq
             .ok_or("selected provider lost its admitted run snapshot provenance")?;
         let observed: &HandoffState = state;
-        let advanced = await_checked_evidence(&self.ctx, self.config.result_timeout_ms, || {
+        let advanced = await_checked_evidence(&self.ctx, || {
             let (current, chain) = checked_live_run_advance(
                 &self.ctx,
                 &self.run_path,
@@ -631,20 +631,13 @@ impl ProviderOutputHandoff {
         mut observe: impl FnMut(&Self, &mut HandoffState) -> Result<T, String>,
     ) -> Result<T, String> {
         let mut state = self.state.lock().await;
-        let deadline = self.live_record_deadline()?;
         loop {
             let retained = (*state).clone();
             match observe(self, &mut state) {
                 Ok(value) => return Ok(value),
-                Err(error) => self.adopt_live_record(&mut state, retained, error, deadline).await?,
+                Err(error) => self.adopt_live_record(&mut state, retained, error).await?,
             }
         }
-    }
-
-    pub(crate) fn live_record_deadline(&self) -> Result<Instant, String> {
-        Instant::now()
-            .checked_add(Duration::from_millis(self.config.result_timeout_ms))
-            .ok_or_else(|| "checked run observation deadline overflow".to_string())
     }
 
     pub(crate) async fn adopt_live_record(
@@ -652,19 +645,17 @@ impl ProviderOutputHandoff {
         state: &mut HandoffState,
         retained: HandoffState,
         error: String,
-        deadline: Instant,
     ) -> Result<(), String> {
         let live = octopus_interfaces::read_artifact_carrier_file_bounded(
             &self.run_path, self.ctx.required_host_io_limits()?.max_payload_bytes,
         ).map_err(|read| format!("{error}; current run record cannot be read: {read}"))?;
-        if live == state.run_record_bytes || self.ctx.cancel.is_cancelled() || Instant::now() >= deadline {
+        if live == state.run_record_bytes || self.ctx.cancel.is_cancelled() {
             return Err(error);
         }
         *state = retained;
         let observed = state.run_record_bytes.clone();
-        tokio::time::timeout_at(deadline.into(), self.reconcile_checked_run_state(state))
+        self.reconcile_checked_run_state(state)
             .await
-            .map_err(|_| format!("{error}; the run was still advancing at its result timeout"))?
             .map_err(|reconcile| format!("{error}; the run advanced without checked evidence: {reconcile}"))?;
         if state.run_record_bytes == observed {
             return Err(error);

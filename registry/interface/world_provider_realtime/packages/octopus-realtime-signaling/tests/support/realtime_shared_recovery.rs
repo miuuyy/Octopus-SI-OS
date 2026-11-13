@@ -106,8 +106,6 @@ impl Fixture {
         let mut descriptor: Value =
             serde_json::from_str(include_str!("../../../../interface.json")).unwrap();
         descriptor["id"] = json!("voice");
-        descriptor["interface_driver_config"]["private_config"]["run_authoring_profile"]
-            ["result_timeout_ms"] = json!(2000);
         let descriptor: InterfaceDescriptor = serde_json::from_value(descriptor).unwrap();
         let mut templates = [
             ("input", "stable", "control", "voice", None),

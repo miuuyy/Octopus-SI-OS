@@ -166,12 +166,11 @@ impl ProviderOutputHandoff {
                 .map(|recovery| (recovery, Vec::new()));
         }
         let mut state = self.state.lock().await;
-        let deadline = self.live_record_deadline()?;
         loop {
             let retained = (*state).clone();
             match self.recover_source_attempt(&mut state).await {
                 Ok(recovered) => return Ok(recovered),
-                Err(error) => self.adopt_live_record(&mut state, retained, error, deadline).await?,
+                Err(error) => self.adopt_live_record(&mut state, retained, error).await?,
             }
         }
     }

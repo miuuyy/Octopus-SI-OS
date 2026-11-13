@@ -402,8 +402,7 @@ mod tests {
         wait["required_verified_artifacts"] = json!([{"mark":"tool.result.corresponds","artifact_label":"exec.result",
             "verifier":"tool_result_correspondence","params":{"call_artifact":call,"tool":"exec","correlation_id":"c1","params":{}}}]);
         let config: RunAuthoringConfig = serde_json::from_value(json!({"run":"run","worker":"worker","provider_interface":"provider",
-            "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result",
-            "result_timeout_ms":1000,"checkpoints":[template("input","stable","client","provider"),
+            "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result","checkpoints":[template("input","stable","client","provider"),
                 template("writer_call","authoring_call","writer","writer_room"),
                 template("writer_result","authoring_result","writer_room","provider"), wait]})).unwrap();
         let earlier = address("operator.message", b"start");

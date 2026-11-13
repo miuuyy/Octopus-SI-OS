@@ -480,12 +480,7 @@ impl ProviderOutputHandoff {
         tokio::select! {
             biased;
             _ = self.ctx.cancel.cancelled() => Err("provider pending output delivery was cancelled".into()),
-            result = tokio::time::timeout(Duration::from_millis(self.config.result_timeout_ms), delivery) => {
-                result.map_err(|_| format!(
-                    "provider pending output '{}' delivery timed out after {}ms; retained scope {original_scope:?} remains unresolved",
-                    item.artifact_id.as_str(), self.config.result_timeout_ms,
-                ))?
-            }
+            result = delivery => result,
         }
     }
 }

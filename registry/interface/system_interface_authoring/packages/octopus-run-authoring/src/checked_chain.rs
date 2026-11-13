@@ -1122,7 +1122,7 @@ pub fn validate_checked_provider_transition(transition: &CheckedRunTransition) -
     source_withdrawal::validate_checked_transition(&before, &after, &transition.writer)?;
     let replacement_config = config_from_persisted_profile(&before, provider, &RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
-        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: transition.writer.result_label.clone(),
     })?;
     rejected_final::validate_transition(&before, &after, &replacement_config)?;
     result_inputs::validate_continuity(&before, &after, &replacement_config)?;
@@ -1190,7 +1190,7 @@ pub fn validate_checked_provider_transition(transition: &CheckedRunTransition) -
     validate_verified_input_change(&topology, &next_topology, &pending)?;
     let next_config = next_topology.config(&RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
-        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: transition.writer.result_label.clone(),
     });
     next_config.validate(provider, &after.id)?;
     result_inputs::validate_transition(&before, &after, &next_config)?;

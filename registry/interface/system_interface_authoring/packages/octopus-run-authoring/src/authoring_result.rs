@@ -13,7 +13,7 @@ impl RunAuthoringResultIdentity {
         let profile = run_authoring_profile(descriptor)?;
         let (context_output_labels, session_snapshot_labels) =
             provider_context_label_sets(descriptor)?;
-        profile.validate(&descriptor.id)?;
+        profile.validate()?;
         Ok(Self {
             provider_interface: descriptor.id.clone(),
             profile,

@@ -169,7 +169,7 @@ fn replacement_checked_write(f:&mut CompletedInputReplayFixture,authored:&Author
     f.edge(authored.content.as_bytes(),&authored.authoring_result_checkpoint,&result,"provider".into(),MovementKind::InterfaceOutbound);
     let evidence=CheckedRunEvidence {movements_path:&f.handoff.ctx.movements_path,ledger_index_path:&f.handoff.ctx.ledger_index_path,blobs_dir:&f.handoff.ctx.blobs_dir,
         max_control_frame_bytes:1<<20,max_manifest_bytes:1<<20,max_payload_bytes:1<<24};
-    let writer=declared_provider_run_writer(&record,&f.handoff.ctx.interface,&RunAuthoringProfile {file_write_tool:"write".into(),file_write_label:"tool.call".into(),file_write_result_label:"write.result".into(),result_timeout_ms:1000}).unwrap();
+    let writer=declared_provider_run_writer(&record,&f.handoff.ctx.interface,&RunAuthoringProfile {file_write_tool:"write".into(),file_write_label:"tool.call".into(),file_write_result_label:"write.result".into()}).unwrap();
     let install=CheckedRunInstall {call:ConsentEvidenceRef {artifact:f.rows[f.rows.len()-2].artifact.clone().unwrap(),movement_seq:f.rows.len() as u64-2},
         result:ConsentEvidenceRef {artifact:f.rows.last().unwrap().artifact.clone().unwrap(),movement_seq:f.rows.len() as u64-1}};
     checked_declared_run_install(&evidence,&f.handoff.run_path,&before,&install,vec![writer])?;

@@ -152,7 +152,7 @@ impl ProviderOutputHandoff {
         let (bytes, record) = pinned_run_record(&self.ctx, &hash, "completed input source")?;
         let config = config_from_persisted_profile(&record, &self.config.provider_interface, &RunAuthoringProfile {
             file_write_tool: self.config.file_write_tool.clone(), file_write_label: self.config.file_write_label.clone(),
-            file_write_result_label: self.config.file_write_result_label.clone(), result_timeout_ms: self.config.result_timeout_ms,
+            file_write_result_label: self.config.file_write_result_label.clone(),
         })?;
         let checkpoint_id = CheckpointId::new(&coordinate.checkpoint);
         let checkpoint = record.checkpoint(&checkpoint_id).ok_or("completed input lost its pinned checkpoint")?;

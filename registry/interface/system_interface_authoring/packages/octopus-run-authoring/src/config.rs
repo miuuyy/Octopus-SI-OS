@@ -16,9 +16,6 @@ impl RunAuthoringConfig {
                 lifted_interface.as_str()
             ));
         }
-        if self.result_timeout_ms == 0 {
-            return Err("run_authoring result_timeout_ms must be positive".to_string());
-        }
         for (name, value) in [
             ("file_write_tool", self.file_write_tool.as_str()),
             ("file_write_label", self.file_write_label.as_str()),

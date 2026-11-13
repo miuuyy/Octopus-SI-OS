@@ -58,7 +58,6 @@ impl ProviderOutputHandoff {
                 file_write_tool: self.config.file_write_tool.clone(),
                 file_write_label: self.config.file_write_label.clone(),
                 file_write_result_label: self.config.file_write_result_label.clone(),
-                result_timeout_ms: self.config.result_timeout_ms,
             };
             let mut recovered = BTreeMap::new();
             for (sequence, expected_pending) in candidates {
@@ -241,7 +240,6 @@ impl ProviderOutputHandoff {
             file_write_tool: self.config.file_write_tool.clone(),
             file_write_label: self.config.file_write_label.clone(),
             file_write_result_label: self.config.file_write_result_label.clone(),
-            result_timeout_ms: self.config.result_timeout_ms,
         };
         for transition in chain {
             let authored = RunRecord::from_bytes(&transition.after)
@@ -373,7 +371,6 @@ impl ProviderOutputHandoff {
             file_write_tool: self.config.file_write_tool.clone(),
             file_write_label: self.config.file_write_label.clone(),
             file_write_result_label: self.config.file_write_result_label.clone(),
-            result_timeout_ms: self.config.result_timeout_ms,
         };
         let (config, _) = resolve_run_authoring_invocation(
             &profile, &self.config.provider_interface, &self.config.run, &record, &checkpoint.id,

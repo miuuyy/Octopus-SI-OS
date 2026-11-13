@@ -133,7 +133,6 @@ pub(crate) fn plan_provider_interface(
             "file_write_tool": identity.authoring_tool_id,
             "file_write_label": config.artifact_labels.tool_call,
             "file_write_result_label": format!("{}.result", identity.authoring_tool_id),
-            "result_timeout_ms": config.authoring.result_timeout_ms,
         }),
     );
     configure_provider_private_auth_store(&mut driver_config, provider.interface.id.as_str())?;

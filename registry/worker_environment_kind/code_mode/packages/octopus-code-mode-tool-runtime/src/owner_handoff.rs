@@ -71,7 +71,6 @@ struct FailureReturn {
 
 struct FailureObservation {
     reader: LedgerTailReader,
-    deadline: tokio::time::Instant,
 }
 
 struct FailureAdvance {
@@ -92,10 +91,9 @@ const INSTALLATION_ADVANCED: &str = "owner failure installation requires a fresh
 
 impl FailureObservation {
     fn open(ctx: &InterfaceLiftContext, topology: &CodeModeOwnerTopology) -> Result<Self, String> {
-        let timeout = std::time::Duration::from_millis(OwnerHandoff::authoring_profile(ctx, topology)?.result_timeout_ms);
+        OwnerHandoff::authoring_profile(ctx, topology)?;
         Ok(Self {
             reader: LedgerTailReader::open_named(ctx, "code-mode-owner-output")?,
-            deadline: tokio::time::Instant::now().checked_add(timeout).ok_or("owner failure observation deadline overflow")?,
         })
     }
 
@@ -108,20 +106,10 @@ impl FailureObservation {
         loop {
             if cancel.is_cancelled() { return Err("owner failure observation cancelled".into()); }
             match observe(&self.reader) {
-                Err(waiting @ CheckedRunError::AwaitingResults { .. }) => {
-                    match tokio::time::timeout_at(self.deadline, self.reader.wait_for_change(&cancel)).await {
-                        Ok(changed) => changed?,
-                        Err(_) => return Err(waiting),
-                    }
-                }
+                Err(CheckedRunError::AwaitingResults { .. }) => self.reader.wait_for_change(&cancel).await?,
                 observed => return observed,
             }
         }
-    }
-
-    fn extend(&mut self, queued: std::time::Duration) -> Result<(), String> {
-        self.deadline = self.deadline.checked_add(queued).ok_or("owner failure observation deadline overflow")?;
-        Ok(())
     }
 
     async fn adopt(
@@ -133,7 +121,7 @@ impl FailureObservation {
         advance: &FailureAdvance,
     ) -> Result<(), String> {
         let error = advance.error;
-        if ctx.owner_cancel().is_cancelled() || tokio::time::Instant::now() >= self.deadline {
+        if ctx.owner_cancel().is_cancelled() {
             return Err(error.into());
         }
         let path = ctx.owner_root_slot("run_records_root")?.canonicalize().map_err(|e| e.to_string())?
@@ -385,9 +373,7 @@ impl OwnerHandoff {
         };
         loop {
             let advance = {
-                let queued = tokio::time::Instant::now();
                 let mut states = self.states.lock().await;
-                observation.extend(queued.elapsed())?;
                 let state = Self::owner_state(&mut states, &root, &config, &topology, &source)?;
                 let retained = (state.authority.clone(), state.generated_artifacts.clone(), state.idle);
                 match self.output_attempt(ctx, &source, &artifact, &config, &topology, &root, formation,
@@ -1114,7 +1100,6 @@ impl OwnerHandoff {
             return Err(format!("code mode authoring was refused: {verdict:?}"));
         };
         let cancel = ctx.owner_cancel();
-        let timeout = std::time::Duration::from_millis(profile.result_timeout_ms);
         let limits = ctx.owner_io_limits()?;
         let evidence = octopus_run_authoring::CheckedRunEvidence {
             movements_path: ctx.owner_movements_path(), ledger_index_path: ctx.owner_ledger_index_path(), blobs_dir: ctx.owner_blobs_dir(),
@@ -1137,7 +1122,7 @@ impl OwnerHandoff {
             owner: ctx.owner_interface().clone(), source: ctx.owner_interface().clone(), door: file_door.clone(),
             tool: profile.file_write_tool.clone(), call_label: profile.file_write_label.clone(), result_label: profile.file_write_result_label.clone(),
         };
-        let result = tokio::time::timeout(timeout, async {
+        let result = async {
             loop {
                 match octopus_run_authoring::checked_failed_run_write(&evidence, &writer, &edit, call_seq,
                     state.topology.coauthor.iter().cloned().collect()) {
@@ -1189,9 +1174,8 @@ impl OwnerHandoff {
                 }
                 reader.wait_for_change(&cancel).await?;
             }
-        })
-        .await
-        .map_err(|_| "code mode checked authoring result timed out".to_string())??;
+        }
+        .await?;
         let Some(result) = result else {
             if let Some(observed) = failure_run_hash {
                 return Ok(Installation::FailureAdvanced(FailureAdvance {
@@ -1291,7 +1275,7 @@ impl OwnerHandoff {
             .ok_or("code mode door has no private config")?.private_config;
         let profile: RunAuthoringProfile = serde_json::from_value(private.get("run_authoring_profile").cloned()
             .ok_or("code mode door has no independent checked authoring profile")?).map_err(|e| e.to_string())?;
-        if profile.file_write_tool != topology.file_write_tool || profile.result_timeout_ms == 0 {
+        if profile.file_write_tool != topology.file_write_tool {
             return Err("owner profile differs from admitted topology".into());
         }
         Ok(profile)

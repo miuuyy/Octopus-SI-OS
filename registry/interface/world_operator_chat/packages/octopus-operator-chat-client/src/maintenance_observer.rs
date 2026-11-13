@@ -351,7 +351,6 @@ pub fn plan_maintenance_observer(
             source_interface: cfg.authoring.source_interface_id.clone(),
             room_interface: cfg.authoring.room_interface_id.clone(),
             tool: cfg.authoring.tool_id.clone(),
-            result_timeout_ms: cfg.authoring.result_timeout_ms,
             _rest: Default::default(),
         },
         run: ClientRunConfig {
@@ -1274,7 +1273,7 @@ fn plan_projection_run(
     let door = format!("system_room_memory_projection_{}", &suffix[..24]);
     let tool = format!("file.write__memory_projection_{}", &suffix[..24]);
     let profile = json!({"file_write_tool":tool,"file_write_label":request.config.authoring.tool_call_label,
-        "file_write_result_label":format!("{tool}.result"),"result_timeout_ms":request.config.authoring.result_timeout_ms});
+        "file_write_result_label":format!("{tool}.result")});
     for (from, to) in [
         (&observer.authoring_source_id, &source),
         (&observer.authoring_environment_id, &door),
@@ -1386,7 +1385,6 @@ fn plan_projection_run(
                 source_interface: source.clone(),
                 room_interface: door.clone(),
                 tool: tool.clone(),
-                result_timeout_ms: request.config.authoring.result_timeout_ms,
                 _rest: Default::default(),
             },
             run: ClientRunConfig {

@@ -256,7 +256,7 @@ pub(super) fn plan_descriptors(
     )?;
     driver.private_config.insert("run_authoring_profile".into(), json!({
         "file_write_tool":voice.writer,"file_write_label":config.artifact_labels.tool_call,
-        "file_write_result_label":format!("{}.result",voice.writer),"result_timeout_ms":config.authoring.result_timeout_ms
+        "file_write_result_label":format!("{}.result",voice.writer)
     }));
     push_json_write(
         root.join(&voice.context.provider_id).join("interface.json"),

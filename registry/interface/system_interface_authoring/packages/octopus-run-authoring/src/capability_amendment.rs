@@ -606,7 +606,7 @@ pub(super) fn apply_to_authored_run(current: &[u8], authored: &mut AuthoredRun, 
     let delta = delta(amendment)?;
     let profile = &amendment.authoring_profile;
     if profile.file_write_tool != config.file_write_tool || profile.file_write_label != config.file_write_label
-        || profile.file_write_result_label != config.file_write_result_label || profile.result_timeout_ms != config.result_timeout_ms {
+        || profile.file_write_result_label != config.file_write_result_label {
         return Err("capability amendment changed the active authoring profile".into());
     }
     let before = RunRecord::from_bytes(current).map_err(|e| e.to_string())?;
@@ -689,7 +689,7 @@ pub(super) fn validate_transition(transition: &CheckedRunTransition) -> Result<b
 pub(super) fn checked_ordinary(transition: &CheckedRunTransition) -> Result<Option<Vec<u8>>, String> {
     let profile = RunAuthoringProfile {
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
-        file_write_result_label: transition.writer.result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: transition.writer.result_label.clone(),
     };
     amended_ordinary(&transition.before, &transition.after, &transition.writer.owner, &profile)
 }
@@ -697,7 +697,7 @@ pub(super) fn checked_ordinary(transition: &CheckedRunTransition) -> Result<Opti
 pub(super) fn saved_ordinary(before: &[u8], after: &[u8], config: &RunAuthoringConfig) -> Result<Option<Vec<u8>>, String> {
     let profile = RunAuthoringProfile {
         file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
-        file_write_result_label: config.file_write_result_label.clone(), result_timeout_ms: 1,
+        file_write_result_label: config.file_write_result_label.clone(),
     };
     amended_ordinary(before, after, &config.provider_interface, &profile)
 }

@@ -3643,8 +3643,7 @@
       "run_authoring_profile": {
         "file_write_tool": "file.write",
         "file_write_label": "tool.call",
-        "file_write_result_label": "file.write.result",
-        "result_timeout_ms": 30000
+        "file_write_result_label": "file.write.result"
       },
       "model_hidden_tools": [
         "file.write",

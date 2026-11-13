@@ -277,7 +277,6 @@ struct ClientAuthoringConfig {
     source_interface: String,
     room_interface: String,
     tool: String,
-    result_timeout_ms: u64,
     #[serde(flatten)]
     _rest: serde_json::Map<String, serde_json::Value>,
 }

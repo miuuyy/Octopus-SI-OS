@@ -31,8 +31,7 @@
     "tool_id": "file.write",
     "tool_call_label": "tool.call",
     "tool_call_mark": "tool.call.allowed",
-    "tool_call_verifier": "tool_call_allowed",
-    "result_timeout_ms": 30000
+    "tool_call_verifier": "tool_call_allowed"
   },
   "tool_result_receiving": {
     "mark": "tool.result.corresponds",

@@ -117,7 +117,7 @@ pub(crate) fn plan_capability_doors(
         if let Some(owner) = identity.code_mode_owners.get(source_interface_id.as_str()) {
             driver_config.get_or_insert_default().private_config.insert("run_authoring_profile".into(), serde_json::json!({
                 "file_write_tool":owner.authoring_tool,"file_write_label":config.artifact_labels.tool_call,
-                "file_write_result_label":format!("{}.result",owner.authoring_tool),"result_timeout_ms":owner.recipe.result_timeout_ms
+                "file_write_result_label":format!("{}.result",owner.authoring_tool)
             }));
         }
         if let Some(approval) = planned_browser_upload_approval(binding, config, identity)? {

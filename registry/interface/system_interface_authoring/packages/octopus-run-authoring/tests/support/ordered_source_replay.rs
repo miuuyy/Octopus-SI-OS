@@ -52,7 +52,7 @@ async fn exercise_interrupted_source_order(
     fn checked_call(h: &ProviderOutputHandoff, before: &[u8], edit: &CheckedRunEdit, root: &Path) -> InterfaceArtifactFile {
         let writer = declared_provider_run_writer(&RunRecord::from_bytes(before).unwrap(), &h.ctx.interface,
             &RunAuthoringProfile { file_write_tool:h.config.file_write_tool.clone(), file_write_label:h.config.file_write_label.clone(),
-                file_write_result_label:h.config.file_write_result_label.clone(), result_timeout_ms:1000 }).unwrap();
+                file_write_result_label:h.config.file_write_result_label.clone() }).unwrap();
         match OwnerWriterEdit::prepare(before, edit, &writer, h.ctx.required_host_io_limits().unwrap().max_payload_bytes).unwrap() {
             Some(ordered) => ordered.materialize(root).unwrap(),
             None => InterfaceArtifactFile::write(root, &writer.call_label,

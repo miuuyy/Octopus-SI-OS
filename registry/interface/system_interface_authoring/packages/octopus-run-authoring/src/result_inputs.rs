@@ -205,7 +205,6 @@ pub(crate) fn definition_value(
         file_write_tool: writer.tool.clone(),
         file_write_label: writer.call_label.clone(),
         file_write_result_label: writer.result_label.clone(),
-        result_timeout_ms: 1,
     });
     validate_bound_run_authoring_topology(&record, &config, None)?;
     if let Some(bindings) = context {
@@ -347,7 +346,6 @@ pub(crate) fn definition_value(
         file_write_tool: writer.tool.clone(),
         file_write_label: writer.call_label.clone(),
         file_write_result_label: writer.result_label.clone(),
-        result_timeout_ms: 1,
     });
     next.validate(&writer.owner, &after.id)?;
     validate_bound_run_authoring_topology(&after, &next, None)?;
@@ -1112,7 +1110,6 @@ pub(super) fn validate_checked(
         file_write_tool: transition.writer.tool.clone(),
         file_write_label: transition.writer.call_label.clone(),
         file_write_result_label: transition.writer.result_label.clone(),
-        result_timeout_ms: 1,
     });
     validate_transition(&before, &after, &config)?;
     validate_continuity(&before, &after, &config)?;

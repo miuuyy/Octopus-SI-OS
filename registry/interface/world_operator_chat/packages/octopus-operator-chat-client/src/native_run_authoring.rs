@@ -107,7 +107,6 @@ pub(super) fn plan(
             "source_interface_id":config.authoring.source_interface,"room_interface_id":config.authoring.room_interface,
             "tool_id":config.authoring.tool,"tool_call_label":config.artifact_labels.tool_call,
             "tool_call_mark":config.run.tool_call_mark,"tool_call_verifier":config.run.tool_call_verifier,
-            "result_timeout_ms":config.authoring.result_timeout_ms,
         },
         "worker_environment_kinds":context.topology.granted_worker_environment_kinds,
         "tools":tools,"door_host_slots":context.door_host_slots,"context_artifacts":[],

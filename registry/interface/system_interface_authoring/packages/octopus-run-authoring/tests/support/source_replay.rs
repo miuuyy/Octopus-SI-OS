@@ -99,12 +99,11 @@ async fn authoring_retains_exact_request_while_registry_changes() {
 }
 
 #[tokio::test]
-async fn retained_pending_retries_exact_admission_with_declared_timeout_and_cancellation() {
+async fn retained_pending_retries_exact_admission_until_decided_or_cancelled() {
     use serde_json::json;
     use octopus_ledger::{ArrivalFanoutMetadata, ArrivalFanoutScope, ArtifactDelivery, DeliveryMetadata, MovementMetadata, RefusedReason};
-    for mode in ["admitted", "timeout", "cancelled", "transport", "wrong_scope", "incomplete", "policy"] {
+    for mode in ["admitted", "cancelled", "transport", "wrong_scope", "incomplete", "policy"] {
         let mut fixture = CompletedInputReplayFixture::new();
-        fixture.handoff.config.result_timeout_ms = if mode == "timeout" { 120 } else { 3000 };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         fixture.handoff.ctx.arrivals = tx;
         let authored = fixture.output(false, false, false);
@@ -213,7 +212,7 @@ async fn retained_pending_retries_exact_admission_with_declared_timeout_and_canc
             "admitted" => assert!(matches!(result.unwrap(), DeliveryVerdict::Admitted { .. })),
             "policy" => assert!(matches!(result.unwrap(), DeliveryVerdict::Refused { reason: RefusedReason::Policy, .. })),
             _ => assert!(result.unwrap_err().contains(match mode {
-                "timeout" => "timed out after 120ms", "cancelled" => "cancelled",
+                "cancelled" => "cancelled",
                 "transport" => "fixture transport closed", "wrong_scope" => "changed its original scope",
                 "incomplete" => "without all original edge decisions", _ => unreachable!(),
             }), "{mode}"),
@@ -452,7 +451,7 @@ fn failed_owner_input_static_revision_requires_checked_terminal_source() {
             fixture.edge(&before, &cp, &input_file, "provider".into(), MovementKind::InterfaceOutbound);
         }
         let writer = declared_provider_run_writer(&record, &"provider".into(), &RunAuthoringProfile {
-            file_write_tool:"write".into(), file_write_label:"tool.call".into(), file_write_result_label:"write.result".into(), result_timeout_ms:1000,
+            file_write_tool:"write".into(), file_write_label:"tool.call".into(), file_write_result_label:"write.result".into(),
         }).unwrap();
         let mut desired = fixture.handoff.config.checkpoints[0].clone();
         desired.static_artifact_bindings = vec![static_id];
@@ -700,7 +699,7 @@ impl CompletedInputReplayFixture {
         });
         let mut config: RunAuthoringConfig = serde_json::from_value(json!({
             "run":"run","worker":"worker","provider_interface":"provider","authoring_source_interface":"writer",
-            "file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result","result_timeout_ms":1000,
+            "file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result",
             "checkpoints":[row("input","stable","room","provider",None),row("alternate","stable","alternate_room","provider",None),
                 row("control","independent_input","control","provider",None),
                 row("client","provider_artifact_output","provider","client",None),
@@ -984,7 +983,7 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
             after_hash:saved.after_hash.clone(), content:saved.content.clone(), patch:saved.patch.clone(),
             correlation_id:"provider-writer-run:run:1:1".into() };
         let writer = declared_provider_run_writer(&record, &cold.ctx.interface, &RunAuthoringProfile {
-            file_write_tool:"write".into(), file_write_label:"tool.call".into(), file_write_result_label:"write.result".into(), result_timeout_ms:1000,
+            file_write_tool:"write".into(), file_write_label:"tool.call".into(), file_write_result_label:"write.result".into(),
         }).unwrap();
         OwnerWriterEdit::prepare(&detached, &edit, &writer, 1<<26).unwrap().unwrap().materialize(&cold.hand_in_root).unwrap();
         let AuthoringAttemptRecovery::InFlight(recovered) = cold.recover_authoring_attempt(&record, &detached).unwrap() else { panic!("lost detached result receiver"); };
@@ -1004,7 +1003,7 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
         manifest_path:call_file.manifest_path().to_path_buf(),
     }).unwrap();
     let profile = RunAuthoringProfile { file_write_tool:"write".into(), file_write_label:"tool.call".into(),
-        file_write_result_label:"write.result".into(), result_timeout_ms:1000 };
+        file_write_result_label:"write.result".into() };
     let mut created = CheckedRunTransition { writer:declared_provider_run_writer(&before, &"provider".into(), &profile).unwrap(),
         before:initial.clone(), after:first.content.as_bytes().to_vec(), call:fixture.rows[2].clone(), result:fixture.rows[3].clone(),
         placement: false, };
@@ -1735,7 +1734,7 @@ fn selected_ledger_checked_authoring_history() {
     let call: FileWriteCallEnvelope = serde_json::from_slice(&call_bytes).unwrap();
     let (result, _) = read_pinned_artifact(&ctx, selected[&1473].artifact.as_ref().unwrap()).unwrap();
     let profile = RunAuthoringProfile { file_write_tool:call.tool, file_write_label:call_manifest.label,
-        file_write_result_label:result.label, result_timeout_ms:1000 };
+        file_write_result_label:result.label };
     let config = config_from_persisted_profile(&record, &provider, &profile).unwrap();
     let evidence = CheckedRunEvidence { movements_path:&ctx.movements_path, ledger_index_path:&ctx.ledger_index_path,
         blobs_dir:&ctx.blobs_dir,max_control_frame_bytes:1_048_576,max_manifest_bytes:1_048_576,max_payload_bytes:268_435_456 };
@@ -1890,11 +1889,11 @@ async fn selected_home_failed_source_rearms_its_consumed_input() {
         .from_invocation_state(&ctx, &descriptor, &run, &input, source_movement_seq, &pinned)
         .err();
     eprintln!("canonical handoff for source {source_movement_seq}: {}", canonical.as_ref().map(ToString::to_string).unwrap_or("formed".into()));
-    if let Some(CheckedRunError::AwaitingResults { call_sequences }) = &canonical {
-        let waiting = await_checked_evidence(&ctx, 0, || {
+    if let Some(CheckedRunError::AwaitingResults { .. }) = &canonical {
+        let waiting = tokio::time::timeout(Duration::from_millis(50), await_checked_evidence(&ctx, || {
             session.from_invocation_state(&ctx, &descriptor, &run, &input, source_movement_seq, &pinned)
-        }).await.err().expect("missing result must remain pending");
-        assert!(matches!(waiting, CheckedRunError::AwaitingResults { call_sequences: actual } if actual == *call_sequences));
+        })).await;
+        assert!(waiting.is_err(), "missing result must keep the handoff waiting");
     }
     let failed = session
         .failed_source_handoff(&ctx, &descriptor, &run, &input, source_movement_seq)

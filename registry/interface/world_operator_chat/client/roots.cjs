@@ -26,7 +26,6 @@ async function readConfig() {
   for (const field of ["source_interface", "room_interface", "tool"]) {
     requiredString(value.authoring[field], `client.authoring.${field}`);
   }
-  positiveInteger(value.authoring.result_timeout_ms, "client.authoring.result_timeout_ms");
   requiredObject(value.run, "client.run");
   for (const field of [
     "interface_prefix",

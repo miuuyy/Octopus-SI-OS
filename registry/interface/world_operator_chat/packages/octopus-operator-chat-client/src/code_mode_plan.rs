@@ -9,7 +9,6 @@ pub(crate) struct CodeModeTaskRecipe {
     pub(crate) authoring_room: String,
     pub(crate) authoring_tool: String,
     pub(crate) notification_interface: String,
-    pub(crate) result_timeout_ms: u64,
     #[serde(default)]
     pub(crate) tool_descriptions: BTreeMap<String, String>,
 }
@@ -170,8 +169,7 @@ pub(crate) fn plan_code_mode_owners(
         if selected_sources.is_empty() {
             continue;
         }
-        if recipe.result_timeout_ms == 0
-            || recipe.authoring_room != config.authoring.room_interface
+        if recipe.authoring_room != config.authoring.room_interface
             || recipe.authoring_tool != config.authoring.tool
             || recipe.notification_interface != config.interface
         {

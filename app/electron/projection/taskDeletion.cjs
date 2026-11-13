@@ -399,9 +399,8 @@ async function taskOwnedInterfaceIds(registryRoot, run, ownerInterface, runId) {
   requiredString(writer.call_label, `${label} call label`);
   requiredString(writer.result_label, `${label} result label`);
   for (const profile of [declaration.profile, declaration.provider_profile]) {
-    exactObjectKeys(profile, ["file_write_tool", "file_write_label", "file_write_result_label", "result_timeout_ms"],
-      ["file_write_tool", "file_write_label", "file_write_result_label", "result_timeout_ms"], `${label} profile`);
-    if (!Number.isSafeInteger(profile.result_timeout_ms) || profile.result_timeout_ms <= 0) throw new Error(`${label} profile has invalid timeout`);
+    exactObjectKeys(profile, ["file_write_tool", "file_write_label", "file_write_result_label"],
+      ["file_write_tool", "file_write_label", "file_write_result_label"], `${label} profile`);
   }
   if (declaration.profile.file_write_tool !== toolId || declaration.profile.file_write_label !== writer.call_label
     || declaration.profile.file_write_result_label !== writer.result_label || writer.call_label === declaration.input_label

@@ -3,7 +3,7 @@ use super::*;
 pub(crate) fn attempt_config(record: &RunRecord, config: &RunAuthoringConfig) -> Result<RunAuthoringConfig, String> {
     config_from_persisted_profile(record, &config.provider_interface, &RunAuthoringProfile {
         file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
-        file_write_result_label: config.file_write_result_label.clone(), result_timeout_ms: config.result_timeout_ms,
+        file_write_result_label: config.file_write_result_label.clone(),
     })
 }
 
@@ -531,7 +531,7 @@ pub(crate) fn recover_source_session_context_with_static_correction(
     }
     let source_config = config_from_persisted_profile(&pinned, &config.provider_interface, &RunAuthoringProfile {
         file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
-        file_write_result_label: config.file_write_result_label.clone(), result_timeout_ms: config.result_timeout_ms,
+        file_write_result_label: config.file_write_result_label.clone(),
     })?;
     let matched = source_config
         .checkpoints
@@ -857,12 +857,8 @@ pub(crate) enum BoundedLedgerRow {
 
 pub(crate) async fn await_checked_evidence<T>(
     ctx: &InterfaceLiftContext,
-    timeout_ms: u64,
     mut validate: impl FnMut() -> Result<T, CheckedRunError>,
 ) -> Result<T, CheckedRunError> {
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(timeout_ms))
-        .ok_or("checked input evidence deadline overflow")?;
     let mut watcher = None;
     loop {
         if ctx.cancel.is_cancelled() {
@@ -871,35 +867,11 @@ pub(crate) async fn await_checked_evidence<T>(
         match validate() {
             Ok(value) => return Ok(value),
             Err(error @ CheckedRunError::Invalid(_)) => return Err(error),
-            Err(changed @ CheckedRunError::ChangedDuringRead { .. }) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(changed);
-                }
+            Err(CheckedRunError::ChangedDuringRead { .. } | CheckedRunError::AwaitingResults { .. }) => {
                 if watcher.is_none() {
                     watcher = Some(LedgerTailReader::open_named(ctx, "checked-input-evidence")?);
                 }
-                tokio::time::timeout(
-                    remaining,
-                    watcher.as_mut().unwrap().wait_for_change(&ctx.cancel),
-                )
-                .await
-                .map_err(|_| changed)??;
-            }
-            Err(waiting @ CheckedRunError::AwaitingResults { .. }) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(waiting);
-                }
-                if watcher.is_none() {
-                    watcher = Some(LedgerTailReader::open_named(ctx, "checked-input-evidence")?);
-                }
-                tokio::time::timeout(
-                    remaining,
-                    watcher.as_mut().unwrap().wait_for_change(&ctx.cancel),
-                )
-                .await
-                .map_err(|_| waiting)??;
+                watcher.as_mut().unwrap().wait_for_change(&ctx.cancel).await?;
             }
         }
     }

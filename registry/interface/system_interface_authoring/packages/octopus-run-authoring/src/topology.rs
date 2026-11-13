@@ -82,7 +82,7 @@ pub(crate) fn config_from_persisted_profile(
     provider: &InterfaceId,
     profile: &RunAuthoringProfile,
 ) -> Result<RunAuthoringConfig, String> {
-    profile.validate(provider)?;
+    profile.validate()?;
     let provider_state = record.interface_state.get(provider).ok_or_else(|| {
         format!(
             "provider run '{}' has no interface_state for '{}'",

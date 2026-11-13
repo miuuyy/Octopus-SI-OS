@@ -519,7 +519,6 @@ impl ProviderOutputHandoff {
         admitted_seq: Option<u64>,
         current_run_record: &[u8],
         authored: &AuthoredRun,
-        deadline: Instant,
     ) -> Result<AuthoringWriteOutcome, String> {
         let mut reader = self.result_reader.lock().await;
         let current_record = RunRecord::from_bytes(current_run_record).map_err(|error| {
@@ -692,23 +691,7 @@ impl ProviderOutputHandoff {
             if let Some(outcome) = outcome {
                 return Ok(outcome);
             }
-            if Instant::now() >= deadline {
-                return Err(format!(
-                    "provider run '{}' authoring result did not arrive within {}ms",
-                    self.config.run.as_str(),
-                    self.config.result_timeout_ms
-                ));
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            tokio::time::timeout(remaining, reader.wait_for_change(&self.ctx.cancel))
-                .await
-                .map_err(|_| {
-                    format!(
-                        "provider run '{}' authoring result did not arrive within {}ms",
-                        self.config.run.as_str(),
-                        self.config.result_timeout_ms
-                    )
-                })??;
+            reader.wait_for_change(&self.ctx.cancel).await?;
         }
     }
 

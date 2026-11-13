@@ -1376,8 +1376,8 @@ async function verifyTaskArchive(temporary) {
   const writer = { owner: intakeId, source: intakeId, door: doorId, tool: toolId, call_label: "tool.call", result_label: `${toolId}.result` };
   const declaration = { schema_version: 1, run: plan.runId, provider_interface: plan.modelInterfaceId, writer,
     writer_required_verified_artifacts: original.checkpoints[4].required_verified_artifacts,
-    profile: { file_write_tool: toolId, file_write_label: writer.call_label, file_write_result_label: writer.result_label, result_timeout_ms: 30000 },
-    provider_profile: { file_write_tool: "file.write.authoring", file_write_label: "tool.call", file_write_result_label: "file.write.authoring.result", result_timeout_ms: 30000 },
+    profile: { file_write_tool: toolId, file_write_label: writer.call_label, file_write_result_label: writer.result_label },
+    provider_profile: { file_write_tool: "file.write.authoring", file_write_label: "tool.call", file_write_result_label: "file.write.authoring.result" },
     input_label: "provider.peer.input", notification_action: "followup", artifact_bindings: [] };
   const intake = { id: intakeId, interface_type: "system", role: "service", direction: "bidirectional", source_names: ["input"],
     interface_driver_ref: "checked_input_intake", interface_driver_config: { private_config: { input_intake: declaration } } };

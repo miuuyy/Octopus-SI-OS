@@ -41,9 +41,6 @@ impl ProviderOutputHandoff {
             source_withdrawal::require_validated_output(state, &authored.pending_handoff)?;
         }
         if self.config.writer_run.is_some() { return self.install_with_writer_run(state, authored).await; }
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(self.config.result_timeout_ms))
-            .ok_or("provider authoring deadline overflow")?;
         let mut planned = authored.clone();
         let current_record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| {
             format!(
@@ -90,9 +87,6 @@ impl ProviderOutputHandoff {
             )),
         };
         loop {
-            if Instant::now() >= deadline {
-                return Err("provider checked authoring retry timed out".into());
-            }
             let authored = &planned;
             let outcome = if let Some(rejected) =
                 authoring_retry::rejected_write(&self.ctx, &self.config, authored)?
@@ -128,7 +122,6 @@ impl ProviderOutputHandoff {
                     admitted_seq,
                     &state.run_record_bytes,
                     authored,
-                    deadline,
                 )
                 .await?
             };
@@ -149,10 +142,6 @@ impl ProviderOutputHandoff {
                     return Ok(AuthoredRunInstallOutcome::Installed);
                 }
                 AuthoringWriteOutcome::Rejected(rejected) => {
-                    let remaining = deadline
-                        .saturating_duration_since(Instant::now())
-                        .as_millis()
-                        .min(u64::MAX as u128) as u64;
                     let before = if ContentHash::of_bytes(&state.run_record_bytes).to_hex()
                         == authored.before_hash
                     {
@@ -162,7 +151,7 @@ impl ProviderOutputHandoff {
                             .ok_or("rejected authoring preimage is malformed")?;
                         pinned_run_record(&self.ctx, &hash, "rejected authoring")?.0
                     };
-                    let (current, chain) = await_checked_evidence(&self.ctx, remaining, || {
+                    let (current, chain) = await_checked_evidence(&self.ctx, || {
                         checked_live_run_advance(
                             &self.ctx,
                             &self.run_path,

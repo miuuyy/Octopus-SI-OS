@@ -93,7 +93,6 @@ pub struct RunAuthoringConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) writer_run: Option<writer_run::WriterRunBinding>,
     pub(crate) checkpoints: Vec<RunAuthoringCheckpoint>,
-    pub(crate) result_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -102,7 +101,6 @@ pub struct RunAuthoringProfile {
     pub file_write_tool: String,
     pub file_write_label: String,
     pub file_write_result_label: String,
-    pub result_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

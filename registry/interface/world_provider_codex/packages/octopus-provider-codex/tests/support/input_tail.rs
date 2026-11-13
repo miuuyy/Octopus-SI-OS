@@ -8,8 +8,8 @@ fn intake_receipts_follow_exact_inline_or_separate_writer_identity() {
     let config: InputIntakeConfig = serde_json::from_value(serde_json::json!({
         "schema_version":1,"run":"recipient","provider_interface":"provider","input_label":"provider.peer.input",
         "writer":{"owner":"intake","source":"intake","door":"writer","tool":"file.write","call_label":"tool.call","result_label":"file.write.result"},
-        "profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result","result_timeout_ms":1000},
-        "provider_profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result","result_timeout_ms":1000},
+        "profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"},
+        "provider_profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"},
         "writer_required_verified_artifacts":[{"artifact_label":"tool.call","mark":"tool.call.allowed","verifier":"tool_call_allowed","params":{"tools":["file.write"],"metadata_matches":[{"metadata":"/runtime/run_record_hash","payload":"/arguments/expected_before_hash"}]}}],"artifact_bindings":[]
     })).unwrap();
     let source = octopus_ledger::ArtifactRef { id: "outcome".into(), content: ContentHash::of_bytes(b"outcome") };

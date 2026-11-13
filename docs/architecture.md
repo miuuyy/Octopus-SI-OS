@@ -455,8 +455,8 @@ interfaces' movements stays in memory, so a busy ledger does not make every
 live interface flush the disk on every append. An interface whose life dies,
 even before it is ready, is lifted again with backoff; the runtime log says
 when it falls into coma and when it wakes. Interfaces wake in no promised
-order: one that hands work to a sibling still waking up waits for it, within
-the hand-in's declared timeout. A stopped interface loses nothing; an unread result is an ordinary consequence of the architecture, not a
+order: one that hands work to a sibling still waking up waits for it for as long
+as the hand-in is not cancelled. A stopped interface loses nothing; an unread result is an ordinary consequence of the architecture, not a
 loss to be repaired with leases and retries.
 
 A restart does not end the work in flight either. A command a room started
