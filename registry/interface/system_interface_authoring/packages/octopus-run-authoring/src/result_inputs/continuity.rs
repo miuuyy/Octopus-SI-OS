@@ -446,5 +446,24 @@ mod tests {
         let row = owned.checkpoint(&CheckpointId::new("wait")).unwrap();
         assert_eq!(result_rebase(&owned, &config, template, row).unwrap(), vec![snapshot],
             "an owner input's source stays static across a session snapshot and is not compared as context");
+
+        let provider = InterfaceId::new("provider");
+        let mut calling = checkpoint("call", "provider_tool_output", "provider", "room");
+        calling["result_receiving"] = json!({"exec":{"mark":"tool.result.corresponds","artifact_label":"exec.result",
+            "verifier":"tool_result_correspondence","params":{}}});
+        let awaiting = |active: &[&str]| {
+            let mut record = serde_json::to_value(rows(&[&earlier], &[&earlier, &call])).unwrap();
+            record["active_checkpoints"] = json!(active);
+            record["interface_state"]["provider"][RUN_AUTHORING_BINDING] = json!({"schema_version":1,"run":"run","worker":"worker",
+                "provider_interface":"provider","authoring_source_interface":"writer","checkpoints":[calling, wait]});
+            RunRecord::from_bytes(&serde_json::to_vec(&record).unwrap()).unwrap()
+        };
+        let open = awaiting(&["input", "writer_call", "writer_result", "wait"]);
+        assert_eq!(crate::awaits_call_result(&open, &provider, crate::AwaitedCall::Tool("exec"), "c1").unwrap(), Some(true));
+        assert_eq!(crate::awaits_call_result(&open, &provider, crate::AwaitedCall::Tool("exec"), "c2").unwrap(), Some(false));
+        assert_eq!(crate::awaits_call_result(&open, &provider, crate::AwaitedCall::Tool("other"), "c1").unwrap(), None,
+            "a call the topology derives no result input for is not judged by the record");
+        let consumed = awaiting(&["input", "writer_call", "writer_result"]);
+        assert_eq!(crate::awaits_call_result(&consumed, &provider, crate::AwaitedCall::Tool("exec"), "c1").unwrap(), Some(false));
     }
 }

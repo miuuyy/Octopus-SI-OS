@@ -929,9 +929,11 @@ closes its private transport before returning control, so an abandoned model
 turn cannot keep issuing requests after its task has failed. A source that fails closed for any
 other reason retires its native turn the same way before its `turn.error` is
 handed, so later results of that turn reach no live model turn. A terminal
-`turn.error` also releases the calls that turn was waiting for, unless a restart
-cut them off with an exact effect still owed: the next input is not held behind a
-result no turn will consume, and a late result arrives as an ordinary input. A terminal error
+`turn.error` settles the result its own source carried, and a call for which the
+run record no longer holds a result row: no result can arrive for it, so the next
+input is not held behind it. A call whose result row is still open stays pending,
+and its result continues the turn; a call a restart cut off with an exact effect
+still owed is never settled this way. A terminal error
 that cannot be handed closes its source through the declared failure route
 instead of ending the provider life. That route writes the context the run has
 published, a deferred publication whose evidence is admitted included, so a

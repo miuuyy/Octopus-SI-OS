@@ -115,6 +115,44 @@ fn active_rows(record: &RunRecord, template: &RunAuthoringCheckpoint) -> Vec<oct
         .collect()
 }
 
+pub enum AwaitedCall<'a> {
+    Tool(&'a str),
+    Operation(&'a InterfaceId),
+}
+
+pub fn awaits_call_result(
+    record: &RunRecord,
+    provider: &InterfaceId,
+    call: AwaitedCall<'_>,
+    correlation_id: &str,
+) -> Result<Option<bool>, String> {
+    let Some(binding) = record.interface_state.get(provider).and_then(|state| state.get(RUN_AUTHORING_BINDING)) else {
+        return Ok(None);
+    };
+    let topology: BoundRunAuthoringTopology = serde_json::from_value(binding.clone()).map_err(|error| error.to_string())?;
+    let derives = topology.checkpoints.iter().any(|output| match (&call, output.role) {
+        (AwaitedCall::Tool(tool), RunAuthoringCheckpointRole::ProviderToolOutput) => output.result_receiving.contains_key(*tool),
+        (AwaitedCall::Operation(interface), RunAuthoringCheckpointRole::ProviderInterfaceOutput) => {
+            !output.result_receiving.is_empty()
+                && output.outbound_interface_bindings.iter().any(|binding| &binding.interface == *interface)
+        }
+        _ => false,
+    });
+    if !derives {
+        return Ok(None);
+    }
+    for template in topology.checkpoints.iter().filter(|template| template.role == RunAuthoringCheckpointRole::ResultInput) {
+        if correspondence(template)?.correlation_id == correlation_id
+            && record.checkpoints.iter().any(|row| {
+                record.active_checkpoints.contains(&row.id) && checkpoint_record_matches_template(row, template, &record.id)
+            })
+        {
+            return Ok(Some(true));
+        }
+    }
+    Ok(Some(false))
+}
+
 pub(super) fn enabled(config: &RunAuthoringConfig) -> bool {
     config.checkpoints.iter().any(|template| {
         template.role == RunAuthoringCheckpointRole::ResultInput

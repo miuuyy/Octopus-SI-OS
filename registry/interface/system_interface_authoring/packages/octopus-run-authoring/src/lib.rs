@@ -448,6 +448,7 @@ pub use rejected_final::RejectedFinalOutput;
 mod standing_routes;
 pub use standing_routes::{open_standing_handoff_before, standing_route_admits_only};
 mod result_inputs;
+pub use result_inputs::{awaits_call_result, AwaitedCall};
 mod output_connections;
 mod input_revision;
 pub use input_revision::{declared_owner_input_bindings, prepare_provider_input_revision, prepare_provider_input_rearm, prepare_provider_input_payloads, provider_input_rearm_ready, provider_input_payloads_ready, ProviderInputRevision};

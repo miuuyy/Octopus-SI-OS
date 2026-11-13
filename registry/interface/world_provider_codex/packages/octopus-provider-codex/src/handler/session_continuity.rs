@@ -538,6 +538,12 @@ pub(crate) fn terminal_output_continuity(
             "terminal Codex continuity is ahead of its authored context".into(),
         ));
     }
+    settle_calls_without_result_row(
+        &mut continuity,
+        current_run_record,
+        record.get("interface_state").and_then(|state| state.get(runtime.interface.as_str())),
+        &runtime.interface,
+    )?;
     continuity.context_generation =
         generation
             .checked_add(1)
@@ -547,6 +553,43 @@ pub(crate) fn terminal_output_continuity(
                 )
             })?;
     Ok(Some(continuity))
+}
+
+fn settle_calls_without_result_row(
+    continuity: &mut CodexContinuityState,
+    current_run_record: &[u8],
+    authored: Option<&serde_json::Value>,
+    provider: &InterfaceId,
+) -> Result<(), InterfaceDriverError> {
+    let (interrupted, calls) = continuity.outstanding_calls();
+    if interrupted || calls.is_empty() || !authored.is_some_and(|state| state.get("run_authoring_binding").is_some()) {
+        return Ok(());
+    }
+    let record = octopus_run_record::RunRecord::from_bytes(current_run_record)
+        .map_err(|error| InterfaceDriverError::FailedClosed(format!(
+            "terminal Codex settlement cannot read its current run record: {error}"
+        )))?;
+    for (key, call) in calls {
+        if call.tool_operator_request.is_some() {
+            continue;
+        }
+        let (awaited, correlation) = match &call.pending {
+            CodexPendingContinuity::DynamicTool { call_id, tool, .. } => {
+                (octopus_run_authoring::AwaitedCall::Tool(tool), call_id)
+            }
+            CodexPendingContinuity::InterfaceOperation { call_id, interface, .. } => {
+                (octopus_run_authoring::AwaitedCall::Operation(interface), call_id)
+            }
+            CodexPendingContinuity::Operator { .. } => continue,
+        };
+        if octopus_run_authoring::awaits_call_result(&record, provider, awaited, correlation)
+            .map_err(InterfaceDriverError::FailedClosed)?
+            == Some(false)
+        {
+            continuity.settle_outstanding(&key);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn close_recovered_pending_from_session(

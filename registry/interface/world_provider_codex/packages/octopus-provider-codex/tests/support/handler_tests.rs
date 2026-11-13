@@ -1662,10 +1662,11 @@
             72,
         ))
         .unwrap();
+        let context = [old_artifact, newest_artifact];
         let retained = terminal_output_continuity(
             &descriptor,
             &input,
-            &[old_artifact, newest_artifact],
+            &context,
             &octopus_descriptors::RunId::new("run-a"),
             br#"{"id":"run-a","interface_state":{"world_provider_codex":{"context_generation":9}}}"#,
             0,
@@ -1673,10 +1674,39 @@
         .unwrap()
         .unwrap();
         assert_eq!(retained.context_generation, 10);
-        assert_eq!(retained.pending, Some(new_pending));
-        let mut ended = retained.clone();
-        ended.release_ended_turn();
-        assert!(!codex_continuity_waits_for_result(&ended) && ended.context_generation == 10);
+        assert_eq!(retained.pending, Some(new_pending.clone()));
+
+        let binding = |id: &str| serde_json::json!({"interface": id, "config": {"artifact_policy": {"mode": "all"}}});
+        let template = |name: &str, role: &str, source: &str, target: &str| serde_json::json!({
+            "name": name, "role": role, "interface_binding": binding(source), "outbound_interface_bindings": [binding(target)],
+            "include_context": role == "result_input", "required_verified_artifacts": [],
+        });
+        let mut calling = template("call", "provider_tool_output", "world_provider_codex", "room");
+        calling["result_receiving"] = serde_json::json!({"coder.exec": {"mark": "tool.result.corresponds",
+            "artifact_label": "coder.exec.result", "verifier": "tool_result_correspondence", "params": {}}});
+        let mut waiting = template("wait", "result_input", "room", "world_provider_codex");
+        waiting["required_verified_artifacts"] = serde_json::json!([{"mark": "tool.result.corresponds",
+            "artifact_label": "coder.exec.result", "verifier": "tool_result_correspondence",
+            "params": {"call_artifact": {"id": "new-call", "content": octopus_ledger::ContentHash::of_bytes(b"new-call")},
+                "tool": "coder.exec", "correlation_id": "call-8", "params": {}}}]);
+        let authored = |templates: Vec<serde_json::Value>, rows: Vec<serde_json::Value>, active: Vec<&str>| serde_json::to_vec(&serde_json::json!({
+            "id": "run-a", "ee": "ee-a", "worker": "system_worker_test", "trace": "run-a", "status": "idle",
+            "checkpoints": rows, "active_checkpoints": active,
+            "interface_state": {"world_provider_codex": {"context_generation": 9, "run_authoring_binding": {
+                "schema_version": 1, "run": "run-a", "worker": "system_worker_test", "provider_interface": "world_provider_codex",
+                "authoring_source_interface": "writer", "checkpoints": templates}}},
+        })).unwrap();
+        let row = serde_json::json!({"id": "wait", "run": "run-a", "epoch": 0, "trace": "trace:run-a:wait",
+            "interface_binding": waiting["interface_binding"], "outbound_interface_bindings": waiting["outbound_interface_bindings"],
+            "required_verified_artifacts": waiting["required_verified_artifacts"], "artifact_bindings": []});
+        let run = octopus_descriptors::RunId::new("run-a");
+        let awaited = terminal_output_continuity(&descriptor, &input, &context, &run,
+            &authored(vec![calling.clone(), waiting], vec![row], vec!["wait"]), 0).unwrap().unwrap();
+        assert_eq!(awaited.pending, Some(new_pending), "a call whose result row is open stays pending");
+        let dead = terminal_output_continuity(&descriptor, &input, &context, &run,
+            &authored(vec![calling], Vec::new(), Vec::new()), 0).unwrap().unwrap();
+        assert!(!codex_continuity_waits_for_result(&dead) && dead.context_generation == 10,
+            "a call with no result row left in the run record can never be answered");
     }
 
     #[test]

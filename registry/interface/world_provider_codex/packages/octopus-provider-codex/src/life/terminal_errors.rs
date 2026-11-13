@@ -56,10 +56,7 @@ pub(crate) async fn emit_terminal_error_message(
         &handoff.current_run_record_bytes().await,
         handoff.deferred_context_generations().await,
     ) {
-        Ok(mut continuity) => {
-            if let Some(continuity) = continuity.as_mut() {
-                continuity.release_ended_turn();
-            }
+        Ok(continuity) => {
             crate::handler::materialize_terminal_turn_error_payload(
                 &output_root, message, continuity.as_ref(),
                 serde_json::json!({"source_movement_seq": turn.seq}),
