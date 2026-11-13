@@ -16,7 +16,7 @@ blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "io-std", "io-util", "time", "process"] }
+tokio = { workspace = true, features = ["rt", "sync", "io-std", "io-util", "time", "process", "net"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1.44"
 notify.workspace = true

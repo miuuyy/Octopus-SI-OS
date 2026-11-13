@@ -453,8 +453,11 @@ catches up on its own movements from its own cursor. A life whose own code has
 nothing left to do ends itself cleanly and says through which movement it has
 read; that is sleep, not coma, and no backoff applies. The runtime lifts it
 again as soon as a movement it has not read reaches its folder, so a call that
-waits on a sleeping door waits for the door to wake. The runtime takes no
-decision about sleep; an interface that listens to the world simply never
+waits on a sleeping door waits for the door to wake. A life that takes work
+through a socket of its folder names that socket when it sleeps; the runtime
+holds it, and the first connection lifts the life with the same listening
+socket, so the caller that knocked is answered by the woken life. The runtime
+takes no decision about sleep; an interface that listens to the world simply never
 ends, and a waiting run holds no process. The cursor is written to
 disk when the interface settles one of its own movements; reading past other
 interfaces' movements stays in memory, so a busy ledger does not make every

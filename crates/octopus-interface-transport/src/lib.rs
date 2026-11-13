@@ -12,11 +12,14 @@ pub use interface_life::{
     InterfaceLiftFn, InterfaceLifeReadyPublication, RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeConfig,
     ResolvedSpawnLifeExecutable, SpawnLifeArgument, SpawnLifeCommand, SpawnLifeConfig,
     SpawnLifeDoctorCommand, SpawnLifeRepositoryFileArgument, ValidatedSpawnLifeConfig,
+    INHERITED_LISTENERS_ENV, InterfaceSleepDeclaration,
     capture_spawned_artifact, interfaces_mentioned_in_live_runs, read_private_environment_document,
     resolve_interface_descriptor, resolve_spawn_life_config,
     resolve_spawn_life_executable, spawn_life_config_of, spawn_process_life,
     validate_spawn_life_config,
 };
+#[cfg(unix)]
+pub use interface_life::take_inherited_listener;
 use notify::{RecursiveMode, Watcher};
 use octopus_descriptors::{ArtifactId, InterfaceId};
 use octopus_interfaces::{DeliveryVerdict, Direction, InterfaceArtifactFile, InterfaceDescriptor};
@@ -54,6 +57,7 @@ pub fn movement_readers(movement: &octopus_ledger::Movement) -> Vec<InterfaceId>
     readers
 }
 pub(crate) const INTERFACE_LOCAL_IPC_ROOT_SLOT: &str = "interface_local_ipc_root";
+const APP_SERVER_CONTROL_ROOT_SLOT: &str = "app_server_control_root";
 
 #[derive(Clone, Debug)]
 pub struct InterfaceActivationEvidence {
@@ -139,6 +143,34 @@ pub struct ActivationStart {
     pub cancel: CancellationToken,
     pub interface_var_dir: PathBuf,
     pub root_slots: BTreeMap<String, PathBuf>,
+    pub sleep: ActivationSleep,
+}
+
+#[derive(Clone, Default)]
+pub struct ActivationSleep {
+    offers: Option<tokio::sync::mpsc::UnboundedSender<(PathBuf, tokio::sync::oneshot::Sender<bool>)>>,
+}
+
+pub type ActivationSleepOffers =
+    tokio::sync::mpsc::UnboundedReceiver<(PathBuf, tokio::sync::oneshot::Sender<bool>)>;
+
+impl ActivationSleep {
+    pub fn channel() -> (Self, ActivationSleepOffers) {
+        let (offers, receiver) = tokio::sync::mpsc::unbounded_channel();
+        (Self { offers: Some(offers) }, receiver)
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.offers.is_some()
+    }
+
+    pub async fn offer(&self, socket: PathBuf) -> bool {
+        let Some(offers) = &self.offers else {
+            return false;
+        };
+        let (answer, accepted) = tokio::sync::oneshot::channel();
+        offers.send((socket, answer)).is_ok() && accepted.await.unwrap_or(false)
+    }
 }
 
 pub async fn send_arrival(
@@ -206,7 +238,17 @@ struct LiftedInterfaceLife {
     restart_attempt: u32,
     retry_not_before: Option<Instant>,
     waking: bool,
+    sleeping: bool,
     asleep_through: Option<u64>,
+    socket_roots: Vec<PathBuf>,
+    #[cfg(unix)]
+    held_sockets: Option<HeldSockets>,
+}
+
+#[cfg(unix)]
+struct HeldSockets {
+    listeners: Vec<interface_life::HeldListener>,
+    _watch: tokio_util::sync::DropGuard,
 }
 
 enum InterfaceLifeEvent {
@@ -228,7 +270,11 @@ enum InterfaceLifeEvent {
     Asleep {
         interface: InterfaceId,
         lift_id: u64,
-        through_seq: u64,
+        declaration: InterfaceSleepDeclaration,
+    },
+    Knocked {
+        interface: InterfaceId,
+        lift_id: u64,
     },
 }
 
@@ -552,7 +598,7 @@ impl InterfaceActivationReconciler {
                 existing.is_some_and(|lifted| lifted.fingerprint != fingerprint);
             let restart = existing
                 .map(|lifted| {
-                    lifted.asleep_through.is_none()
+                    !lifted.sleeping
                         && (fingerprint_changed
                             || lifted.handle.is_finished()
                                 && lifted
@@ -581,6 +627,13 @@ impl InterfaceActivationReconciler {
                 .map(|lifted| lifted.restart_attempt)
                 .unwrap_or(0);
             let after_coma = self.live.then(|| self.failures.borrow().get(&interface).cloned()).flatten();
+            #[cfg(unix)]
+            let inherited_listeners = self
+                .lifted
+                .get_mut(&interface)
+                .and_then(|life| life.held_sockets.take())
+                .map(|held| held.listeners)
+                .unwrap_or_default();
             self.stop_life(&interface).await;
             let config = resolved.config;
             let descriptor_snapshot = resolved.interface_descriptor;
@@ -616,7 +669,15 @@ impl InterfaceActivationReconciler {
                 cancel: cancel.clone(),
                 readiness: readiness.clone(),
                 asleep: Default::default(),
+                #[cfg(unix)]
+                inherited_listeners: interface_life::InheritedListeners::new(inherited_listeners),
+                #[cfg(not(unix))]
+                inherited_listeners: Default::default(),
             };
+            let socket_roots = [APP_SERVER_CONTROL_ROOT_SLOT, INTERFACE_LOCAL_IPC_ROOT_SLOT]
+                .into_iter()
+                .filter_map(|slot| ctx.root_slots.get(slot).cloned())
+                .collect::<Vec<_>>();
             let life_sleep = ctx.asleep.clone();
             let lifted_interface = interface.clone();
             let life_exit_tx = self.life_exit_tx.clone();
@@ -624,11 +685,11 @@ impl InterfaceActivationReconciler {
             let handle = tokio::spawn(async move {
                 let result = life(ctx).await;
                 if result.is_ok() && !life_cancel.is_cancelled() {
-                    if let Some(through_seq) = life_sleep.through_seq() {
+                    if let Some(declaration) = life_sleep.declared() {
                         let _ = life_exit_tx.send(InterfaceLifeEvent::Asleep {
                             interface: lifted_interface,
                             lift_id,
-                            through_seq,
+                            declaration,
                         });
                         return;
                     }
@@ -682,7 +743,11 @@ impl InterfaceActivationReconciler {
                     restart_attempt,
                     retry_not_before: None,
                     waking: true,
+                    sleeping: false,
                     asleep_through: None,
+                    socket_roots,
+                    #[cfg(unix)]
+                    held_sockets: None,
                 },
             );
         }
@@ -890,25 +955,52 @@ impl InterfaceActivationReconciler {
                 self.lift_deferred().await;
                 None
             }
-            InterfaceLifeEvent::Asleep { interface, lift_id, through_seq } => {
+            InterfaceLifeEvent::Asleep { interface, lift_id, declaration } => {
+                let events = self.life_exit_tx.clone();
                 let current = self
                     .lifted
                     .get_mut(&interface)
                     .filter(|life| life.lift_id == lift_id && !life.cancel.is_cancelled())?;
                 let was_waking = std::mem::replace(&mut current.waking, false);
-                current.asleep_through = Some(through_seq);
+                current.sleeping = true;
+                current.asleep_through = declaration.through_seq;
                 current.restart_attempt = 0;
                 current.retry_not_before = None;
+                #[cfg(unix)]
+                let held = hold_sleeping_sockets(&interface, lift_id, &declaration.sockets, &current.socket_roots, events);
+                #[cfg(not(unix))]
+                let held: Result<(), String> = if declaration.sockets.is_empty() {
+                    Ok(())
+                } else {
+                    Err("sleeping sockets are held only on unix".to_string())
+                };
+                #[cfg(unix)]
+                let held = held.map(|held| current.held_sockets = held);
+                if let Err(error) = held {
+                    self.record_failure(&interface, &format!("sleeping life sockets cannot be held: {error}"));
+                    self.wake_life(&interface).await;
+                    return None;
+                }
                 self.clear_failure(&interface);
-                tracing::debug!(interface = interface.as_str(), through_seq, "interface life fell asleep");
-                if self
-                    .latest_movements
-                    .get(&interface)
-                    .is_some_and(|seq| *seq >= through_seq)
-                {
+                tracing::debug!(interface = interface.as_str(), "interface life fell asleep");
+                if declaration.through_seq.is_some_and(|through| {
+                    self.latest_movements
+                        .get(&interface)
+                        .is_some_and(|seq| *seq >= through)
+                }) {
                     self.wake_life(&interface).await;
                 } else if was_waking {
                     self.lift_deferred().await;
+                }
+                None
+            }
+            InterfaceLifeEvent::Knocked { interface, lift_id } => {
+                if self
+                    .lifted
+                    .get(&interface)
+                    .is_some_and(|life| life.lift_id == lift_id && life.sleeping)
+                {
+                    self.wake_life(&interface).await;
                 }
                 None
             }
@@ -925,6 +1017,7 @@ impl InterfaceActivationReconciler {
         if self
             .lifted
             .get(&interface)
+            .filter(|life| life.sleeping)
             .and_then(|life| life.asleep_through)
             .is_some_and(|through| seq >= through)
         {
@@ -936,6 +1029,7 @@ impl InterfaceActivationReconciler {
         let Some(life) = self.lifted.get_mut(interface) else {
             return;
         };
+        life.sleeping = false;
         life.asleep_through = None;
         let scope = BTreeSet::from([interface.clone()]);
         if let Err(error) = self.reconcile_scope(Some(&scope)).await {
@@ -1163,6 +1257,84 @@ impl InterfaceActivationReconciler {
 
     async fn reconcile_scope(&mut self, scope: Option<&BTreeSet<InterfaceId>>) -> Result<(), String> {
         self.reconcile_interface_lives(scope).await
+    }
+}
+
+#[cfg(unix)]
+fn hold_sleeping_sockets(
+    interface: &InterfaceId,
+    lift_id: u64,
+    sockets: &[PathBuf],
+    socket_roots: &[PathBuf],
+    events: tokio::sync::mpsc::UnboundedSender<InterfaceLifeEvent>,
+) -> Result<Option<HeldSockets>, String> {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+    if sockets.is_empty() {
+        return Ok(None);
+    }
+    let watch = CancellationToken::new();
+    let mut listeners = Vec::new();
+    for socket in sockets {
+        if !socket
+            .parent()
+            .is_some_and(|parent| socket_roots.iter().any(|root| root == parent))
+        {
+            return Err(format!(
+                "socket '{}' is not in a socket root the host formed for this life",
+                socket.display()
+            ));
+        }
+        match std::fs::symlink_metadata(socket) {
+            Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(socket)
+                .map_err(|error| format!("stale socket '{}' cannot be removed: {error}", socket.display()))?,
+            Ok(_) => return Err(format!("'{}' is not a socket", socket.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("socket '{}' cannot be inspected: {error}", socket.display())),
+        }
+        let listener = std::os::unix::net::UnixListener::bind(socket)
+            .map_err(|error| format!("socket '{}' cannot be bound: {error}", socket.display()))?;
+        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("socket '{}' permissions cannot be set: {error}", socket.display()))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("socket '{}' cannot be made nonblocking: {error}", socket.display()))?;
+        let fd = Arc::new(OwnedFd::from(listener));
+        let readable = unsafe {
+            tokio::io::unix::AsyncFd::register_with_interest(
+                SharedListenerFd(Arc::clone(&fd)),
+                tokio::io::Interest::READABLE,
+            )
+        }
+        .map_err(|error| format!("socket '{}' cannot be watched: {}", socket.display(), error.into_parts().1))?;
+        let watch = watch.clone();
+        let events = events.clone();
+        let interface = interface.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = watch.cancelled() => {}
+                ready = readable.readable() => {
+                    if ready.is_ok() {
+                        let _ = events.send(InterfaceLifeEvent::Knocked { interface, lift_id });
+                    }
+                }
+            }
+        });
+        listeners.push((socket.clone(), fd));
+    }
+    Ok(Some(HeldSockets {
+        listeners,
+        _watch: watch.drop_guard(),
+    }))
+}
+
+#[cfg(unix)]
+struct SharedListenerFd(Arc<std::os::fd::OwnedFd>);
+
+#[cfg(unix)]
+impl std::os::fd::AsRawFd for SharedListenerFd {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.0.as_raw_fd()
     }
 }
 
@@ -1424,7 +1596,7 @@ fn life_root_slots(
         registry_root.join("worker_environment_kind"),
     );
     slots.insert(
-        "app_server_control_root".to_string(),
+        APP_SERVER_CONTROL_ROOT_SLOT.to_string(),
         octopus_home.join("app-server-control"),
     );
     slots.insert(
@@ -1874,7 +2046,11 @@ mod interface_life_switch_tests {
                     restart_attempt: 0,
                     retry_not_before: None,
                     waking: true,
+                    sleeping: false,
                     asleep_through: None,
+                    socket_roots: Vec::new(),
+                    #[cfg(unix)]
+                    held_sockets: None,
                 },
             );
         }
@@ -2166,6 +2342,110 @@ mod interface_life_switch_tests {
         })
         .await
         .expect("a movement past the sleep boundary lifts the life again");
+        cancel.cancel();
+        reconciler.stop_all_lives().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sleeping_life_socket_is_held_and_a_connection_lifts_it_with_the_listener() {
+        let dir = tempfile::Builder::new().prefix("oct").tempdir_in("/tmp").unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let root = root.as_path();
+        let durable_root = root.join("d");
+        let runs_dir = durable_root.join("runs");
+        std::fs::create_dir_all(durable_root.join("blobs")).unwrap();
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let home = root.join("h");
+        std::fs::create_dir_all(home.join("app-server-control")).unwrap();
+        std::fs::write(home.join("host.json"), serde_json::json!({
+            "host_manifest_version": 1,
+            "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": runs_dir.to_str().unwrap()}
+        }).to_string()).unwrap();
+        let name = "test_knock";
+        let iface_dir = root.join("registry").join("interface").join(name);
+        std::fs::create_dir_all(&iface_dir).unwrap();
+        let var_dir = home.join("interfaces").join(name);
+        std::fs::create_dir_all(&var_dir).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&var_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let socket = home.join("app-server-control").join("k.sock");
+        let marker = var_dir.join("slept");
+        let inherited = var_dir.join("inherited");
+        std::fs::write(iface_dir.join("interface.json"), serde_json::json!({
+            "id": name, "interface_type": "system", "role": "system",
+            "direction": "bidirectional", "source_names": [name], "interface_driver_ref": name
+        }).to_string()).unwrap();
+        std::fs::write(iface_dir.join("life.json"), serde_json::json!({
+            "processes": [{
+                "bin": "/bin/sh",
+                "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
+                    "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
+                "args": ["-c", format!(
+                    "if [ -e '{marker}' ]; then printf '%s' \"$OCTOPUS_INHERITED_LISTENERS\" > '{inherited}'; printf '%s\\n' \"$1\"; IFS= read -r ignored; else : > '{marker}'; printf '%s\\n' \"$1\" \"$2\"; fi",
+                    marker = marker.display(), inherited = inherited.display()),
+                    "octopus-test",
+                    serde_json::json!({"kind": "ready"}).to_string(),
+                    serde_json::json!({"kind": "asleep", "sockets": [socket]}).to_string()],
+                "authority": {
+                    "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
+                    "read_paths": [], "write_paths": [marker, inherited], "executable_paths": ["/bin/sh"],
+                    "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
+                    "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
+                },
+                "read_handles": []
+            }]
+        }).to_string()).unwrap();
+        std::fs::write(runs_dir.join("run_knock.json"), serde_json::json!({
+            "id": "run_knock", "ee": "ee_test", "worker": "system_worker_test",
+            "trace": "trace:run_knock", "status": "idle",
+            "checkpoints": [{
+                "id": "c1", "run": "run_knock", "trace": "trace:run_knock:c1", "epoch": 0,
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(name)),
+                "outbound_interface_bindings": []
+            }],
+            "active_checkpoints": ["c1"]
+        }).to_string()).unwrap();
+        let cancel = CancellationToken::new();
+        let mut reconciler = InterfaceActivationReconciler::new(
+            root.join("registry"),
+            root.to_path_buf(),
+            tokio::sync::mpsc::channel(4).0,
+            tokio::sync::mpsc::channel(4).0,
+            cancel.clone(),
+            home.clone(),
+            Some(durable_root),
+        );
+        let interface = InterfaceId::new(name);
+        reconciler.reconcile_once().await.unwrap();
+        assert_eq!(reconciler.await_initial_readiness(1, 0, None).await.unwrap(), 1);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !reconciler.lifted.get(&interface).is_some_and(|life| life.sleeping) {
+                let event = reconciler.life_exit_rx.recv().await.unwrap();
+                reconciler.handle_life_event(event).await;
+            }
+        })
+        .await
+        .expect("a life that names its socket falls asleep");
+        assert!(reconciler.failures.borrow().is_empty());
+        let _client = std::os::unix::net::UnixStream::connect(&socket)
+            .expect("the runtime holds a sleeping life's socket");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while std::fs::read_to_string(&inherited).map_or(true, |text| text.is_empty()) {
+                if let Ok(Some(event)) =
+                    tokio::time::timeout(Duration::from_millis(20), reconciler.life_exit_rx.recv()).await
+                {
+                    reconciler.handle_life_event(event).await;
+                }
+            }
+        })
+        .await
+        .expect("a connection to the held socket lifts the life");
+        let listeners: BTreeMap<PathBuf, i32> =
+            serde_json::from_str(&std::fs::read_to_string(&inherited).unwrap()).unwrap();
+        assert_eq!(listeners.keys().collect::<Vec<_>>(), vec![&socket], "the woken life inherits the listener");
         cancel.cancel();
         reconciler.stop_all_lives().await;
     }

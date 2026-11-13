@@ -50,6 +50,8 @@ pub async fn run_descriptor_activation_life(
         )
     })?;
     let mut tasks = Vec::new();
+    let (sleep, mut sleep_offers) = octopus_interface_transport::ActivationSleep::channel();
+    let mut sleeping_activations = 0usize;
     for activation in loaded
         .descriptor
         .activations
@@ -67,6 +69,7 @@ pub async fn run_descriptor_activation_life(
             cancel: ctx.cancel.clone(),
             interface_var_dir: ctx.var_dir.clone(),
             root_slots: ctx.root_slots.clone(),
+            sleep: sleep.clone(),
         })
         .await
         .map_err(|error| {
@@ -76,8 +79,12 @@ pub async fn run_descriptor_activation_life(
                 activation_ref
             )
         })?;
+        if !started.is_empty() {
+            sleeping_activations += 1;
+        }
         tasks.extend(started);
     }
+    drop(sleep);
     if tasks.is_empty() {
         return Err(format!(
             "interface '{}' declares no enabled '{}' activation",
@@ -86,7 +93,27 @@ pub async fn run_descriptor_activation_life(
         ));
     }
     ctx.signal_ready().await?;
-    ctx.cancel.cancelled().await;
+    loop {
+        tokio::select! {
+            _ = ctx.cancel.cancelled() => break,
+            offer = sleep_offers.recv() => {
+                let Some((socket, answer)) = offer else {
+                    ctx.cancel.cancelled().await;
+                    break;
+                };
+                if sleeping_activations != 1 {
+                    let _ = answer.send(false);
+                    continue;
+                }
+                ctx.fall_asleep_holding(None, vec![socket])?;
+                let _ = answer.send(true);
+                for task in &tasks {
+                    task.abort();
+                }
+                return Ok(());
+            }
+        }
+    }
     for task in tasks {
         task.abort();
     }
@@ -706,7 +733,8 @@ enum SpawnedLifeOutput {
         to_interface: String,
     },
     Asleep {
-        through_seq: u64,
+        through_seq: Option<u64>,
+        sockets: Vec<PathBuf>,
     },
 }
 
@@ -759,10 +787,13 @@ pub async fn run_spawned_interface_life(life: InterfaceLiftFn) -> Result<(), Str
         result = &mut input => return result,
     };
     result?;
-    if let Some(through_seq) = observed.asleep_through() {
+    if let Some(declaration) = observed.sleep_declaration() {
         use std::io::Write;
         let bytes = serialize_bounded_json_line(
-            &SpawnedLifeOutput::Asleep { through_seq },
+            &SpawnedLifeOutput::Asleep {
+                through_seq: declaration.through_seq,
+                sockets: declaration.sockets,
+            },
             host_io_limits.max_control_frame_bytes,
             "spawned-life output frame",
         )?;

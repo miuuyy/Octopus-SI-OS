@@ -318,29 +318,88 @@ pub struct InterfaceLiftContext {
     pub cancel: CancellationToken,
     pub(crate) readiness: InterfaceLifeReadiness,
     pub(crate) asleep: InterfaceLifeSleep,
+    pub(crate) inherited_listeners: InheritedListeners,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InterfaceSleepDeclaration {
+    pub through_seq: Option<u64>,
+    pub sockets: Vec<PathBuf>,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct InterfaceLifeSleep {
-    through_seq: Arc<std::sync::Mutex<Option<u64>>>,
+    declaration: Arc<std::sync::Mutex<Option<InterfaceSleepDeclaration>>>,
 }
 
 impl InterfaceLifeSleep {
-    fn declare(&self, through_seq: u64) -> Result<(), String> {
+    fn declare(&self, declaration: InterfaceSleepDeclaration) -> Result<(), String> {
+        if declaration.through_seq.is_none() && declaration.sockets.is_empty() {
+            return Err("a sleeping life must name a movement boundary or a socket that wakes it".to_string());
+        }
+        if let Some(socket) = declaration.sockets.iter().find(|socket| !socket.is_absolute()) {
+            return Err(format!("sleeping life socket '{}' is not absolute", socket.display()));
+        }
         let mut slot = self
-            .through_seq
+            .declaration
             .lock()
             .map_err(|_| "interface life sleep lock is poisoned".to_string())?;
         if slot.is_some() {
             return Err("life declared sleep twice".to_string());
         }
-        *slot = Some(through_seq);
+        *slot = Some(declaration);
         Ok(())
     }
 
-    pub(crate) fn through_seq(&self) -> Option<u64> {
-        self.through_seq.lock().ok().and_then(|slot| *slot)
+    pub(crate) fn declared(&self) -> Option<InterfaceSleepDeclaration> {
+        self.declaration.lock().ok().and_then(|slot| slot.clone())
     }
+}
+
+#[cfg(unix)]
+pub(crate) type HeldListener = (PathBuf, Arc<std::os::fd::OwnedFd>);
+
+#[derive(Clone, Default)]
+pub(crate) struct InheritedListeners {
+    #[cfg(unix)]
+    listeners: Arc<std::sync::Mutex<Vec<HeldListener>>>,
+}
+
+#[cfg(unix)]
+impl InheritedListeners {
+    pub(crate) fn new(listeners: Vec<HeldListener>) -> Self {
+        Self { listeners: Arc::new(std::sync::Mutex::new(listeners)) }
+    }
+
+    fn take(&self) -> Vec<HeldListener> {
+        self.listeners.lock().map(|mut held| std::mem::take(&mut *held)).unwrap_or_default()
+    }
+}
+
+pub const INHERITED_LISTENERS_ENV: &str = "OCTOPUS_INHERITED_LISTENERS";
+
+#[cfg(unix)]
+pub fn take_inherited_listener(path: &Path) -> Option<std::os::unix::net::UnixListener> {
+    use std::os::fd::FromRawFd;
+    static INHERITED: std::sync::OnceLock<std::sync::Mutex<BTreeMap<PathBuf, i32>>> =
+        std::sync::OnceLock::new();
+    let inherited = INHERITED.get_or_init(|| {
+        let parsed = std::env::var(INHERITED_LISTENERS_ENV)
+            .ok()
+            .and_then(|value| serde_json::from_str::<BTreeMap<PathBuf, i32>>(&value).ok())
+            .unwrap_or_default();
+        std::sync::Mutex::new(parsed)
+    });
+    let fd = inherited.lock().ok()?.remove(path)?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0
+        || unsafe { stat.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFSOCK
+    {
+        return None;
+    }
+    let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+    listener.set_nonblocking(true).ok()?;
+    Some(listener)
 }
 
 #[derive(Clone, Default)]
@@ -421,15 +480,20 @@ impl InterfaceLiftContext {
             cancel,
             readiness: InterfaceLifeReadiness::default(),
             asleep: InterfaceLifeSleep::default(),
+            inherited_listeners: InheritedListeners::default(),
         }
     }
 
     pub fn fall_asleep(&self, through_seq: u64) -> Result<(), String> {
-        self.asleep.declare(through_seq)
+        self.asleep.declare(InterfaceSleepDeclaration { through_seq: Some(through_seq), sockets: Vec::new() })
     }
 
-    pub fn asleep_through(&self) -> Option<u64> {
-        self.asleep.through_seq()
+    pub fn fall_asleep_holding(&self, through_seq: Option<u64>, sockets: Vec<PathBuf>) -> Result<(), String> {
+        self.asleep.declare(InterfaceSleepDeclaration { through_seq, sockets })
+    }
+
+    pub fn sleep_declaration(&self) -> Option<InterfaceSleepDeclaration> {
+        self.asleep.declared()
     }
 
     pub fn with_readiness_channel(
@@ -2536,7 +2600,10 @@ enum SpawnedLifeOutput {
         to_interface: String,
     },
     Asleep {
-        through_seq: u64,
+        #[serde(default)]
+        through_seq: Option<u64>,
+        #[serde(default)]
+        sockets: Vec<PathBuf>,
     },
 }
 
@@ -2953,9 +3020,34 @@ fn spawn_process_command_life(
             ctx.var_dir.parent().ok_or("interface life has no private root")?, &ctx.interface,
         )?.ok_or("interface process lost its lifetime ownership before spawn")?;
         #[cfg(unix)]
+        let inherited_listeners = ctx.inherited_listeners.take();
+        let mut inherited_listeners_env = None;
+        #[cfg(unix)]
         {
             command.process_group(0);
             child_ownership.inherit_into(&mut command);
+            if !inherited_listeners.is_empty() {
+                use std::os::fd::AsRawFd;
+                let fds = inherited_listeners
+                    .iter()
+                    .map(|(path, fd)| (path.clone(), fd.as_raw_fd()))
+                    .collect::<BTreeMap<_, _>>();
+                inherited_listeners_env = Some(
+                    serde_json::to_string(&fds).map_err(|error| format!("inherited listeners failed to encode: {error}"))?,
+                );
+                let raw = fds.values().copied().collect::<Vec<_>>();
+                unsafe {
+                    command.pre_exec(move || {
+                        for fd in &raw {
+                            let flags = libc::fcntl(*fd, libc::F_GETFD);
+                            if flags == -1 || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        }
+                        Ok(())
+                    });
+                }
+            }
         }
         command
             .env_clear()
@@ -2974,6 +3066,9 @@ fn spawn_process_command_life(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        if let Some(inherited_listeners_env) = inherited_listeners_env {
+            command.env(INHERITED_LISTENERS_ENV, inherited_listeners_env);
+        }
         if let Some(movements_path) = movements_path {
             command.env("OCTOPUS_MOVEMENTS_JSONL", movements_path);
         }
@@ -3186,15 +3281,15 @@ async fn handle_spawned_life_output(
     stdin: &mut tokio::process::ChildStdin,
     output: SpawnedLifeOutput,
 ) -> Result<(), String> {
-    if ctx.asleep.through_seq().is_some() {
+    if ctx.asleep.declared().is_some() {
         return Err("life spoke after it declared sleep".to_string());
     }
     match output {
-        SpawnedLifeOutput::Asleep { through_seq } => {
+        SpawnedLifeOutput::Asleep { through_seq, sockets } => {
             if !ctx.readiness.signaled() {
                 return Err("life declared sleep before readiness".to_string());
             }
-            ctx.asleep.declare(through_seq)?;
+            ctx.asleep.declare(InterfaceSleepDeclaration { through_seq, sockets })?;
         }
         SpawnedLifeOutput::Ready => ctx.signal_ready().await?,
         SpawnedLifeOutput::Arrival {
@@ -3758,6 +3853,7 @@ mod tests {
             cancel: CancellationToken::new(),
             readiness: InterfaceLifeReadiness::default(),
             asleep: InterfaceLifeSleep::default(),
+            inherited_listeners: InheritedListeners::default(),
         }
     }
 

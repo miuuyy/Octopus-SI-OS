@@ -38,9 +38,17 @@ pub(crate) async fn send_authoring_manifest(
                 ));
             }
         };
-        let (mut ws, _) = tokio_tungstenite::client_async("ws://localhost/rpc", stream)
-            .await
-            .map_err(|error| format!("interface authoring websocket upgrade failed: {error}"))?;
+        let mut ws = match tokio_tungstenite::client_async("ws://localhost/rpc", stream).await {
+            Ok((ws, _)) => ws,
+            Err(error) if authoring_socket_closed_before_upgrade(&error) => {
+                tokio::select! {
+                    _ = ctx.cancel.cancelled() => return Err("interface authoring hand-in was cancelled".into()),
+                    _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+                }
+                continue;
+            }
+            Err(error) => return Err(format!("interface authoring websocket upgrade failed: {error}")),
+        };
         ws.send(WsMessage::Text(text.clone().into()))
             .await
             .map_err(|error| format!("interface authoring send failed: {error}"))?;
@@ -64,6 +72,22 @@ pub(crate) async fn send_authoring_manifest(
             _ = ctx.cancel.cancelled() => return Err("interface authoring hand-in was cancelled".into()),
             _ = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
+    }
+}
+
+fn authoring_socket_closed_before_upgrade(error: &tokio_tungstenite::tungstenite::Error) -> bool {
+    use tokio_tungstenite::tungstenite::error::{Error, ProtocolError};
+    match error {
+        Error::Protocol(ProtocolError::HandshakeIncomplete) => true,
+        Error::Io(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::NotConnected
+        ),
+        _ => false,
     }
 }
 

@@ -8,8 +8,8 @@ use std::time::Duration;
 use futures::FutureExt;
 use octopus_descriptors::InterfaceId;
 use octopus_interface_transport::{
-    ActivationStart, ActivationStartFuture, InterfaceActivationArrival, InterfaceHostIoLimits,
-    send_arrival,
+    ActivationSleep, ActivationStart, ActivationStartFuture, InterfaceActivationArrival,
+    InterfaceHostIoLimits, send_arrival,
 };
 use octopus_interfaces::{DeliveryVerdict, RefusedReason};
 use sha2::{Digest, Sha256};
@@ -23,6 +23,7 @@ const HAND_IN_ROOT_DIR_NAME: &str = "interface-hand-in";
 const REPO_ROOT_SLOT: &str = "repo_root";
 const APP_SERVER_CONTROL_ROOT_SLOT: &str = "app_server_control_root";
 const DEFAULT_VERDICT_TIMEOUT_MS: u64 = 120_000;
+const IDLE_BEFORE_SLEEP: Duration = Duration::from_secs(120);
 
 fn default_verdict_timeout_ms() -> u64 {
     DEFAULT_VERDICT_TIMEOUT_MS
@@ -249,7 +250,12 @@ pub fn activation_start(start: ActivationStart) -> ActivationStartFuture {
             })?;
         let client_bundle =
             prepare_client_bundle_launch(&start, config.open_client_bundle.as_deref())?;
-        let (accept, drain) = spawn_transport_arrivals(
+        let sleep = if client_bundle.is_some() {
+            ActivationSleep::default()
+        } else {
+            start.sleep.clone()
+        };
+        let (accept, drain) = spawn_sleeping_transport_arrivals(
             socket_path,
             start.tx,
             start.interface_id.clone(),
@@ -257,6 +263,7 @@ pub fn activation_start(start: ActivationStart) -> ActivationStartFuture {
             start.host_io_limits,
             verdict_timeout,
             start.cancel.clone(),
+            sleep,
         )
         .await
         .map_err(|error| {
@@ -451,6 +458,32 @@ mod socket {
         (tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>),
         Box<dyn std::error::Error>,
     > {
+        spawn_sleeping_transport_arrivals(
+            socket_path,
+            tx,
+            interface_id,
+            artifact_root,
+            host_io_limits,
+            verdict_timeout,
+            cancel,
+            ActivationSleep::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn spawn_sleeping_transport_arrivals(
+        socket_path: octopus_util_abspath::AbsolutePathBuf,
+        tx: tokio::sync::mpsc::Sender<InterfaceActivationArrival>,
+        interface_id: InterfaceId,
+        artifact_root: PathBuf,
+        host_io_limits: InterfaceHostIoLimits,
+        verdict_timeout: Duration,
+        cancel: CancellationToken,
+        sleep: ActivationSleep,
+    ) -> Result<
+        (tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>),
+        Box<dyn std::error::Error>,
+    > {
         host_io_limits
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
@@ -465,9 +498,15 @@ mod socket {
                 "app-server transport frame ceiling exceeds host address space",
             )
         })?;
-        prepare_control_socket_path(socket_path.as_path()).await?;
-        let listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
-        set_control_socket_permissions(socket_path.as_path()).await?;
+        let listener = match octopus_interface_transport::take_inherited_listener(socket_path.as_path()) {
+            Some(inherited) => tokio::net::UnixListener::from_std(inherited)?,
+            None => {
+                prepare_control_socket_path(socket_path.as_path()).await?;
+                let listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
+                set_control_socket_permissions(socket_path.as_path()).await?;
+                listener
+            }
+        };
         tracing::info!(
             socket_path = %socket_path.as_path().display(),
             "interface control socket listening"
@@ -475,10 +514,24 @@ mod socket {
         let guard_path = socket_path.clone();
         let accept_cancel = cancel.clone();
         let in_flight = Arc::new(InFlightHandIns::default());
+        let open = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let last_work = Arc::new(std::sync::Mutex::new(tokio::time::Instant::now()));
+        let sleep_socket = socket_path.as_path().to_path_buf();
         let accept_handle = tokio::spawn(async move {
             loop {
+                let idle_until = *last_work.lock().expect("last work lock") + super::IDLE_BEFORE_SLEEP;
                 let stream = tokio::select! {
                     _ = accept_cancel.cancelled() => break,
+                    _ = tokio::time::sleep_until(idle_until), if sleep.enabled() => {
+                        let quiet = open.load(std::sync::atomic::Ordering::SeqCst) == 0
+                            && in_flight.entries.lock().await.is_empty()
+                            && last_work.lock().expect("last work lock").elapsed() >= super::IDLE_BEFORE_SLEEP;
+                        if quiet && sleep.offer(sleep_socket.clone()).await {
+                            return;
+                        }
+                        *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
+                        continue;
+                    }
                     accepted = listener.accept() => match accepted {
                         Ok((stream, _addr)) => stream,
                         Err(err) => {
@@ -488,7 +541,9 @@ mod socket {
                         }
                     },
                 };
-                tokio::spawn(run_connection(
+                open.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
+                let connection = run_connection(
                     stream,
                     tx.clone(),
                     interface_id.clone(),
@@ -498,7 +553,14 @@ mod socket {
                     in_flight.clone(),
                     verdict_timeout,
                     accept_cancel.clone(),
-                ));
+                );
+                let open = open.clone();
+                let last_work = last_work.clone();
+                tokio::spawn(async move {
+                    connection.await;
+                    *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
+                    open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                });
             }
             tracing::info!("control socket acceptor shutting down");
         });
@@ -674,6 +736,22 @@ mod socket {
 
 #[cfg(unix)]
 pub use socket::spawn_transport_arrivals;
+#[cfg(unix)]
+use socket::spawn_sleeping_transport_arrivals;
+
+#[cfg(not(unix))]
+async fn spawn_sleeping_transport_arrivals(
+    socket_path: octopus_util_abspath::AbsolutePathBuf,
+    tx: tokio::sync::mpsc::Sender<InterfaceActivationArrival>,
+    interface_id: InterfaceId,
+    artifact_root: PathBuf,
+    host_io_limits: InterfaceHostIoLimits,
+    verdict_timeout: Duration,
+    cancel: CancellationToken,
+    _sleep: ActivationSleep,
+) -> Result<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>> {
+    spawn_transport_arrivals(socket_path, tx, interface_id, artifact_root, host_io_limits, verdict_timeout, cancel).await
+}
 
 #[cfg(not(unix))]
 pub async fn spawn_transport_arrivals(
@@ -727,6 +805,7 @@ mod tests {
                 ),
                 (REPO_ROOT_SLOT.to_string(), octopus_home.to_path_buf()),
             ]),
+            sleep: ActivationSleep::default(),
         }
     }
 

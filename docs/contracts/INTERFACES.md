@@ -124,8 +124,18 @@ has declared readiness, one last frame naming the first movement it has not
 read, then exits with status 0:
 
 ```json
-{ "kind": "asleep", "through_seq": 41328 }
+{ "kind": "asleep", "through_seq": 41328, "sockets": ["/…/app-server-control/<digest>.sock"] }
 ```
+
+Either field may be absent, not both. `sockets` names listening sockets the
+life served in a socket root the host formed for it (`app_server_control_root`
+or `interface_local_ipc_root`). While the life sleeps the runtime holds them;
+the first connection lifts the life, which receives the same listeners through
+`OCTOPUS_INHERITED_LISTENERS` (a JSON map of socket path to inherited file
+descriptor) and accepts the waiting connection. A socket intake (the
+app-server activation transport) offers sleep after two quiet minutes with no
+open connection and no hand-in in flight; a caller whose connection closes
+before the WebSocket upgrade simply connects again.
 
 That is sleep, not coma: no failure is recorded and no backoff applies. When
 the runtime records a movement for that folder at or past `through_seq`, it
