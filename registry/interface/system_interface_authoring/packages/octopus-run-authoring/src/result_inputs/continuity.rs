@@ -17,6 +17,7 @@ fn instruction_ids(
     ids.extend(result_static_bindings(config, Some(context), call));
     ids.extend(current_mandatory_role_artifacts(record, config)?);
     ids.extend(config.payload_artifact_bindings.iter().map(|reference| reference.id.clone()));
+    ids.extend(input_artifacts::owner_sources(record, &config.provider_interface)?.into_iter().map(|source| source.id));
     ids.remove(&call.id);
     Ok(ids)
 }
@@ -392,19 +393,19 @@ mod tests {
     #[test]
     fn waiting_call_is_its_own_evidence_and_never_context_that_left_the_run() {
         let binding = |id: &str| json!(AuthoredInterfaceBinding::all(InterfaceId::new(id)));
-        let template = |name: &str, role: &str, source: &str, target: &str| json!({
+        let checkpoint = |name: &str, role: &str, source: &str, target: &str| json!({
             "name":name,"role":role,"interface_binding":binding(source),"outbound_interface_bindings":[binding(target)],
             "include_context":role == "stable","required_verified_artifacts":[],
         });
         let call = address("tool.call", b"exec");
-        let mut wait = template("wait", "result_input", "room", "provider");
+        let mut wait = checkpoint("wait", "result_input", "room", "provider");
         wait["include_context"] = json!(true);
         wait["required_verified_artifacts"] = json!([{"mark":"tool.result.corresponds","artifact_label":"exec.result",
             "verifier":"tool_result_correspondence","params":{"call_artifact":call,"tool":"exec","correlation_id":"c1","params":{}}}]);
         let config: RunAuthoringConfig = serde_json::from_value(json!({"run":"run","worker":"worker","provider_interface":"provider",
-            "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result","checkpoints":[template("input","stable","client","provider"),
-                template("writer_call","authoring_call","writer","writer_room"),
-                template("writer_result","authoring_result","writer_room","provider"), wait]})).unwrap();
+            "authoring_source_interface":"writer","file_write_tool":"write","file_write_label":"tool.call","file_write_result_label":"write.result","checkpoints":[checkpoint("input","stable","client","provider"),
+                checkpoint("writer_call","authoring_call","writer","writer_room"),
+                checkpoint("writer_result","authoring_result","writer_room","provider"), wait]})).unwrap();
         let earlier = address("operator.message", b"start");
         let steer = address("turn.control.acknowledged", b"steer");
         let roles = [json!({"id":"role"})];
@@ -430,5 +431,20 @@ mod tests {
         let row = lost.checkpoint(&CheckpointId::new("wait")).unwrap();
         let error = result_rebase(&lost, &config, template, row).unwrap_err();
         assert!(error.contains(&format!("context '{}' left the run", earlier.id.as_str())), "{error}");
+
+        let message = address("provider.peer.message", b"owner");
+        let snapshot = address("turn.error", b"snapshot");
+        let mut owned = serde_json::to_value(rows(&[&message, &snapshot], &[&message, &earlier, &call])).unwrap();
+        let mut owner = checkpoint("owner", "owner_input", "owner", "provider");
+        owner["include_context"] = json!(true);
+        owner["owner_authoring"] = json!({"owner":"owner","source":"owner","door":"door","tool":"write",
+            "call_label":"tool.call","result_label":"write.result"});
+        owned["interface_state"]["provider"][RUN_AUTHORING_BINDING] = json!({"schema_version":1,"run":"run","worker":"worker",
+            "provider_interface":"provider","authoring_source_interface":"writer","checkpoints":[owner]});
+        owned["interface_state"]["owner"] = json!({"input_artifact_bindings":[{"artifact":message,"source_movement_seq":5}]});
+        let owned = RunRecord::from_bytes(&serde_json::to_vec(&owned).unwrap()).unwrap();
+        let row = owned.checkpoint(&CheckpointId::new("wait")).unwrap();
+        assert_eq!(result_rebase(&owned, &config, template, row).unwrap(), vec![snapshot],
+            "an owner input's source stays static across a session snapshot and is not compared as context");
     }
 }

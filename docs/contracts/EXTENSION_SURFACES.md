@@ -470,8 +470,9 @@ publication, an owner write — the consuming write records the context added
 since the receiving checkpoint, in record order, as its rebase. Every checked
 validator recomputes that rebase from the record before the write, and every
 reader rebuilds the result's session context as its admitted context, then the
-rebase, then the result. Instructions and role artifacts are not part of it; the
-native turn refreshes them. Context that left the run while the call waited, or
+rebase, then the result. Instructions, role artifacts and the sources an owner
+input selected are not part of it: they stay static across a session snapshot,
+and the native turn refreshes them. Context that left the run while the call waited, or
 a change without checked writer evidence, fails closed. A result is never
 delivered twice. A session snapshot the provider published while the call waited,
 such as the closure of a sibling call's late result, replaces the context it
