@@ -91,7 +91,11 @@ lives in the verifier, not in the kernel.
 A verifier does not wake the runtime, does not create checkpoints, does not
 edit run records, does not write marks, and is not an agent. It must not pass
 silently on any malformed leg: a missing blob, an unreadable payload, a hash
-mismatch, a missing engine, a timeout - all `failed`, with details.
+mismatch, a missing engine, a declared time limit that ran out - all `failed`,
+with details. A verifier process runs until its verdict, its death or
+cancellation; only a package that reaches outside the system declares
+`timeout_ms`, and `params` may only narrow it. A slow machine is not a failed
+check.
 
 ## 4. Verifiers are removable packages
 
@@ -137,8 +141,8 @@ The script reads one request JSON on stdin and prints one verdict on stdout:
 The runtime's verifier host is a blind script runner. It knows no verifier's
 identity and no language.
 
-Non-JSON output, a non-zero exit, a missing `passed`, or a timeout all count
-as failed.
+Non-JSON output, a non-zero exit, a missing `passed`, or a declared time limit
+that ran out all count as failed.
 
 ## 5. Marks are vocabulary plus a grant axis
 

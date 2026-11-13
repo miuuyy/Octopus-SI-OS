@@ -13,7 +13,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const DEFAULT_VERIFIER_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -24,9 +23,8 @@ pub struct VerifierDescriptor {
     pub authority: ProcessAuthoritySpec,
     #[serde(default)]
     pub default_params: serde_json::Value,
-    /// VERIFIERS.md §3 — the package declares how long its own check may run, so a
-    /// twenty-line shell check and an out-of-system judge live under the same
-    /// contract; `params.timeout_ms` may only narrow this ceiling.
+    /// VERIFIERS.md §3 — a package that reaches outside the system declares how
+    /// long its check may run; `params.timeout_ms` may only narrow it.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
@@ -559,13 +557,13 @@ fn script_verdict(stdout: &str, stderr: &str) -> Result<VerificationVerdict, ser
     }
 }
 
-fn process_timeout_from(descriptor: &VerifierDescriptor, params: &serde_json::Value) -> Duration {
-    let declared = descriptor.timeout_ms.unwrap_or(DEFAULT_VERIFIER_TIMEOUT_MS);
-    let requested = params
-        .get("timeout_ms")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(declared);
-    Duration::from_millis(requested.min(declared).max(1))
+fn process_timeout_from(descriptor: &VerifierDescriptor, params: &serde_json::Value) -> Option<Duration> {
+    let requested = params.get("timeout_ms").and_then(serde_json::Value::as_u64);
+    let limit = match (descriptor.timeout_ms, requested) {
+        (Some(declared), Some(requested)) => requested.min(declared),
+        (declared, requested) => declared.or(requested)?,
+    };
+    Some(Duration::from_millis(limit.max(1)))
 }
 
 const PINNED_PACKAGES_DIRECTORY: &str = "pinned";
@@ -761,7 +759,7 @@ fn run_process_with_timeout(
     prepared: PreparedProcess,
     environment: &BTreeMap<String, OsString>,
     cwd: &Path,
-    timeout: Duration,
+    timeout: Option<Duration>,
     stdin_bytes: Option<&[u8]>,
 ) -> Result<(bool, String, String), serde_json::Value> {
     let executable = prepared.executable.display().to_string();
@@ -824,7 +822,7 @@ fn run_process_with_timeout(
             }
             return Ok((status.success(), stdout, stderr));
         }
-        if started.elapsed() >= timeout {
+        if let Some(timeout) = timeout.filter(|timeout| started.elapsed() >= *timeout) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(serde_json::json!({
@@ -1112,6 +1110,16 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn only_a_declared_limit_bounds_a_verifier_process() {
+        let mut descriptor = package_ctx("timing").descriptor;
+        assert_eq!(process_timeout_from(&descriptor, &serde_json::Value::Null), None);
+        assert_eq!(process_timeout_from(&descriptor, &serde_json::json!({"timeout_ms": 700})), Some(Duration::from_millis(700)));
+        descriptor.timeout_ms = Some(60_000);
+        assert_eq!(process_timeout_from(&descriptor, &serde_json::Value::Null), Some(Duration::from_secs(60)));
+        assert_eq!(process_timeout_from(&descriptor, &serde_json::json!({"timeout_ms": 90_000})), Some(Duration::from_secs(60)));
+    }
+
     #[test]
     fn verifier_stdin_failure_retains_child_exit_evidence() {
         let package = tempfile::tempdir().unwrap();
