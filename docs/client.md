@@ -127,8 +127,10 @@ turning its contents into JSON. The kernel does not decode audio.
 Project settings include **Source folders**. Add several folders, remove a folder,
 or use **Make primary** to choose the working directory. Tasks created afterward
 use that Primary folder and can work in the other selected folders within their
-configured access. **Full access** keeps those folders as working context and
-uses its separately selected filesystem permissions.
+configured access. **Full access**, the default, keeps those folders as working
+context and gives the task the whole machine: its commands run without the
+operating-system sandbox, so browsers, Electron apps and `ps` work.
+**Project access** limits the task to its folders inside that sandbox.
 
 Filesystem tools require a working folder from the selected project, Agent or
 host configuration. When none is configured, the composer explains the missing

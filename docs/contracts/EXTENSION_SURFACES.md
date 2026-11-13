@@ -99,7 +99,9 @@ Project source folders are ordered client configuration in the EE's
 composition binds that folder and the remaining explicit roots to the selected
 workspace door, and carries their names in the operator input's client context.
 Full access keeps the same working context while its separate host-root grant
-controls filesystem reach. Editing project folders affects future tasks;
+controls filesystem reach. Full access is the default for a new task unless
+the EE's `config.octopus_os.task_access_default` is `project_access`; a room
+holding the host root runs its commands without a platform sandbox. Editing project folders affects future tasks;
 existing private doors retain their accepted roots. Folder edits and presentation
 are one guarded client transaction whose receipt proves the exact EE writes
 and Home-sidecar publication.

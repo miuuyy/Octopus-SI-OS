@@ -111,7 +111,8 @@ They use the same user-facing operations as interactive chat.
 ```
 
 `exec --access project_access|full_access` chooses the new task's access; the
-default comes from the Project. `agent create --application <id>` (repeatable)
+default comes from the Project and is full access unless the Project sets
+project access. `agent create --application <id>` (repeatable)
 connects Applications to a new Agent. `project delete <id> --yes` and
 `agent delete <id> --yes` remove a Project or an Agent through the same
 operations as the desktop client.

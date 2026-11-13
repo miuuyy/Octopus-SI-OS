@@ -101,7 +101,8 @@ process.
 
 Physical isolation uses the default enforced sandbox mode. An explicit
 `sandbox_mode: "disabled"` opts out of the OS sandbox; policy checks alone do
-not provide that isolation. See [Security model](../security-model.md).
+not provide that isolation. A process granted the whole host (read, write and
+execute of `/` with network) runs without the OS sandbox in either mode. See [Security model](../security-model.md).
 
 The tool binary is blind to the runtime, the ledger, policy, and marks.
 

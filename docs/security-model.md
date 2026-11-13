@@ -38,6 +38,11 @@ them. A file tool whose path arrives in its arguments is
 started with authority for that one path; a path outside the permitted roots is
 refused before anything runs. A descriptor can explicitly select
 `sandbox_mode: "disabled"`; that process then runs without this OS sandbox.
+A process whose grant is the whole host (read, write and execute of `/` and
+network) also runs without it: a full-access room keeps nothing a sandbox
+could protect, so its commands run like the user's own, as Codex's
+`danger-full-access` does. Browsers, Electron, `ps` and other Mach services
+work there. Project-access and read-only rooms keep the sandbox.
 Do not treat a policy grant as equivalent to physical process isolation.
 
 The two layers do not depend on each other. A room enforces the operation-level
