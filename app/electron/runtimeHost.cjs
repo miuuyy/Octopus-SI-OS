@@ -243,11 +243,9 @@ function readRuntimeControlStatus(home) {
     const finish = (error, status) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       socket.destroy();
       if (error) reject(error); else resolve(status);
     };
-    const timer = setTimeout(() => finish(new Error("runtime control status timed out")), 1_500);
     socket.once("connect", () => socket.write('{"request":"status"}\n'));
     socket.once("error", (error) => finish(error));
     socket.once("end", () => finish(new Error("runtime control status ended without a complete frame")));
