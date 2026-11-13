@@ -3531,6 +3531,59 @@ while IFS= read -r _; do :; done
         ));
         assert!(queued_output_rx.recv().await.is_none());
 
+        let lagging = continuity("world_provider_codex", "run-a", "thr-exact", 0, None);
+        let cut_turn_envelope = InterfaceInvocationEnvelope {
+            artifact: ArtifactRef {
+                id: octopus_descriptors::ArtifactId::new("turn-cut-after-dispatch"),
+                content: octopus_ledger::ContentHash::of_bytes(&queued_turn_bytes),
+            },
+            artifact_file: InterfaceArtifactFile::write(
+                temp.path().join("cut-turn"), OPERATOR_MESSAGE_LABEL, &queued_turn_bytes,
+            ).unwrap(),
+            artifact_binding_payloads: vec![role.clone(), bound(
+                "context-before-cut-turn",
+                serde_json::json!({"label": TOOL_CALL_LABEL, CODEX_CONTINUITY_FIELD: lagging}),
+            )],
+            metadata: Some(runtime_metadata.clone()),
+        };
+        let (cut_output, mut cut_output_rx) = ProviderOutputStream::channel();
+        driver
+            .receive_artifact_and_stream_outputs(CodexProviderInvocation {
+                callable_tool_names: cut_turn_envelope.granted_tool_names().unwrap().into_iter().collect(),
+                input: cut_turn_envelope,
+                emit: cut_output,
+                resolved_session_snapshot: None,
+                current_session_context: Arc::new(Vec::new()),
+                output_root: &temp.path().join("cut-turn-output"),
+                live_stream_root: &temp.path().join("cut-turn-streams"),
+                source_movement_seq: 3,
+                attempt: 2,
+                admitted_run_record: &pinned_run_record,
+                current_run_record: &pinned_run_record,
+                deferred_context_generations: 1,
+                input_changes_context: false,
+                interrupted_after_artifact: Some(PROVIDER_TRANSPORT_DISPATCH_LABEL.to_string()),
+                recovered_handoff_artifacts: Arc::new(Vec::new()),
+                durable_interrupted_continuity: None,
+                reconciled_result_continuity: None,
+                control: &CodexTurnControlBroker::new(Some(3)),
+                handoff_barrier: ProviderHandoffBarrier::new(),
+            })
+            .await
+            .unwrap();
+        let mut cut_error = None;
+        while let Some(emission) = cut_output_rx.recv().await {
+            if let ProviderStreamEmission::Turn(emission) = emission
+                && emission.artifact.read_manifest().unwrap().label == TURN_ERROR_LABEL
+            {
+                cut_error = Some(serde_json::from_slice::<serde_json::Value>(&emission.artifact.read_payload_bytes().unwrap()).unwrap());
+            }
+        }
+        let cut_error = cut_error.expect("a cut turn ends with its interrupted error");
+        assert_eq!(cut_error["additional_details"]["code"], "transport_turn_interrupted");
+        assert_eq!(cut_error.pointer("/codex_continuity/context_generation"), Some(&serde_json::json!(2)),
+            "the interrupted error follows the authored record and its standing generations, not the lagging session copy");
+
         let (interrupted_output, mut interrupted_output_rx) = ProviderOutputStream::channel();
         driver
             .receive_artifact_and_stream_outputs(CodexProviderInvocation {

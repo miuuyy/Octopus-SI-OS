@@ -911,8 +911,9 @@ A provider context transition retains the exact terminal proof for its retired
 native turn. A late request with those same thread and turn coordinates is
 recorded and explicitly rejected without dispatching an effect; it cannot be
 executed under the replacement context. Requests without that exact proof still
-fail closed. Terminal error and control receipts count ledger-admitted standing
-context generations as well as the last authored record. A protocol failure
+fail closed. Terminal error and control receipts, and the error that closes a
+turn a restart cut off, count ledger-admitted standing context generations as
+well as the last authored record. A protocol failure
 closes its private transport before returning control, so an abandoned model
 turn cannot keep issuing requests after its task has failed. A source that fails closed for any
 other reason retires its native turn the same way before its `turn.error` is

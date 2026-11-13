@@ -566,6 +566,9 @@ impl CodexAppServerInterfaceDriver {
             };
             if !interrupted_result_recovery && !pending_result_recovery {
                 control.finish();
+                let mut authored = recovered.clone();
+                authored.context_generation = context_generation;
+                sink.set_continuity(authored);
                 return sink.send(interrupted_transport_output(
                     last_artifact_label,
                     recovered.pending.as_ref(),
