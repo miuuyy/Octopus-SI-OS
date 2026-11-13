@@ -284,12 +284,14 @@ async fn admitted_publication_seed(
     config: &InputIntakeConfig,
     legacy: bool,
 ) {
+    use futures::{SinkExt, StreamExt};
     use octopus_app_server::{SharedBlobHandle, SpineRootConfig, admit_interface_artifact_arrival, build_embedded_spine};
     use octopus_interface_transport::{InterfaceHostIoLimits, InterfaceLiftContext};
-    use octopus_interfaces::{DeliveryVerdict, InterfaceArtifactFile, InterfaceInvocationEnvelope};
+    use octopus_interfaces::{DeliveryVerdict, InterfaceArtifactFile, InterfaceArtifactManifest, InterfaceInvocationEnvelope};
     use octopus_ledger::{LiveMovementLog, SharedBlobs};
     use octopus_ledger_store::{DurableBlobs, DurableLog};
-    use octopus_run_authoring::{CheckedRunWriter, ProviderHandoffSession};
+    use octopus_run_authoring::{CheckedRunWriter, ProviderEmission, ProviderEmissionRoute, ProviderHandoffSession};
+    use octopus_operator_chat_client::run_revision::{prepare_run_revision, verify_run_revision};
     use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact};
     use octopus_world_pyecho_life_runtime::LedgerTailReader;
     use std::{collections::BTreeMap, sync::{Arc, Mutex}};
@@ -342,7 +344,7 @@ async fn admitted_publication_seed(
         interface_artifact_root:root.join("artifacts"),run_records_root:request.roots.run_records_root.clone(),ee_instances_root:request.roots.ee_instances_root.clone()}).await.unwrap();
     let mut log = LiveMovementLog::new(DurableLog::open(root.join("ledger/movements.jsonl")).unwrap());
     let mut handle = SharedBlobHandle::new(blobs);
-    let (sender, _receiver) = tokio::sync::mpsc::channel(8);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
     let provider_root = request.roots.registry_root.join("interface").join(config.provider_interface.as_str());
     let descriptor = serde_json::from_slice(&std::fs::read(provider_root.join("interface.json")).unwrap()).unwrap();
     let mut ctx = InterfaceLiftContext::unprivileged(config.provider_interface.clone(),provider_root,Some(descriptor),root.join("provider"),
@@ -354,7 +356,8 @@ async fn admitted_publication_seed(
     octopus_app_server::InterfaceArtifactArrivalFromInterface::new(&runtime.runtime,&mut log,&mut handle,runtime.arrival_dedup.clone(),
         parent.trace.clone(),parent.checkpoints[0].inbound_interface().unwrap().clone())
         .emit_artifact_to_interface(&seed,&parent.id,&parent.checkpoints[0].id,parent.checkpoints[0].epoch,Lamport(0),&config.writer.owner).await.unwrap();
-    let (seed_seq, seed_input) = envelope(&ctx,&seed,&config.writer.owner);
+    let (mut seed_seq, mut seed_input) = envelope(&ctx,&seed,&config.writer.owner);
+    for attempt in 0..if legacy {2} else {1} {
     let current = std::fs::read(&plan.run_write.path).unwrap();
     let edit = prepare_input(config,plan.run_write.path.clone(),&current,seed_seq,&seed_input.artifact,seed_seq,1<<26).unwrap();
     let call = edit.materialize(&root.join("write"),config).unwrap();
@@ -371,18 +374,75 @@ async fn admitted_publication_seed(
     let static_ids = template["static_artifact_bindings"].as_array().cloned().unwrap_or_default();
     let snapshot = plan.publication_evidence[0].snapshot.as_ref().unwrap();
     for reference in [&request.publications[0].source,snapshot] {
-        assert_eq!(static_ids.contains(&json!(reference.id)), !legacy);
+        assert_eq!(static_ids.contains(&json!(reference.id)), !legacy || attempt == 1);
         assert!(input.metadata().unwrap().artifact_binding_refs.contains(reference));
         assert!(input.metadata().unwrap().grant.may_read_artifact(reference.id.as_str()));
     }
     assert!(!static_ids.contains(&json!(seed_input.artifact.id)));
     let sources = octopus_run_authoring::input_artifacts::selections(&admitted,&config.writer.owner).unwrap();
-    assert_eq!(sources.len(),1); assert_eq!(sources.last().unwrap().artifact,seed_input.artifact); assert_eq!(sources.last().unwrap().source_movement_seq,seed_seq);
+    assert_eq!(sources.len(),attempt+1); assert_eq!(sources.last().unwrap().artifact,seed_input.artifact); assert_eq!(sources.last().unwrap().source_movement_seq,seed_seq);
     let session = ProviderHandoffSession::new(&ctx).unwrap();
     let handoff = session.from_invocation(&ctx,ctx.descriptor_snapshot.as_ref().unwrap(),&admitted.id,&input,seq,&pinned).unwrap();
     assert_eq!(handoff.recover_source().await.unwrap(),octopus_run_authoring::ProviderSourceRecovery::Process);
+    if legacy && attempt == 0 {
+        drop(handoff);
+        let failure = "provider turn ended before any output";
+        ctx.root_slots.insert("app_server_control_root".into(),root.join("control"));
+        let path = octopus_app_server_interface::interface_control_socket_path_from_root(&root.join("control"),&plan.authoring.source_interface_id.clone().into());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let socket = tokio::net::UnixListener::bind(path).unwrap();
+        let descriptor = ctx.descriptor_snapshot.as_ref().unwrap();
+        let failed = session.failed_source_handoff(&ctx,descriptor,&admitted.id,&input,seq).unwrap();
+        let descriptor_value = serde_json::to_value(descriptor).unwrap();
+        let profile = serde_json::from_value(descriptor_value.pointer("/interface_driver_config/private_config/run_authoring_profile").unwrap().clone()).unwrap();
+        let writer = octopus_run_authoring::declared_provider_run_writer(&admitted,&config.provider_interface,
+            &profile).unwrap();
+        let error = InterfaceArtifactFile::write(ctx.var_dir.join("emitted"),"turn.error",
+            &serde_json::to_vec(&json!({"label":"turn.error","message":failure,"will_retry":false,"additional_details":{"source_movement_seq":seq}})).unwrap()).unwrap();
+        let (_, ()) = tokio::time::timeout(std::time::Duration::from_secs(20), async {tokio::join!(
+            async {failed.hand_failed_source(ProviderEmission {artifact:error,route:ProviderEmissionRoute::ClientProjection}).await.unwrap()},
+            async {
+                let mut ws = tokio_tungstenite::accept_async(socket.accept().await.unwrap().0).await.unwrap();
+                let bytes = ws.next().await.unwrap().unwrap().into_data();
+                let call = InterfaceArtifactFile::store_manifest_bounded(&root.join("transport"),&bytes,1<<20,1<<26).unwrap();
+                let verdict = write(&runtime,&mut log,&mut handle,&ctx,&call,&writer).await;
+                ws.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&verdict).unwrap().into())).await.unwrap();
+                let arrival = receiver.recv().await.unwrap();
+                if let Some(retained) = arrival.retained {
+                    let delivery = octopus_app_server::admit_retained_interface_artifact_arrival(&runtime,&mut log,&mut handle,&arrival.artifact,&config.provider_interface,&retained.id).await.unwrap();
+                    retained.reply.send(Ok(delivery)).unwrap();
+                } else {
+                    let outcome = admit_interface_artifact_arrival(&runtime,&mut log,&mut handle,&arrival.artifact.capture_bounded(1<<20,1<<26).unwrap(),&config.provider_interface).await.unwrap();
+                    arrival.verdict_tx.unwrap().send(DeliveryVerdict::Admitted {seq:outcome.admission.records[0].arrival_movement.seq.0}).unwrap();
+                }
+            }
+        )}).await.unwrap();
+        let before = std::fs::read_to_string(&plan.run_write.path).unwrap();
+        let before_record: Value = serde_json::from_str(&before).unwrap();
+        let client = before_record["interface_state"].as_object().unwrap().iter().find(|(_,state)|state["provider_runtime_interface"] == config.provider_interface.as_str()).unwrap().0;
+        let corrected: Value = serde_json::from_str(&plan.run_write.content).unwrap();
+        let desired = corrected["interface_state"][config.provider_interface.as_str()]["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter().filter(|row|row["role"] == "owner_input").cloned().collect::<Vec<_>>();
+        let scope = json!({"registry_root":request.roots.registry_root,"run_path":plan.run_write.path,"ledger_root":root.join("ledger"),"artifact_root":root.join("client"),"interface_hand_in_root":root.join("hand-in"),"provider":config.provider_interface,"source":client,"key":"old-child-static"});
+        let mut revision = scope.clone(); revision["operation"] = json!({"kind":"owner_inputs","desired_inputs":desired}); revision["expected_before_content"] = json!(before);
+        assert_eq!(prepare_run_revision(serde_json::from_value(revision.clone()).unwrap()).unwrap()["status"],"prepared");
+        assert_eq!(prepare_run_revision(serde_json::from_value(revision).unwrap()).unwrap()["status"],"prepared");
+        let ready = verify_run_revision(serde_json::from_value(scope.clone()).unwrap()).unwrap(); assert_eq!(ready["status"],"ready");
+        let manifest: InterfaceArtifactManifest = serde_json::from_value(ready["manifest"].clone()).unwrap();
+        let call = InterfaceArtifactFile::store_manifest_bounded(&root.join("revision"),&serde_json::to_vec(&manifest).unwrap(),1<<20,1<<26).unwrap();
+        write(&runtime,&mut log,&mut handle,&ctx,&call,&writer).await;
+        assert_eq!(verify_run_revision(serde_json::from_value(scope).unwrap()).unwrap()["status"],"installed");
+        let after = RunRecord::from_bytes(&std::fs::read(&plan.run_write.path).unwrap()).unwrap();
+        let prior = RunRecord::from_bytes(before.as_bytes()).unwrap();
+        assert_eq!(prior.interface_state[&config.provider_interface]["pending_handoff"],after.interface_state[&config.provider_interface]["pending_handoff"]);
+        assert_eq!(ctx.pinned_run_record_bytes(&input).unwrap(),pinned);
+        let next = file(&plan.seed.label,json!({"text":"Continue in this same run with the selected publication"}));
+        octopus_app_server::InterfaceArtifactArrivalFromInterface::new(&runtime.runtime,&mut log,&mut handle,runtime.arrival_dedup.clone(),parent.trace.clone(),parent.checkpoints[0].inbound_interface().unwrap().clone())
+            .emit_artifact_to_interface(&next,&parent.id,&parent.checkpoints[0].id,parent.checkpoints[0].epoch,Lamport(0),&config.writer.owner).await.unwrap();
+        (seed_seq,seed_input) = envelope(&ctx,&next,&config.writer.owner);
+    }
     assert!(input.artifact_binding_payloads.iter().find(|bound| bound.artifact == *snapshot).unwrap().read_bytes().unwrap()
         .windows(b"Read the exact source".len()).any(|window| window == b"Read the exact source"));
+    }
 }
 
 #[test]
