@@ -218,6 +218,8 @@ impl EvidenceTail {
 #[path = "../tests/support/input_tail.rs"]
 mod tests;
 
+const IDLE_BEFORE_SLEEP: std::time::Duration = std::time::Duration::from_secs(120);
+
 async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
     let descriptor = ctx.resolved_interface_descriptor()?;
     if descriptor.interface_type != octopus_interfaces::InterfaceType::System
@@ -258,11 +260,13 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
     let mut delivery_artifact: Option<PreparedIntakeArtifact> = None;
     let mut writer_artifact: Option<PreparedIntakeArtifact> = None;
     ctx.signal_ready().await?;
+    let mut last_work = tokio::time::Instant::now();
     loop {
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
         if let Some(pending) = &state.pending {
+            last_work = tokio::time::Instant::now();
             evidence.catch_up(
                 &ctx,
                 state.completed_through,
@@ -273,9 +277,17 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
         if state.pending.is_none() {
             let batch = reader.read_new_uncommitted_limit(1)?;
             if batch.is_empty() {
-                reader.wait_for_change(&ctx.cancel).await?;
+                tokio::select! {
+                    biased;
+                    changed = reader.wait_for_change(&ctx.cancel) => changed?,
+                    _ = tokio::time::sleep_until(last_work + IDLE_BEFORE_SLEEP) => {
+                        ctx.fall_asleep(reader.next_seq())?;
+                        return Ok(());
+                    }
+                }
                 continue;
             }
+            last_work = tokio::time::Instant::now();
             for own in batch {
                 if state
                     .completed_through

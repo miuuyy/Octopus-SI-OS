@@ -134,7 +134,11 @@ lifts the life again, and the life catches up from its cursor. A frame after
 listens to the world (a clock, a mailbox, a chat) never prints it. The system
 room's door sleeps after two idle minutes with no call in flight, and its tool
 processes end with it; doors whose tool processes hold a live session (a
-browser, a desktop, a shell) keep living.
+browser, a desktop, a shell) keep living. A model provider sleeps the same way
+once it holds no transport, no turn and no deferred input: a run that waits for
+a result holds no process, and the result, a control or the next input lifts the
+provider, which restores the run's turn from its files. Its input intake sleeps
+when no input is pending.
 
 **Hand-in.** The process prints one JSON line per artifact:
 

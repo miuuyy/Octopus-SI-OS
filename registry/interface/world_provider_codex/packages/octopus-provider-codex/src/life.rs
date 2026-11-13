@@ -54,6 +54,7 @@ use octopus_run_authoring::{
 };
 
 const TURN_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+const IDLE_BEFORE_SLEEP: std::time::Duration = std::time::Duration::from_secs(120);
 const PROVIDER_CONTROL_READ_BATCH_LIMIT: usize = 128;
 const MACHINE_CODEX_AUTH_FILE_ENV: &str = "OCTOPUS_MACHINE_CODEX_AUTH_FILE";
 

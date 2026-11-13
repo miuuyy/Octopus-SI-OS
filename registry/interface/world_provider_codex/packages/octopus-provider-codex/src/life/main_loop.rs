@@ -90,6 +90,7 @@ pub(crate) async fn codex_life(
         }
     }
 
+    let mut last_work = tokio::time::Instant::now();
     loop {
         if ctx.cancel.is_cancelled() {
             finish_active_controls(&active_controls).await;
@@ -123,6 +124,7 @@ pub(crate) async fn codex_life(
             }
         }
         if let Some((seq, turn)) = ready_deferred {
+            last_work = tokio::time::Instant::now();
             let DeferredProviderTurn { run, .. } = deferred_turns
                 .remove(&seq)
                 .ok_or_else(|| format!("deferred provider turn {seq} disappeared"))?;
@@ -238,6 +240,7 @@ pub(crate) async fn codex_life(
                     shutdown_driver(&ctx, &mut driver).await?;
                     return Err(error);
                 }
+                last_work = tokio::time::Instant::now();
                 continue;
             }
             if let Some(deadline) = driver_idle_deadline {
@@ -264,6 +267,15 @@ pub(crate) async fn codex_life(
                                 .map(|idle| tokio::time::Instant::now() + idle);
                         }
                     }
+                    _ = tokio::time::sleep_until(last_work + IDLE_BEFORE_SLEEP), if !keep_ready_connected => {
+                        if provider_may_sleep(&ctx, &deferred_turns, &active_controls, &mut driver).await? {
+                            control_task.abort();
+                            let _ = control_task.await;
+                            ctx.fall_asleep(reader.next_seq())?;
+                            return Ok(());
+                        }
+                        last_work = tokio::time::Instant::now();
+                    }
                     result = reader.wait_for_change(&ctx.cancel) => result?,
                 }
             } else {
@@ -282,11 +294,21 @@ pub(crate) async fn codex_life(
                         return Ok(());
                     }
                     _ = late_call_arrival(&mut late_arrivals) => {}
+                    _ = tokio::time::sleep_until(last_work + IDLE_BEFORE_SLEEP), if !keep_ready_connected => {
+                        if provider_may_sleep(&ctx, &deferred_turns, &active_controls, &mut driver).await? {
+                            control_task.abort();
+                            let _ = control_task.await;
+                            ctx.fall_asleep(reader.next_seq())?;
+                            return Ok(());
+                        }
+                        last_work = tokio::time::Instant::now();
+                    }
                     result = reader.wait_for_change(&ctx.cancel) => result?,
                 }
             }
             continue;
         }
+        last_work = tokio::time::Instant::now();
         for own in batch {
             let envelope = match reader.envelope(&own) {
                 Ok(envelope) => envelope,
@@ -764,6 +786,17 @@ pub(crate) async fn active_controls_are_quiescent(active_controls: &ActiveTurnCo
     let mut active = active_controls.lock().await;
     active.retain(|_, broker| !broker.is_finished());
     active.is_empty()
+}
+
+pub(crate) async fn provider_may_sleep(
+    ctx: &InterfaceLiftContext,
+    deferred_turns: &BTreeMap<u64, DeferredProviderTurn>,
+    active_controls: &ActiveTurnControls,
+    driver: &mut Option<Arc<CodexAppServerInterfaceDriver>>,
+) -> Result<bool, String> {
+    Ok(deferred_turns.is_empty()
+        && active_controls_are_quiescent(active_controls).await
+        && release_driver_if_quiescent(ctx, active_controls, driver).await?)
 }
 
 pub(crate) async fn release_driver_if_quiescent(
