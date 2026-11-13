@@ -94,7 +94,7 @@
     },
     "verifier_protocol": {
       "package": "registry/verifier/<id>/verifier.json declares id=package=<id>, script as a plain filename, authority, default_params and optional timeout_ms. Its script and regular support files live in that exact package and are pinned together. No interpreter is inferred from a filename or body. A text entrypoint must start with #!/absolute/interpreter; an explicit /usr/bin/env selector additionally requires its selected command in authority.executable_commands. Native executable formats are also valid.",
-      "permissions": "Ordinary file.write can author a new 0644 text verifier. The runner makes its isolated pinned entrypoint executable; source chmod is unnecessary. #!/usr/bin/env python3 works with executable_commands:[/usr/bin/env,python3] when those commands are installed. #!/usr/bin/python3 explicitly selects that absolute interpreter. Use the corresponding explicit interpreter/command declarations for any other language; none is selected by the runner.",
+      "permissions": "Ordinary file.write can author a new 0644 text verifier. The runner makes its isolated pinned entrypoint executable; source chmod is unnecessary. #!/usr/bin/env python3 works with executable_commands:[/usr/bin/env,python3] when those commands are installed. #!/usr/bin/python3 explicitly selects that absolute interpreter; on a Mac without another Python it is the Command Line Tools Python 3.9, which rejects backslashes inside f-string expressions and match statements. Use the corresponding explicit interpreter/command declarations for any other language; none is selected by the runner.",
       "stdin": {
         "run": "run id",
         "checkpoint": "checkpoint id",
