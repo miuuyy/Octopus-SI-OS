@@ -22,12 +22,7 @@ const CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
 const HAND_IN_ROOT_DIR_NAME: &str = "interface-hand-in";
 const REPO_ROOT_SLOT: &str = "repo_root";
 const APP_SERVER_CONTROL_ROOT_SLOT: &str = "app_server_control_root";
-const DEFAULT_VERDICT_TIMEOUT_MS: u64 = 120_000;
 const IDLE_BEFORE_SLEEP: Duration = Duration::from_secs(120);
-
-fn default_verdict_timeout_ms() -> u64 {
-    DEFAULT_VERDICT_TIMEOUT_MS
-}
 
 pub fn conventional_control_socket_path(octopus_home: &std::path::Path) -> PathBuf {
     octopus_home
@@ -186,8 +181,6 @@ pub fn activation_start(start: ActivationStart) -> ActivationStartFuture {
             bind_interface_socket_when_env_unset: bool,
             #[serde(default)]
             open_client_bundle: Option<String>,
-            #[serde(default = "default_verdict_timeout_ms")]
-            verdict_timeout_ms: u64,
         }
 
         let config: Config = serde_json::from_value(start.config.clone()).map_err(|e| {
@@ -196,13 +189,6 @@ pub fn activation_start(start: ActivationStart) -> ActivationStartFuture {
                 start.interface_id
             )
         })?;
-        if config.verdict_timeout_ms == 0 {
-            return Err(format!(
-                "interface {} app_server_transport verdict_timeout_ms must be positive",
-                start.interface_id
-            ));
-        }
-        let verdict_timeout = Duration::from_millis(config.verdict_timeout_ms);
         let listen: std::path::PathBuf = match std::env::var_os(&config.listen_env) {
             Some(listen) => std::path::PathBuf::from(listen),
             None if config.bind_conventional_socket_when_env_unset => start
@@ -261,7 +247,6 @@ pub fn activation_start(start: ActivationStart) -> ActivationStartFuture {
             start.interface_id.clone(),
             start.artifact_root,
             start.host_io_limits,
-            verdict_timeout,
             start.cancel.clone(),
             sleep,
         )
@@ -336,7 +321,6 @@ async fn handle_wire_frame_with_inflight(
     artifact_root: &std::path::Path,
     host_io_limits: InterfaceHostIoLimits,
     in_flight: Arc<InFlightHandIns>,
-    verdict_timeout: Duration,
     cancel: CancellationToken,
 ) -> Result<String, ()> {
     let artifact = match octopus_interfaces::InterfaceArtifactFile::store_manifest_bounded(
@@ -384,7 +368,6 @@ async fn handle_wire_frame_with_inflight(
                 &tx,
                 &interface_id,
                 artifact,
-                verdict_timeout,
                 cancel,
             ))
             .catch_unwind()
@@ -413,7 +396,6 @@ async fn hand_in_captured_artifact(
     tx: &tokio::sync::mpsc::Sender<InterfaceActivationArrival>,
     interface_id: &InterfaceId,
     artifact: octopus_interfaces::InterfaceArtifactFile,
-    verdict_timeout: Duration,
     cancel: CancellationToken,
 ) -> Result<String, ()> {
     let hand_in = async move {
@@ -429,10 +411,7 @@ async fn hand_in_captured_artifact(
     };
     tokio::select! {
         _ = cancel.cancelled() => Err(()),
-        result = tokio::time::timeout(verdict_timeout, hand_in) => match result {
-            Ok(result) => result,
-            Err(_) => Err(()),
-        },
+        result = hand_in => result,
     }
 }
 
@@ -452,7 +431,6 @@ mod socket {
         interface_id: InterfaceId,
         artifact_root: PathBuf,
         host_io_limits: InterfaceHostIoLimits,
-        verdict_timeout: Duration,
         cancel: CancellationToken,
     ) -> Result<
         (tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>),
@@ -464,7 +442,6 @@ mod socket {
             interface_id,
             artifact_root,
             host_io_limits,
-            verdict_timeout,
             cancel,
             ActivationSleep::default(),
         )
@@ -477,7 +454,6 @@ mod socket {
         interface_id: InterfaceId,
         artifact_root: PathBuf,
         host_io_limits: InterfaceHostIoLimits,
-        verdict_timeout: Duration,
         cancel: CancellationToken,
         sleep: ActivationSleep,
     ) -> Result<
@@ -551,7 +527,6 @@ mod socket {
                     host_io_limits,
                     maximum_frame_bytes,
                     in_flight.clone(),
-                    verdict_timeout,
                     accept_cancel.clone(),
                 );
                 let open = open.clone();
@@ -587,7 +562,6 @@ mod socket {
         host_io_limits: InterfaceHostIoLimits,
         maximum_frame_bytes: usize,
         in_flight: Arc<InFlightHandIns>,
-        verdict_timeout: Duration,
         cancel: CancellationToken,
     ) {
         let websocket_config = WebSocketConfig::default()
@@ -636,7 +610,6 @@ mod socket {
                 &artifact_root,
                 host_io_limits,
                 in_flight.clone(),
-                verdict_timeout,
                 cancel.clone(),
             )
             .await
@@ -746,11 +719,10 @@ async fn spawn_sleeping_transport_arrivals(
     interface_id: InterfaceId,
     artifact_root: PathBuf,
     host_io_limits: InterfaceHostIoLimits,
-    verdict_timeout: Duration,
     cancel: CancellationToken,
     _sleep: ActivationSleep,
 ) -> Result<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>> {
-    spawn_transport_arrivals(socket_path, tx, interface_id, artifact_root, host_io_limits, verdict_timeout, cancel).await
+    spawn_transport_arrivals(socket_path, tx, interface_id, artifact_root, host_io_limits, cancel).await
 }
 
 #[cfg(not(unix))]
@@ -760,7 +732,6 @@ pub async fn spawn_transport_arrivals(
     _interface_id: InterfaceId,
     _artifact_root: PathBuf,
     _host_io_limits: InterfaceHostIoLimits,
-    _verdict_timeout: Duration,
     _cancel: CancellationToken,
 ) -> Result<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>>
 {
@@ -778,10 +749,6 @@ mod tests {
             max_manifest_bytes: 1024,
             max_payload_bytes: 1024,
         }
-    }
-
-    fn test_verdict_timeout() -> Duration {
-        Duration::from_secs(1)
     }
 
     fn start_for(
@@ -945,7 +912,6 @@ mod tests {
             root.path(),
             test_limits(),
             in_flight,
-            test_verdict_timeout(),
             CancellationToken::new(),
         );
         let receiver = async {
@@ -985,7 +951,6 @@ mod tests {
             root.path(),
             test_limits(),
             in_flight.clone(),
-            test_verdict_timeout(),
             CancellationToken::new(),
         );
         let second = handle_wire_frame_with_inflight(
@@ -995,7 +960,6 @@ mod tests {
             root.path(),
             test_limits(),
             in_flight,
-            test_verdict_timeout(),
             CancellationToken::new(),
         );
         let receiver = async {
@@ -1049,7 +1013,6 @@ mod tests {
                     &artifact_root,
                     test_limits(),
                     in_flight,
-                    Duration::from_secs(60),
                     cancel,
                 )
                 .await
@@ -1113,7 +1076,6 @@ mod tests {
                     &artifact_root,
                     test_limits(),
                     in_flight,
-                    test_verdict_timeout(),
                     CancellationToken::new(),
                 )
                 .await
@@ -1139,7 +1101,6 @@ mod tests {
                     &artifact_root,
                     test_limits(),
                     in_flight,
-                    test_verdict_timeout(),
                     CancellationToken::new(),
                 )
                 .await
@@ -1207,7 +1168,6 @@ mod tests {
                     &artifact_root,
                     test_limits(),
                     in_flight,
-                    test_verdict_timeout(),
                     CancellationToken::new(),
                 )
                 .await
@@ -1229,7 +1189,6 @@ mod tests {
                     &artifact_root,
                     test_limits(),
                     in_flight,
-                    test_verdict_timeout(),
                     CancellationToken::new(),
                 )
                 .await

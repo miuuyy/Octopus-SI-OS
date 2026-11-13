@@ -6,7 +6,6 @@
       "activation_driver_ref": "app_server_transport",
       "config": {
         "bind_interface_socket_when_env_unset": true,
-        "verdict_timeout_ms": 120000,
         "listen_env": "OCTOPUS_CLIENT_MAINTENANCE_SOCK"
       }
     }
