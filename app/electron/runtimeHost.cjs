@@ -4,6 +4,8 @@ const net = require("node:net");
 const path = require("node:path");
 const { blockedStorageHealth, nativeStorageFailure, readHomeStorageHealth } = require("./storageHealth.cjs");
 
+const RUNTIME_CONTROL_STATUS_TIMEOUT_MS = 10_000;
+
 const RUNTIME_INSTANCE_FIELDS = [
   "launch_owner",
   "phase",
@@ -243,9 +245,14 @@ function readRuntimeControlStatus(home) {
     const finish = (error, status) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       socket.destroy();
       if (error) reject(error); else resolve(status);
     };
+    const timer = setTimeout(
+      () => finish(new Error(`runtime control status did not answer within ${RUNTIME_CONTROL_STATUS_TIMEOUT_MS}ms`)),
+      RUNTIME_CONTROL_STATUS_TIMEOUT_MS,
+    );
     socket.once("connect", () => socket.write('{"request":"status"}\n'));
     socket.once("error", (error) => finish(error));
     socket.once("end", () => finish(new Error("runtime control status ended without a complete frame")));
