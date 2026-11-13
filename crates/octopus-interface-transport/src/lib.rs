@@ -30,6 +30,29 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) const INTERFACE_LIFE_INSTALL_ROOT_SLOT: &str = "interface_life_install_root";
+
+pub type InterfaceMovementWakes = tokio::sync::mpsc::UnboundedSender<(InterfaceId, u64)>;
+pub type InterfaceMovementWakeReceiver = tokio::sync::mpsc::UnboundedReceiver<(InterfaceId, u64)>;
+
+pub fn interface_movement_wakes() -> (InterfaceMovementWakes, InterfaceMovementWakeReceiver) {
+    tokio::sync::mpsc::unbounded_channel()
+}
+
+pub fn movement_readers(movement: &octopus_ledger::Movement) -> Vec<InterfaceId> {
+    if movement.kind != octopus_ledger::MovementKind::InterfaceOutbound
+        || !matches!(movement.from, octopus_ledger::Endpoint::Interface(_))
+    {
+        return Vec::new();
+    }
+    let octopus_ledger::Endpoint::Interface(to) = &movement.to;
+    let mut readers = vec![to.clone()];
+    if let Some(runtime) = movement.runtime() {
+        if runtime.interface != *to {
+            readers.push(runtime.interface.clone());
+        }
+    }
+    readers
+}
 pub(crate) const INTERFACE_LOCAL_IPC_ROOT_SLOT: &str = "interface_local_ipc_root";
 
 #[derive(Clone, Debug)]
@@ -164,6 +187,8 @@ pub struct InterfaceActivationReconciler {
     waking_limit: usize,
     deferred_lifts: BTreeSet<InterfaceId>,
     deferred_wake_scheduled: bool,
+    movement_wakes: Option<InterfaceMovementWakeReceiver>,
+    latest_movements: BTreeMap<InterfaceId, u64>,
     live: bool,
 }
 
@@ -181,6 +206,7 @@ struct LiftedInterfaceLife {
     restart_attempt: u32,
     retry_not_before: Option<Instant>,
     waking: bool,
+    asleep_through: Option<u64>,
 }
 
 enum InterfaceLifeEvent {
@@ -199,6 +225,11 @@ enum InterfaceLifeEvent {
         outcome: Result<(), String>,
     },
     WakingSlotElapsed,
+    Asleep {
+        interface: InterfaceId,
+        lift_id: u64,
+        through_seq: u64,
+    },
 }
 
 const LIFE_RESTART_BASE_DELAY: Duration = Duration::from_millis(250);
@@ -288,6 +319,8 @@ impl InterfaceActivationReconciler {
             waking_limit: interface_life_waking_limit(),
             deferred_lifts: BTreeSet::new(),
             deferred_wake_scheduled: false,
+            movement_wakes: None,
+            latest_movements: BTreeMap::new(),
             live: false,
         }
     }
@@ -354,7 +387,10 @@ impl InterfaceActivationReconciler {
         Ok(Some(resolved))
     }
 
-    async fn reconcile_interface_lives(&mut self) -> Result<(), String> {
+    async fn reconcile_interface_lives(
+        &mut self,
+        scope: Option<&BTreeSet<InterfaceId>>,
+    ) -> Result<(), String> {
         if self.root_cancel.is_cancelled() {
             self.stop_all_lives().await;
             return Err("interface lifecycle reconciliation cancelled".to_string());
@@ -389,11 +425,20 @@ impl InterfaceActivationReconciler {
             ));
         }
         let mentioned = self.run_index.interfaces_requiring_life();
-        let activation_scan = scan_activation_lives(&self.registry_root, &mentioned);
+        let considered = match scope {
+            Some(scope) => mentioned.intersection(scope).cloned().collect::<BTreeSet<_>>(),
+            None => mentioned.clone(),
+        };
+        let activation_scan = scan_activation_lives(&self.registry_root, &considered);
         self.failures.send_modify(|failures| {
             failures.retain(|interface, _| mentioned.contains(interface));
         });
-        self.deferred_lifts.clear();
+        match scope {
+            Some(scope) => self.deferred_lifts.retain(|interface| {
+                !scope.contains(interface) && mentioned.contains(interface)
+            }),
+            None => self.deferred_lifts.clear(),
+        }
         let mut failures = Vec::new();
         let stale = self
             .lifted
@@ -407,7 +452,7 @@ impl InterfaceActivationReconciler {
             self.clear_failure(&interface);
         }
         let mut verification = std::mem::take(&mut self.imported_executables);
-        for interface in mentioned {
+        for interface in considered {
             tokio::task::yield_now().await;
             if self.root_cancel.is_cancelled() {
                 self.stop_all_lives().await;
@@ -507,11 +552,12 @@ impl InterfaceActivationReconciler {
                 existing.is_some_and(|lifted| lifted.fingerprint != fingerprint);
             let restart = existing
                 .map(|lifted| {
-                    fingerprint_changed
-                        || lifted.handle.is_finished()
-                            && lifted
-                                .retry_not_before
-                                .is_none_or(|not_before| Instant::now() >= not_before)
+                    lifted.asleep_through.is_none()
+                        && (fingerprint_changed
+                            || lifted.handle.is_finished()
+                                && lifted
+                                    .retry_not_before
+                                    .is_none_or(|not_before| Instant::now() >= not_before))
                 })
                 .unwrap_or(true);
             if !restart {
@@ -569,12 +615,24 @@ impl InterfaceActivationReconciler {
                 emissions: self.emissions_tx.clone(),
                 cancel: cancel.clone(),
                 readiness: readiness.clone(),
+                asleep: Default::default(),
             };
+            let life_sleep = ctx.asleep.clone();
             let lifted_interface = interface.clone();
             let life_exit_tx = self.life_exit_tx.clone();
             let life_cancel = cancel.clone();
             let handle = tokio::spawn(async move {
                 let result = life(ctx).await;
+                if result.is_ok() && !life_cancel.is_cancelled() {
+                    if let Some(through_seq) = life_sleep.through_seq() {
+                        let _ = life_exit_tx.send(InterfaceLifeEvent::Asleep {
+                            interface: lifted_interface,
+                            lift_id,
+                            through_seq,
+                        });
+                        return;
+                    }
+                }
                 let failure = match result {
                     Ok(()) => format!("interface life '{}' ended", lifted_interface.as_str()),
                     Err(error) => error,
@@ -624,6 +682,7 @@ impl InterfaceActivationReconciler {
                     restart_attempt,
                     retry_not_before: None,
                     waking: true,
+                    asleep_through: None,
                 },
             );
         }
@@ -831,6 +890,60 @@ impl InterfaceActivationReconciler {
                 self.lift_deferred().await;
                 None
             }
+            InterfaceLifeEvent::Asleep { interface, lift_id, through_seq } => {
+                let current = self
+                    .lifted
+                    .get_mut(&interface)
+                    .filter(|life| life.lift_id == lift_id && !life.cancel.is_cancelled())?;
+                let was_waking = std::mem::replace(&mut current.waking, false);
+                current.asleep_through = Some(through_seq);
+                current.restart_attempt = 0;
+                current.retry_not_before = None;
+                self.clear_failure(&interface);
+                tracing::debug!(interface = interface.as_str(), through_seq, "interface life fell asleep");
+                if self
+                    .latest_movements
+                    .get(&interface)
+                    .is_some_and(|seq| *seq >= through_seq)
+                {
+                    self.wake_life(&interface).await;
+                } else if was_waking {
+                    self.lift_deferred().await;
+                }
+                None
+            }
+        }
+    }
+
+    pub fn attach_movement_wakes(&mut self, wakes: InterfaceMovementWakeReceiver) {
+        self.movement_wakes = Some(wakes);
+    }
+
+    async fn movement_reached(&mut self, interface: InterfaceId, seq: u64) {
+        let latest = self.latest_movements.entry(interface.clone()).or_insert(seq);
+        *latest = (*latest).max(seq);
+        if self
+            .lifted
+            .get(&interface)
+            .and_then(|life| life.asleep_through)
+            .is_some_and(|through| seq >= through)
+        {
+            self.wake_life(&interface).await;
+        }
+    }
+
+    async fn wake_life(&mut self, interface: &InterfaceId) {
+        let Some(life) = self.lifted.get_mut(interface) else {
+            return;
+        };
+        life.asleep_through = None;
+        let scope = BTreeSet::from([interface.clone()]);
+        if let Err(error) = self.reconcile_scope(Some(&scope)).await {
+            tracing::warn!(
+                interface = interface.as_str(),
+                error = %error,
+                "interface life could not be woken by its movement"
+            );
         }
     }
 
@@ -838,7 +951,8 @@ impl InterfaceActivationReconciler {
         if self.deferred_lifts.is_empty() {
             return;
         }
-        if let Err(error) = self.reconcile_once().await {
+        let scope = self.deferred_lifts.clone();
+        if let Err(error) = self.reconcile_scope(Some(&scope)).await {
             tracing::warn!(
                 error = %error,
                 "interface life reconciliation failed closed while lifting deferred lives"
@@ -948,6 +1062,17 @@ impl InterfaceActivationReconciler {
                     };
                     self.handle_life_event(event).await;
                 }
+                wake = async { self.movement_wakes.as_mut().expect("guarded movement wakes").recv().await },
+                    if self.movement_wakes.is_some() =>
+                {
+                    match wake {
+                        Some((interface, seq)) => self.movement_reached(interface, seq).await,
+                        None => {
+                            tracing::error!("interface movement wake channel closed");
+                            break;
+                        }
+                    }
+                }
             }
         }
         drop(watcher);
@@ -1032,8 +1157,12 @@ impl InterfaceActivationReconciler {
     }
 
     async fn reconcile_once(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
-        self.reconcile_interface_lives().await?;
+        self.reconcile_interface_lives(None).await?;
         Ok(self.lifted.len())
+    }
+
+    async fn reconcile_scope(&mut self, scope: Option<&BTreeSet<InterfaceId>>) -> Result<(), String> {
+        self.reconcile_interface_lives(scope).await
     }
 }
 
@@ -1745,6 +1874,7 @@ mod interface_life_switch_tests {
                     restart_attempt: 0,
                     retry_not_before: None,
                     waking: true,
+                    asleep_through: None,
                 },
             );
         }
@@ -1937,6 +2067,105 @@ mod interface_life_switch_tests {
         assert_eq!(reconciler.lifted.len(), 3);
         assert!(reconciler.deferred_lifts.is_empty());
         assert!(events.iter().all(|event| matches!(event, InterfaceBootEvent::Ready { .. })));
+        cancel.cancel();
+        reconciler.stop_all_lives().await;
+    }
+
+    #[tokio::test]
+    async fn a_life_that_falls_asleep_is_woken_only_by_a_movement_it_has_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let durable_root = root.join("durable");
+        let runs_dir = durable_root.join("runs");
+        std::fs::create_dir_all(durable_root.join("blobs")).unwrap();
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        std::fs::create_dir_all(root.join("home")).unwrap();
+        std::fs::write(root.join("home").join("host.json"), serde_json::json!({
+            "host_manifest_version": 1,
+            "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": runs_dir.to_str().unwrap()}
+        }).to_string()).unwrap();
+        let name = "test_sleeper";
+        let iface_dir = root.join("registry").join("interface").join(name);
+        std::fs::create_dir_all(&iface_dir).unwrap();
+        let var_dir = root.join("home").join("interfaces").join(name);
+        std::fs::create_dir_all(&var_dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&var_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let lifts = var_dir.join("lifts");
+        std::fs::write(iface_dir.join("interface.json"), serde_json::json!({
+            "id": name, "interface_type": "system", "role": "system",
+            "direction": "bidirectional", "source_names": [name], "interface_driver_ref": name
+        }).to_string()).unwrap();
+        std::fs::write(iface_dir.join("life.json"), serde_json::json!({
+            "processes": [{
+                "bin": "/bin/sh",
+                "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
+                    "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
+                "args": ["-c", format!("echo lift >> '{}'; printf '%s\\n' \"$1\" \"$2\"", lifts.display()),
+                    "octopus-test",
+                    serde_json::json!({"kind": "ready"}).to_string(),
+                    serde_json::json!({"kind": "asleep", "through_seq": 5}).to_string()],
+                "authority": {
+                    "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
+                    "read_paths": [], "write_paths": [lifts], "executable_paths": ["/bin/sh"],
+                    "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
+                    "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
+                },
+                "read_handles": []
+            }]
+        }).to_string()).unwrap();
+        std::fs::write(runs_dir.join("run_sleeper.json"), serde_json::json!({
+            "id": "run_sleeper", "ee": "ee_test", "worker": "system_worker_test",
+            "trace": "trace:run_sleeper", "status": "idle",
+            "checkpoints": [{
+                "id": "c1", "run": "run_sleeper", "trace": "trace:run_sleeper:c1", "epoch": 0,
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(name)),
+                "outbound_interface_bindings": []
+            }],
+            "active_checkpoints": ["c1"]
+        }).to_string()).unwrap();
+        let cancel = CancellationToken::new();
+        let mut reconciler = InterfaceActivationReconciler::new(
+            root.join("registry"),
+            root.to_path_buf(),
+            tokio::sync::mpsc::channel(4).0,
+            tokio::sync::mpsc::channel(4).0,
+            cancel.clone(),
+            root.join("home"),
+            Some(durable_root),
+        );
+        let interface = InterfaceId::new(name);
+        reconciler.reconcile_once().await.unwrap();
+        assert_eq!(reconciler.await_initial_readiness(1, 0, None).await.unwrap(), 1);
+        let asleep = |reconciler: &InterfaceActivationReconciler| {
+            reconciler.lifted.get(&interface).and_then(|life| life.asleep_through)
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while asleep(&reconciler).is_none() {
+                let event = reconciler.life_exit_rx.recv().await.unwrap();
+                reconciler.handle_life_event(event).await;
+            }
+        })
+        .await
+        .expect("a life that declares sleep and exits cleanly is asleep");
+        assert_eq!(asleep(&reconciler), Some(5));
+        assert!(reconciler.failures.borrow().is_empty(), "sleep is neither coma nor failure");
+        reconciler.reconcile_once().await.unwrap();
+        reconciler.movement_reached(interface.clone(), 4).await;
+        assert_eq!(asleep(&reconciler), Some(5), "a movement the life already read does not wake it");
+        assert_eq!(std::fs::read_to_string(&lifts).unwrap().lines().count(), 1);
+        reconciler.movement_reached(interface.clone(), 5).await;
+        assert_eq!(asleep(&reconciler), None);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while std::fs::read_to_string(&lifts).unwrap().lines().count() < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("a movement past the sleep boundary lifts the life again");
         cancel.cancel();
         reconciler.stop_all_lives().await;
     }

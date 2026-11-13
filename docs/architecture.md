@@ -449,7 +449,13 @@ An Octopus Home is a directory:
 Stop the runtime and start it again, and the goals are still there. The
 runtime scans the
 JSON, wakes every interface mentioned on a live binding, and each interface
-catches up on its own movements from its own cursor. The cursor is written to
+catches up on its own movements from its own cursor. A life whose own code has
+nothing left to do ends itself cleanly and says through which movement it has
+read; that is sleep, not coma, and no backoff applies. The runtime lifts it
+again as soon as a movement it has not read reaches its folder, so a call that
+waits on a sleeping door waits for the door to wake. The runtime takes no
+decision about sleep; an interface that listens to the world simply never
+ends, and a waiting run holds no process. The cursor is written to
 disk when the interface settles one of its own movements; reading past other
 interfaces' movements stays in memory, so a busy ledger does not make every
 live interface flush the disk on every append. An interface whose life dies,

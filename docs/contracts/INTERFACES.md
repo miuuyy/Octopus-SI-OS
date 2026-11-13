@@ -118,6 +118,21 @@ registry and run records, the runtime wakes every interface mentioned on a live
 run binding. Liveness comes only from bindings: an installed interface nobody
 binds does not run. From then on the interface lives by itself, already warm.
 
+**Sleep.** A life that has nothing to do — its own code decides: no turn open,
+no call in flight, nothing awaited — may end itself. It first prints, after it
+has declared readiness, one last frame naming the first movement it has not
+read, then exits with status 0:
+
+```json
+{ "kind": "asleep", "through_seq": 41328 }
+```
+
+That is sleep, not coma: no failure is recorded and no backoff applies. When
+the runtime records a movement for that folder at or past `through_seq`, it
+lifts the life again, and the life catches up from its cursor. A frame after
+`asleep`, or `asleep` before readiness, fails the life closed. A life that
+listens to the world (a clock, a mailbox, a chat) never prints it.
+
 **Hand-in.** The process prints one JSON line per artifact:
 
 ```json

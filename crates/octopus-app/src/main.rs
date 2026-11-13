@@ -507,6 +507,7 @@ async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn s
             let daemon_durable_root = durable_root.clone();
             let daemon_registry_root = registry_root_path.clone();
             let daemon_cancel = cancel.clone();
+            let (movement_wakes, movement_wake_rx) = octopus_interface_transport::interface_movement_wakes();
             let mut daemon_task = tokio::task::spawn_local(async move {
                 daemon::run_daemon_on_dirs(
                     &daemon_durable_root,
@@ -520,6 +521,7 @@ async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn s
                     daemon_cancel,
                     Some(ready_tx),
                     Some(daemon_boot_tx),
+                    Some(movement_wakes),
                 )
                 .await
                 .map_err(|error| error.to_string())
@@ -641,8 +643,9 @@ async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn s
                     interface.as_str()
                 );
             }
-            let activation_reconciler_task =
-                tokio::task::spawn_local(interface_activation_reconciler.reconciler.run());
+            let mut activation_reconciler = interface_activation_reconciler.reconciler;
+            activation_reconciler.attach_movement_wakes(movement_wake_rx);
+            let activation_reconciler_task = tokio::task::spawn_local(activation_reconciler.run());
 
             if cancel.is_cancelled() {
                 let daemon_result = daemon_task.await;

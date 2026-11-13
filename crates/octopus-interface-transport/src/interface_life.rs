@@ -317,6 +317,30 @@ pub struct InterfaceLiftContext {
     pub(crate) emissions: tokio::sync::mpsc::Sender<SystemInterfaceEmission>,
     pub cancel: CancellationToken,
     pub(crate) readiness: InterfaceLifeReadiness,
+    pub(crate) asleep: InterfaceLifeSleep,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct InterfaceLifeSleep {
+    through_seq: Arc<std::sync::Mutex<Option<u64>>>,
+}
+
+impl InterfaceLifeSleep {
+    fn declare(&self, through_seq: u64) -> Result<(), String> {
+        let mut slot = self
+            .through_seq
+            .lock()
+            .map_err(|_| "interface life sleep lock is poisoned".to_string())?;
+        if slot.is_some() {
+            return Err("life declared sleep twice".to_string());
+        }
+        *slot = Some(through_seq);
+        Ok(())
+    }
+
+    pub(crate) fn through_seq(&self) -> Option<u64> {
+        self.through_seq.lock().ok().and_then(|slot| *slot)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -346,6 +370,10 @@ impl InterfaceLifeReadiness {
             },
             receiver,
         )
+    }
+
+    pub(crate) fn signaled(&self) -> bool {
+        self.sender.lock().is_ok_and(|sender| sender.is_none())
     }
 
     pub(crate) fn signal(&self, result: Result<(), String>) -> Result<(), String> {
@@ -392,6 +420,7 @@ impl InterfaceLiftContext {
             emissions,
             cancel,
             readiness: InterfaceLifeReadiness::default(),
+            asleep: InterfaceLifeSleep::default(),
         }
     }
 
@@ -2498,6 +2527,9 @@ enum SpawnedLifeOutput {
         source_movement_seq: u64,
         to_interface: String,
     },
+    Asleep {
+        through_seq: u64,
+    },
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -3146,7 +3178,16 @@ async fn handle_spawned_life_output(
     stdin: &mut tokio::process::ChildStdin,
     output: SpawnedLifeOutput,
 ) -> Result<(), String> {
+    if ctx.asleep.through_seq().is_some() {
+        return Err("life spoke after it declared sleep".to_string());
+    }
     match output {
+        SpawnedLifeOutput::Asleep { through_seq } => {
+            if !ctx.readiness.signaled() {
+                return Err("life declared sleep before readiness".to_string());
+            }
+            ctx.asleep.declare(through_seq)?;
+        }
         SpawnedLifeOutput::Ready => ctx.signal_ready().await?,
         SpawnedLifeOutput::Arrival {
             request_id,
@@ -3708,6 +3749,7 @@ mod tests {
             emissions: emissions_tx,
             cancel: CancellationToken::new(),
             readiness: InterfaceLifeReadiness::default(),
+            asleep: InterfaceLifeSleep::default(),
         }
     }
 
@@ -4170,7 +4212,7 @@ mod tests {
         reconciler.durable_root = Some(dir.path().join("ledger"));
         reconciler.root_cancel.cancel();
         assert_eq!(
-            reconciler.reconcile_interface_lives().await.unwrap_err(),
+            reconciler.reconcile_interface_lives(None).await.unwrap_err(),
             "interface lifecycle reconciliation cancelled"
         );
         assert!(reconciler.lifted.is_empty());

@@ -269,6 +269,7 @@ pub async fn run_daemon(
         cancel,
         None,
         None,
+        None,
     )
     .await
 }
@@ -285,6 +286,7 @@ pub(crate) async fn run_daemon_on_dirs(
     cancel: CancellationToken,
     ready: Option<tokio::sync::oneshot::Sender<()>>,
     boot_events: Option<tokio::sync::mpsc::UnboundedSender<DaemonBootEvent>>,
+    movement_wakes: Option<octopus_interface_transport::InterfaceMovementWakes>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     octopus_file_storage::publication::create_dir_all(durable_root)?;
     let durable_root = std::fs::canonicalize(durable_root)?;
@@ -454,7 +456,7 @@ pub(crate) async fn run_daemon_on_dirs(
             ee_scopes: resumed.ee_tree.len(),
         },
     );
-    let writer = crate::ledger_writer::LedgerWriter::new(log, spotlight);
+    let writer = crate::ledger_writer::LedgerWriter::new(log, spotlight).with_movement_wakes(movement_wakes);
     if let Some(ready) = ready {
         ready
             .send(())
@@ -1345,7 +1347,7 @@ mod tests {
                         run_daemon_on_dirs(&task_root, repository_registry_root(),
                             task_state.join("interface-artifacts"), task_state.join("runs"),
                             task_state.join("ee_instances"), task_blobs, arrival_rx, emission_rx,
-                            task_cancel, Some(ready_tx), None).await.map_err(|error| error.to_string())
+                            task_cancel, Some(ready_tx), None, None).await.map_err(|error| error.to_string())
                     });
                     ready_rx.await.unwrap();
                     write_literal_run_record_fixture(&state.join("runs/receiver.json"), &record).unwrap();
@@ -1374,6 +1376,7 @@ mod tests {
                     arrival_rx,
                     emission_rx,
                     CancellationToken::new(),
+                    None,
                     None,
                     None,
                 )
@@ -1579,6 +1582,7 @@ mod tests {
                 emission_rx,
                 cancel,
                 Some(ready_tx),
+                None,
                 None,
             )
             .await

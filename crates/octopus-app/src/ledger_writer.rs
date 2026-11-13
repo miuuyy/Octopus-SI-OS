@@ -8,6 +8,7 @@ use octopus_ledger_index::{LedgerSqliteIndex, SqliteIndexError};
 pub struct LedgerWriter {
     log: Arc<Mutex<Box<dyn MovementLog + Send>>>,
     spotlight: Arc<Mutex<Option<LedgerSqliteIndex>>>,
+    movement_wakes: Option<octopus_interface_transport::InterfaceMovementWakes>,
 }
 
 impl LedgerWriter {
@@ -18,7 +19,16 @@ impl LedgerWriter {
         Self {
             log: Arc::new(Mutex::new(Box::new(log))),
             spotlight: Arc::new(Mutex::new(spotlight)),
+            movement_wakes: None,
         }
+    }
+
+    pub fn with_movement_wakes(
+        mut self,
+        movement_wakes: Option<octopus_interface_transport::InterfaceMovementWakes>,
+    ) -> Self {
+        self.movement_wakes = movement_wakes;
+        self
     }
 
     fn index_appended_movements(
@@ -130,6 +140,12 @@ impl MovementLog for LedgerWriter {
                  next boot rebuilds): {error}"
             );
             *spotlight = None;
+        }
+        drop(spotlight);
+        if let Some(wakes) = &self.movement_wakes {
+            for reader in octopus_interface_transport::movement_readers(&movement) {
+                let _ = wakes.send((reader, movement.seq.0));
+            }
         }
         movement
     }
