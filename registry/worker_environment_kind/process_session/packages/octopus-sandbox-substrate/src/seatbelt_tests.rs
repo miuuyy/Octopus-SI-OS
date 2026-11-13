@@ -106,6 +106,10 @@ fn base_policy_allows_node_cpu_sysctls() {
         MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"hw.model\")"),
         "base policy must allow hardware model lookup for os.cpus()"
     );
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"kern.boottime\")"),
+        "base policy must allow boot time lookup for os.uptime()"
+    );
 }
 
 #[test]
