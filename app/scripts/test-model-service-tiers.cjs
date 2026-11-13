@@ -5,7 +5,15 @@ const { test } = require("node:test");
 const ts = require("typescript");
 const { modelServiceTiers, validateModelServiceTier } = require("../electron/providerModelTiers.cjs");
 
-function functions(file, names, scope = {}) {
+function taskAccessExports() {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src/components/chat/taskAccess.ts"), "utf8");
+  const module = { exports: {} };
+  Function("module", "exports", ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(module, module.exports);
+  return module.exports;
+}
+
+function functions(file, names, bindings = {}) {
+  const scope = { DEFAULT_TASK_ACCESS_MODE: taskAccessExports().DEFAULT_TASK_ACCESS_MODE, ...bindings };
   const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const selected = [];
@@ -87,7 +95,8 @@ test("existing runs wait for their bound model and tier while saved run drafts r
     if (ts.isIfStatement(node) && node.expression.getText(tree) === "loadedScope !== scopeIdentity") {
       const findRestore = (child) => {
         if (ts.isCallExpression(child) && child.expression.getText(tree) === "applyDraft") {
-          scopeRestore = Function("initialDraftRef", "input", "storedSettingsRef", "return " + child.arguments[0].getText(tree));
+          scopeRestore = Function("DEFAULT_TASK_ACCESS_MODE", "initialDraftRef", "input", "storedSettingsRef", "return " + child.arguments[0].getText(tree))
+            .bind(null, taskAccessExports().DEFAULT_TASK_ACCESS_MODE);
         }
         ts.forEachChild(child, findRestore);
       };
@@ -109,6 +118,7 @@ test("existing runs wait for their bound model and tier while saved run drafts r
     assert.equal(restore("")[key], settings[key]);
     assert.equal(restore("existing-run", draft)[key], draft[key]);
   }
+  assert.equal(restore("").accessMode, "full_access");
 });
 
 test("durable queue claims and submission restoration preserve the selected tier", () => {

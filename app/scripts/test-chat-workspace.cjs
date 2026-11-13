@@ -925,17 +925,17 @@ test("a new task without a matching Agent sends nothing, then takes the chosen A
   assert.deepEqual([turn.runId, turn.eeId, turn.workerInterfaceId, turn.providerModel, turn.reasoningEffort, turn.selectedWorkerEnvironmentKinds, turn.selectedTools.map((tool) => tool.tool)],
     [undefined, "ee.proj", "worker.research", "model-b", "high", ["system_shell"], ["notes.read", "shell.exec"]]);
   assert.deepEqual(Object.keys(turn).filter((key) => /agent/i.test(key)), [], "the runtime receives the Agent's configuration, never a client Agent identity");
-  assert.equal(turn.doorHostSlots["door.shell"]?.host_filesystem_root, undefined);
+  assert.equal(turn.doorHostSlots["door.shell"]?.host_filesystem_root, "/", "a new task starts with full access");
   host.reply("run-new", "Studied.");
   await until(() => !view.current.busy, "the new task never settled");
 });
 
-test("an Agent's task choices stay inside its template, a missing Worker Environment blocks sending, and full access carries the host root", { timeout: 15_000 }, async () => {
+test("an Agent's task choices stay inside its template, a missing Worker Environment blocks sending, and default full access carries the host root", { timeout: 15_000 }, async () => {
   const host = capableHost();
   const view = await mount(host, "lab");
   await type(view, "Study the market");
   await choose(view, "agent-research");
-  assert.equal(view.current.fullAccessUnavailableReason, "");
+  assert.deepEqual([view.current.accessMode, view.current.fullAccessUnavailableReason], ["full_access", ""]);
   view.current.toggleApplication("app.mail");
   view.current.toggleDriver("system_browser");
   await settle();
@@ -949,11 +949,10 @@ test("an Agent's task choices stay inside its template, a missing Worker Environ
   assert.equal(view.current.agentPresetId, "agent-research");
   view.current.toggleApplication("app.notes");
   await until(() => view.current.canSubmit, () => `still blocked: ${view.current.submitBlockReason}`);
-  assert.equal(view.current.fullAccessUnavailableReason, "Full access requires a selected Worker Environment that declares the host filesystem root.");
+  assert.equal(view.current.fullAccessUnavailableReason, "", "full access without a host-root Worker Environment adds nothing and blocks nothing");
   view.current.toggleDriver("system_shell");
-  await until(() => view.current.fullAccessUnavailableReason === "", "the host-root Worker Environment did not make full access available");
-  view.current.setAccessMode("full_access");
-  await until(() => view.current.accessMode === "full_access", "full access was not chosen");
+  await until(() => view.current.driverNames.includes("system_shell"), "the host-root Worker Environment was not selected again");
+  assert.equal(view.current.accessMode, "full_access");
   void view.current.submit();
   await until(() => host.turns.length === 1, "the task was not created");
   assert.deepEqual([host.turns[0].providerModel, host.turns[0].reasoningEffort, host.turns[0].doorHostSlots], ["model-a", "medium", { "door.shell": { host_filesystem_root: "/" } }]);

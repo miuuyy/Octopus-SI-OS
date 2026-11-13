@@ -101,7 +101,9 @@ workspace door, and carries their names in the operator input's client context.
 Full access keeps the same working context while its separate host-root grant
 controls filesystem reach. Full access is the default for a new task unless
 the EE's `config.octopus_os.task_access_default` is `project_access`; a room
-holding the host root runs its commands without a platform sandbox. Editing project folders affects future tasks;
+holding the host root runs its commands without a platform sandbox. Full
+access binds the host root to every selected Worker Environment that declares
+it; a task with none of them is unchanged by it and is not refused. Editing project folders affects future tasks;
 existing private doors retain their accepted roots. Folder edits and presentation
 are one guarded client transaction whose receipt proves the exact EE writes
 and Home-sidecar publication.

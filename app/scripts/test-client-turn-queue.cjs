@@ -42,8 +42,10 @@ function workspaceActions(names, bindings) {
   visit(tree);
   assert.equal(functions.length, names.length);
   const compiled = ts.transpileModule(functions.join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return vm.compileFunction(`${compiled}\nreturn { ${names.join(",")} };`, Object.keys(bindings))(...Object.values(bindings));
+  const scope = { DEFAULT_TASK_ACCESS_MODE: taskAccess.DEFAULT_TASK_ACCESS_MODE, ...bindings };
+  return vm.compileFunction(`${compiled}\nreturn { ${names.join(",")} };`, Object.keys(scope))(...Object.values(scope));
 }
+const taskAccess = load("src/components/chat/taskAccess.ts");
 const { ClientTurnQueue, indexedQueuePersistence, queueNamespace, queueHead, queueDispatchCandidates, queueSubmissionFailureStatus, queueTurnReady, visibleQueueTurns, pendingQueueSteering } = load("src/components/chat/clientTurnQueue.ts", { "./chatTurnControl": load("src/components/chat/chatTurnControl.ts") });
 const { operatorChatSubmitFailure, unwrapOperatorChatSubmitResult } = require("../electron/operatorChatSubmitResult.cjs");
 for (const submissionStarted of [false, true]) {
@@ -76,6 +78,7 @@ for (const [hadAttachments, attachments, recoverPreparedMessage] of [
   assert.equal(submission.queueId, queued.id);
   assert.equal(submission.runId, queued.runKey);
   assert.equal(submission.attachments, attachments);
+  assert.equal(submission.accessMode, "full_access");
 }
 (async () => {
   const editedMessage = { id: "latest", runId: "run-a", role: "user", eventKind: "message", text: "original" };
@@ -598,6 +601,7 @@ for (const [hadAttachments, attachments, recoverPreparedMessage] of [
   const commands = load("src/clientActions.ts");
   let sendShortcut = "enter";
   const composer = load("src/components/chat/ChatComposer.tsx", {
+    "./taskAccess": taskAccess,
     "./DictationIcon": load("src/components/chat/DictationIcon.tsx"),
     "../IconGlyphs": { Glyph: empty }, "./ProviderModelPicker": { ProviderModelPicker: empty },
     "./ChatAttachmentCard": { ChatAttachmentStrip: empty },
@@ -706,6 +710,7 @@ for (const [hadAttachments, attachments, recoverPreparedMessage] of [
   await act(async () => host.unmount());
   const storageApi = load("src/components/chat/storage.ts", { "./constants": { CHAT_SETTINGS_KEY: "settings" }, "./taskAccess": load("src/components/chat/taskAccess.ts") });
   const useDraft = load("src/components/chat/useChatDraftState.ts", {
+    "./taskAccess": taskAccess,
     "./storage": storageApi, "./artifacts": { attachmentLabel: () => "operator.file" },
     "./attachmentDrop": {}, "./constants": { MAX_ATTACHMENT_BYTES: 1024 },
   }).useChatDraftState;

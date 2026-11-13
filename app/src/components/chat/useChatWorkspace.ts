@@ -859,7 +859,6 @@ export function useChatWorkspace(
         selectedWorker,
         applicationIds,
         driverNames,
-        accessMode,
       )
     : "";
   const workspaceSelectionError = useMemo(() => {
@@ -3287,13 +3286,12 @@ function clientAgentCapabilitySelectionFailure(
   worker: ChatWorkerChoice | null,
   applicationIds: readonly string[],
   driverNames: readonly string[],
-  accessMode: TaskAccessMode,
 ): string {
   const applicationId = applicationIds.find((id) => !agent.applicationIds.includes(id));
   if (applicationId) return `Application '${applicationId}' is not provided by ${agent.name}.`;
   const driverName = driverNames.find((name) => !agent.driverNames.includes(name));
   if (driverName) return `Worker Environment '${driverName}' is not provided by ${agent.name}.`;
-  return taskCapabilitySelectionFailure(worker, applicationIds, driverNames, accessMode);
+  return taskCapabilitySelectionFailure(worker, applicationIds, driverNames);
 }
 
 function latestSteerableUserMessageId(messages: readonly ChatRenderMessage[], runId: string, canSteer: boolean): string {

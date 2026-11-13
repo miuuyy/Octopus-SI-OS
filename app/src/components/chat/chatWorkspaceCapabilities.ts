@@ -191,7 +191,6 @@ export function taskCapabilitySelectionFailure(
   worker: ChatWorkerChoice | null,
   applicationIds: readonly string[],
   driverNames: readonly string[],
-  accessMode: TaskAccessMode = "project_access",
 ): string {
   if (!worker) return "The selected Agent worker template is not projected.";
   const applicationById = new Map(worker.applications.map((application) => [application.id, application]));
@@ -201,16 +200,6 @@ export function taskCapabilitySelectionFailure(
   const unavailableDriverName = driverNames.find((name) => !driverByName.has(name));
   if (unavailableDriverName) return `Worker Environment '${unavailableDriverName}' is not available to this task.`;
   const selectedDriverNames = new Set(driverNames);
-  if (
-    accessMode === "full_access"
-    && !worker.drivers.some((driver) => (
-      selectedDriverNames.has(driver.name)
-      && driver.rootSlots.includes(HOST_FILESYSTEM_ROOT_SLOT)
-      && driver.doorInterfaces.length > 0
-    ))
-  ) {
-    return "Full access requires a selected Worker Environment that declares the host filesystem root.";
-  }
   for (const applicationId of applicationIds) {
     const application = applicationById.get(applicationId);
     const missingKind = application?.taskCapabilities.tools
@@ -251,7 +240,7 @@ export function executionContextTaskCapabilities(
   if (!worker) {
     throw new Error(`Agent worker template '${workerInterfaceId}' is not projected in EE '${eeId}'.`);
   }
-  const selectionFailure = taskCapabilitySelectionFailure(worker, applicationIds, driverNames, accessMode);
+  const selectionFailure = taskCapabilitySelectionFailure(worker, applicationIds, driverNames);
   if (selectionFailure) throw new Error(selectionFailure);
   const applicationById = new Map(worker.applications.map((application) => [application.id, application]));
   const driverByName = new Map(worker.drivers.map((driver) => [driver.name, driver]));
@@ -370,14 +359,15 @@ export function executionContextTaskCapabilities(
       }
     }
   }
-  if (accessMode === "full_access") {
+  const hostRootDrivers = accessMode === "full_access"
+    ? selectedDrivers.filter((candidate) => candidate.rootSlots.includes(HOST_FILESYSTEM_ROOT_SLOT))
+    : [];
+  if (hostRootDrivers.length) {
     const hostFilesystemRoot = context?.fullAccessRoot;
     if (!hostFilesystemRoot) {
       throw new Error("The host filesystem root is unavailable. Reload the task configuration.");
     }
-    for (const driver of selectedDrivers.filter((candidate) => (
-      candidate.rootSlots.includes(HOST_FILESYSTEM_ROOT_SLOT)
-    ))) {
+    for (const driver of hostRootDrivers) {
       for (const door of driver.doorInterfaces) {
         const slots = doorHostSlots[door] ?? {};
         const configured = slots[HOST_FILESYSTEM_ROOT_SLOT];
