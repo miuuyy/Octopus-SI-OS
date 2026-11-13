@@ -922,7 +922,9 @@ handed, so later results of that turn reach no live model turn. A terminal
 cut them off with an exact effect still owed: the next input is not held behind a
 result no turn will consume, and a late result arrives as an ordinary input. A terminal error
 that cannot be handed closes its source through the declared failure route
-instead of ending the provider life. A failed source with neither a failed-source
+instead of ending the provider life. That route writes the context the run has
+published, a deferred publication whose evidence is admitted included, so a
+failed result does not drop what its call's wait already joined. A failed source with neither a failed-source
 handoff nor a proven standing route is recorded as the interface's admitted
 failure of that movement, and the life keeps serving its other sources. A
 saved attempt or withdrawal of one run that does not read is that run's

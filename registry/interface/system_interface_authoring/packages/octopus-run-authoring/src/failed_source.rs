@@ -258,7 +258,6 @@ impl ProviderHandoffSession {
         let consumed_input = template.is_some()
             && !consumed_verified_input
             && consumed_context_free_independent_input.is_none();
-        let context_artifacts = current_context_artifacts(&record, &config)?;
         let current_bindings = if config.payload_artifact_bindings.is_empty() { Vec::new() }
             else { provider_context_bindings(&record, &config.provider_interface)? };
         let static_context_artifacts = config
@@ -280,7 +279,7 @@ impl ProviderHandoffSession {
             ));
         }
         let result_reader = LedgerTailReader::open_named(ctx, "run-authoring")?;
-        Ok(ProviderOutputHandoff {
+        let handoff = ProviderOutputHandoff {
             ctx: ctx.clone(),
             invocation_metadata: input.metadata().map_err(|error| error.to_string())?.clone(),
             run_path,
@@ -302,7 +301,7 @@ impl ProviderHandoffSession {
             invocation_session_snapshot: None,
             state: Arc::new(tokio::sync::Mutex::new(HandoffState {
                 validated_withdrawal_output: None,
-                context_artifacts,
+                context_artifacts: Vec::new(),
                 static_context_artifacts,
                 session_context: ResolvedSessionContext {
                     provider_interface: config.provider_interface.clone(),
@@ -319,7 +318,12 @@ impl ProviderHandoffSession {
             })),
             config,
             result_reader: Arc::new(tokio::sync::Mutex::new(result_reader)),
-        })
+        };
+        let published = handoff.published_context_artifacts(&record, &handoff.config)?;
+        handoff.state.try_lock()
+            .map_err(|_| "failed provider source handoff state is already held".to_string())?
+            .context_artifacts = published;
+        Ok(handoff)
     }
 }
 
