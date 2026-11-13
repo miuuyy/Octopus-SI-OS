@@ -161,6 +161,9 @@ pub struct InterfaceActivationReconciler {
     life_exit_rx: tokio::sync::mpsc::UnboundedReceiver<InterfaceLifeEvent>,
     next_lift_id: u64,
     failures: tokio::sync::watch::Sender<BTreeMap<InterfaceId, String>>,
+    waking_limit: usize,
+    deferred_lifts: BTreeSet<InterfaceId>,
+    deferred_wake_scheduled: bool,
     live: bool,
 }
 
@@ -177,7 +180,7 @@ struct LiftedInterfaceLife {
     started_at: Instant,
     restart_attempt: u32,
     retry_not_before: Option<Instant>,
-    readiness: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
+    waking: bool,
 }
 
 enum InterfaceLifeEvent {
@@ -195,12 +198,21 @@ enum InterfaceLifeEvent {
         lift_id: u64,
         outcome: Result<(), String>,
     },
+    WakingSlotElapsed,
 }
 
 const LIFE_RESTART_BASE_DELAY: Duration = Duration::from_millis(250);
 const LIFE_RESTART_MAX_DELAY: Duration = Duration::from_secs(300);
 const LIFE_RESTART_STABLE_AFTER: Duration = Duration::from_secs(600);
+const LIFE_WAKING_SLOT: Duration = Duration::from_secs(30);
 const INTERFACE_WATCH_EVENT_BATCH_LIMIT: usize = 256;
+
+fn interface_life_waking_limit() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .clamp(2, 8)
+}
 
 fn interface_life_restart_delay(attempt: u32) -> Duration {
     let exponent = attempt.saturating_sub(1).min(16);
@@ -273,6 +285,9 @@ impl InterfaceActivationReconciler {
             life_exit_rx,
             next_lift_id: 0,
             failures: tokio::sync::watch::channel(BTreeMap::new()).0,
+            waking_limit: interface_life_waking_limit(),
+            deferred_lifts: BTreeSet::new(),
+            deferred_wake_scheduled: false,
             live: false,
         }
     }
@@ -378,6 +393,7 @@ impl InterfaceActivationReconciler {
         self.failures.send_modify(|failures| {
             failures.retain(|interface, _| mentioned.contains(interface));
         });
+        self.deferred_lifts.clear();
         let mut failures = Vec::new();
         let stale = self
             .lifted
@@ -501,6 +517,19 @@ impl InterfaceActivationReconciler {
             if !restart {
                 continue;
             }
+            let waking = self
+                .lifted
+                .iter()
+                .filter(|(lifted, life)| {
+                    *lifted != &interface
+                        && life.waking
+                        && life.started_at.elapsed() < LIFE_WAKING_SLOT
+                })
+                .count();
+            if waking >= self.waking_limit {
+                self.deferred_lifts.insert(interface);
+                continue;
+            }
             let restart_attempt = existing
                 .filter(|_| !fingerprint_changed)
                 .map(|lifted| lifted.restart_attempt)
@@ -568,22 +597,21 @@ impl InterfaceActivationReconciler {
                     error: failure,
                 });
             });
-            let mut readiness_rx = Some(readiness_rx);
             if let Some(previous) = after_coma {
                 eprintln!(
                     "interface life '{}' is lifted again after coma (restart attempt {restart_attempt}): {previous}",
                     interface.as_str()
                 );
-                if let Some(receiver) = readiness_rx.take() {
-                    let events = self.life_exit_tx.clone();
-                    let interface = interface.clone();
-                    tokio::spawn(async move {
-                        let outcome = receiver
-                            .await
-                            .unwrap_or_else(|_| Err("readiness channel closed".to_string()));
-                        let _ = events.send(InterfaceLifeEvent::Readiness { interface, lift_id, outcome });
-                    });
-                }
+            }
+            {
+                let events = self.life_exit_tx.clone();
+                let interface = interface.clone();
+                tokio::spawn(async move {
+                    let outcome = readiness_rx
+                        .await
+                        .unwrap_or_else(|_| Err("readiness channel closed".to_string()));
+                    let _ = events.send(InterfaceLifeEvent::Readiness { interface, lift_id, outcome });
+                });
             }
             self.lifted.insert(
                 interface,
@@ -595,12 +623,27 @@ impl InterfaceActivationReconciler {
                     started_at: Instant::now(),
                     restart_attempt,
                     retry_not_before: None,
-                    readiness: readiness_rx,
+                    waking: true,
                 },
             );
         }
         verification.finish_pass();
         self.imported_executables = verification;
+        if !self.deferred_lifts.is_empty() && !self.deferred_wake_scheduled {
+            self.deferred_wake_scheduled = true;
+            let events = self.life_exit_tx.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(LIFE_WAKING_SLOT).await;
+                let _ = events.send(InterfaceLifeEvent::WakingSlotElapsed);
+            });
+        }
+        if !self.deferred_lifts.is_empty() {
+            tracing::info!(
+                deferred = self.deferred_lifts.len(),
+                waking_limit = self.waking_limit,
+                "interface lives wait for waking siblings before they are lifted"
+            );
+        }
         if !failures.is_empty() {
             tracing::warn!(
                 failures = failures.len(),
@@ -649,6 +692,7 @@ impl InterfaceActivationReconciler {
     }
 
     async fn stop_all_lives(&mut self) {
+        self.deferred_lifts.clear();
         self.imported_executables = interface_life::ImportedExecutableVerification::default();
         let lifted = std::mem::take(&mut self.lifted);
         for life in lifted.values() {
@@ -671,98 +715,135 @@ impl InterfaceActivationReconciler {
         mut completed: usize,
         mut report: Option<&mut dyn FnMut(InterfaceBootEvent)>,
     ) -> Result<usize, String> {
-        let interfaces = self.lifted.keys().cloned().collect::<Vec<_>>();
-        let mut readiness = tokio::task::JoinSet::new();
+        let mut awaiting = self
+            .lifted
+            .keys()
+            .chain(self.deferred_lifts.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let mut ready = 0usize;
-        for interface in interfaces {
-            let receiver = self
-                .lifted
-                .get_mut(&interface)
-                .and_then(|life| life.readiness.take())
-                .ok_or_else(|| {
-                    format!(
-                        "interface life '{}' has no initial readiness receiver",
-                        interface.as_str()
-                    )
-                })?;
-            readiness.spawn(async move { (interface, receiver.await) });
-        }
-        while !readiness.is_empty() {
-            let result = tokio::select! {
+        while !awaiting.is_empty() {
+            let event = tokio::select! {
                 biased;
                 _ = self.root_cancel.cancelled() => {
-                    readiness.abort_all();
-                    while readiness.join_next().await.is_some() {}
                     self.stop_all_lives().await;
                     return Err("interface lifecycle initialization cancelled".to_string());
                 }
-                result = readiness.join_next() => result
-                    .ok_or_else(|| "interface readiness set ended early".to_string())?,
+                event = self.life_exit_rx.recv() => event
+                    .ok_or_else(|| "interface life event channel closed during initialization".to_string())?,
             };
-            let (interface, outcome) =
-                result.map_err(|error| format!("interface readiness task failed: {error}"))?;
-            completed = completed.saturating_add(1);
-            match outcome {
-                Ok(Ok(())) => {
-                    self.clear_failure(&interface);
-                    ready = ready.saturating_add(1);
-                    if let Some(report) = report.as_deref_mut() {
-                        report(InterfaceBootEvent::Ready {
-                            interface,
-                            completed,
-                            total,
-                        });
-                    }
+            let mut outcomes = Vec::new();
+            if let Some((interface, outcome)) = self.handle_life_event(event).await {
+                if awaiting.remove(&interface) {
+                    outcomes.push((interface, outcome.map_err(|error| format!("failed before readiness: {error}"))));
                 }
-                Ok(Err(error)) => {
-                    let failure = format!("failed before readiness: {error}");
-                    self.record_failure(&interface, &failure);
-                    let lift_id = self
-                        .lifted
-                        .get(&interface)
-                        .map(|life| life.lift_id)
-                        .ok_or_else(|| {
-                            format!(
-                                "interface life '{}' disappeared during readiness",
-                                interface.as_str()
-                            )
-                        })?;
-                    self.schedule_life_retry(&interface, lift_id);
-                    if let Some(report) = report.as_deref_mut() {
-                        report(InterfaceBootEvent::Failed {
-                            interface,
-                            completed,
-                            total,
-                            error: failure,
-                        });
+            }
+            let unbound = awaiting
+                .iter()
+                .filter(|interface| {
+                    !self.lifted.contains_key(*interface) && !self.deferred_lifts.contains(*interface)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for interface in unbound {
+                awaiting.remove(&interface);
+                let failure = self
+                    .failures
+                    .borrow()
+                    .get(&interface)
+                    .cloned()
+                    .unwrap_or_else(|| "interface life is no longer lifted".to_string());
+                outcomes.push((interface, Err(failure)));
+            }
+            for (interface, outcome) in outcomes {
+                completed = completed.saturating_add(1);
+                let event = match outcome {
+                    Ok(()) => {
+                        ready = ready.saturating_add(1);
+                        InterfaceBootEvent::Ready { interface, completed, total }
                     }
-                }
-                Err(_) => {
-                    let failure = "readiness channel closed".to_string();
-                    self.record_failure(&interface, &failure);
-                    let lift_id = self
-                        .lifted
-                        .get(&interface)
-                        .map(|life| life.lift_id)
-                        .ok_or_else(|| {
-                            format!(
-                                "interface life '{}' disappeared during readiness",
-                                interface.as_str()
-                            )
-                        })?;
-                    self.schedule_life_retry(&interface, lift_id);
-                    if let Some(report) = report.as_deref_mut() {
-                        report(InterfaceBootEvent::Failed {
-                            interface,
-                            completed,
-                            total,
-                            error: failure,
-                        });
-                    }
+                    Err(error) => InterfaceBootEvent::Failed { interface, completed, total, error },
+                };
+                if let Some(report) = report.as_deref_mut() {
+                    report(event);
                 }
             }
         }
         Ok(ready)
+    }
+
+    async fn handle_life_event(
+        &mut self,
+        event: InterfaceLifeEvent,
+    ) -> Option<(InterfaceId, Result<(), String>)> {
+        match event {
+            InterfaceLifeEvent::Exited { interface, lift_id, error } => {
+                let current = self.lifted.get_mut(&interface).filter(|life| {
+                    life.lift_id == lift_id && !life.cancel.is_cancelled()
+                })?;
+                let was_waking = std::mem::replace(&mut current.waking, false);
+                self.record_failure(&interface, &error);
+                self.schedule_life_retry(&interface, lift_id);
+                if was_waking {
+                    self.lift_deferred().await;
+                }
+                None
+            }
+            InterfaceLifeEvent::Retry { interface, lift_id } => {
+                let current = self
+                    .lifted
+                    .get(&interface)
+                    .is_some_and(|lifted| lifted.lift_id == lift_id);
+                if current {
+                    if let Err(error) = self.reconcile_once().await {
+                        eprintln!(
+                            "interface life '{}' could not be lifted again: {error}",
+                            interface.as_str()
+                        );
+                    }
+                }
+                None
+            }
+            InterfaceLifeEvent::Readiness { interface, lift_id, outcome } => {
+                let current = self
+                    .lifted
+                    .get_mut(&interface)
+                    .filter(|lifted| lifted.lift_id == lift_id)?;
+                let was_waking = std::mem::replace(&mut current.waking, false);
+                match &outcome {
+                    Ok(()) => {
+                        if self.clear_failure(&interface) && self.live {
+                            eprintln!("interface '{}' woke from coma", interface.as_str());
+                        }
+                    }
+                    Err(error) => {
+                        self.record_failure(&interface, &format!("failed before readiness: {error}"));
+                        self.schedule_life_retry(&interface, lift_id);
+                    }
+                }
+                if was_waking {
+                    self.lift_deferred().await;
+                }
+                Some((interface, outcome))
+            }
+            InterfaceLifeEvent::WakingSlotElapsed => {
+                self.deferred_wake_scheduled = false;
+                self.lift_deferred().await;
+                None
+            }
+        }
+    }
+
+    async fn lift_deferred(&mut self) {
+        if self.deferred_lifts.is_empty() {
+            return;
+        }
+        if let Err(error) = self.reconcile_once().await {
+            tracing::warn!(
+                error = %error,
+                "interface life reconciliation failed closed while lifting deferred lives"
+            );
+        }
     }
 
     pub async fn run(mut self) {
@@ -865,40 +946,7 @@ impl InterfaceActivationReconciler {
                         tracing::error!("interface life completion channel closed");
                         break;
                     };
-                    match event {
-                        InterfaceLifeEvent::Exited { interface, lift_id, error } => {
-                            if self.lifted.get(&interface).is_some_and(|life| life.lift_id == lift_id && !life.cancel.is_cancelled()) {
-                                self.record_failure(&interface, &error);
-                                self.schedule_life_retry(&interface, lift_id);
-                            }
-                        }
-                        InterfaceLifeEvent::Retry { interface, lift_id } => {
-                            let current = self
-                                .lifted
-                                .get(&interface)
-                                .is_some_and(|lifted| lifted.lift_id == lift_id);
-                            if current {
-                                if let Err(error) = self.reconcile_once().await {
-                                    eprintln!(
-                                        "interface life '{}' could not be lifted again: {error}",
-                                        interface.as_str()
-                                    );
-                                }
-                            }
-                        }
-                        InterfaceLifeEvent::Readiness { interface, lift_id, outcome } => {
-                            if self.lifted.get(&interface).is_some_and(|lifted| lifted.lift_id == lift_id) {
-                                match outcome {
-                                    Ok(()) => {
-                                        if self.clear_failure(&interface) {
-                                            eprintln!("interface '{}' woke from coma", interface.as_str());
-                                        }
-                                    }
-                                    Err(error) => self.record_failure(&interface, &format!("failed before readiness: {error}")),
-                                }
-                            }
-                        }
-                    }
+                    self.handle_life_event(event).await;
                 }
             }
         }
@@ -1475,10 +1523,12 @@ pub async fn prepare_interface_activation_reconciler(
         .failures
         .borrow()
         .iter()
-        .filter(|(interface, _)| !reconciler.lifted.contains_key(*interface))
+        .filter(|(interface, _)| {
+            !reconciler.lifted.contains_key(*interface) && !reconciler.deferred_lifts.contains(*interface)
+        })
         .map(|(interface, error)| (interface.clone(), error.clone()))
         .collect::<Vec<_>>();
-    let total = reconciler.lifted.len() + preflight_failures.len();
+    let total = reconciler.lifted.len() + reconciler.deferred_lifts.len() + preflight_failures.len();
     let initial_task_count = match report {
         Some(report) => {
             report(InterfaceBootEvent::Discovered { total });
@@ -1681,10 +1731,8 @@ mod interface_life_switch_tests {
             let interface = InterfaceId::new(name);
             let life_cancel = cancel.child_token();
             let life_wait = life_cancel.clone();
-            let (readiness_tx, readiness_rx) = tokio::sync::oneshot::channel();
             let handle = tokio::spawn(async move {
                 life_wait.cancelled().await;
-                drop(readiness_tx);
             });
             reconciler.lifted.insert(
                 interface,
@@ -1696,7 +1744,7 @@ mod interface_life_switch_tests {
                     started_at: Instant::now(),
                     restart_attempt: 0,
                     retry_not_before: None,
-                    readiness: Some(readiness_rx),
+                    waking: true,
                 },
             );
         }
@@ -1803,6 +1851,94 @@ mod interface_life_switch_tests {
         assert_eq!(arrival.artifact.read_payload_bytes().unwrap(), br#"{"text":"lifted again"}"#);
         cancel.cancel();
         reconciler_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lives_wake_in_stages_bounded_by_the_waking_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let durable_root = root.join("durable");
+        let runs_dir = durable_root.join("runs");
+        std::fs::create_dir_all(durable_root.join("blobs")).unwrap();
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        std::fs::create_dir_all(root.join("home")).unwrap();
+        std::fs::write(root.join("home").join("host.json"), serde_json::json!({
+            "host_manifest_version": 1,
+            "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": runs_dir.to_str().unwrap()}
+        }).to_string()).unwrap();
+        let names = ["test_stage_a", "test_stage_b", "test_stage_c"];
+        let mut checkpoints = Vec::new();
+        for name in names {
+            let iface_dir = root.join("registry").join("interface").join(name);
+            std::fs::create_dir_all(&iface_dir).unwrap();
+            let var_dir = root.join("home").join("interfaces").join(name);
+            std::fs::create_dir_all(&var_dir).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&var_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            std::fs::write(iface_dir.join("interface.json"), serde_json::json!({
+                "id": name, "interface_type": "system", "role": "system",
+                "direction": "bidirectional", "source_names": [name], "interface_driver_ref": name
+            }).to_string()).unwrap();
+            std::fs::write(iface_dir.join("life.json"), serde_json::json!({
+                "processes": [{
+                    "bin": "/bin/sh",
+                    "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
+                        "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
+                    "args": ["-c", "printf '%s\\n' \"$1\"; IFS= read -r ignored", "octopus-test",
+                        serde_json::json!({"kind": "ready"}).to_string()],
+                    "authority": {
+                        "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
+                        "read_paths": [], "write_paths": [], "executable_paths": ["/bin/sh"],
+                        "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
+                        "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
+                    },
+                    "read_handles": []
+                }]
+            }).to_string()).unwrap();
+            checkpoints.push(serde_json::json!({
+                "id": format!("c_{name}"), "run": "run_stages", "trace": format!("trace:run_stages:c_{name}"), "epoch": 0,
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(name)),
+                "outbound_interface_bindings": []
+            }));
+        }
+        let active = names.iter().map(|name| format!("c_{name}")).collect::<Vec<_>>();
+        std::fs::write(runs_dir.join("run_stages.json"), serde_json::json!({
+            "id": "run_stages", "ee": "ee_test", "worker": "system_worker_test",
+            "trace": "trace:run_stages", "status": "idle",
+            "checkpoints": checkpoints, "active_checkpoints": active
+        }).to_string()).unwrap();
+        let cancel = CancellationToken::new();
+        let mut reconciler = InterfaceActivationReconciler::new(
+            root.join("registry"),
+            root.to_path_buf(),
+            tokio::sync::mpsc::channel(4).0,
+            tokio::sync::mpsc::channel(4).0,
+            cancel.clone(),
+            root.join("home"),
+            Some(durable_root),
+        );
+        reconciler.waking_limit = 1;
+        reconciler.reconcile_once().await.unwrap();
+        assert_eq!(reconciler.lifted.len(), 1, "only the waking limit is lifted at once");
+        assert_eq!(reconciler.deferred_lifts.len(), 2, "the other lives wait for their turn");
+        let mut events = Vec::new();
+        let mut report = |event| events.push(event);
+        let ready = tokio::time::timeout(
+            Duration::from_secs(10),
+            reconciler.await_initial_readiness(3, 0, Some(&mut report)),
+        )
+        .await
+        .expect("deferred lives are lifted as their waking siblings become ready")
+        .unwrap();
+        assert_eq!(ready, 3);
+        assert_eq!(reconciler.lifted.len(), 3);
+        assert!(reconciler.deferred_lifts.is_empty());
+        assert!(events.iter().all(|event| matches!(event, InterfaceBootEvent::Ready { .. })));
+        cancel.cancel();
+        reconciler.stop_all_lives().await;
     }
 
     #[tokio::test]

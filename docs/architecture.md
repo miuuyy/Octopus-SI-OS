@@ -458,7 +458,13 @@ minutes and returns to its shortest step only after the life has stayed alive
 for ten minutes, so a life that keeps crashing sleeps longer instead of being
 lifted every few seconds forever; the runtime log says when it falls into coma
 and when it wakes. Interfaces wake in no promised
-order: one that hands work to a sibling still waking up waits for it for as long
+order and a few at a time: the host lifts at most as many lives as the machine
+has cores (between two and eight) while they have not yet declared readiness,
+and the rest wait for a waking sibling to become ready, to die, or to have had
+thirty seconds. A cold start with hundreds of bound interfaces, or a binary that
+hundreds of lives import being replaced, therefore moves through the lives in
+stages instead of starting them all at once; a life whose binary changed keeps
+running the old one until its turn. One that hands work to a sibling still waking up waits for it for as long
 as the hand-in is not cancelled. A stopped interface loses nothing; an unread result is an ordinary consequence of the architecture, not a
 loss to be repaired with leases and retries.
 
