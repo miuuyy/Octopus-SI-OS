@@ -8016,6 +8016,24 @@ pub fn owned_tool_door_interface_life_with_output(
     decoder: ToolDoorArtifactDecoder,
     output_callback: Option<ToolDoorOutputCallback>,
 ) -> Result<InterfaceLiftFn, String> {
+    tool_door_interface_life(owner, decoder, output_callback, None)
+}
+
+pub fn sleeping_tool_door_interface_life_with_output(
+    owner: ToolDoorOwner,
+    decoder: ToolDoorArtifactDecoder,
+    output_callback: Option<ToolDoorOutputCallback>,
+    idle_before_sleep: std::time::Duration,
+) -> Result<InterfaceLiftFn, String> {
+    tool_door_interface_life(owner, decoder, output_callback, Some(idle_before_sleep))
+}
+
+fn tool_door_interface_life(
+    owner: ToolDoorOwner,
+    decoder: ToolDoorArtifactDecoder,
+    output_callback: Option<ToolDoorOutputCallback>,
+    idle_before_sleep: Option<std::time::Duration>,
+) -> Result<InterfaceLiftFn, String> {
     owner.validate()?;
     Ok(Arc::new(move |ctx| {
         Box::pin(tool_door_life(
@@ -8023,6 +8041,7 @@ pub fn owned_tool_door_interface_life_with_output(
             owner.clone(),
             decoder,
             output_callback.clone(),
+            idle_before_sleep,
         )) as InterfaceLifeFuture
     }))
 }
@@ -8032,12 +8051,13 @@ async fn tool_door_life(
     owner: ToolDoorOwner,
     decoder: ToolDoorArtifactDecoder,
     output_callback: Option<ToolDoorOutputCallback>,
+    idle_before_sleep: Option<std::time::Duration>,
 ) -> Result<(), String> {
     ctx.installation_root()?;
     let mut host = ToolProcessBrokerHost::new(owner.clone())?;
     host.output_callback = output_callback;
     let host = Arc::new(host);
-    let result = tool_door_loop(&ctx, &owner, Arc::clone(&host), decoder).await;
+    let result = tool_door_loop(&ctx, &owner, Arc::clone(&host), decoder, idle_before_sleep).await;
     let detached = host.detach(&ctx).await;
     match (result, detached) {
         (Ok(()), Ok(())) => Ok(()),
@@ -8051,8 +8071,10 @@ async fn tool_door_loop(
     owner: &ToolDoorOwner,
     host: Arc<ToolProcessBrokerHost>,
     decoder: ToolDoorArtifactDecoder,
+    idle_before_sleep: Option<std::time::Duration>,
 ) -> Result<(), String> {
     let maximum_in_flight = owner.max_in_flight;
+    let mut last_work = tokio::time::Instant::now();
     let host_io_limits = ctx.required_host_io_limits()?;
     let mut reader = LedgerTailReader::open_named(&ctx, "tool-door")?;
     let mut journal = ToolDoorEffectJournal::open(
@@ -8089,6 +8111,9 @@ async fn tool_door_loop(
             batch.push(row.own);
         }
         batch.extend(incoming);
+        if !batch.is_empty() {
+            last_work = tokio::time::Instant::now();
+        }
         for own in batch {
             let seq = own.movement.seq.0;
             let movement_digest = tool_door_movement_digest(&own.movement)?;
@@ -8218,9 +8243,16 @@ async fn tool_door_loop(
                     return Err(error);
                 }
                 record_tool_door_completion(completion, &mut journal, &mut rows)?;
+                last_work = tokio::time::Instant::now();
             }
             changed = reader.wait_for_change(&ctx.cancel) => {
                 changed?;
+            }
+            _ = tokio::time::sleep_until(last_work + idle_before_sleep.unwrap_or_default()),
+                if idle_before_sleep.is_some() && rows.is_empty() && tasks.is_empty() =>
+            {
+                ctx.fall_asleep(reader.next_seq())?;
+                return Ok(());
             }
         }
     }
@@ -9440,7 +9472,7 @@ mod tool_process_private_boundary_tests {
                 let path = ctx.interface_var_dir().join(TOOL_DOOR_EFFECT_JOURNAL_FILE);
                 let state = |seq| ToolDoorEffectJournal::read_only(path.clone(),65536).unwrap().entries.get(&seq).map(|entry| entry.state);
                 {
-                    let hot = tool_door_loop(&ctx, &owner, Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()), decode); tokio::pin!(hot);
+                    let hot = tool_door_loop(&ctx, &owner, Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()), decode, None); tokio::pin!(hot);
                     until(hot.as_mut(), || state(1) == Some(ToolDoorJournalState::Completed) && state(0) == Some(if early { ToolDoorJournalState::Completed } else { ToolDoorJournalState::Prepared })).await;
                     assert!(std::fs::read(ctx.interface_var_dir().join("attempts")).unwrap().len() <= 3);
                     ctx.cancel.cancel(); hot.await.unwrap();
@@ -9449,7 +9481,7 @@ mod tool_process_private_boundary_tests {
                     assert_eq!(LedgerTailReader::open_named(&ctx, "tool-door").unwrap().next_seq(), 0);
                     ctx.cancel = tokio_util::sync::CancellationToken::new();
                     let attempts = std::fs::read(ctx.interface_var_dir().join("attempts")).unwrap().len();
-                    let cold = tool_door_loop(&ctx, &owner, Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()), decode); tokio::pin!(cold);
+                    let cold = tool_door_loop(&ctx, &owner, Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()), decode, None); tokio::pin!(cold);
                     until(cold.as_mut(), || std::fs::read(ctx.interface_var_dir().join("attempts")).unwrap().len() > attempts).await; receipt(&ctx, &source);
                     if refused {
                         let output = tokio::select! { output = tokio::time::timeout(std::time::Duration::from_secs(5), outputs.recv()) => output.unwrap().unwrap(), result = &mut cold => panic!("door stopped: {result:?}") };
@@ -9460,6 +9492,22 @@ mod tool_process_private_boundary_tests {
                 }
                 assert_eq!(std::fs::read(ctx.interface_var_dir().join("unrelated")).unwrap(), b"x");
             }
+        }
+
+        #[tokio::test]
+        async fn an_idle_sleeping_door_falls_asleep_past_what_it_has_read() {
+            fn decode(_: &InterfaceLiftContext, _: &InterfaceInvocationEnvelope, _: ToolDoorArtifactDecodePurpose) -> Result<Option<ToolCallArtifact>, ToolDoorArtifactDecodeError> {
+                Ok(None)
+            }
+            let root = tempfile::tempdir().unwrap(); let root = root.path().canonicalize().unwrap();
+            let (ctx, _, _, _outputs, source) = completed_fixture(&root, 1).await;
+            write_recovery_ledger(&root, &[source]);
+            let owner = ToolDoorOwner { worker_environment_kind:WorkerEnvironmentKindId::new("test.room"), door_interface:ctx.interface.clone(), max_in_flight:2, private_read_max_bytes:4096, root_slot_transform:None };
+            let door = tool_door_loop(&ctx, &owner, Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()), decode, Some(std::time::Duration::from_millis(50)));
+            tokio::time::timeout(std::time::Duration::from_secs(5), door).await
+                .expect("an idle sleeping door ends itself").unwrap();
+            assert_eq!(*ctx.asleep.lock().unwrap(), Some(1), "the door sleeps through the movement it handled");
+            assert_eq!(LedgerTailReader::open_named(&ctx, "tool-door").unwrap().next_seq(), 1);
         }
     }
     use super::{

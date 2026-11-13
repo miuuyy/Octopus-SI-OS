@@ -227,7 +227,7 @@ async fn completed_outputs_survive_transient_refusal_and_cold_broker_recovery_wi
         let owner = ToolDoorOwner { worker_environment_kind:WorkerEnvironmentKindId::new("test.room"),
             door_interface:ctx.interface.clone(), max_in_flight:1, private_read_max_bytes:4096, root_slot_transform:None };
         let host = Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap());
-        let cold = tool_door_loop(&ctx, &owner, host.clone(), default_tool_door_artifact_decoder);
+        let cold = tool_door_loop(&ctx, &owner, host.clone(), default_tool_door_artifact_decoder, None);
         tokio::pin!(cold);
         if retryable {
             let output = tokio::select! { output=arrivals.recv()=>output.unwrap(), result=&mut cold=>panic!("cold recovery failed: {result:?}") };
@@ -284,7 +284,7 @@ async fn explicit_completed_output_import_replays_only_selected_receipt_behind_c
     host.output_callback = Some(Arc::new(CompletedOutputOwner { mode:"original", calls:Arc::new(AtomicU64::new(0)),
         proofs:Arc::new(AtomicU64::new(0)), unsubmitted:true }));
     let host = Arc::new(host);
-    let resumed = tool_door_loop(&ctx, &owner, host.clone(), default_tool_door_artifact_decoder);
+    let resumed = tool_door_loop(&ctx, &owner, host.clone(), default_tool_door_artifact_decoder, None);
     tokio::pin!(resumed);
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         tokio::select! {
@@ -516,7 +516,7 @@ async fn completed_output_legacy_recovery_waits_for_partial_tail_but_rejects_com
             let mut reader = LedgerTailReader::open_named(&cold, "tool-door").unwrap();
             let consumed = reader.read_new_uncommitted_limit(1).unwrap(); reader.commit_through(&consumed[0]).unwrap(); drop(reader);
             let (cold, ready) = cold.with_readiness_channel();
-            let resumed = tool_door_loop(&cold, &owner, host.clone(), default_tool_door_artifact_decoder);
+            let resumed = tool_door_loop(&cold, &owner, host.clone(), default_tool_door_artifact_decoder, None);
             tokio::pin!(resumed);
             tokio::select! { ready=ready=>ready.unwrap().unwrap(), result=&mut resumed=>panic!("door ended before ready: {result:?}") }
             tokio::select! {

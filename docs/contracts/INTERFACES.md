@@ -131,7 +131,10 @@ That is sleep, not coma: no failure is recorded and no backoff applies. When
 the runtime records a movement for that folder at or past `through_seq`, it
 lifts the life again, and the life catches up from its cursor. A frame after
 `asleep`, or `asleep` before readiness, fails the life closed. A life that
-listens to the world (a clock, a mailbox, a chat) never prints it.
+listens to the world (a clock, a mailbox, a chat) never prints it. The system
+room's door sleeps after two idle minutes with no call in flight, and its tool
+processes end with it; doors whose tool processes hold a live session (a
+browser, a desktop, a shell) keep living.
 
 **Hand-in.** The process prints one JSON line per artifact:
 

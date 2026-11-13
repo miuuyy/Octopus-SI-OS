@@ -442,6 +442,7 @@ pub struct InterfaceLiftContext {
     pub(crate) cancel: CancellationToken,
     readiness: InterfaceLifeReadiness,
     source_movement: Option<Arc<Movement>>,
+    pub(crate) asleep: Arc<std::sync::Mutex<Option<u64>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -514,6 +515,7 @@ impl InterfaceLiftContext {
             cancel,
             readiness: InterfaceLifeReadiness::default(),
             source_movement: None,
+            asleep: Default::default(),
         }
     }
 
@@ -527,6 +529,18 @@ impl InterfaceLiftContext {
 
     pub(crate) fn signal_ready(&self) -> Result<(), String> {
         self.readiness.signal(Ok(()))
+    }
+
+    pub(crate) fn fall_asleep(&self, through_seq: u64) -> Result<(), String> {
+        let mut asleep = self
+            .asleep
+            .lock()
+            .map_err(|_| "interface life sleep lock is poisoned".to_string())?;
+        if asleep.is_some() {
+            return Err("interface life declared sleep twice".to_string());
+        }
+        *asleep = Some(through_seq);
+        Ok(())
     }
 
     pub(crate) fn required_host_io_limits(&self) -> Result<InterfaceHostIoLimits, String> {
@@ -1118,6 +1132,9 @@ enum SpawnedLifeOutput {
         source_movement_seq: u64,
         to_interface: String,
     },
+    Asleep {
+        through_seq: u64,
+    },
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -1378,15 +1395,34 @@ pub async fn run_spawned_interface_life(life: InterfaceLiftFn) -> Result<(), Str
     );
     let input =
         pump_spawned_life_inputs(Arc::clone(&pending), host_io_limits.max_control_frame_bytes);
+    let asleep = Arc::clone(&ctx.asleep);
     let life = life(ctx);
     tokio::pin!(output);
     tokio::pin!(input);
     tokio::pin!(life);
-    tokio::select! {
+    let result = tokio::select! {
         result = &mut life => result,
-        result = &mut output => result,
-        result = &mut input => result,
+        result = &mut output => return result,
+        result = &mut input => return result,
+    };
+    result?;
+    let through_seq = *asleep
+        .lock()
+        .map_err(|_| "interface life sleep lock is poisoned".to_string())?;
+    if let Some(through_seq) = through_seq {
+        use std::io::Write;
+        let bytes = serialize_bounded_json_line(
+            &SpawnedLifeOutput::Asleep { through_seq },
+            host_io_limits.max_control_frame_bytes,
+            "spawned-life output frame",
+        )?;
+        let mut stdout = std::io::stdout();
+        stdout
+            .write_all(&bytes)
+            .and_then(|()| stdout.flush())
+            .map_err(|error| format!("spawned life sleep frame write failed: {error}"))?;
     }
+    Ok(())
 }
 
 fn required_spawned_env_path(name: &str) -> Result<PathBuf, String> {
@@ -1440,7 +1476,8 @@ fn spawned_context_from_env(
         emissions,
         cancel: CancellationToken::new(),
         readiness: InterfaceLifeReadiness::default(),
-            source_movement: None,
+        source_movement: None,
+        asleep: Default::default(),
     })
 }
 
