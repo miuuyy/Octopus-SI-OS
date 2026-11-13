@@ -2192,3 +2192,37 @@
         assert!(matches!(control_reader_ownership(Some(&broker), 10, 11, "operator.message"), ControlReaderOwnership::Main));
         assert!(matches!(control_reader_ownership(Some(&broker), 10, 12, "operator.turn.control"), ControlReaderOwnership::Independent));
     }
+
+    #[tokio::test]
+    async fn provider_sleeps_only_with_no_open_turn_and_no_deferred_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let descriptor = descriptor();
+        let ctx = context(root.path(), &descriptor);
+        let controls = ActiveTurnControls::default();
+        let mut driver = None;
+        assert!(provider_may_sleep(&ctx, &BTreeMap::new(), &controls, &mut driver).await.unwrap());
+
+        let broker = CodexTurnControlBroker::new(Some(1));
+        controls.lock().await.insert("run-a".into(), broker.clone());
+        assert!(!provider_may_sleep(&ctx, &BTreeMap::new(), &controls, &mut driver).await.unwrap(),
+            "a turn that is open, one waiting for a result included, keeps its provider awake");
+        broker.finish();
+        assert!(provider_may_sleep(&ctx, &BTreeMap::new(), &controls, &mut driver).await.unwrap());
+
+        let message = InterfaceArtifactFile::write(root.path().join("sent"), "operator.message", br#"{"text":"later"}"#).unwrap();
+        let deferred = BTreeMap::from([(7, DeferredProviderTurn {
+            run: RunId::new("run-a"),
+            turn: QueuedTurn {
+                envelope: InterfaceInvocationEnvelope {
+                    artifact: materialized_artifact_ref(&message).unwrap(),
+                    artifact_file: message,
+                    artifact_binding_payloads: Vec::new(),
+                    metadata: Some(runtime_metadata()),
+                },
+                seq: 7,
+            },
+            release: None,
+        })]);
+        assert!(!provider_may_sleep(&ctx, &deferred, &controls, &mut driver).await.unwrap(),
+            "a deferred turn is held in the life's files and is released only by a life that stays awake");
+    }

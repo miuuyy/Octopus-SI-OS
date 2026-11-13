@@ -119,3 +119,71 @@ fn receipt_tail_does_not_buffer_other_inputs_and_waits_for_complete_rows() {
     file.set_len(0).unwrap();
     assert!(tail.catch_up(&ctx, None, 7, &door).is_err());
 }
+
+#[tokio::test(start_paused = true)]
+async fn idle_intake_sleeps_at_its_cursor_and_a_woken_life_takes_the_input_from_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let path = home.join("movements.jsonl");
+    let owner = InterfaceId::new("intake");
+    let mut descriptor: octopus_interfaces::InterfaceDescriptor = serde_json::from_slice(&std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../system_service_input/interface.json")).unwrap()).unwrap();
+    descriptor.id = owner.clone();
+    descriptor.interface_driver_config.as_mut().unwrap().private_config.insert("input_intake".into(), serde_json::json!({
+        "schema_version":1,"run":"recipient","provider_interface":"provider","input_label":"provider.peer.input",
+        "writer":{"owner":"intake","source":"intake","door":"writer","tool":"file.write","call_label":"tool.call","result_label":"file.write.result"},
+        "profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"},
+        "provider_profile":{"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"},
+        "writer_required_verified_artifacts":[{"artifact_label":"tool.call","mark":"tool.call.allowed","verifier":"tool_call_allowed","params":{"tools":["file.write"],"metadata_matches":[{"metadata":"/runtime/run_record_hash","payload":"/arguments/expected_before_hash"}]}}],"artifact_bindings":[]
+    }));
+    let life = || {
+        let (arrivals, _receiver) = tokio::sync::mpsc::channel(1);
+        let mut ctx = InterfaceLiftContext::unprivileged(
+            owner.clone(), home.clone(), Some(descriptor.clone()), home.join("var"), path.clone(), home.join("blobs"),
+            home.join("index.sqlite"), [("run_records_root".to_string(), home.join("runs"))].into(),
+            arrivals, tokio_util::sync::CancellationToken::new(),
+        );
+        ctx.host_io_limits = Some(octopus_interface_transport::InterfaceHostIoLimits {
+            max_control_frame_bytes: 65536, max_stderr_bytes: 1024, max_manifest_bytes: 65536, max_payload_bytes: 65536,
+        });
+        ctx
+    };
+    std::fs::create_dir_all(home.join("runs")).unwrap();
+    std::fs::create_dir_all(home.join("blobs")).unwrap();
+    let sent = Movement {
+        seq: Seq(0), lamport: Lamport(0), recorded_at_unix_ms: 0, trace: TraceId("source".into()),
+        kind: MovementKind::InterfaceOutbound, from: Endpoint::Interface("sender".into()),
+        to: Endpoint::Interface("elsewhere".into()), artifact: None, invocation_metadata: None,
+    };
+    let mut ledger = std::fs::File::create(&path).unwrap();
+
+    let idle = life();
+    run(idle.clone()).await.unwrap();
+    assert_eq!(idle.sleep_declaration().and_then(|sleep| sleep.through_seq), Some(0),
+        "an idle intake sleeps at the first movement it has not read");
+
+    let message = br#"{"action":"queue","control_id":"passive","text":"context only"}"#;
+    let file = InterfaceArtifactFile::write(home.join("sent"), PEER_MESSAGE_LABEL, message).unwrap();
+    std::fs::write(home.join("blobs").join(ContentHash::of_bytes(message).to_hex()), message).unwrap();
+    let manifest = std::fs::read(file.manifest_path()).unwrap();
+    let artifact = octopus_ledger::ArtifactRef { id: "provider.peer.message:woken".into(), content: ContentHash::of_bytes(&manifest) };
+    std::fs::write(home.join("blobs").join(artifact.content.to_hex()), &manifest).unwrap();
+    let mut input = sent;
+    input.to = Endpoint::Interface(owner.clone());
+    input.artifact = Some(artifact.clone());
+    input.invocation_metadata = Some(octopus_ledger::InvocationMetadata::new(Default::default())
+        .with_runtime(octopus_ledger::RuntimeInvocationMetadata {
+            run: octopus_descriptors::RunId::new("recipient"), ee: octopus_descriptors::EeId::new("ee"),
+            worker: InterfaceId::new("worker"), checkpoint: octopus_descriptors::CheckpointId::new("input"),
+            interface: owner.clone(), epoch: 0, run_record_hash: None,
+        }).into());
+    writeln!(ledger, "{}", serde_json::to_string(&input).unwrap()).unwrap();
+
+    let woken = life();
+    let ended = run(woken.clone()).await;
+    let state = load_state(&home.join("var").join("input-state.json"), 262144).unwrap();
+    let pending = state.pending.unwrap_or_else(|| panic!("the woken life retains the input that arrived at its sleep boundary: {ended:?}"));
+    assert_eq!((pending.source.seq, pending.delivery.source_artifact), (Seq(0), artifact));
+    assert!(woken.sleep_declaration().is_none() && ended.is_err(),
+        "a life holding an undelivered input never sleeps on it: {ended:?}");
+}

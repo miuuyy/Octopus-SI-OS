@@ -70,6 +70,7 @@ octopus-app-server-interface = { path = "../../../world_operator_chat/packages/o
 
 [dev-dependencies]
 json-patch.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 octopus-app-server = { path = "../../../../../crates/octopus-app-server" }
 octopus-system-room-env = { path = "../../../../../registry/worker_environment_kind/system_room/packages/octopus-system-room-env" }
 toml = "0.9.5"
