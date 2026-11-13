@@ -16,6 +16,11 @@
         "smtp_host_env": "EMAIL_SMTP_SERVER",
         "allowed_senders_env": "EMAIL_ALLOWED_SENDERS"
       },
+      "context_artifact_bindings": [
+        {
+          "id": "artifact-application-email-context"
+        }
+      ],
       "operation_catalog_dir": "operations",
       "operation_catalog_label": "email.operation_catalog",
       "operation_request_label": "email.operation.request",

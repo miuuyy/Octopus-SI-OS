@@ -18,7 +18,8 @@
         "registry/interface/world_email/email_contract.py",
         "registry/interface/world_email/email_wire.py",
         "registry/interface/world_email/octopus_operation_catalog.py",
-        "registry/interface/world_email/octopus_content_hash.py"
+        "registry/interface/world_email/octopus_content_hash.py",
+        "registry/interface/world_email/config.json"
       ],
       "env": {
         "PYTHONDONTWRITEBYTECODE": "1"
