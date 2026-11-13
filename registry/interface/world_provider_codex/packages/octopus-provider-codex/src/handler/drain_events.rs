@@ -953,6 +953,9 @@ impl CodexAppServerInterfaceDriver {
                 } else {
                     sink.replace_pending(continuity)?;
                 }
+                if matches!(&pending.kind, PendingServerRequestKind::InterfaceOperation { .. }) {
+                    sink.send_awaiting_results_receipt()?;
+                }
                 if let Some(lifecycle) = context.lifecycle {
                     let held = hold_lifecycle_output(sink, output)?;
                     let subject_artifact = match &held {

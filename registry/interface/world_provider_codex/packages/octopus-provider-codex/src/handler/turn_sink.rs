@@ -378,7 +378,7 @@ impl TurnSink<'_> {
             || !self.client_projection_output_labels.contains(INTERFACE_CONTEXT_UPDATED_LABEL)
         {
             return Err(InterfaceDriverError::FailedClosed(
-                "a result consumed while other calls remain outstanding requires the declared context output binding".into(),
+                "calls a turn awaits outside its own context outputs require the declared context output binding".into(),
             ));
         }
         self.send(CodexTurnOutput::client(

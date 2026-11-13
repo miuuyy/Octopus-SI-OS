@@ -866,7 +866,10 @@ A native turn may wait on several external calls at once. The provider admits
 every ordinary dynamic tool or interface-operation request that arrives while
 earlier calls wait, emits each as its own call artifact and records the whole
 set in its continuity, so every snapshot names exactly the calls still
-outstanding. A request that arrives after the turn's drain suspended wakes the
+outstanding. An interface-operation request carries only the contract of the
+interface it addresses, so before it leaves the provider emits
+`interface.context.updated` naming the `awaiting_results` with the continuity
+that holds the new call; its result then finds its wait recorded. A request that arrives after the turn's drain suspended wakes the
 provider: it is drained through the same path, after that turn's notifications
 buffered before it, and what the drain emits continues the completed handoff of
 the turn's latest arrival in terminal batches of that source movement; no new
