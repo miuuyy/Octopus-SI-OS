@@ -705,6 +705,9 @@ enum SpawnedLifeOutput {
         source_movement_seq: u64,
         to_interface: String,
     },
+    Asleep {
+        through_seq: u64,
+    },
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -745,15 +748,31 @@ pub async fn run_spawned_interface_life(life: InterfaceLiftFn) -> Result<(), Str
     );
     let input =
         pump_spawned_life_inputs(Arc::clone(&pending), host_io_limits.max_control_frame_bytes);
+    let observed = ctx.clone();
     let life = life(ctx);
     tokio::pin!(output);
     tokio::pin!(input);
     tokio::pin!(life);
-    tokio::select! {
+    let result = tokio::select! {
         result = &mut life => result,
-        result = &mut output => result,
-        result = &mut input => result,
+        result = &mut output => return result,
+        result = &mut input => return result,
+    };
+    result?;
+    if let Some(through_seq) = observed.asleep_through() {
+        use std::io::Write;
+        let bytes = serialize_bounded_json_line(
+            &SpawnedLifeOutput::Asleep { through_seq },
+            host_io_limits.max_control_frame_bytes,
+            "spawned-life output frame",
+        )?;
+        let mut stdout = std::io::stdout();
+        stdout
+            .write_all(&bytes)
+            .and_then(|()| stdout.flush())
+            .map_err(|error| format!("spawned life sleep frame write failed: {error}"))?;
     }
+    Ok(())
 }
 
 fn required_spawned_env_path(name: &str) -> Result<PathBuf, String> {

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const DRIVER: &str = "bound_context_projection";
+const IDLE_BEFORE_SLEEP: std::time::Duration = std::time::Duration::from_secs(120);
 pub const OUTPUT_LABEL: &str = "memory.experience.input";
 pub const OUTCOME_LABEL: &str = "memory.capture.outcome";
 pub const OUTCOME_ERROR_LABEL: &str = "memory.capture.error";
@@ -616,15 +617,24 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
     let session = ProviderHandoffSession::new(&ctx)?;
     let authoring_result = RunAuthoringResultIdentity::from_descriptor(&descriptor)?;
     ctx.signal_ready().await?;
+    let mut last_work = tokio::time::Instant::now();
     loop {
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
         let batch = reader.read_new()?;
         if batch.is_empty() {
-            reader.wait_for_change(&ctx.cancel).await?;
+            tokio::select! {
+                biased;
+                changed = reader.wait_for_change(&ctx.cancel) => changed?,
+                _ = tokio::time::sleep_until(last_work + IDLE_BEFORE_SLEEP) => {
+                    ctx.fall_asleep(reader.next_seq())?;
+                    return Ok(());
+                }
+            }
             continue;
         }
+        last_work = tokio::time::Instant::now();
         for own in batch {
             let envelope = reader.envelope(&own)?;
             let manifest = envelope.artifact_file.read_manifest().map_err(|e| e.to_string())?;

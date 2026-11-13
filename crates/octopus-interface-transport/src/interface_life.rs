@@ -424,6 +424,14 @@ impl InterfaceLiftContext {
         }
     }
 
+    pub fn fall_asleep(&self, through_seq: u64) -> Result<(), String> {
+        self.asleep.declare(through_seq)
+    }
+
+    pub fn asleep_through(&self) -> Option<u64> {
+        self.asleep.through_seq()
+    }
+
     pub fn with_readiness_channel(
         mut self,
     ) -> (Self, tokio::sync::oneshot::Receiver<Result<(), String>>) {
