@@ -494,6 +494,26 @@ pub(super) struct StandingJournal {
     context_generations: u64,
 }
 
+/// The source whose non-terminal handoff a result input continues. Journal
+/// lines are bound to the exact persisted handoff, so lines of that source are
+/// the continued turn's own standing deliveries rather than an unfinished
+/// sibling source.
+pub(super) fn continued_result_source(
+    pending: Option<&PendingHandoff>,
+    source_movement_seq: u64,
+    result_input: bool,
+) -> Option<u64> {
+    pending
+        .filter(|pending| {
+            result_input
+                && !pending.terminal
+                && pending.source_movement_seq < source_movement_seq
+                && pending.withdrawal.is_none()
+                && !pending.publication_unfinished()
+        })
+        .map(|pending| pending.source_movement_seq)
+}
+
 impl ProviderOutputHandoff {
     pub(super) fn standing_route_for(
         &self,
@@ -540,7 +560,18 @@ impl ProviderOutputHandoff {
 
     pub(super) fn standing_items_since_write(&self, record: &RunRecord) -> Result<Vec<PendingHandoffItem>, String> {
         let lines = journal_lines(&self.ctx, record, &self.config.provider_interface)?;
-        if let Some(other) = lines.iter().find(|line| line.source_movement_seq != self.source_movement_seq) {
+        let continued = if lines.iter().any(|line| line.source_movement_seq != self.source_movement_seq) {
+            continued_result_source(
+                persisted_pending_handoff(record, &self.config.provider_interface)?.as_ref(),
+                self.source_movement_seq,
+                self.result_input_template()?.is_some(),
+            )
+        } else {
+            None
+        };
+        if let Some(other) = lines.iter().find(|line| {
+            line.source_movement_seq != self.source_movement_seq && Some(line.source_movement_seq) != continued
+        }) {
             return Err(format!(
                 "provider write for movement {} meets standing deliveries of movement {} without their terminal boundary",
                 self.source_movement_seq, other.source_movement_seq

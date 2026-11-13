@@ -2073,6 +2073,24 @@
     }
 
     #[test]
+    fn result_input_owns_standing_deliveries_of_the_turn_it_continues() {
+        let pending = |source: u64, terminal: bool| -> PendingHandoff {
+            serde_json::from_value(serde_json::json!({
+                "source_movement_seq": source, "items": [], "terminal": terminal, "dispatch_fenced": true
+            })).unwrap()
+        };
+        let open = pending(9201, false);
+        // A result for the open tool-calling turn continues that turn's journal.
+        assert_eq!(standing_routes::continued_result_source(Some(&open), 9246, true), Some(9201));
+        // An ordinary later input does not own another source's standing deliveries.
+        assert_eq!(standing_routes::continued_result_source(Some(&open), 9246, false), None);
+        // A completed predecessor or a later handoff is never continued this way.
+        assert_eq!(standing_routes::continued_result_source(Some(&pending(9201, true)), 9246, true), None);
+        assert_eq!(standing_routes::continued_result_source(Some(&pending(9300, false)), 9246, true), None);
+        assert_eq!(standing_routes::continued_result_source(None, 9246, true), None);
+    }
+
+    #[test]
     fn amended_static_context_stays_static_for_retained_context_owner_input() {
         let mut config = config_with_tool_routes(&[]);
         let catalog = ArtifactId::new("artifact-operation-catalog-test");
