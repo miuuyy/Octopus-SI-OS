@@ -3,6 +3,9 @@ const net = require("node:net");
 const path = require("node:path");
 const WebSocket = require("ws");
 
+const REFUSED_CONNECTION_RETRY_MS = 2_000;
+const REFUSED_CONNECTION_RETRY_STEP_MS = 50;
+
 function handInArtifact(request) {
   const interfaceId = safeSegment(request?.interfaceId, "interfaceId");
   const octopusHome = absolutePath(request?.octopusHome, "octopusHome");
@@ -20,25 +23,17 @@ function handInArtifact(request) {
     let settled = false;
     let opened = false;
     let dispatched = false;
-    const socket = target.kind === "unix"
-      ? new WebSocket("ws://localhost/", {
-        createConnection: () => net.createConnection(target.path),
-        handshakeTimeout: timeoutMs,
-        maxPayload: 1024 * 1024,
-        perMessageDeflate: false,
-      })
-      : new WebSocket(target.url, {
-        handshakeTimeout: timeoutMs,
-        maxPayload: 1024 * 1024,
-        perMessageDeflate: false,
-      });
+    let socket = null;
+    let retry = null;
+    const refusedUntil = Date.now() + REFUSED_CONNECTION_RETRY_MS;
     const finish = (error, verdict) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(retry);
       try {
-        if (socket.readyState === WebSocket.OPEN) socket.close();
-        else socket.terminate();
+        if (socket?.readyState === WebSocket.OPEN) socket.close();
+        else socket?.terminate();
       } catch {}
       if (error) {
         error.deliveryStage = dispatched ? "outcome-unknown" : "not-sent";
@@ -50,42 +45,66 @@ function handInArtifact(request) {
       () => finish(new Error(`artifact delivery verdict timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
-    socket.once("open", () => {
-      if (settled) return;
-      opened = true;
-      dispatched = true;
-      try {
-        socket.send(frame, (error) => {
-          if (error) finish(error);
+    const connect = () => {
+      let refused = false;
+      const attempt = target.kind === "unix"
+        ? new WebSocket("ws://localhost/", {
+          createConnection: () => net.createConnection(target.path),
+          handshakeTimeout: timeoutMs,
+          maxPayload: 1024 * 1024,
+          perMessageDeflate: false,
+        })
+        : new WebSocket(target.url, {
+          handshakeTimeout: timeoutMs,
+          maxPayload: 1024 * 1024,
+          perMessageDeflate: false,
         });
-      } catch (error) { finish(error); }
-    });
-    socket.once("message", (data, isBinary) => {
-      if (isBinary) {
-        finish(new Error("artifact delivery returned a binary verdict frame"));
-        return;
-      }
-      let verdict;
-      try {
-        verdict = JSON.parse(Buffer.from(data).toString("utf8"));
-      } catch (error) {
-        finish(new Error(`artifact delivery returned malformed verdict JSON: ${error.message}`));
-        return;
-      }
-      if (!isObject(verdict)) {
-        finish(new Error("artifact delivery verdict must be a JSON object"));
-        return;
-      }
-      finish(null, verdict);
-    });
-    socket.once("error", (error) => finish(error));
-    socket.once("close", (code, reason) => {
-      if (settled) return;
-      const detail = Buffer.from(reason).toString("utf8");
-      finish(new Error(
-        `${opened ? "artifact delivery closed before a verdict" : "artifact delivery could not connect"} (${code}${detail ? `: ${detail}` : ""})`,
-      ));
-    });
+      socket = attempt;
+      attempt.once("open", () => {
+        if (settled) return;
+        opened = true;
+        dispatched = true;
+        try {
+          attempt.send(frame, (error) => {
+            if (error) finish(error);
+          });
+        } catch (error) { finish(error); }
+      });
+      attempt.once("message", (data, isBinary) => {
+        if (isBinary) {
+          finish(new Error("artifact delivery returned a binary verdict frame"));
+          return;
+        }
+        let verdict;
+        try {
+          verdict = JSON.parse(Buffer.from(data).toString("utf8"));
+        } catch (error) {
+          finish(new Error(`artifact delivery returned malformed verdict JSON: ${error.message}`));
+          return;
+        }
+        if (!isObject(verdict)) {
+          finish(new Error("artifact delivery verdict must be a JSON object"));
+          return;
+        }
+        finish(null, verdict);
+      });
+      attempt.once("error", (error) => {
+        if (!settled && !opened && target.kind === "unix" && error?.code === "ECONNREFUSED" && Date.now() < refusedUntil) {
+          refused = true;
+          retry = setTimeout(connect, REFUSED_CONNECTION_RETRY_STEP_MS);
+          return;
+        }
+        finish(error);
+      });
+      attempt.once("close", (code, reason) => {
+        if (settled || refused) return;
+        const detail = Buffer.from(reason).toString("utf8");
+        finish(new Error(
+          `${opened ? "artifact delivery closed before a verdict" : "artifact delivery could not connect"} (${code}${detail ? `: ${detail}` : ""})`,
+        ));
+      });
+    };
+    connect();
   });
 }
 

@@ -73,6 +73,20 @@ test("actual socket admission distinguishes pre-dispatch failure, unknown outcom
   assert.equal((await send({ ...request, endpoint: `unix://${handshake}` })).deliveryError.stage, "not-sent");
   for (const socket of connections) socket.destroy();
   mode = "admitted";
+  const asleep = path.join(scratch, "z"), staged = path.join(scratch, "p");
+  const gone = require("node:net").createServer();
+  gone.listen(staged); await once(gone, "listening");
+  fs.renameSync(staged, asleep); await new Promise((resolve) => gone.close(resolve));
+  const woken = require("node:http").createServer();
+  const wokenWss = new WebSocketServer({ server: woken });
+  wokenWss.on("connection", (socket) => socket.once("message", () => socket.send(JSON.stringify({ admitted: { seq: 6 } }))));
+  t.after(async () => {
+    for (const socket of wokenWss.clients) socket.terminate();
+    await new Promise((resolve) => wokenWss.close(resolve));
+    if (woken.listening) await new Promise((resolve) => woken.close(resolve));
+  });
+  setTimeout(() => woken.listen(staged, () => fs.renameSync(staged, asleep)), 120);
+  assert.deepEqual((await send({ ...request, endpoint: `unix://${asleep}`, timeoutMs: 3000 })).verdict, { admitted: { seq: 6 } });
   const afterAdmission = await captureArtifactDelivery(async (deliver) => { await deliver(request); throw new Error("read failed"); });
   assert.equal(afterAdmission.deliveryError.stage, "admitted");
 });
