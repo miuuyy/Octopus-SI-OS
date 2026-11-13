@@ -27,11 +27,11 @@
     "properties": {
       "query": {"type": "string", "minLength": 1},
       "mode": {"type": "string", "enum": ["content", "path"]},
-      "path": {"type": "string"},
+      "path": {"type": "string", "minLength": 1, "description": "Directory or file to search: relative to the formed workspace root (\".\" is the whole workspace root, which in a full-access room is the filesystem root), or an absolute path inside another filesystem root explicitly granted to this task."},
       "max_results": {"type": "integer", "minimum": 1, "maximum": 500},
       "case_sensitive": {"type": "boolean"}
     },
-    "required": ["query"],
+    "required": ["query", "path"],
     "additionalProperties": false
   },
   "is_world_effect": false

@@ -483,8 +483,7 @@ async fn grep(
     let query = required_string_argument(&tool_id, &call.arguments, "query")?;
     let mode = optional_string_argument(&tool_id, &call.arguments, "mode")?
         .unwrap_or_else(|| "content".to_string());
-    let path = optional_string_argument(&tool_id, &call.arguments, "path")?
-        .unwrap_or_else(|| ".".to_string());
+    let path = required_string_argument(&tool_id, &call.arguments, "path")?;
     let max_results = bounded_optional_usize_argument(
         &tool_id,
         &call.arguments,

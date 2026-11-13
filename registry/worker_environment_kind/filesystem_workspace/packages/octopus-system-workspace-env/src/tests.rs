@@ -796,7 +796,7 @@ async fn content_grep_bounds_line_memory_and_total_scanned_bytes() {
             &context,
             &ToolCall {
                 tool_id: "workspace.grep.run_grep_line_limit".to_string(),
-                arguments: json!({"query": "needle"}),
+                arguments: json!({"path": ".", "query": "needle"}),
                 handler_config: grep_config(10, 1024, 1000, 16),
             },
         )
@@ -816,7 +816,7 @@ async fn content_grep_bounds_line_memory_and_total_scanned_bytes() {
             &context,
             &ToolCall {
                 tool_id: "workspace.grep.run_grep_byte_limit".to_string(),
-                arguments: json!({"query": "absent"}),
+                arguments: json!({"path": ".", "query": "absent"}),
                 handler_config: grep_config(10, 8, 1000, 64),
             },
         )
@@ -827,6 +827,17 @@ async fn content_grep_bounds_line_memory_and_total_scanned_bytes() {
         byte_limited.body["truncation_reasons"],
         json!(["max_scanned_bytes"])
     );
+    let unrooted = WorkspaceFsHandler
+        .execute(
+            &context,
+            &ToolCall {
+                tool_id: "workspace.grep.run_grep_without_path".to_string(),
+                arguments: json!({"query": "needle"}),
+                handler_config: grep_config(10, 1024, 1000, 64),
+            },
+        )
+        .await;
+    assert!(matches!(unrooted, Err(ToolHandlerError::InvalidArguments { .. })));
 }
 
 #[tokio::test]
@@ -862,7 +873,7 @@ async fn content_grep_enforces_descriptor_file_limit_and_complete_limit_config()
             &context,
             &ToolCall {
                 tool_id: "workspace.grep.run_grep_file_limit".to_string(),
-                arguments: json!({"query": "needle"}),
+                arguments: json!({"path": ".", "query": "needle"}),
                 handler_config: grep_config(1, 1024, 1000, 64),
             },
         )
@@ -880,7 +891,7 @@ async fn content_grep_enforces_descriptor_file_limit_and_complete_limit_config()
             &context,
             &ToolCall {
                 tool_id: "workspace.grep.run_incomplete_config".to_string(),
-                arguments: json!({"query": "needle"}),
+                arguments: json!({"path": ".", "query": "needle"}),
                 handler_config: json!({
                     "operation": "grep",
                     "max_scanned_files": 1,
