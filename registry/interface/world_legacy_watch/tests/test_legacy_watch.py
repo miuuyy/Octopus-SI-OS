@@ -574,7 +574,7 @@ class AuthorTest(unittest.TestCase):
         with open(os.path.join(self.home, "registry", "interface", "world_email", "config.json")) as handle:
             text_before = handle.read()
         config_before = json.loads(text_before)
-        completed = self.author()
+        completed = self.author("--project-access")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         with open(self.observation) as handle:
             observation = json.load(handle)
@@ -715,7 +715,7 @@ class AuthorTest(unittest.TestCase):
         with open(config_path) as handle:
             text_before = handle.read()
         config_before = json.loads(text_before)
-        rearmed = self.author("--rearm", "--full-access", "--any-sender")
+        rearmed = self.author("--rearm", "--any-sender")
         self.assertEqual(rearmed.returncode, 0, rearmed.stderr)
         self.assertIn("full machine access", rearmed.stdout)
         self.assertIn("now admits every sender", rearmed.stdout)

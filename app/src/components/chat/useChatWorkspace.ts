@@ -113,6 +113,7 @@ import { chatDraftKey, useChatDraftState, type ChatDraftValue } from "./useChatD
 import { pendingQueueSteering, queueDispatchCandidates, queueSubmissionFailureStatus, queueTurnReady, visibleQueueTurns } from "./clientTurnQueue";
 import { useChatTurnQueue, type QueuedChatTurn } from "./useChatTurnQueue";
 import {
+  DEFAULT_TASK_ACCESS_MODE,
   taskAccessModeFromDoorHostSlots,
   type TaskAccessMode,
 } from "./taskAccess";
@@ -1056,7 +1057,7 @@ export function useChatWorkspace(
       setWorkerInterfaceId("");
       setApplicationIds([]);
       setDriverNames([]);
-      setAccessMode("project_access");
+      setAccessMode(DEFAULT_TASK_ACCESS_MODE);
     }
   }, [agentPresets, executionContexts, executionContextsLoaded, providerInterfacesLoaded]);
 
@@ -1160,7 +1161,7 @@ export function useChatWorkspace(
       const restored = { ...failed, messageId: failed.status === "unknown" ? failed.messageId : "",
         messageHadAttachments: failed.hadAttachments, agentPresetId: failed.agentPresetId ?? "",
         applicationIds: failed.applicationIds ?? [], driverNames: failed.driverNames ?? [],
-        accessMode: failed.accessMode ?? "project_access" as TaskAccessMode, continuation: failed.continuation ?? null };
+        accessMode: failed.accessMode ?? DEFAULT_TASK_ACCESS_MODE as TaskAccessMode, continuation: failed.continuation ?? null };
       writeDraft(activeRunId, restored);
       applyDraft(restored);
     }
@@ -1324,7 +1325,7 @@ export function useChatWorkspace(
       driverNames: nextDraft?.driverNames ?? [],
       accessMode: nextRun
         ? taskAccessModeFromDoorHostSlots(nextRun.doorHostSlots)
-        : nextDraft?.accessMode ?? "project_access",
+        : nextDraft?.accessMode ?? DEFAULT_TASK_ACCESS_MODE,
       continuation: nextDraft?.continuation ?? null,
     });
     setError("");
@@ -1393,7 +1394,7 @@ export function useChatWorkspace(
       serviceTier: usableAgent?.serviceTier ?? defaults?.serviceTier ?? "",
       applicationIds: usableAgent?.applicationIds ?? capabilityDefaults.applicationIds,
       driverNames: usableAgent?.driverNames ?? capabilityDefaults.driverNames,
-      accessMode: requestedContext?.defaultTaskAccessMode ?? "project_access",
+      accessMode: requestedContext?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE,
       continuation: null,
     });
     setNewTaskTargetResolutionBlocked(Boolean(
@@ -1583,7 +1584,7 @@ export function useChatWorkspace(
       text: nextText, attachments: [], eeId: run.eeId, workerInterfaceId: run.workerChoiceInterfaceId || run.workerInterfaceId,
       providerInterfaceId: run.providerInterfaceId, providerModel: run.providerModel,
       reasoningEffort: run.reasoningEffort, serviceTier: run.serviceTier,
-      applicationIds: [], driverNames: [], accessMode: "project_access", endpoint,
+      applicationIds: [], driverNames: [], accessMode: DEFAULT_TASK_ACCESS_MODE, endpoint,
       continuation: null, clientSurfaceRole: run.clientSurfaceRole, agentPresetId: "",
       }, undefined, () => resolve(true)).then(() => resolve(false), (error) => {
         setError(formatProjectionError(error));
@@ -1736,7 +1737,7 @@ export function useChatWorkspace(
       setWorkerInterfaceId("");
       setApplicationIds([]);
       setDriverNames([]);
-      setAccessMode("project_access");
+      setAccessMode(DEFAULT_TASK_ACCESS_MODE);
       setNewTaskTargetResolutionBlocked(true);
       setError(`The selected project '${nextEeId}' is no longer available. Choose a project before sending.`);
       return;
@@ -1784,7 +1785,7 @@ export function useChatWorkspace(
     if (unavailable || !worker) return unavailable;
     const requestedAccessMode = preset.projectEeId === eeId
       ? accessMode
-      : context?.defaultTaskAccessMode ?? "project_access";
+      : context?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE;
     try {
       executionContextTaskCapabilities(
         executionContexts,
@@ -1820,7 +1821,7 @@ export function useChatWorkspace(
       setWorkerInterfaceId("");
       setApplicationIds([]);
       setDriverNames([]);
-      setAccessMode("project_access");
+      setAccessMode(DEFAULT_TASK_ACCESS_MODE);
       setNewTaskTargetResolutionBlocked(Boolean(nextAgentPresetId));
       setError(nextAgentPresetId ? `Agent '${nextAgentPresetId}' is no longer available.` : "");
       return;
@@ -1828,7 +1829,7 @@ export function useChatWorkspace(
     const presetContext = executionContexts.find((context) => context.eeId === preset.projectEeId);
     const nextAccessMode = preset.projectEeId === eeId
       ? accessMode
-      : presetContext?.defaultTaskAccessMode ?? "project_access";
+      : presetContext?.defaultTaskAccessMode ?? DEFAULT_TASK_ACCESS_MODE;
     const unavailable = clientAgentSelectionFailure(preset);
     if (unavailable) {
       setAgentPresetId(preset.id);
@@ -1964,7 +1965,7 @@ export function useChatWorkspace(
       reasoningEffort: item.reasoningEffort, serviceTier: item.serviceTier,
       applicationIds: item.applicationIds ?? [],
       driverNames: item.driverNames ?? [],
-      accessMode: item.accessMode ?? "project_access",
+      accessMode: item.accessMode ?? DEFAULT_TASK_ACCESS_MODE,
       endpoint: item.endpoint,
       continuation: item.continuation ?? null,
       clientSurfaceRole: item.clientSurfaceRole,
@@ -2887,7 +2888,7 @@ export function useChatWorkspace(
     }
     const item = selected as QueuedChatTurn;
     const savedEdit = backup?.messageId === item.messageId ? backup : undefined;
-    applyDraft({ ...(backup ?? { agentPresetId: "", applicationIds: [], driverNames: [], accessMode: "project_access", continuation: null }),
+    applyDraft({ ...(backup ?? { agentPresetId: "", applicationIds: [], driverNames: [], accessMode: DEFAULT_TASK_ACCESS_MODE, continuation: null }),
       messageId: item.messageId, messageHadAttachments: item.hadAttachments, text: savedEdit?.text ?? item.text,
       attachments: savedEdit?.attachments ?? item.attachments, eeId: item.eeId, workerInterfaceId: item.workerInterfaceId,
       providerInterfaceId: item.providerInterfaceId, providerModel: item.providerModel, reasoningEffort: item.reasoningEffort, serviceTier: item.serviceTier });

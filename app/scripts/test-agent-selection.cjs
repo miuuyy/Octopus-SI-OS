@@ -56,7 +56,7 @@ function selection() {
     providerModels: provider => provider.models, providerDefaultModel: provider => provider.models[0], providerReasoningEfforts: () => [], executionContextTaskCapabilities: () => ({}),
     providerServiceTierAvailable: capabilities.exports.providerServiceTierAvailable, providerSelectedServiceTier: capabilities.exports.providerSelectedServiceTier,
     defaultCapabilitySelection: () => ({ applicationIds: [], driverNames: [] }),
-    runsLoaded: false, runs: [], accessProfile: 'live', accessMode: 'project_access', eeId: 'ee', error: '',
+    runsLoaded: false, runs: [], accessProfile: 'live', accessMode: 'project_access', DEFAULT_TASK_ACCESS_MODE: 'full_access', eeId: 'ee', error: '',
     saveCurrentDraft() {}, deleteDraft() {}, resetInputHistory() {}, applyDraft: draft => Object.assign(state, draft),
   };
   for (const field of ['agentPresetId', 'eeId', 'workerInterfaceId', 'providerInterfaceId', 'providerModel', 'reasoningEffort', 'serviceTier', 'applicationIds', 'driverNames', 'accessMode', 'error', 'newTaskTargetResolutionBlocked', 'activeRunId', 'messages', 'loadingMessages', 'messageQuery']) state[`set${field[0].toUpperCase()}${field.slice(1)}`] = value => { state[field] = value; };

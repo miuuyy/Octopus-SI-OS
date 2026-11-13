@@ -261,7 +261,7 @@ function operatorChatContextProjection(store) {
         .sort((left, right) => left.authoring_profile_index - right.authoring_profile_index || left.id.localeCompare(right.id));
       const defaultTaskAccessMode = stringValue(
         objectOrEmpty(objectOrEmpty(environment.config).octopus_os).task_access_default,
-      ) || "project_access";
+      ) || "full_access";
       if (!["project_access", "full_access"].includes(defaultTaskAccessMode)) {
         throw new Error(`EE '${stringValue(environment.ee_id)}' has an invalid Octopus OS task access default`);
       }

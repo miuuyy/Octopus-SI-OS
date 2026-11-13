@@ -507,7 +507,7 @@ def task_capabilities(layout, home, profile, drivers, applications, notice_label
     drivers, without_folder, source_folders, host_workspace = working_folder_drivers(layout, home, profile, drivers, full_access)
     kinds = {driver["name"] for driver in drivers}
     left_out = [
-        (f"Worker Environment {kind}", "it needs a working folder and the root EE has none (choose one, or --full-access)")
+        (f"Worker Environment {kind}", "it needs a working folder and the root EE has none (choose one, or drop --project-access)")
         for kind in without_folder
     ]
     for application in [row for row in applications if not {tool["worker_environment_kind"] for tool in row["tools"]} <= kinds]:
@@ -583,7 +583,7 @@ def task_capabilities(layout, home, profile, drivers, applications, notice_label
                 slots[door] = {**slots.get(door, {}), WORKSPACE_ROOT: source_folders[0]}
     host_root = os.path.splitdrive(layout["home"])[0] + os.sep
     full = [driver for driver in drivers if HOST_FILESYSTEM_ROOT in driver["root_slots"] and driver["doors"]] if full_access else []
-    require(full or not full_access, "full access requires an offered Worker Environment that declares the host filesystem root")
+    require(full or not full_access, "full access requires an offered Worker Environment that declares the host filesystem root (or pass --project-access)")
     for driver in full:
         for door in driver["doors"]:
             row = slots.get(door, {})
@@ -1009,7 +1009,7 @@ def author(arguments):
         tools = registry_tools(layout)
         drivers = offered_drivers(layout, policy, ceiling, tools, home["octopus_os"])
         applications, left_out = offered_applications(layout, policy, ceiling, tools)
-        connected, unavailable, capabilities = task_capabilities(layout, home, profile, drivers, applications, notice_label, arguments.full_access)
+        connected, unavailable, capabilities = task_capabilities(layout, home, profile, drivers, applications, notice_label, not arguments.project_access)
     sensor_folder = os.path.join(layout["interfaces"], SENSOR_ID)
     replace = arguments.replace or arguments.rearm
     if not replace:
@@ -1092,8 +1092,8 @@ def author(arguments):
     say(f"  armed at: {armed_at} (letters Email received earlier never fire)")
     say(f"  receiving task: {task_run_id} in {home['ee_id']}, titled {title!r} (the Sidebar lists it with no project filter)")
     if plan is not None:
-        if arguments.full_access:
-            say(f"  task access: full machine access (host filesystem root {os.path.splitdrive(home_path)[0] + os.sep}, --full-access)")
+        if not arguments.project_access:
+            say(f"  task access: full machine access (host filesystem root {os.path.splitdrive(home_path)[0] + os.sep})")
         else:
             say(f"  task access: the root task profile's own door slots {json.dumps(capabilities['door_host_slots'], ensure_ascii=False)}")
         say("  task grant:")
@@ -1152,7 +1152,7 @@ def main():
     parser.add_argument("--app", help="the installed Octopus.app whose bundled planner and runtime are used, e.g. /Applications/Octopus.app")
     parser.add_argument("--planner", help="the task topology planner; overrides the one in --app")
     parser.add_argument("--runtime", help="the octopus binary whose project-ee-policies forms the root EE policy; overrides the one in --app")
-    parser.add_argument("--full-access", action="store_true", help="grant the woken task the whole machine (host filesystem root)")
+    parser.add_argument("--project-access", action="store_true", help="give the woken task the root task profile's own door slots instead of the whole machine")
     parser.add_argument("--any-sender", action="store_true", help="open this Home's Email to every sender, automated mail included, so a matching letter from anyone fires the trigger")
     arguments = parser.parse_args()
     try:

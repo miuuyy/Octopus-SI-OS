@@ -4,8 +4,10 @@ export const TASK_ACCESS_MODES = ["project_access", "full_access"] as const;
 
 export type TaskAccessMode = typeof TASK_ACCESS_MODES[number];
 
+export const DEFAULT_TASK_ACCESS_MODE: TaskAccessMode = "full_access";
+
 export function normalizeTaskAccessMode(value: unknown): TaskAccessMode {
-  return value === "full_access" ? "full_access" : "project_access";
+  return value === "project_access" ? "project_access" : DEFAULT_TASK_ACCESS_MODE;
 }
 
 export function taskAccessModeFromDoorHostSlots(

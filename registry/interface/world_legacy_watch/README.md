@@ -86,7 +86,7 @@ wake the task with a single word.
 
 ```sh
 python3 /Applications/Octopus.app/Contents/Resources/app/local-packages/registry/interface/world_legacy_watch/author.py \
-  --home ~/.octopus --app /Applications/Octopus.app --full-access
+  --home ~/.octopus --app /Applications/Octopus.app
 ```
 
 6. The trigger fires once; run `author.py` with `--rearm` to arm it again.
@@ -97,9 +97,10 @@ python3 /Applications/Octopus.app/Contents/Resources/app/local-packages/registry
   from (its `project-ee-policies` forms the root EE policy the way the client
   does). `--planner <path>` and `--runtime <path>` override each one. Without
   them `author.py` refuses.
-- `--full-access`: the task gets the whole machine (`host_filesystem_root` and
-  `workspace_root` = `/`). Without it, the task gets exactly the slots the root
-  task profile gives an ordinary task. `author.py` prints which one under
+- `--project-access`: the task gets exactly the slots the root task profile
+  gives an ordinary task. Without it, the task gets the whole machine
+  (`host_filesystem_root` and `workspace_root` = `/`), and its room commands run
+  without a platform sandbox. `author.py` prints which one under
   `task access`.
 - `--any-sender`: open Email to every sender, automated mail included (see
   [Who can fire it](#who-can-fire-it)).
@@ -151,8 +152,8 @@ the same rules as the client's `executionContextTaskCapabilities`:
 - **Door slots.** From the profile for the selected doors, and from the root
   EE's `driver_host_slots` and `source_folders`. A kind that needs
   `workspace_root` while neither those nor `host.json` give one is left out,
-  as the client does not enable it without a working folder either. With
-  `--full-access`, the file system root.
+  as the client does not enable it without a working folder either. Without
+  `--project-access`, the file system root.
 - **Applications.** Every installed application (it has a receipt in
   `client/package-state/receipts/`) of category connector, plugin or artifact
   that the EE policy and the worker ceiling admit. It is connected the way the

@@ -16,7 +16,7 @@ import { ProjectedFilePicker, type ProjectedFileSource } from "./ProjectedFilePi
 import { ComposerUtilityBar } from "./ComposerUtilityBar";
 import type { ChatExecutionContext, ChatWorkerEnvironmentRoom } from "../../chatRuns";
 import type { ClientAgentDefinition } from "../../agentPresets";
-import type { TaskAccessMode } from "./taskAccess";
+import { DEFAULT_TASK_ACCESS_MODE, type TaskAccessMode } from "./taskAccess";
 import { ShellTooltip } from "../shell/ShellTooltip";
 import { OcDropdown } from "../../design-system/OcDropdown";
 import "./queue.css";
@@ -461,7 +461,7 @@ export function ChatComposer({
               contexts={executionContexts}
               agentPresets={agentPresets ?? []}
               agentPresetId={agentPresetId ?? ""}
-              accessMode={accessMode ?? "project_access"}
+              accessMode={accessMode ?? DEFAULT_TASK_ACCESS_MODE}
               fullAccessUnavailableReason={fullAccessUnavailableReason ?? "Task capabilities are not ready."}
               applicationIds={applicationIds ?? []}
               applicationLocked={applicationSelectionLocked === true}

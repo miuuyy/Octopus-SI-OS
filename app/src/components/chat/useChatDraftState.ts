@@ -13,7 +13,7 @@ import {
 } from "./storage";
 import type { ChatAttachment } from "./types";
 import type { ContinuationDraft } from "./chatTurnObservation";
-import type { TaskAccessMode } from "./taskAccess";
+import { DEFAULT_TASK_ACCESS_MODE, type TaskAccessMode } from "./taskAccess";
 
 export type ChatDraftValue = {
   messageId: string;
@@ -141,7 +141,7 @@ export function useChatDraftState(input: {
   const [workerInterfaceId, setWorkerInterfaceId] = useState(initialDraftRef.current?.workerInterfaceId || "");
   const [applicationIds, setApplicationIds] = useState<string[]>(initialDraftRef.current?.applicationIds ?? []);
   const [driverNames, setDriverNames] = useState<string[]>(initialDraftRef.current?.driverNames ?? []);
-  const [accessMode, setAccessMode] = useState<TaskAccessMode>(initialDraftRef.current?.accessMode ?? "project_access");
+  const [accessMode, setAccessMode] = useState<TaskAccessMode>(initialDraftRef.current?.accessMode ?? DEFAULT_TASK_ACCESS_MODE);
   const [continuation, setContinuation] = useState<ContinuationDraft | null>(initialDraftRef.current?.continuation ?? null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -155,7 +155,7 @@ export function useChatDraftState(input: {
       providerModel: input.activeRunId ? "" : storedSettingsRef.current.providerModel,
       reasoningEffort: input.activeRunId ? "" : storedSettingsRef.current.reasoningEffort,
       serviceTier: input.activeRunId ? "" : storedSettingsRef.current.serviceTier,
-      applicationIds: [], driverNames: [], accessMode: "project_access", continuation: null,
+      applicationIds: [], driverNames: [], accessMode: DEFAULT_TASK_ACCESS_MODE, continuation: null,
     });
   }
   const liveDraftRef = useRef({ runId: input.activeRunId, text, attachments, scopeIdentity });
