@@ -237,10 +237,8 @@ impl TurnSink<'_> {
     }
 
     pub(crate) fn clear_pending(&self) {
-        if let Some(continuity) = self.continuity.lock().expect("continuity lock").continuity.as_mut()
-            && continuity.interrupted_pending.is_none()
-        {
-            continuity.store_outstanding(false, BTreeMap::new());
+        if let Some(continuity) = self.continuity.lock().expect("continuity lock").continuity.as_mut() {
+            continuity.release_ended_turn();
         }
     }
 

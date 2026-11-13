@@ -913,7 +913,10 @@ context generations as well as the last authored record. A protocol failure
 closes its private transport before returning control, so an abandoned model
 turn cannot keep issuing requests after its task has failed. A source that fails closed for any
 other reason retires its native turn the same way before its `turn.error` is
-handed, so later results of that turn reach no live model turn. A terminal error
+handed, so later results of that turn reach no live model turn. A terminal
+`turn.error` also releases the calls that turn was waiting for, unless a restart
+cut them off with an exact effect still owed: the next input is not held behind a
+result no turn will consume, and a late result arrives as an ordinary input. A terminal error
 that cannot be handed closes its source through the declared failure route
 instead of ending the provider life. A failed source with neither a failed-source
 handoff nor a proven standing route is recorded as the interface's admitted

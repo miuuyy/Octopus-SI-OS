@@ -1674,6 +1674,9 @@
         .unwrap();
         assert_eq!(retained.context_generation, 10);
         assert_eq!(retained.pending, Some(new_pending));
+        let mut ended = retained.clone();
+        ended.release_ended_turn();
+        assert!(!codex_continuity_waits_for_result(&ended) && ended.context_generation == 10);
     }
 
     #[test]

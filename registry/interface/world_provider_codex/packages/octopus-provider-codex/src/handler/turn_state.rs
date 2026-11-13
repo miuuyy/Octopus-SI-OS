@@ -218,6 +218,12 @@ impl CodexContinuityState {
         Ok(())
     }
 
+    pub(crate) fn release_ended_turn(&mut self) {
+        if self.interrupted_pending.is_none() {
+            self.store_outstanding(false, BTreeMap::new());
+        }
+    }
+
     pub(crate) fn settle_outstanding(&mut self, key: &str) -> Option<CodexPendingContinuity> {
         let (interrupted, mut calls) = self.outstanding_calls();
         let settled = calls.remove(key)?;
