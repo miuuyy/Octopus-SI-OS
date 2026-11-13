@@ -237,6 +237,7 @@ struct LiftedInterfaceLife {
     handle: tokio::task::JoinHandle<()>,
     started_at: Instant,
     restart_attempt: u32,
+    died_at: Option<Instant>,
     retry_not_before: Option<Instant>,
     waking: bool,
     ended: bool,
@@ -283,6 +284,7 @@ enum InterfaceLifeEvent {
 
 const LIFE_RESTART_BASE_DELAY: Duration = Duration::from_millis(250);
 const LIFE_RESTART_MAX_DELAY: Duration = Duration::from_secs(300);
+const LIFE_RESTART_MAX_DELAY_WITH_WORK: Duration = Duration::from_secs(30);
 const LIFE_RESTART_STABLE_AFTER: Duration = Duration::from_secs(600);
 const LIFE_WAKING_SLOT: Duration = Duration::from_secs(30);
 const INTERFACE_WATCH_EVENT_BATCH_LIMIT: usize = 256;
@@ -735,6 +737,7 @@ impl InterfaceActivationReconciler {
                     handle,
                     started_at: Instant::now(),
                     restart_attempt,
+                    died_at: None,
                     retry_not_before: None,
                     waking: true,
                     ended: false,
@@ -806,7 +809,9 @@ impl InterfaceActivationReconciler {
         }
         lifted.restart_attempt = lifted.restart_attempt.saturating_add(1);
         let delay = interface_life_restart_delay(lifted.restart_attempt);
-        lifted.retry_not_before = Some(Instant::now() + delay);
+        let died_at = Instant::now();
+        lifted.died_at = Some(died_at);
+        lifted.retry_not_before = Some(died_at + delay);
         let event_tx = self.life_exit_tx.clone();
         let interface = interface.clone();
         tokio::spawn(async move {
@@ -1030,15 +1035,29 @@ impl InterfaceActivationReconciler {
     async fn movement_reached(&mut self, interface: InterfaceId, seq: u64) {
         let latest = self.latest_movements.entry(interface.clone()).or_insert(seq);
         *latest = (*latest).max(seq);
-        if self
-            .lifted
-            .get(&interface)
-            .filter(|life| life.sleeping)
-            .and_then(|life| life.asleep_through)
-            .is_some_and(|through| seq >= through)
-        {
-            self.wake_life(&interface).await;
+        let Some(life) = self.lifted.get_mut(&interface) else {
+            return;
+        };
+        if life.sleeping {
+            if life.asleep_through.is_some_and(|through| seq >= through) {
+                self.wake_life(&interface).await;
+            }
+            return;
         }
+        let (Some(died_at), Some(not_before)) = (life.died_at, life.retry_not_before) else {
+            return;
+        };
+        let sooner = died_at + LIFE_RESTART_MAX_DELAY_WITH_WORK;
+        if sooner >= not_before {
+            return;
+        }
+        life.retry_not_before = Some(sooner);
+        let lift_id = life.lift_id;
+        let event_tx = self.life_exit_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep_until(sooner.into()).await;
+            let _ = event_tx.send(InterfaceLifeEvent::Retry { interface, lift_id });
+        });
     }
 
     async fn wake_life(&mut self, interface: &InterfaceId) {
@@ -2079,6 +2098,7 @@ mod interface_life_switch_tests {
                     handle,
                     started_at: Instant::now(),
                     restart_attempt: 0,
+                    died_at: None,
                     retry_not_before: None,
                     waking: true,
                     ended: false,
@@ -2385,6 +2405,35 @@ mod interface_life_switch_tests {
             "a movement past the sleep boundary lifts the life again",
             |_| std::fs::read_to_string(&lifts).unwrap().lines().count() >= 2,
         )
+        .await;
+        lives.stop(reconciler).await;
+    }
+
+    #[tokio::test]
+    async fn a_movement_brings_a_comatose_life_back_sooner_than_its_backoff() {
+        let lives = ShLives::new();
+        let name = "test_coma";
+        let lifts = lives.var_dir(name).join("lifts");
+        lives.life(name, &format!("echo lift >> '{}'; exit 3", lifts.display()), &[], &[&lifts]);
+        lives.bind("run_coma", &[name]);
+        let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);
+        let interface = InterfaceId::new(name);
+        let lifted = || std::fs::read_to_string(&lifts).map_or(0, |text| text.lines().count());
+        reconciler.reconcile_once().await.unwrap();
+        pump_life_events(&mut reconciler, "a life that dies is in coma with a retry ahead", |reconciler| {
+            reconciler.lifted.get(&interface).is_some_and(|life| life.retry_not_before.is_some())
+        })
+        .await;
+        let life = reconciler.lifted.get_mut(&interface).unwrap();
+        life.died_at = Some(Instant::now() - LIFE_RESTART_MAX_DELAY_WITH_WORK);
+        life.retry_not_before = Some(Instant::now() + LIFE_RESTART_MAX_DELAY);
+        let quiet_until = Instant::now() + Duration::from_millis(400);
+        pump_life_events(&mut reconciler, "the backoff holds", |_| Instant::now() >= quiet_until).await;
+        assert_eq!(lifted(), 1, "nothing lifts a comatose life before its backoff ends");
+        reconciler.movement_reached(interface.clone(), 1).await;
+        pump_life_events(&mut reconciler, "a movement to a comatose life lifts it once thirty seconds have passed since its death", |_| {
+            lifted() >= 2
+        })
         .await;
         lives.stop(reconciler).await;
     }

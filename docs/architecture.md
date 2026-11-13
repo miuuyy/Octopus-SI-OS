@@ -465,8 +465,10 @@ live interface flush the disk on every append. An interface whose life dies,
 even before it is ready, is lifted again with backoff that doubles up to five
 minutes and returns to its shortest step only after the life has stayed alive
 for ten minutes, so a life that keeps crashing sleeps longer instead of being
-lifted every few seconds forever; the runtime log says when it falls into coma
-and when it wakes. Interfaces wake in no promised
+lifted every few seconds forever. A movement that reaches a life in coma brings
+its next attempt forward to no later than thirty seconds after its death, so
+work that arrives does not wait out a long backoff. The runtime log says when a
+life falls into coma and when it wakes. Interfaces wake in no promised
 order and a few at a time: the host lifts at most as many lives as the machine
 has cores (between two and eight) while they have not yet declared readiness,
 and the rest wait for a waking sibling to become ready, to die, or to have had
