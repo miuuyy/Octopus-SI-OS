@@ -2362,7 +2362,8 @@
                         "items": {
                           "type": "string",
                           "minLength": 1
-                        }
+                        },
+                        "minItems": 1
                       },
                       "record_labels": {
                         "type": "array",
@@ -2370,9 +2371,11 @@
                         "items": {
                           "type": "string",
                           "minLength": 1
-                        }
+                        },
+                        "minItems": 1
                       }
-                    }
+                    },
+                    "description": "Omit to keep the defaults. When given, return_labels and record_labels are both nonempty and disjoint, and together they own every output label the provider declares; a label that should not come back to the creator belongs in record_labels."
                   },
                   "authored": {
                     "type": "object",
@@ -2903,7 +2906,8 @@
                         "items": {
                           "type": "string",
                           "minLength": 1
-                        }
+                        },
+                        "minItems": 1
                       },
                       "record_labels": {
                         "type": "array",
@@ -2911,9 +2915,11 @@
                         "items": {
                           "type": "string",
                           "minLength": 1
-                        }
+                        },
+                        "minItems": 1
                       }
-                    }
+                    },
+                    "description": "Omit to keep the defaults. When given, return_labels and record_labels are both nonempty and disjoint, and together they own every output label the provider declares; a label that should not come back to the creator belongs in record_labels."
                   },
                   "authored": {
                     "type": "object",
