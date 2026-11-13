@@ -63,7 +63,11 @@ readiness observer directly.
 The life host observes root exit separately from group closure. On macOS it
 keeps the root waitable until the owned group closes, so cleanup never signals
 a recycled PID or PGID. Protocol EOF allows a bounded exit observation; process
-cleanup and private stderr draining also have finite deadlines. Wait, signal and
+cleanup and private stderr draining also have finite deadlines. When the root
+exits first, the host closes its group and reads the protocol output to its end
+before it judges the exit, so every frame printed before the exit counts, the
+`asleep` frame included; output that stays open past the cleanup deadline after
+the group closed fails the life. Wait, signal and
 cleanup failures remain explicit, with the original exit status and private
 diagnostics preserved. Each incarnation writes its own bounded stderr capture
 in the interface's var directory; the host keeps the sixteen newest, so a life

@@ -3133,13 +3133,15 @@ fn spawn_process_command_life(
             .take()
             .ok_or_else(|| "life stdout unavailable".to_string())?;
         let mut lines = BoundedJsonLineReader::new(stdout, host_io_limits.max_control_frame_bytes)?;
+        let mut exit = None;
         loop {
             tokio::select! {
                 _ = ctx.cancel.cancelled() => {
                     break Ok(());
                 }
-                status = child.wait() => {
-                    break exit_result(status);
+                status = child.wait(), if exit.is_none() => {
+                    exit = Some(status);
+                    let _ = child.terminate().await;
                 }
                 stderr = &mut stderr_failure_rx, if stderr_open => {
                     match stderr {
@@ -3147,12 +3149,15 @@ fn spawn_process_command_life(
                         Err(_) => stderr_open = false,
                     }
                 }
-                line = lines.next_line() => {
+                line = next_protocol_line(&mut lines, exit.is_some()) => {
                     let line = match line {
                         Ok(Some(line)) => line,
-                        Ok(None) => break tokio::select! {
-                            _ = ctx.cancel.cancelled() => Ok(()),
-                            result = child.protocol_closed() => result,
+                        Ok(None) => break match exit.take() {
+                            Some(status) => exit_result(status),
+                            None => tokio::select! {
+                                _ = ctx.cancel.cancelled() => Ok(()),
+                                result = child.protocol_closed() => result,
+                            },
                         },
                         Err(error) => break Err(format!("life stdout read failed: {error}")),
                     };
@@ -3202,6 +3207,23 @@ fn spawn_process_command_life(
             Err(errors.join("; "))
         }
     }) as InterfaceLifeFuture
+}
+
+async fn next_protocol_line<R>(
+    lines: &mut BoundedJsonLineReader<R>,
+    life_exited: bool,
+) -> Result<Option<String>, String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    if !life_exited {
+        return lines.next_line().await;
+    }
+    tokio::time::timeout(crate::life_process::CLEANUP_TIMEOUT, lines.next_line())
+        .await
+        .unwrap_or_else(|_| {
+            Err("protocol output stayed open after the life process exited".to_string())
+        })
 }
 
 fn resolve_executable_base(

@@ -2159,25 +2159,38 @@ mod interface_life_switch_tests {
         reconciler_task.await.unwrap();
     }
 
-    #[tokio::test]
-    async fn lives_wake_in_stages_bounded_by_the_waking_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let durable_root = root.join("durable");
-        let runs_dir = durable_root.join("runs");
-        std::fs::create_dir_all(durable_root.join("blobs")).unwrap();
-        std::fs::create_dir_all(&runs_dir).unwrap();
-        std::fs::create_dir_all(root.join("home")).unwrap();
-        std::fs::write(root.join("home").join("host.json"), serde_json::json!({
-            "host_manifest_version": 1,
-            "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": runs_dir.to_str().unwrap()}
-        }).to_string()).unwrap();
-        let names = ["test_stage_a", "test_stage_b", "test_stage_c"];
-        let mut checkpoints = Vec::new();
-        for name in names {
-            let iface_dir = root.join("registry").join("interface").join(name);
+    struct ShLives {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        home: PathBuf,
+        durable: PathBuf,
+        cancel: CancellationToken,
+    }
+
+    impl ShLives {
+        fn new() -> Self {
+            let dir = tempfile::Builder::new().prefix("oct").tempdir_in("/tmp").unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let home = root.join("h");
+            let durable = root.join("d");
+            std::fs::create_dir_all(durable.join("blobs")).unwrap();
+            std::fs::create_dir_all(durable.join("runs")).unwrap();
+            std::fs::create_dir_all(home.join("app-server-control")).unwrap();
+            std::fs::write(home.join("host.json"), serde_json::json!({
+                "host_manifest_version": 1,
+                "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": durable.join("runs").to_str().unwrap()}
+            }).to_string()).unwrap();
+            Self { _dir: dir, root, home, durable, cancel: CancellationToken::new() }
+        }
+
+        fn var_dir(&self, name: &str) -> PathBuf {
+            self.home.join("interfaces").join(name)
+        }
+
+        fn life(&self, name: &str, script: &str, frames: &[serde_json::Value], write_paths: &[&Path]) {
+            let iface_dir = self.root.join("registry").join("interface").join(name);
             std::fs::create_dir_all(&iface_dir).unwrap();
-            let var_dir = root.join("home").join("interfaces").join(name);
+            let var_dir = self.var_dir(name);
             std::fs::create_dir_all(&var_dir).unwrap();
             #[cfg(unix)]
             {
@@ -2188,44 +2201,95 @@ mod interface_life_switch_tests {
                 "id": name, "interface_type": "system", "role": "system",
                 "direction": "bidirectional", "source_names": [name], "interface_driver_ref": name
             }).to_string()).unwrap();
+            let mut args = vec![
+                serde_json::json!("-c"),
+                serde_json::json!(script),
+                serde_json::json!("octopus-test"),
+            ];
+            args.extend(frames.iter().map(|frame| serde_json::json!(frame.to_string())));
             std::fs::write(iface_dir.join("life.json"), serde_json::json!({
                 "processes": [{
                     "bin": "/bin/sh",
                     "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
                         "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
-                    "args": ["-c", "printf '%s\\n' \"$1\"; IFS= read -r ignored", "octopus-test",
-                        serde_json::json!({"kind": "ready"}).to_string()],
+                    "args": args,
                     "authority": {
                         "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
-                        "read_paths": [], "write_paths": [], "executable_paths": ["/bin/sh"],
+                        "read_paths": [], "write_paths": write_paths, "executable_paths": ["/bin/sh"],
                         "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
                         "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
                     },
                     "read_handles": []
                 }]
             }).to_string()).unwrap();
-            checkpoints.push(serde_json::json!({
-                "id": format!("c_{name}"), "run": "run_stages", "trace": format!("trace:run_stages:c_{name}"), "epoch": 0,
-                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(name)),
-                "outbound_interface_bindings": []
-            }));
         }
-        let active = names.iter().map(|name| format!("c_{name}")).collect::<Vec<_>>();
-        std::fs::write(runs_dir.join("run_stages.json"), serde_json::json!({
-            "id": "run_stages", "ee": "ee_test", "worker": "system_worker_test",
-            "trace": "trace:run_stages", "status": "idle",
-            "checkpoints": checkpoints, "active_checkpoints": active
-        }).to_string()).unwrap();
-        let cancel = CancellationToken::new();
-        let mut reconciler = InterfaceActivationReconciler::new(
-            root.join("registry"),
-            root.to_path_buf(),
-            tokio::sync::mpsc::channel(4).0,
-            tokio::sync::mpsc::channel(4).0,
-            cancel.clone(),
-            root.join("home"),
-            Some(durable_root),
-        );
+
+        fn bind(&self, run: &str, names: &[&str]) {
+            let checkpoints = names.iter().map(|name| serde_json::json!({
+                "id": format!("c_{name}"), "run": run, "trace": format!("trace:{run}:c_{name}"), "epoch": 0,
+                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(*name)),
+                "outbound_interface_bindings": []
+            })).collect::<Vec<_>>();
+            let active = names.iter().map(|name| format!("c_{name}")).collect::<Vec<_>>();
+            std::fs::write(self.durable.join("runs").join(format!("{run}.json")), serde_json::json!({
+                "id": run, "ee": "ee_test", "worker": "system_worker_test",
+                "trace": format!("trace:{run}"), "status": "idle",
+                "checkpoints": checkpoints, "active_checkpoints": active
+            }).to_string()).unwrap();
+        }
+
+        fn reconciler(
+            &self,
+            arrivals: tokio::sync::mpsc::Sender<InterfaceActivationArrival>,
+        ) -> InterfaceActivationReconciler {
+            InterfaceActivationReconciler::new(
+                self.root.join("registry"),
+                self.root.clone(),
+                arrivals,
+                tokio::sync::mpsc::channel(4).0,
+                self.cancel.clone(),
+                self.home.clone(),
+                Some(self.durable.clone()),
+            )
+        }
+
+        async fn stop(&self, mut reconciler: InterfaceActivationReconciler) {
+            self.cancel.cancel();
+            reconciler.stop_all_lives().await;
+        }
+    }
+
+    fn ready_frame() -> serde_json::Value {
+        serde_json::json!({"kind": "ready"})
+    }
+
+    async fn pump_life_events(
+        reconciler: &mut InterfaceActivationReconciler,
+        expectation: &str,
+        done: impl Fn(&InterfaceActivationReconciler) -> bool,
+    ) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !done(reconciler) {
+                if let Ok(Some(event)) =
+                    tokio::time::timeout(Duration::from_millis(20), reconciler.life_exit_rx.recv()).await
+                {
+                    reconciler.handle_life_event(event).await;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{expectation}"));
+    }
+
+    #[tokio::test]
+    async fn lives_wake_in_stages_bounded_by_the_waking_limit() {
+        let lives = ShLives::new();
+        let names = ["test_stage_a", "test_stage_b", "test_stage_c"];
+        for name in names {
+            lives.life(name, "printf '%s\\n' \"$1\"; IFS= read -r ignored", &[ready_frame()], &[]);
+        }
+        lives.bind("run_stages", &names);
+        let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);
         reconciler.waking_limit = 1;
         reconciler.reconcile_once().await.unwrap();
         assert_eq!(reconciler.lifted.len(), 1, "only the waking limit is lifted at once");
@@ -2243,90 +2307,34 @@ mod interface_life_switch_tests {
         assert_eq!(reconciler.lifted.len(), 3);
         assert!(reconciler.deferred_lifts.is_empty());
         assert!(events.iter().all(|event| matches!(event, InterfaceBootEvent::Ready { .. })));
-        cancel.cancel();
-        reconciler.stop_all_lives().await;
+        lives.stop(reconciler).await;
     }
 
     #[tokio::test]
     async fn a_life_that_falls_asleep_is_woken_only_by_a_movement_it_has_not_read() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let durable_root = root.join("durable");
-        let runs_dir = durable_root.join("runs");
-        std::fs::create_dir_all(durable_root.join("blobs")).unwrap();
-        std::fs::create_dir_all(&runs_dir).unwrap();
-        std::fs::create_dir_all(root.join("home")).unwrap();
-        std::fs::write(root.join("home").join("host.json"), serde_json::json!({
-            "host_manifest_version": 1,
-            "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": runs_dir.to_str().unwrap()}
-        }).to_string()).unwrap();
+        let lives = ShLives::new();
         let name = "test_sleeper";
-        let iface_dir = root.join("registry").join("interface").join(name);
-        std::fs::create_dir_all(&iface_dir).unwrap();
-        let var_dir = root.join("home").join("interfaces").join(name);
-        std::fs::create_dir_all(&var_dir).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&var_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let lifts = var_dir.join("lifts");
-        std::fs::write(iface_dir.join("interface.json"), serde_json::json!({
-            "id": name, "interface_type": "system", "role": "system",
-            "direction": "bidirectional", "source_names": [name], "interface_driver_ref": name
-        }).to_string()).unwrap();
-        std::fs::write(iface_dir.join("life.json"), serde_json::json!({
-            "processes": [{
-                "bin": "/bin/sh",
-                "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
-                    "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
-                "args": ["-c", format!("echo lift >> '{}'; printf '%s\\n' \"$1\" \"$2\"", lifts.display()),
-                    "octopus-test",
-                    serde_json::json!({"kind": "ready"}).to_string(),
-                    serde_json::json!({"kind": "asleep", "through_seq": 5}).to_string()],
-                "authority": {
-                    "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
-                    "read_paths": [], "write_paths": [lifts], "executable_paths": ["/bin/sh"],
-                    "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
-                    "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
-                },
-                "read_handles": []
-            }]
-        }).to_string()).unwrap();
-        std::fs::write(runs_dir.join("run_sleeper.json"), serde_json::json!({
-            "id": "run_sleeper", "ee": "ee_test", "worker": "system_worker_test",
-            "trace": "trace:run_sleeper", "status": "idle",
-            "checkpoints": [{
-                "id": "c1", "run": "run_sleeper", "trace": "trace:run_sleeper:c1", "epoch": 0,
-                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(name)),
-                "outbound_interface_bindings": []
-            }],
-            "active_checkpoints": ["c1"]
-        }).to_string()).unwrap();
-        let cancel = CancellationToken::new();
-        let mut reconciler = InterfaceActivationReconciler::new(
-            root.join("registry"),
-            root.to_path_buf(),
-            tokio::sync::mpsc::channel(4).0,
-            tokio::sync::mpsc::channel(4).0,
-            cancel.clone(),
-            root.join("home"),
-            Some(durable_root),
+        let lifts = lives.var_dir(name).join("lifts");
+        lives.life(
+            name,
+            &format!("echo lift >> '{}'; printf '%s\\n' \"$1\" \"$2\"", lifts.display()),
+            &[ready_frame(), serde_json::json!({"kind": "asleep", "through_seq": 5})],
+            &[&lifts],
         );
+        lives.bind("run_sleeper", &[name]);
+        let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);
         let interface = InterfaceId::new(name);
         reconciler.reconcile_once().await.unwrap();
         assert_eq!(reconciler.await_initial_readiness(1, 0, None).await.unwrap(), 1);
         let asleep = |reconciler: &InterfaceActivationReconciler| {
             reconciler.lifted.get(&interface).and_then(|life| life.asleep_through)
         };
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while asleep(&reconciler).is_none() {
-                let event = reconciler.life_exit_rx.recv().await.unwrap();
-                reconciler.handle_life_event(event).await;
-            }
-        })
-        .await
-        .expect("a life that declares sleep and exits cleanly is asleep");
+        pump_life_events(
+            &mut reconciler,
+            "a life that declares sleep and exits cleanly is asleep",
+            |reconciler| asleep(reconciler).is_some(),
+        )
+        .await;
         assert_eq!(asleep(&reconciler), Some(5));
         assert!(reconciler.failures.borrow().is_empty(), "sleep is neither coma nor failure");
         reconciler.reconcile_once().await.unwrap();
@@ -2335,119 +2343,106 @@ mod interface_life_switch_tests {
         assert_eq!(std::fs::read_to_string(&lifts).unwrap().lines().count(), 1);
         reconciler.movement_reached(interface.clone(), 5).await;
         assert_eq!(asleep(&reconciler), None);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while std::fs::read_to_string(&lifts).unwrap().lines().count() < 2 {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+        pump_life_events(
+            &mut reconciler,
+            "a movement past the sleep boundary lifts the life again",
+            |_| std::fs::read_to_string(&lifts).unwrap().lines().count() >= 2,
+        )
+        .await;
+        lives.stop(reconciler).await;
+    }
+
+    #[tokio::test]
+    async fn a_life_whose_exit_is_seen_before_its_asleep_frame_is_still_asleep() {
+        let lives = ShLives::new();
+        let name = "test_last_word";
+        let gone = lives.var_dir(name).join("gone");
+        let manifest = lives.var_dir(name).join("emission.manifest.json");
+        let payload = lives.var_dir(name).join("payload.json");
+        lives.life(
+            name,
+            &format!("printf '%s\\n' \"$1\" \"$2\" \"$2\" \"$3\"; : > '{}'", gone.display()),
+            &[
+                ready_frame(),
+                serde_json::json!({"kind": "arrival", "request_id": null, "artifact_manifest_path": manifest, "evidence": []}),
+                serde_json::json!({"kind": "asleep", "through_seq": 5}),
+            ],
+            &[&gone],
+        );
+        std::fs::write(&payload, br#"{"text":"said before sleep"}"#).unwrap();
+        std::fs::write(&manifest, serde_json::json!({"label": "interface.output", "payload_path": payload}).to_string()).unwrap();
+        lives.bind("run_last_word", &[name]);
+        let (arrivals, mut arrived) = tokio::sync::mpsc::channel(1);
+        let mut reconciler = lives.reconciler(arrivals);
+        let interface = InterfaceId::new(name);
+        reconciler.reconcile_once().await.unwrap();
+        assert_eq!(reconciler.await_initial_readiness(1, 0, None).await.unwrap(), 1);
+        for _ in 0..8 {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !gone.exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the life prints its frames and exits while the host still hands in its first arrival");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            for _ in 0..2 {
+                arrived.recv().await.expect("both arrivals the life printed are handed in");
             }
-        })
-        .await
-        .expect("a movement past the sleep boundary lifts the life again");
-        cancel.cancel();
-        reconciler.stop_all_lives().await;
+            pump_life_events(&mut reconciler, "the life's exit is settled", |reconciler| {
+                reconciler.lifted.get(&interface).is_some_and(|life| life.sleeping)
+                    || !reconciler.failures.borrow().is_empty()
+            })
+            .await;
+            assert_eq!(
+                reconciler.failures.borrow().get(&interface),
+                None,
+                "an exit seen before the asleep frame was read is still sleep"
+            );
+            std::fs::remove_file(&gone).unwrap();
+            reconciler.wake_life(&interface).await;
+        }
+        lives.stop(reconciler).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn a_sleeping_life_socket_is_held_and_a_connection_lifts_it_with_the_listener() {
-        let dir = tempfile::Builder::new().prefix("oct").tempdir_in("/tmp").unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let root = root.as_path();
-        let durable_root = root.join("d");
-        let runs_dir = durable_root.join("runs");
-        std::fs::create_dir_all(durable_root.join("blobs")).unwrap();
-        std::fs::create_dir_all(&runs_dir).unwrap();
-        let home = root.join("h");
-        std::fs::create_dir_all(home.join("app-server-control")).unwrap();
-        std::fs::write(home.join("host.json"), serde_json::json!({
-            "host_manifest_version": 1,
-            "root_refs": {"repo_root": root.to_str().unwrap(), "run_records_root": runs_dir.to_str().unwrap()}
-        }).to_string()).unwrap();
+        let lives = ShLives::new();
         let name = "test_knock";
-        let iface_dir = root.join("registry").join("interface").join(name);
-        std::fs::create_dir_all(&iface_dir).unwrap();
-        let var_dir = home.join("interfaces").join(name);
-        std::fs::create_dir_all(&var_dir).unwrap();
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&var_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let socket = home.join("app-server-control").join("k.sock");
-        let marker = var_dir.join("slept");
-        let inherited = var_dir.join("inherited");
-        std::fs::write(iface_dir.join("interface.json"), serde_json::json!({
-            "id": name, "interface_type": "system", "role": "system",
-            "direction": "bidirectional", "source_names": [name], "interface_driver_ref": name
-        }).to_string()).unwrap();
-        std::fs::write(iface_dir.join("life.json"), serde_json::json!({
-            "processes": [{
-                "bin": "/bin/sh",
-                "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
-                    "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
-                "args": ["-c", format!(
-                    "if [ -e '{marker}' ]; then printf '%s' \"$OCTOPUS_INHERITED_LISTENERS\" > '{inherited}'; printf '%s\\n' \"$1\"; IFS= read -r ignored; else : > '{marker}'; printf '%s\\n' \"$1\" \"$2\"; fi",
-                    marker = marker.display(), inherited = inherited.display()),
-                    "octopus-test",
-                    serde_json::json!({"kind": "ready"}).to_string(),
-                    serde_json::json!({"kind": "asleep", "sockets": [socket]}).to_string()],
-                "authority": {
-                    "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
-                    "read_paths": [], "write_paths": [marker, inherited], "executable_paths": ["/bin/sh"],
-                    "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
-                    "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
-                },
-                "read_handles": []
-            }]
-        }).to_string()).unwrap();
-        std::fs::write(runs_dir.join("run_knock.json"), serde_json::json!({
-            "id": "run_knock", "ee": "ee_test", "worker": "system_worker_test",
-            "trace": "trace:run_knock", "status": "idle",
-            "checkpoints": [{
-                "id": "c1", "run": "run_knock", "trace": "trace:run_knock:c1", "epoch": 0,
-                "interface_binding": octopus_policy::AuthoredInterfaceBinding::all(InterfaceId::new(name)),
-                "outbound_interface_bindings": []
-            }],
-            "active_checkpoints": ["c1"]
-        }).to_string()).unwrap();
-        let cancel = CancellationToken::new();
-        let mut reconciler = InterfaceActivationReconciler::new(
-            root.join("registry"),
-            root.to_path_buf(),
-            tokio::sync::mpsc::channel(4).0,
-            tokio::sync::mpsc::channel(4).0,
-            cancel.clone(),
-            home.clone(),
-            Some(durable_root),
+        let socket = lives.home.join("app-server-control").join("k.sock");
+        let marker = lives.var_dir(name).join("slept");
+        let inherited = lives.var_dir(name).join("inherited");
+        lives.life(
+            name,
+            &format!(
+                "if [ -e '{marker}' ]; then printf '%s' \"$OCTOPUS_INHERITED_LISTENERS\" > '{inherited}'; printf '%s\\n' \"$1\"; IFS= read -r ignored; else : > '{marker}'; printf '%s\\n' \"$1\" \"$2\"; fi",
+                marker = marker.display(),
+                inherited = inherited.display(),
+            ),
+            &[ready_frame(), serde_json::json!({"kind": "asleep", "sockets": [socket]})],
+            &[&marker, &inherited],
         );
+        lives.bind("run_knock", &[name]);
+        let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);
         let interface = InterfaceId::new(name);
         reconciler.reconcile_once().await.unwrap();
         assert_eq!(reconciler.await_initial_readiness(1, 0, None).await.unwrap(), 1);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while !reconciler.lifted.get(&interface).is_some_and(|life| life.sleeping) {
-                let event = reconciler.life_exit_rx.recv().await.unwrap();
-                reconciler.handle_life_event(event).await;
-            }
+        pump_life_events(&mut reconciler, "a life that names its socket falls asleep", |reconciler| {
+            reconciler.lifted.get(&interface).is_some_and(|life| life.sleeping)
         })
-        .await
-        .expect("a life that names its socket falls asleep");
+        .await;
         assert!(reconciler.failures.borrow().is_empty());
         let _client = std::os::unix::net::UnixStream::connect(&socket)
             .expect("the runtime holds a sleeping life's socket");
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while std::fs::read_to_string(&inherited).map_or(true, |text| text.is_empty()) {
-                if let Ok(Some(event)) =
-                    tokio::time::timeout(Duration::from_millis(20), reconciler.life_exit_rx.recv()).await
-                {
-                    reconciler.handle_life_event(event).await;
-                }
-            }
+        pump_life_events(&mut reconciler, "a connection to the held socket lifts the life", |_| {
+            std::fs::read_to_string(&inherited).is_ok_and(|text| !text.is_empty())
         })
-        .await
-        .expect("a connection to the held socket lifts the life");
+        .await;
         let listeners: BTreeMap<PathBuf, i32> =
             serde_json::from_str(&std::fs::read_to_string(&inherited).unwrap()).unwrap();
         assert_eq!(listeners.keys().collect::<Vec<_>>(), vec![&socket], "the woken life inherits the listener");
-        cancel.cancel();
-        reconciler.stop_all_lives().await;
+        lives.stop(reconciler).await;
     }
 
     #[tokio::test]
