@@ -1135,7 +1135,12 @@ mod tests {
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../registry"),
             &registry,
         );
-        let applications = ["world_mcp_firecrawl", "world_mcp_github", "world_mcp_unity"];
+        let applications = [
+            "world_mcp_firecrawl",
+            "world_mcp_github",
+            "world_mcp_outcrawl",
+            "world_mcp_unity",
+        ];
         let worker_path = registry.join("interface/system_worker_coder_max/policy.json");
         let mut worker: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&worker_path).unwrap()).unwrap();

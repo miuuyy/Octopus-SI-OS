@@ -1,0 +1,30 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_mcp_outcrawl",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_mcp_outcrawl",
+  "release_status": "optional",
+  "display": {
+    "name": "Outcrawl",
+    "description": "Outcrawl's MCP server: search the web with the results already read, scrape and crawl pages into clean markdown or JSON, and hand a browser task to an agent. Needs an Outcrawl API key.",
+    "developer": "Outcrawl",
+    "category": "plugin",
+    "icon": "globe"
+  },
+  "required_packages": [
+    "world_mcp_example"
+  ],
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_mcp_outcrawl",
+      "primary": true
+    },
+    {
+      "registry_kind": "artifact",
+      "owner": "artifact-application-mcp-outcrawl-context"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "outcrawl.list_tools",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "list_tools"
+  },
+  "description": "List one page of tools from the bound remote MCP World interface.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "cursor": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false
+  }
+}
