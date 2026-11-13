@@ -66,6 +66,9 @@ pub fn sandboxed_room_process_argv(
         return Err(WorkerEnvError::ExecFailed("empty argv".into()));
     }
     sandbox.authorize_read(cwd)?;
+    if sandbox.grants_whole_host() {
+        return Ok(argv);
+    }
     match sandbox_mode {
         ProcessSandboxMode::Disabled => Ok(argv),
         ProcessSandboxMode::Enforced => platform_sandboxed_room_process_argv(sandbox, cwd, argv),
@@ -790,6 +793,8 @@ mod tests {
         let tmp = std::fs::canonicalize("/tmp").unwrap();
         assert_eq!(sandboxed_tmp_dir(&root_sandbox, &root_abs), Some(tmp.clone()));
         assert_eq!(sandboxed_tmp_dir(&root_sandbox, &repo_abs), Some(tmp));
+        assert_eq!(sandboxed_room_process_argv(&root_sandbox, ProcessSandboxMode::Enforced, &root_abs,
+            vec!["/usr/bin/true".into()]).unwrap(), vec!["/usr/bin/true".to_string()]);
 
         let read_only = ProjectedSandbox::from_parts(
             Vec::new(),

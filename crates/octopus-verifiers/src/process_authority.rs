@@ -126,6 +126,14 @@ impl ProcessAuthority {
         })
     }
 
+    fn grants_whole_host(&self) -> bool {
+        let root = Path::new("/");
+        self.allow_network
+            && self.readable.contains(root)
+            && self.writable.contains(root)
+            && self.executable.contains(root)
+    }
+
     fn with_executable_links(mut self, links: BTreeSet<PathBuf>) -> Self {
         self.executable_links = links;
         self
@@ -141,7 +149,7 @@ impl ProcessAuthority {
     ) -> Result<PreparedProcess, String> {
         let cwd = normalize_existing_directory(cwd)?;
         let executable = resolve_executable(declared_program, &cwd, search_path)?;
-        if self.sandbox_mode == octopus_descriptors::ProcessSandboxMode::Disabled {
+        if self.sandbox_mode == octopus_descriptors::ProcessSandboxMode::Disabled || self.grants_whole_host() {
             return Ok(PreparedProcess {
                 program: executable.clone(),
                 args: args.to_vec(),
@@ -2228,6 +2236,22 @@ mod future_write_authority_tests {
         assert!(!future.exists());
         assert!(authority.writable.contains(&expected));
         assert!(authority.readable.contains(&expected));
+    }
+
+    #[test]
+    fn whole_host_grant_runs_without_a_platform_sandbox() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let whole = |network: bool| ProcessAuthority::resolve(
+            std::iter::empty(), [PathBuf::from("/")], [PathBuf::from("/")],
+            std::iter::empty(), std::iter::empty(), std::iter::empty(),
+            network, false, false, false, false,
+            octopus_descriptors::ProcessSandboxMode::Enforced,
+        ).expect("whole host authority");
+        let prepared = whole(true)
+            .prepare("/usr/bin/true", &[], root.path(), None, root.path())
+            .expect("whole host process");
+        assert!(prepared.sandbox_profile.is_none());
+        assert!(!whole(false).grants_whole_host());
     }
 
     #[test]

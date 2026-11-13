@@ -37,6 +37,12 @@ impl ProjectedSandbox {
         self.network
     }
 
+    pub fn grants_whole_host(&self) -> bool {
+        self.network == NetworkCeiling::Full
+            && self.read_only_subpaths.is_empty()
+            && self.writable_roots.iter().any(|root| root.as_path() == std::path::Path::new("/"))
+    }
+
     pub fn authorize_write(&self, path: &AbsPath) -> Result<(), WorkerEnvError> {
         let inside_writable = self.writable_roots.iter().any(|r| path.is_within(r));
         if !inside_writable {
