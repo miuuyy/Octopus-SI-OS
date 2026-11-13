@@ -384,7 +384,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     let gates=Default::default();
     let driver=Some(native.driver.clone());
     let woken=wake_late_calls(ctx,descriptor,&session,&gates,&driver,&ready);
-    let gate=pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,1,true,27,true);
+    let gate=pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,2,true,27,true);
     tokio::time::timeout(std::time::Duration::from_secs(10),async {
         tokio::select! {
             woken=woken => woken.unwrap(),
@@ -395,11 +395,15 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     let after=std::fs::read(run_path).unwrap();let current=RunRecord::from_bytes(&after).unwrap();
     let pending=&current.interface_state[&descriptor.id]["pending_handoff"];
     assert_eq!((pending["source_movement_seq"].clone(),pending["terminal"].clone()),(json!(source_seq),json!(true)));
-    assert_eq!(pending["continuation_of"]["id"],completed["items"][0]["artifact_id"]);
+    assert!(pending["continuation_of"]["id"].as_str().unwrap().starts_with("turn.agent_message:"),
+        "the late call continues the late note's own write, which continued the completed source");
     assert_eq!(pending["items"].as_array().unwrap().iter().map(|item|item["artifact_label"].as_str().unwrap()).collect::<Vec<_>>(),["tool.call"]);
     let call=InterfaceArtifactFile::new(ctx.interface_var_dir().join(pending["items"][0]["manifest_relative_path"].as_str().unwrap())).unwrap();
     let call:serde_json::Value=serde_json::from_slice(&call.read_payload_bytes().unwrap()).unwrap();
-    let outstanding=serde_json::from_value::<crate::handler::CodexContinuityState>(call["codex_continuity"].clone()).unwrap()
+    let late_continuity=serde_json::from_value::<crate::handler::CodexContinuityState>(call["codex_continuity"].clone()).unwrap();
+    assert_eq!(current.interface_state[&descriptor.id]["context_generation"],json!(late_continuity.context_generation),
+        "every late context output is its own authored generation");
+    let outstanding=late_continuity
         .outstanding().map(|pending|serde_json::to_value(pending).unwrap()["call_id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
     assert_eq!(outstanding,["call-a","call-b"]);
     let cp=current.checkpoints.iter().find(|cp|current.active_checkpoints.contains(&cp.id)

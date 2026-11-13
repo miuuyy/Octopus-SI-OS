@@ -151,19 +151,21 @@ pub(crate) async fn wake_late_calls(
         if emissions.is_empty() {
             return Ok(());
         }
-        let outcomes = handoff
-            .hand_completed_source_continuation(emissions)
-            .await
-            .map_err(&refused)?;
-        if let Some((failure_seq, failure_class)) = outcomes.iter().find_map(|outcome| match outcome {
-            ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. } => {
-                Some((*failure_seq, failure_class.clone()))
+        for emission in emissions {
+            let outcomes = handoff
+                .hand_completed_source_continuation(vec![emission])
+                .await
+                .map_err(&refused)?;
+            if let Some((failure_seq, failure_class)) = outcomes.iter().find_map(|outcome| match outcome {
+                ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. } => {
+                    Some((*failure_seq, failure_class.clone()))
+                }
+                ProviderHandoffOutcome::Admitted { .. } => None,
+            }) {
+                return Err(refused(format!(
+                    "run authoring replaced it with failure '{failure_class}' at movement {failure_seq}"
+                )));
             }
-            ProviderHandoffOutcome::Admitted { .. } => None,
-        }) {
-            return Err(refused(format!(
-                "run authoring replaced it with failure '{failure_class}' at movement {failure_seq}"
-            )));
         }
         Ok(())
     }

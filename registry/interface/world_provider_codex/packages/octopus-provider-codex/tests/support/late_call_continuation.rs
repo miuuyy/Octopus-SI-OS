@@ -17,6 +17,9 @@ async fn late_call_native_turn(root: &Path, descriptor: &InterfaceDescriptor) ->
             "turnId":"turn-a","callId":call,"namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":call}}});
         socket.send(tokio_tungstenite::tungstenite::Message::Text(call("request-a", "call-a").to_string().into())).await.unwrap();
         late_rx.await.unwrap();
+        let note = json!({"method":"item/completed","params":{"threadId":"thread-a","turnId":"turn-a","completedAtMs":5,
+            "item":{"type":"agentMessage","id":"note-b","text":"checking b as well","phase":"commentary"}}});
+        socket.send(tokio_tungstenite::tungstenite::Message::Text(note.to_string().into())).await.unwrap();
         socket.send(tokio_tungstenite::tungstenite::Message::Text(call("request-b", "call-b").to_string().into())).await.unwrap();
         while let Some(Ok(frame)) = socket.next().await {
             let tokio_tungstenite::tungstenite::Message::Text(frame) = frame else { continue };

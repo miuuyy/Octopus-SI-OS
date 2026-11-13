@@ -873,8 +873,9 @@ interface it addresses, so before it leaves the provider emits
 that holds the new call; its result then finds its wait recorded. A request that arrives after the turn's drain suspended wakes the
 provider: it is drained through the same path, after that turn's notifications
 buffered before it, and what the drain emits continues the completed handoff of
-the turn's latest arrival in terminal batches of that source movement; no new
-arrival is recorded. The latest arrival is the input or result whose drain
+the turn's latest arrival in terminal writes of that source movement, one output
+each as the turn's own stream is handed, so every late context output is its own
+authored generation; no new arrival is recorded. The latest arrival is the input or result whose drain
 suspended, or a later steer, queued message or duplicate result whose receipt
 completed that source. The request instead waits for the next arrival while a
 control applied to the waiting turn has no handed receipt, while a movement the
