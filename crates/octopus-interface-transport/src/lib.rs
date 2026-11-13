@@ -12,14 +12,14 @@ pub use interface_life::{
     InterfaceLiftFn, InterfaceLifeReadyPublication, RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeConfig,
     ResolvedSpawnLifeExecutable, SpawnLifeArgument, SpawnLifeCommand, SpawnLifeConfig,
     SpawnLifeDoctorCommand, SpawnLifeRepositoryFileArgument, ValidatedSpawnLifeConfig,
-    INHERITED_LISTENERS_ENV, InterfaceSleepDeclaration,
+    INHERITED_SOCKETS_ENV, InterfaceSleepDeclaration,
     capture_spawned_artifact, interfaces_mentioned_in_live_runs, read_private_environment_document,
     resolve_interface_descriptor, resolve_spawn_life_config,
     resolve_spawn_life_executable, spawn_life_config_of, spawn_process_life,
     validate_spawn_life_config,
 };
 #[cfg(unix)]
-pub use interface_life::take_inherited_listener;
+pub use interface_life::{InheritedSocketHandles, take_inherited_socket};
 use notify::{RecursiveMode, Watcher};
 use octopus_descriptors::{ArtifactId, InterfaceId};
 use octopus_interfaces::{DeliveryVerdict, Direction, InterfaceArtifactFile, InterfaceDescriptor};
@@ -251,8 +251,23 @@ struct LiftedInterfaceLife {
 
 #[cfg(unix)]
 struct HeldSockets {
-    listeners: Vec<interface_life::HeldListener>,
-    _watch: tokio_util::sync::DropGuard,
+    doormen: Vec<tokio::task::JoinHandle<Option<interface_life::InheritedSocket>>>,
+    stop: tokio_util::sync::DropGuard,
+}
+
+#[cfg(unix)]
+impl HeldSockets {
+    async fn release(self) -> Vec<interface_life::InheritedSocket> {
+        let Self { doormen, stop } = self;
+        drop(stop);
+        let mut sockets = Vec::new();
+        for doorman in doormen {
+            if let Ok(Some(socket)) = doorman.await {
+                sockets.push(socket);
+            }
+        }
+        sockets
+    }
 }
 
 enum InterfaceLifeEvent {
@@ -598,6 +613,13 @@ impl InterfaceActivationReconciler {
                         continue;
                     }
                 };
+            #[cfg(unix)]
+            if self.lifted.get(&interface).is_some_and(|lifted| {
+                lifted.sleeping && lifted.held_sockets.is_some() && lifted.fingerprint != fingerprint
+            }) && self.replace_held_sockets(&interface, &fingerprint).await
+            {
+                continue;
+            }
             let existing = self.lifted.get(&interface);
             let fingerprint_changed =
                 existing.is_some_and(|lifted| lifted.fingerprint != fingerprint);
@@ -624,12 +646,14 @@ impl InterfaceActivationReconciler {
                 .unwrap_or(0);
             let after_coma = self.live.then(|| self.failures.borrow().get(&interface).cloned()).flatten();
             #[cfg(unix)]
-            let inherited_listeners = self
+            let inherited_sockets = match self
                 .lifted
                 .get_mut(&interface)
                 .and_then(|life| life.held_sockets.take())
-                .map(|held| held.listeners)
-                .unwrap_or_default();
+            {
+                Some(held) => held.release().await,
+                None => Vec::new(),
+            };
             self.stop_life(&interface).await;
             let config = resolved.config;
             let descriptor_snapshot = resolved.interface_descriptor;
@@ -666,9 +690,9 @@ impl InterfaceActivationReconciler {
                 readiness: readiness.clone(),
                 asleep: Default::default(),
                 #[cfg(unix)]
-                inherited_listeners: interface_life::InheritedListeners::new(inherited_listeners),
+                inherited_sockets: interface_life::InheritedSockets::new(inherited_sockets),
                 #[cfg(not(unix))]
-                inherited_listeners: Default::default(),
+                inherited_sockets: Default::default(),
             };
             let socket_roots = [APP_SERVER_CONTROL_ROOT_SLOT, INTERFACE_LOCAL_IPC_ROOT_SLOT]
                 .into_iter()
@@ -988,7 +1012,20 @@ impl InterfaceActivationReconciler {
                 current.restart_attempt = 0;
                 current.retry_not_before = None;
                 #[cfg(unix)]
-                let held = hold_sleeping_sockets(&interface, lift_id, &declaration.sockets, &current.socket_roots, events);
+                let held = declaration
+                    .sockets
+                    .iter()
+                    .map(|socket| {
+                        bind_held_socket(socket, &current.socket_roots)
+                            .map(|listener| (socket.clone(), listener, Vec::new()))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .and_then(|sockets| {
+                        if sockets.is_empty() {
+                            return Ok(None);
+                        }
+                        hold_sockets(&interface, lift_id, sockets, events).map(Some)
+                    });
                 #[cfg(not(unix))]
                 let held: Result<(), String> = if declaration.sockets.is_empty() {
                     Ok(())
@@ -1024,6 +1061,53 @@ impl InterfaceActivationReconciler {
                     self.wake_life(&interface).await;
                 }
                 None
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    async fn replace_held_sockets(&mut self, interface: &InterfaceId, fingerprint: &ContentHash) -> bool {
+        let events = self.life_exit_tx.clone();
+        let Some(life) = self.lifted.get_mut(interface) else {
+            return false;
+        };
+        let Some(held) = life.held_sockets.take() else {
+            return false;
+        };
+        let replaced = held
+            .release()
+            .await
+            .into_iter()
+            .map(|held| {
+                let listener = bind_held_socket(&held.path, &life.socket_roots)?;
+                let previous = std::os::unix::net::UnixListener::from(held.listener);
+                let mut callers = held
+                    .connections
+                    .into_iter()
+                    .map(std::os::unix::net::UnixStream::from)
+                    .collect::<Vec<_>>();
+                while let Ok((caller, _)) = previous.accept() {
+                    callers.push(caller);
+                }
+                Ok((held.path, listener, callers))
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .and_then(|sockets| hold_sockets(interface, life.lift_id, sockets, events));
+        match replaced {
+            Ok(held) => {
+                life.held_sockets = Some(held);
+                life.fingerprint = fingerprint.clone();
+                true
+            }
+            Err(error) => {
+                life.sleeping = false;
+                life.woken = true;
+                life.asleep_through = None;
+                self.record_failure(
+                    interface,
+                    &format!("sleeping life sockets cannot be held again: {error}"),
+                );
+                false
             }
         }
     }
@@ -1315,81 +1399,202 @@ impl InterfaceActivationReconciler {
 }
 
 #[cfg(unix)]
-fn hold_sleeping_sockets(
-    interface: &InterfaceId,
-    lift_id: u64,
-    sockets: &[PathBuf],
+type SocketToHold = (
+    PathBuf,
+    std::os::unix::net::UnixListener,
+    Vec<std::os::unix::net::UnixStream>,
+);
+
+#[cfg(unix)]
+fn bind_held_socket(
+    socket: &Path,
     socket_roots: &[PathBuf],
-    events: tokio::sync::mpsc::UnboundedSender<InterfaceLifeEvent>,
-) -> Result<Option<HeldSockets>, String> {
-    use std::os::fd::OwnedFd;
+) -> Result<std::os::unix::net::UnixListener, String> {
     use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-    if sockets.is_empty() {
-        return Ok(None);
+    if !socket
+        .parent()
+        .is_some_and(|parent| socket_roots.iter().any(|root| root == parent))
+    {
+        return Err(format!(
+            "socket '{}' is not in a socket root the host formed for this life",
+            socket.display()
+        ));
     }
-    let watch = CancellationToken::new();
-    let mut listeners = Vec::new();
-    for socket in sockets {
-        if !socket
-            .parent()
-            .is_some_and(|parent| socket_roots.iter().any(|root| root == parent))
-        {
-            return Err(format!(
-                "socket '{}' is not in a socket root the host formed for this life",
-                socket.display()
-            ));
-        }
-        match std::fs::symlink_metadata(socket) {
-            Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(socket)
-                .map_err(|error| format!("stale socket '{}' cannot be removed: {error}", socket.display()))?,
-            Ok(_) => return Err(format!("'{}' is not a socket", socket.display())),
+    let staged = socket.with_extension("held");
+    for path in [socket, staged.as_path()] {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_socket() => {}
+            Ok(_) => return Err(format!("'{}' is not a socket", path.display())),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("socket '{}' cannot be inspected: {error}", socket.display())),
-        }
-        let listener = std::os::unix::net::UnixListener::bind(socket)
-            .map_err(|error| format!("socket '{}' cannot be bound: {error}", socket.display()))?;
-        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("socket '{}' permissions cannot be set: {error}", socket.display()))?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|error| format!("socket '{}' cannot be made nonblocking: {error}", socket.display()))?;
-        let fd = Arc::new(OwnedFd::from(listener));
-        let readable = unsafe {
-            tokio::io::unix::AsyncFd::register_with_interest(
-                SharedListenerFd(Arc::clone(&fd)),
-                tokio::io::Interest::READABLE,
-            )
-        }
-        .map_err(|error| format!("socket '{}' cannot be watched: {}", socket.display(), error.into_parts().1))?;
-        let watch = watch.clone();
-        let events = events.clone();
-        let interface = interface.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = watch.cancelled() => {}
-                ready = readable.readable() => {
-                    if ready.is_ok() {
-                        let _ = events.send(InterfaceLifeEvent::Knocked { interface, lift_id });
-                    }
-                }
+            Err(error) => {
+                return Err(format!("socket '{}' cannot be inspected: {error}", path.display()));
             }
-        });
-        listeners.push((socket.clone(), fd));
+        }
     }
-    Ok(Some(HeldSockets {
-        listeners,
-        _watch: watch.drop_guard(),
-    }))
+    match std::fs::remove_file(&staged) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!("staged socket '{}' cannot be removed: {error}", staged.display()));
+        }
+    }
+    let listener = std::os::unix::net::UnixListener::bind(&staged)
+        .map_err(|error| format!("socket '{}' cannot be bound: {error}", staged.display()))?;
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("socket '{}' permissions cannot be set: {error}", staged.display()))?;
+    std::fs::rename(&staged, socket)
+        .map_err(|error| format!("socket '{}' cannot take its place: {error}", socket.display()))?;
+    Ok(listener)
 }
 
 #[cfg(unix)]
-struct SharedListenerFd(Arc<std::os::fd::OwnedFd>);
+fn hold_sockets(
+    interface: &InterfaceId,
+    lift_id: u64,
+    sockets: Vec<SocketToHold>,
+    events: tokio::sync::mpsc::UnboundedSender<InterfaceLifeEvent>,
+) -> Result<HeldSockets, String> {
+    let stop = CancellationToken::new();
+    let stop_guard = stop.clone().drop_guard();
+    let mut doormen = Vec::new();
+    for (path, listener, carried) in sockets {
+        let nonblocking = |error: std::io::Error| {
+            format!("socket '{}' cannot be held: {error}", path.display())
+        };
+        listener.set_nonblocking(true).map_err(nonblocking)?;
+        let listener = tokio::net::UnixListener::from_std(listener).map_err(nonblocking)?;
+        let carried = carried
+            .into_iter()
+            .map(|caller| {
+                caller.set_nonblocking(true)?;
+                tokio::net::UnixStream::from_std(caller)
+            })
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(nonblocking)?;
+        doormen.push(tokio::spawn(keep_door(
+            interface.clone(),
+            lift_id,
+            path,
+            listener,
+            carried,
+            stop.clone(),
+            events.clone(),
+        )));
+    }
+    Ok(HeldSockets {
+        doormen,
+        stop: stop_guard,
+    })
+}
 
 #[cfg(unix)]
-impl std::os::fd::AsRawFd for SharedListenerFd {
-    fn as_raw_fd(&self) -> std::os::fd::RawFd {
-        self.0.as_raw_fd()
+enum Caller {
+    Spoke(tokio::net::UnixStream),
+    Waiting(tokio::net::UnixStream),
+    Left,
+}
+
+#[cfg(unix)]
+async fn first_word(caller: tokio::net::UnixStream, stop: CancellationToken) -> Caller {
+    use std::os::fd::AsRawFd;
+    loop {
+        tokio::select! {
+            biased;
+            ready = caller.readable() => {
+                if ready.is_err() {
+                    return Caller::Left;
+                }
+                let peeked = caller.try_io(tokio::io::Interest::READABLE, || {
+                    let mut byte = 0_u8;
+                    let read = unsafe {
+                        libc::recv(caller.as_raw_fd(), (&raw mut byte).cast(), 1, libc::MSG_PEEK)
+                    };
+                    if read < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(read)
+                    }
+                });
+                match peeked {
+                    Ok(0) => return Caller::Left,
+                    Ok(_) => return Caller::Spoke(caller),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => return Caller::Left,
+                }
+            }
+            _ = stop.cancelled() => return Caller::Waiting(caller),
+        }
     }
+}
+
+#[cfg(unix)]
+async fn keep_door(
+    interface: InterfaceId,
+    lift_id: u64,
+    path: PathBuf,
+    listener: tokio::net::UnixListener,
+    carried: Vec<tokio::net::UnixStream>,
+    stop: CancellationToken,
+    events: tokio::sync::mpsc::UnboundedSender<InterfaceLifeEvent>,
+) -> Option<interface_life::InheritedSocket> {
+    let mut callers = Vec::new();
+    let mut silent = tokio::task::JoinSet::new();
+    for caller in carried {
+        silent.spawn(first_word(caller, stop.clone()));
+    }
+    let mut knocked = false;
+    let mut accepting = true;
+    loop {
+        let spoke = tokio::select! {
+            _ = stop.cancelled() => break,
+            accepted = listener.accept(), if accepting => match accepted {
+                Ok((caller, _)) => {
+                    silent.spawn(first_word(caller, stop.clone()));
+                    false
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        interface = interface.as_str(),
+                        socket = %path.display(),
+                        error = %error,
+                        "held socket cannot accept; waking its life"
+                    );
+                    accepting = false;
+                    true
+                }
+            },
+            Some(caller) = silent.join_next() => match caller {
+                Ok(Caller::Spoke(caller)) => {
+                    callers.push(caller);
+                    true
+                }
+                Ok(Caller::Waiting(caller)) => {
+                    callers.push(caller);
+                    false
+                }
+                Ok(Caller::Left) | Err(_) => false,
+            },
+        };
+        if spoke && !std::mem::replace(&mut knocked, true) {
+            let _ = events.send(InterfaceLifeEvent::Knocked {
+                interface: interface.clone(),
+                lift_id,
+            });
+        }
+    }
+    while let Some(caller) = silent.join_next().await {
+        if let Ok(Caller::Spoke(caller) | Caller::Waiting(caller)) = caller {
+            callers.push(caller);
+        }
+    }
+    Some(interface_life::InheritedSocket {
+        path,
+        listener: listener.into_std().ok()?.into(),
+        connections: callers
+            .into_iter()
+            .filter_map(|caller| caller.into_std().ok().map(Into::into))
+            .collect(),
+    })
 }
 
 fn scan_activation_lives(
@@ -2493,41 +2698,58 @@ mod interface_life_switch_tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_sleeping_life_socket_is_held_and_a_connection_lifts_it_with_the_listener() {
+    async fn a_held_socket_wakes_its_life_on_a_first_word_and_hands_the_caller_over() {
+        use std::io::Write;
+        use std::os::unix::fs::MetadataExt;
         let lives = ShLives::new();
         let name = "test_knock";
         let socket = lives.home.join("app-server-control").join("k.sock");
         let marker = lives.var_dir(name).join("slept");
-        let inherited = lives.var_dir(name).join("inherited");
-        lives.life(
-            name,
-            &format!(
-                "if [ -e '{marker}' ]; then printf '%s' \"$OCTOPUS_INHERITED_LISTENERS\" > '{inherited}'; printf '%s\\n' \"$1\"; IFS= read -r ignored; else : > '{marker}'; printf '%s\\n' \"$1\" \"$2\"; fi",
-                marker = marker.display(),
-                inherited = inherited.display(),
-            ),
-            &[ready_frame(), serde_json::json!({"kind": "asleep", "sockets": [socket]})],
-            &[&marker, &inherited],
+        let heard = lives.var_dir(name).join("heard");
+        let script = format!(
+            "if [ -e '{marker}' ]; then fd=${{OCTOPUS_INHERITED_SOCKETS##*\\[}}; fd=${{fd%%\\]*}}; IFS= read -r word <&$fd; printf '%s' \"$word\" > '{heard}'; printf '%s\\n' \"$1\"; IFS= read -r ignored; else : > '{marker}'; printf '%s\\n' \"$1\" \"$2\"; fi",
+            marker = marker.display(),
+            heard = heard.display(),
         );
+        let frames = [ready_frame(), serde_json::json!({"kind": "asleep", "sockets": [socket]})];
+        lives.life(name, &script, &frames, &[&marker, &heard]);
         lives.bind("run_knock", &[name]);
         let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);
         let interface = InterfaceId::new(name);
+        let asleep = |reconciler: &InterfaceActivationReconciler| {
+            reconciler.lifted.get(&interface).is_some_and(|life| life.sleeping)
+        };
         reconciler.reconcile_once().await.unwrap();
         assert_eq!(reconciler.await_initial_readiness(1, 0, None).await.unwrap(), 1);
-        pump_life_events(&mut reconciler, "a life that names its socket falls asleep", |reconciler| {
-            reconciler.lifted.get(&interface).is_some_and(|life| life.sleeping)
-        })
-        .await;
+        pump_life_events(&mut reconciler, "a life that names its socket falls asleep", asleep).await;
         assert!(reconciler.failures.borrow().is_empty());
-        let _client = std::os::unix::net::UnixStream::connect(&socket)
-            .expect("the runtime holds a sleeping life's socket");
-        pump_life_events(&mut reconciler, "a connection to the held socket lifts the life", |_| {
-            std::fs::read_to_string(&inherited).is_ok_and(|text| !text.is_empty())
+
+        drop(std::os::unix::net::UnixStream::connect(&socket).expect("the runtime holds a sleeping life's socket"));
+        let quiet_until = Instant::now() + Duration::from_millis(300);
+        pump_life_events(&mut reconciler, "a caller that leaves without a word is let go", |_| {
+            Instant::now() >= quiet_until
         })
         .await;
-        let listeners: BTreeMap<PathBuf, i32> =
-            serde_json::from_str(&std::fs::read_to_string(&inherited).unwrap()).unwrap();
-        assert_eq!(listeners.keys().collect::<Vec<_>>(), vec![&socket], "the woken life inherits the listener");
+        assert!(asleep(&reconciler), "a caller that leaves without a word wakes nobody");
+
+        let held = std::fs::metadata(&socket).unwrap().ino();
+        lives.life(name, &format!(": ; {script}"), &frames, &[&marker, &heard]);
+        reconciler.reconcile_once().await.unwrap();
+        assert!(asleep(&reconciler), "a changed configuration does not wake a sleeping life");
+        assert_ne!(
+            std::fs::metadata(&socket).unwrap().ino(),
+            held,
+            "a sleeping life whose configuration changed gets a new socket"
+        );
+
+        let mut caller = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+        caller.write_all(b"hello\n").unwrap();
+        pump_life_events(&mut reconciler, "a caller's first word lifts the life and reaches it", |_| {
+            std::fs::read_to_string(&heard).is_ok_and(|word| word == "hello")
+        })
+        .await;
+        assert!(!asleep(&reconciler));
+        assert!(reconciler.failures.borrow().is_empty());
         lives.stop(reconciler).await;
     }
 

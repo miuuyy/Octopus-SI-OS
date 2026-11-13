@@ -474,13 +474,20 @@ mod socket {
                 "app-server transport frame ceiling exceeds host address space",
             )
         })?;
-        let listener = match octopus_interface_transport::take_inherited_listener(socket_path.as_path()) {
-            Some(inherited) => tokio::net::UnixListener::from_std(inherited)?,
+        let (listener, carried) = match octopus_interface_transport::take_inherited_socket(socket_path.as_path()) {
+            Some(inherited) => (
+                tokio::net::UnixListener::from_std(inherited.listener)?,
+                inherited
+                    .connections
+                    .into_iter()
+                    .map(tokio::net::UnixStream::from_std)
+                    .collect::<std::io::Result<Vec<_>>>()?,
+            ),
             None => {
                 prepare_control_socket_path(socket_path.as_path()).await?;
                 let listener = tokio::net::UnixListener::bind(socket_path.as_path())?;
                 set_control_socket_permissions(socket_path.as_path()).await?;
-                listener
+                (listener, Vec::new())
             }
         };
         tracing::info!(
@@ -494,31 +501,36 @@ mod socket {
         let last_work = Arc::new(std::sync::Mutex::new(tokio::time::Instant::now()));
         let sleep_socket = socket_path.as_path().to_path_buf();
         let accept_handle = tokio::spawn(async move {
+            let mut carried = carried.into_iter();
             loop {
-                let idle_until = *last_work.lock().expect("last work lock") + super::IDLE_BEFORE_SLEEP;
-                let stream = tokio::select! {
-                    _ = accept_cancel.cancelled() => break,
-                    _ = tokio::time::sleep_until(idle_until), if sleep.enabled() => {
-                        let quiet = open.load(std::sync::atomic::Ordering::SeqCst) == 0
-                            && in_flight.entries.lock().await.is_empty()
-                            && last_work.lock().expect("last work lock").elapsed() >= super::IDLE_BEFORE_SLEEP;
-                        if quiet && sleep.offer(sleep_socket.clone()).await {
-                            return;
+                let stream = match carried.next() {
+                    Some(stream) => stream,
+                    None => {
+                        let idle_until = *last_work.lock().expect("last work lock") + super::IDLE_BEFORE_SLEEP;
+                        tokio::select! {
+                            _ = accept_cancel.cancelled() => break,
+                            _ = tokio::time::sleep_until(idle_until), if sleep.enabled() => {
+                                let quiet = open.load(std::sync::atomic::Ordering::SeqCst) == 0
+                                    && in_flight.entries.lock().await.is_empty()
+                                    && last_work.lock().expect("last work lock").elapsed() >= super::IDLE_BEFORE_SLEEP;
+                                if quiet && sleep.offer(sleep_socket.clone()).await {
+                                    return;
+                                }
+                                *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
+                                continue;
+                            }
+                            accepted = listener.accept() => match accepted {
+                                Ok((stream, _addr)) => stream,
+                                Err(err) => {
+                                    tracing::warn!(error = %err, "control socket accept error");
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    continue;
+                                }
+                            },
                         }
-                        *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
-                        continue;
                     }
-                    accepted = listener.accept() => match accepted {
-                        Ok((stream, _addr)) => stream,
-                        Err(err) => {
-                            tracing::warn!(error = %err, "control socket accept error");
-                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                            continue;
-                        }
-                    },
                 };
                 open.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
                 let connection = run_connection(
                     stream,
                     tx.clone(),
@@ -528,12 +540,11 @@ mod socket {
                     maximum_frame_bytes,
                     in_flight.clone(),
                     accept_cancel.clone(),
+                    last_work.clone(),
                 );
                 let open = open.clone();
-                let last_work = last_work.clone();
                 tokio::spawn(async move {
                     connection.await;
-                    *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
                     open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 });
             }
@@ -563,6 +574,7 @@ mod socket {
         maximum_frame_bytes: usize,
         in_flight: Arc<InFlightHandIns>,
         cancel: CancellationToken,
+        last_work: Arc<std::sync::Mutex<tokio::time::Instant>>,
     ) {
         let websocket_config = WebSocketConfig::default()
             .max_frame_size(Some(maximum_frame_bytes))
@@ -603,7 +615,8 @@ mod socket {
                     continue;
                 }
             };
-            match handle_wire_frame_with_inflight(
+            *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
+            let handled = handle_wire_frame_with_inflight(
                 &text,
                 &tx,
                 &interface_id,
@@ -612,8 +625,9 @@ mod socket {
                 in_flight.clone(),
                 cancel.clone(),
             )
-            .await
-            {
+            .await;
+            *last_work.lock().expect("last work lock") = tokio::time::Instant::now();
+            match handled {
                 Ok(reply) => {
                     if ws.send(WsMessage::Text(reply.into())).await.is_err() {
                         break;

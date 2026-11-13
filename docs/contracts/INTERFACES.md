@@ -129,13 +129,25 @@ read, then exits with status 0:
 
 Either field may be absent, not both. `sockets` names listening sockets the
 life served in a socket root the host formed for it (`app_server_control_root`
-or `interface_local_ipc_root`). While the life sleeps the runtime holds them;
-the first connection lifts the life, which receives the same listeners through
-`OCTOPUS_INHERITED_LISTENERS` (a JSON map of socket path to inherited file
-descriptor) and accepts the waiting connection. A socket intake (the
-app-server activation transport) offers sleep after two quiet minutes with no
-open connection and no hand-in in flight; a caller whose connection closes
-before the WebSocket upgrade simply connects again.
+or `interface_local_ipc_root`). While the life sleeps the runtime holds them and
+accepts their callers. A caller that leaves without sending anything wakes
+nobody. A caller's first byte lifts the life, which receives the listener and
+every caller still connected through `OCTOPUS_INHERITED_SOCKETS` and serves
+them as its own:
+
+```json
+{ "/…/app-server-control/<digest>.sock": { "listener": 5, "connections": [7, 9] } }
+```
+
+The values are inherited file descriptors. When the configuration of a sleeping
+life changes, the runtime replaces the held socket with a new one at the same
+path and keeps the callers it has; the life stays asleep and takes the new
+configuration when it wakes. Only a life of one process may leave sockets.
+Between the life closing its listener and the runtime holding the path, a
+connection is refused; the caller connects again. A socket intake (the
+app-server activation transport) offers sleep after two minutes in which it
+received and answered no frame, with no open connection and no hand-in in
+flight.
 
 That is sleep, not coma: no failure is recorded and no backoff applies. When
 the runtime records a movement for that folder at or past `through_seq`, it

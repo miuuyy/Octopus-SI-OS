@@ -318,7 +318,7 @@ pub struct InterfaceLiftContext {
     pub cancel: CancellationToken,
     pub(crate) readiness: InterfaceLifeReadiness,
     pub(crate) asleep: InterfaceLifeSleep,
-    pub(crate) inherited_listeners: InheritedListeners,
+    pub(crate) inherited_sockets: InheritedSockets,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -357,49 +357,74 @@ impl InterfaceLifeSleep {
 }
 
 #[cfg(unix)]
-pub(crate) type HeldListener = (PathBuf, Arc<std::os::fd::OwnedFd>);
+pub(crate) struct InheritedSocket {
+    pub(crate) path: PathBuf,
+    pub(crate) listener: std::os::fd::OwnedFd,
+    pub(crate) connections: Vec<std::os::fd::OwnedFd>,
+}
 
 #[derive(Clone, Default)]
-pub(crate) struct InheritedListeners {
+pub(crate) struct InheritedSockets {
     #[cfg(unix)]
-    listeners: Arc<std::sync::Mutex<Vec<HeldListener>>>,
+    sockets: Arc<std::sync::Mutex<Vec<InheritedSocket>>>,
 }
 
 #[cfg(unix)]
-impl InheritedListeners {
-    pub(crate) fn new(listeners: Vec<HeldListener>) -> Self {
-        Self { listeners: Arc::new(std::sync::Mutex::new(listeners)) }
+impl InheritedSockets {
+    pub(crate) fn new(sockets: Vec<InheritedSocket>) -> Self {
+        Self { sockets: Arc::new(std::sync::Mutex::new(sockets)) }
     }
 
-    fn take(&self) -> Vec<HeldListener> {
-        self.listeners.lock().map(|mut held| std::mem::take(&mut *held)).unwrap_or_default()
+    fn take(&self) -> Vec<InheritedSocket> {
+        self.sockets.lock().map(|mut held| std::mem::take(&mut *held)).unwrap_or_default()
     }
 }
 
-pub const INHERITED_LISTENERS_ENV: &str = "OCTOPUS_INHERITED_LISTENERS";
+pub const INHERITED_SOCKETS_ENV: &str = "OCTOPUS_INHERITED_SOCKETS";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InheritedSocketDescriptors {
+    listener: i32,
+    connections: Vec<i32>,
+}
 
 #[cfg(unix)]
-pub fn take_inherited_listener(path: &Path) -> Option<std::os::unix::net::UnixListener> {
+pub struct InheritedSocketHandles {
+    pub listener: std::os::unix::net::UnixListener,
+    pub connections: Vec<std::os::unix::net::UnixStream>,
+}
+
+#[cfg(unix)]
+pub fn take_inherited_socket(path: &Path) -> Option<InheritedSocketHandles> {
     use std::os::fd::FromRawFd;
-    static INHERITED: std::sync::OnceLock<std::sync::Mutex<BTreeMap<PathBuf, i32>>> =
+    static INHERITED: std::sync::OnceLock<std::sync::Mutex<BTreeMap<PathBuf, InheritedSocketDescriptors>>> =
         std::sync::OnceLock::new();
     let inherited = INHERITED.get_or_init(|| {
-        let parsed = std::env::var(INHERITED_LISTENERS_ENV)
+        let parsed = std::env::var(INHERITED_SOCKETS_ENV)
             .ok()
-            .and_then(|value| serde_json::from_str::<BTreeMap<PathBuf, i32>>(&value).ok())
+            .and_then(|value| serde_json::from_str(&value).ok())
             .unwrap_or_default();
         std::sync::Mutex::new(parsed)
     });
-    let fd = inherited.lock().ok()?.remove(path)?;
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0
-        || unsafe { stat.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFSOCK
-    {
+    let descriptors = inherited.lock().ok()?.remove(path)?;
+    let is_socket = |fd: i32| {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        unsafe { libc::fstat(fd, stat.as_mut_ptr()) == 0 && stat.assume_init().st_mode & libc::S_IFMT == libc::S_IFSOCK }
+    };
+    if !is_socket(descriptors.listener) {
         return None;
     }
-    let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+    let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(descriptors.listener) };
     listener.set_nonblocking(true).ok()?;
-    Some(listener)
+    let connections = descriptors
+        .connections
+        .into_iter()
+        .filter(|fd| is_socket(*fd))
+        .map(|fd| unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) })
+        .filter(|connection| connection.set_nonblocking(true).is_ok())
+        .collect();
+    Some(InheritedSocketHandles { listener, connections })
 }
 
 #[derive(Clone, Default)]
@@ -480,7 +505,7 @@ impl InterfaceLiftContext {
             cancel,
             readiness: InterfaceLifeReadiness::default(),
             asleep: InterfaceLifeSleep::default(),
-            inherited_listeners: InheritedListeners::default(),
+            inherited_sockets: InheritedSockets::default(),
         }
     }
 
@@ -2709,6 +2734,7 @@ pub fn spawn_process_life(
         let mut processes = tokio::task::JoinSet::new();
         let mut readiness = tokio::task::JoinSet::new();
         let process_cancel = ctx.cancel.child_token();
+        let several_processes = config.processes.len() > 1;
         for command in config.processes {
             let mut process_ctx = ctx.clone();
             process_ctx.cancel = process_cancel.clone();
@@ -2768,6 +2794,13 @@ pub fn spawn_process_life(
         let mut errors = Vec::new();
         if let Err(error) = life_result {
             errors.push(error);
+        }
+        if several_processes
+            && ctx
+                .sleep_declaration()
+                .is_some_and(|declaration| !declaration.sockets.is_empty())
+        {
+            errors.push("a life of several processes cannot leave sockets for the host to hold".to_string());
         }
         while let Some(result) = processes.join_next().await {
             if let Some(error) = spawned_life_task_error(result) {
@@ -3020,22 +3053,33 @@ fn spawn_process_command_life(
             ctx.var_dir.parent().ok_or("interface life has no private root")?, &ctx.interface,
         )?.ok_or("interface process lost its lifetime ownership before spawn")?;
         #[cfg(unix)]
-        let inherited_listeners = ctx.inherited_listeners.take();
-        let mut inherited_listeners_env = None;
+        let inherited_sockets = ctx.inherited_sockets.take();
+        let mut inherited_sockets_env = None;
         #[cfg(unix)]
         {
             command.process_group(0);
             child_ownership.inherit_into(&mut command);
-            if !inherited_listeners.is_empty() {
+            if !inherited_sockets.is_empty() {
                 use std::os::fd::AsRawFd;
-                let fds = inherited_listeners
+                let descriptors = inherited_sockets
                     .iter()
-                    .map(|(path, fd)| (path.clone(), fd.as_raw_fd()))
+                    .map(|socket| {
+                        (
+                            socket.path.clone(),
+                            InheritedSocketDescriptors {
+                                listener: socket.listener.as_raw_fd(),
+                                connections: socket.connections.iter().map(AsRawFd::as_raw_fd).collect(),
+                            },
+                        )
+                    })
                     .collect::<BTreeMap<_, _>>();
-                inherited_listeners_env = Some(
-                    serde_json::to_string(&fds).map_err(|error| format!("inherited listeners failed to encode: {error}"))?,
+                inherited_sockets_env = Some(
+                    serde_json::to_string(&descriptors).map_err(|error| format!("inherited sockets failed to encode: {error}"))?,
                 );
-                let raw = fds.values().copied().collect::<Vec<_>>();
+                let raw = descriptors
+                    .values()
+                    .flat_map(|socket| std::iter::once(socket.listener).chain(socket.connections.iter().copied()))
+                    .collect::<Vec<_>>();
                 unsafe {
                     command.pre_exec(move || {
                         for fd in &raw {
@@ -3066,8 +3110,8 @@ fn spawn_process_command_life(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
-        if let Some(inherited_listeners_env) = inherited_listeners_env {
-            command.env(INHERITED_LISTENERS_ENV, inherited_listeners_env);
+        if let Some(inherited_sockets_env) = inherited_sockets_env {
+            command.env(INHERITED_SOCKETS_ENV, inherited_sockets_env);
         }
         if let Some(movements_path) = movements_path {
             command.env("OCTOPUS_MOVEMENTS_JSONL", movements_path);
@@ -3093,6 +3137,8 @@ fn spawn_process_command_life(
         let mut child = LifeProcess::spawn(&mut command)
             .await
             .map_err(|e| format!("life spawn '{}' failed: {e}", executable.display()))?;
+        #[cfg(unix)]
+        drop(inherited_sockets);
         let child_pid = child.id();
         let capture_sequence = STDERR_CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let stderr_path = var_dir.join(format!(
@@ -3875,7 +3921,7 @@ mod tests {
             cancel: CancellationToken::new(),
             readiness: InterfaceLifeReadiness::default(),
             asleep: InterfaceLifeSleep::default(),
-            inherited_listeners: InheritedListeners::default(),
+            inherited_sockets: InheritedSockets::default(),
         }
     }
 
