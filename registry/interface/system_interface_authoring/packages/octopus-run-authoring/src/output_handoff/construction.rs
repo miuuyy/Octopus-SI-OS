@@ -378,6 +378,7 @@ impl ProviderOutputHandoff {
         }
         let context_payloads = context_artifact_payloads(&initial_record, input.metadata().map_err(|error| error.to_string())?, &input.artifact_binding_payloads)?;
         let instruction_sources = bound_instruction_sources(&context_payloads, &[])?;
+        let declared_static = declared_static_context(&config, &consumed_templates[0]);
         for bound in &context_payloads {
             if consumes_context && consumed_templates[0].role != RunAuthoringCheckpointRole::ResultInput {
                 append_artifact(&mut context_artifacts, bound.artifact.id.clone());
@@ -385,7 +386,7 @@ impl ProviderOutputHandoff {
             if input.metadata().map_err(|error| error.to_string())?.grant.role_artifacts.iter()
                 .any(|id| id == bound.artifact.id.as_str())
                 || instruction_sources.contains(&bound.artifact.id)
-                || consumed_templates[0].static_artifact_bindings.contains(&bound.artifact.id) {
+                || declared_static.contains(&bound.artifact.id) {
                 append_artifact(&mut static_context_artifacts, bound.artifact.id.clone());
                 continue;
             }

@@ -699,7 +699,7 @@ pub(crate) fn source_context_payloads_from_cache(
     let mut static_ids = bound_instruction_sources(&payloads, &selected)?;
     static_ids.extend(source.role_artifacts.iter().map(ArtifactId::new));
     static_ids.extend(selected.iter().map(|reference| reference.id.clone()));
-    static_ids.extend(template.static_artifact_bindings.iter().cloned());
+    static_ids.extend(declared_static_context(config, template));
     Ok((payloads, static_ids))
 }
 

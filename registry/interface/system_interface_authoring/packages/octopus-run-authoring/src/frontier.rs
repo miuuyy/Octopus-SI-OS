@@ -891,6 +891,24 @@ pub(crate) fn current_context_artifacts(
         .into_iter().map(|binding| binding.id).collect())
 }
 
+/// Static context classification for one consumed provider input. An input
+/// that carries the provider context receives the bindings published by the
+/// stable context inputs, so their declared static artifacts stay static for it
+/// too; a capability amendment extends that declaration without rewriting
+/// retained owner-input templates.
+pub(crate) fn declared_static_context(
+    config: &RunAuthoringConfig,
+    template: &RunAuthoringCheckpoint,
+) -> BTreeSet<ArtifactId> {
+    let mut ids = template.static_artifact_bindings.iter().cloned().collect::<BTreeSet<_>>();
+    if template.include_context && template.role != RunAuthoringCheckpointRole::ResultInput {
+        ids.extend(config.checkpoints.iter()
+            .filter(|stable| stable.role == RunAuthoringCheckpointRole::Stable && stable.include_context)
+            .flat_map(|stable| stable.static_artifact_bindings.iter().cloned()));
+    }
+    ids
+}
+
 pub(crate) fn effective_context_bindings(
     record: &RunRecord,
     templates: &[RunAuthoringCheckpoint],

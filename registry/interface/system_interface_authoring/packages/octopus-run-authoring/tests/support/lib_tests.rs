@@ -2073,6 +2073,36 @@
     }
 
     #[test]
+    fn amended_static_context_stays_static_for_retained_context_owner_input() {
+        let mut config = config_with_tool_routes(&[]);
+        let catalog = ArtifactId::new("artifact-operation-catalog-test");
+        config.checkpoints[0].static_artifact_bindings = vec![ArtifactId::new("artifact-library"), catalog.clone()];
+        let template = |name: &str, role: &str, include_context: bool| -> RunAuthoringCheckpoint {
+            serde_json::from_value(serde_json::json!({
+                "name": name,
+                "role": role,
+                "static_artifact_bindings": ["artifact-library"],
+                "interface_binding": all_binding(format!("system_{name}")),
+                "outbound_interface_bindings": [all_binding("world_provider_test")],
+                "include_context": include_context,
+                "required_verified_artifacts": []
+            })).unwrap()
+        };
+        // The amendment extended the stable context; the retained owner input
+        // still declares only its original static list.
+        let owner_input = template("followup_input", "owner_input", true);
+        let classified = declared_static_context(&config, &owner_input);
+        assert!(classified.contains(&catalog), "context-carrying owner input must classify amended static context as static");
+        assert!(classified.contains(&ArtifactId::new("artifact-library")));
+        // A context-free input receives no provider context and keeps exactly its own list.
+        let context_free = template("control_input", "independent_input", false);
+        assert_eq!(declared_static_context(&config, &context_free), BTreeSet::from([ArtifactId::new("artifact-library")]));
+        // Result inputs keep their own call-evidence classification.
+        let result = template("result_input", "result_input", true);
+        assert!(!declared_static_context(&config, &result).contains(&catalog));
+    }
+
+    #[test]
     fn recorded_output_is_explicit_and_disjoint_from_return_bindings() {
         let mut config = config_with_tool_routes(&[]);
         let output = config.checkpoints.iter_mut().find(|cp| cp.role == RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap();
