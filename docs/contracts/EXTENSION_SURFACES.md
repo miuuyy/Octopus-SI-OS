@@ -462,7 +462,9 @@ A tool, operation or operator result that settles one of several outstanding
 calls of a native turn leaves the turn waiting for the rest. The provider then
 emits `interface.context.updated` naming the `awaiting_results` with the new
 continuity, so the run consumes that result and retires its result input before
-the next one arrives; the last result resumes the model. A waiting result is
+the next one arrives; the last result resumes the model. Standing outputs the
+waiting turn delivered without a write, such as a late usage update, belong to
+that turn: the write of a result that continues it carries them along. A waiting result is
 always consumed through its own admitted movement, in one write. Whatever checked
 writer changed the run's context while the call waited — sibling calls and
 results of the same turn, a steer, a control receipt, an earlier turn's
@@ -535,7 +537,9 @@ retained templates' static context order, and rebased onto the current record:
 the pending effect and its checkpoints stay exactly as admitted, and only the
 template change and the new routes are applied. A result wait the same step opens
 keeps the context it captured; context the amendment adds reaches the model
-through the amended context route. Every reader of that write, live or checked,
+through the amended context route. The retained owner-input templates are not
+rewritten, yet every input that carries the provider context treats the static
+context the stable context inputs declare, amended included, as static. Every reader of that write, live or checked,
 validates the ordinary step the amendment carries as its own patch and the
 amendment as an exact transformation of it.
 

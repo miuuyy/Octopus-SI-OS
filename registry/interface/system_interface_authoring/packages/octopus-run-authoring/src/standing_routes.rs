@@ -494,10 +494,6 @@ pub(super) struct StandingJournal {
     context_generations: u64,
 }
 
-/// The source whose non-terminal handoff a result input continues. Journal
-/// lines are bound to the exact persisted handoff, so lines of that source are
-/// the continued turn's own standing deliveries rather than an unfinished
-/// sibling source.
 pub(super) fn continued_result_source(
     pending: Option<&PendingHandoff>,
     source_movement_seq: u64,

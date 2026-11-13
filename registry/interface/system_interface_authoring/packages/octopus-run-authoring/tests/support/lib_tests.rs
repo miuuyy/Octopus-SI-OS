@@ -2080,11 +2080,8 @@
             })).unwrap()
         };
         let open = pending(9201, false);
-        // A result for the open tool-calling turn continues that turn's journal.
         assert_eq!(standing_routes::continued_result_source(Some(&open), 9246, true), Some(9201));
-        // An ordinary later input does not own another source's standing deliveries.
         assert_eq!(standing_routes::continued_result_source(Some(&open), 9246, false), None);
-        // A completed predecessor or a later handoff is never continued this way.
         assert_eq!(standing_routes::continued_result_source(Some(&pending(9201, true)), 9246, true), None);
         assert_eq!(standing_routes::continued_result_source(Some(&pending(9300, false)), 9246, true), None);
         assert_eq!(standing_routes::continued_result_source(None, 9246, true), None);
@@ -2106,16 +2103,12 @@
                 "required_verified_artifacts": []
             })).unwrap()
         };
-        // The amendment extended the stable context; the retained owner input
-        // still declares only its original static list.
         let owner_input = template("followup_input", "owner_input", true);
         let classified = declared_static_context(&config, &owner_input);
         assert!(classified.contains(&catalog), "context-carrying owner input must classify amended static context as static");
         assert!(classified.contains(&ArtifactId::new("artifact-library")));
-        // A context-free input receives no provider context and keeps exactly its own list.
         let context_free = template("control_input", "independent_input", false);
         assert_eq!(declared_static_context(&config, &context_free), BTreeSet::from([ArtifactId::new("artifact-library")]));
-        // Result inputs keep their own call-evidence classification.
         let result = template("result_input", "result_input", true);
         assert!(!declared_static_context(&config, &result).contains(&catalog));
     }
