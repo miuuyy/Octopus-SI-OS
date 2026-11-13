@@ -2149,7 +2149,7 @@
                         }
                       }
                     },
-                    "description": "Exact model-visible tool selection when nonempty. Worker environment kinds do not add tools to this list; required private authoring tools remain internal."
+                    "description": "Exact model-visible tool selection when nonempty. Worker environment kinds do not add tools to this list; required private authoring tools remain internal. The new run's own run operations come from this list: without artifact.send it has none; with it, list_runs, wait_for_runs, send_message, followup_task and interrupt_run; adding file.write also gives create_run, preview_run, preview_revision and revise_run; adding file.read as well gives preview_current_run and amend_current_run."
                   },
                   "door_host_slots": {
                     "type": "object",
@@ -2690,7 +2690,7 @@
                         }
                       }
                     },
-                    "description": "Exact model-visible tool selection when nonempty. Worker environment kinds do not add tools to this list; required private authoring tools remain internal."
+                    "description": "Exact model-visible tool selection when nonempty. Worker environment kinds do not add tools to this list; required private authoring tools remain internal. The new run's own run operations come from this list: without artifact.send it has none; with it, list_runs, wait_for_runs, send_message, followup_task and interrupt_run; adding file.write also gives create_run, preview_run, preview_revision and revise_run; adding file.read as well gives preview_current_run and amend_current_run."
                   },
                   "door_host_slots": {
                     "type": "object",

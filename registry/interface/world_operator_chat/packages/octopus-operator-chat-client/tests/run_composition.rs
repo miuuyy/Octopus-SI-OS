@@ -1024,6 +1024,13 @@ fn composition_binds_planned_native_catalog_and_task_coordinates_before_validati
     request.selected_tools.retain(|tool|tool.tool!="file.write");
     let without_writer=plan_run_composition(&request).unwrap();
     assert_eq!(without_writer.authoring.capability_tools["file.write"],without_writer.authoring.tool_id);
+    let provider:Value=serde_json::from_str(&without_writer.descriptor_writes.iter().find(|write|write.tag==format!("interface:{}",without_writer.provider_interface_id)).unwrap().content).unwrap();
+    let config=&provider["interface_driver_config"]["private_config"]["run_affordances"];
+    assert_eq!(config["file_write_tool"],Value::Null);
+    let catalog:Value=serde_json::from_str(&without_writer.descriptor_writes.iter().find(|write|write.tag==format!("artifact:{}",config["catalog_artifact"]["id"].as_str().unwrap())).unwrap().content).unwrap();
+    let operations=catalog["operations"].as_array().unwrap().iter().map(|row|row["operation"].as_str().unwrap()).collect::<Vec<_>>();
+    assert!(["send_message","followup_task","list_runs","wait"].iter().all(|operation|operations.contains(operation)));
+    assert!(!["create_run","preview_run","revise_run","preview_revision","preview_current_run","amend_current_run"].iter().any(|operation|operations.contains(operation)));
     request.communication.client_template_interface_id=Some("world_operator_chat".into());
     request.communication.client_title=Some("Background task".into());
     request.selected_tools.push(octopus_operator_chat_client::SelectedToolSeed {tool:"file.write".into(),interface:"system_room".into(),worker_environment_kind:"system_room".into()});

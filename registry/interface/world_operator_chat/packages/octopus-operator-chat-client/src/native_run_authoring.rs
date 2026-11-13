@@ -61,17 +61,12 @@ pub(super) fn plan(
     let private = provider.pointer_mut("/interface_driver_config/private_config")
         .and_then(Value::as_object_mut).ok_or("planned provider private_config must be an object")?;
     private.remove("run_affordances");
-    let (Some(writer), Some(sender)) = (
-        identity.capability_tools.get(&profile.file_write_tool),
-        identity.capability_tools.get(&profile.artifact_send_tool),
-    ) else {
+    let Some(sender) = identity.capability_tools.get(&profile.artifact_send_tool) else {
         writes[provider_index].content = pretty_json(&provider)?;
         return Ok(None);
     };
-    if writer == &identity.authoring_tool_id {
-        writes[provider_index].content = pretty_json(&provider)?;
-        return Ok(None);
-    }
+    let writer = identity.capability_tools.get(&profile.file_write_tool)
+        .filter(|writer| *writer != &identity.authoring_tool_id);
     let reader = profile.file_read_tool.as_ref().and_then(|tool| identity.capability_tools.get(tool));
     let required_root = |root: Option<&Path>, label: &str| -> Result<PathBuf, String> {
         root.filter(|path| path.is_absolute()).map(Path::to_path_buf)
@@ -112,9 +107,12 @@ pub(super) fn plan(
         "tools":tools,"door_host_slots":context.door_host_slots,"context_artifacts":[],
         "return_interface_ids":[],
     });
-    let (affordances, catalog) = render(&profile, &catalog_id, json!({
+    let Some((affordances, catalog)) = render(&profile, &catalog_id, json!({
         "file_write_tool":writer,"file_read_tool":reader,"artifact_send_tool":sender,"roots":roots,"defaults":defaults,
-    }), identity.owns_client().then_some(config.interface.as_str()))?;
+    }), identity.owns_client().then_some(config.interface.as_str()))? else {
+        writes[provider_index].content = pretty_json(&provider)?;
+        return Ok(None);
+    };
     private.insert("run_affordances".into(), affordances);
     writes[provider_index].content = pretty_json(&provider)?;
     push_json_write(context.registry_root.join("artifact").join(&catalog_id).join("artifact.json"),
@@ -168,11 +166,21 @@ fn current_run_operation(operation: &Value) -> bool {
     matches!(operation.get("operation").and_then(Value::as_str), Some("preview_current_run" | "amend_current_run"))
 }
 
-fn render(profile: &Profile, catalog_id: &str, mut affordances: Value, client_template: Option<&str>) -> Result<(Value, Value), String> {
-    let reader = affordances.get("file_read_tool").filter(|value| !value.is_null());
+fn authoring_operation(operation: &Value) -> bool {
+    matches!(operation.get("operation").and_then(Value::as_str),
+        Some("create_run" | "preview_run" | "revise_run" | "preview_revision"))
+}
+
+fn render(profile: &Profile, catalog_id: &str, mut affordances: Value, client_template: Option<&str>) -> Result<Option<(Value, Value)>, String> {
+    let granted = |field: &str| affordances.get(field).is_some_and(|value| !value.is_null());
+    let (writer, reader) = (granted("file_write_tool"), granted("file_read_tool"));
     let operations = profile.catalog.operations.iter()
-        .filter(|operation| reader.is_some() || !current_run_operation(operation))
+        .filter(|operation| (writer && reader) || !current_run_operation(operation))
+        .filter(|operation| writer || !authoring_operation(operation))
         .collect::<Vec<_>>();
+    if operations.is_empty() {
+        return Ok(None);
+    }
     let catalog = json!({
         "id":catalog_id,"label":profile.catalog.label,"text":profile.catalog.text,
         "operations":operations,
@@ -189,7 +197,7 @@ fn render(profile: &Profile, catalog_id: &str, mut affordances: Value, client_te
     }
     defaults.entry("output_selection").or_insert_with(||json!(profile.output_selection));
     defaults.entry("return_to_source").or_insert_with(||json!(profile.return_to_source));
-    Ok((affordances, catalog))
+    Ok(Some((affordances, catalog)))
 }
 
 fn retain_write(
