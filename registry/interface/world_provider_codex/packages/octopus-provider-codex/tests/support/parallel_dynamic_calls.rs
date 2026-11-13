@@ -337,6 +337,11 @@ async fn a_lone_interface_operation_leaves_its_wait_in_context_before_the_reques
         tokio::time::timeout(Duration::from_secs(5), driver.drain_turn(context, "thread-a", "turn-a")).await.unwrap().unwrap(),
         TurnDrainOutcome::AwaitingResults
     ));
+    let waiting_run = octopus_interfaces::RunId::new("run-a");
+    assert!(crate::life::run_holds_open_request(Some(&driver), &waiting_run).await,
+        "a new turn input waits on the request the transport holds, before the call is handed or admitted anywhere");
+    assert!(!crate::life::run_holds_open_request(Some(&driver), &octopus_interfaces::RunId::new("run-b")).await);
+    assert!(!crate::life::run_holds_open_request(None, &waiting_run).await);
     drop(sink);
     drop(emit);
     let mut emitted = Vec::new();

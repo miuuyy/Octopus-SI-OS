@@ -937,7 +937,11 @@ handed, so later results of that turn reach no live model turn. A terminal
 run record no longer holds a result row: no result can arrive for it, so the next
 input is not held behind it. A call whose result row is still open stays pending,
 and its result continues the turn; a call a restart cut off with an exact effect
-still owed is never settled this way. A terminal error
+still owed is never settled this way. A turn input that reaches a run whose
+native turn still has a call open is deferred, never started into that turn:
+the provider asks the transport itself whether it holds an open request for the
+run, the same state the handler refuses a new turn on, so the input waits even
+in the interval before the call is handed and admitted. A terminal error
 that cannot be handed closes its source through the declared failure route
 instead of ending the provider life. That route writes the context the run has
 published, a deferred publication whose evidence is admitted included, so a

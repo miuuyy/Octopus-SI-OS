@@ -112,7 +112,9 @@ pub(crate) async fn codex_life(
             .collect::<Vec<_>>();
         let mut ready_deferred = None;
         for (seq, deferred) in deferred_candidates {
-            if !interrupted_effects.reconciled(&deferred.run).await? {
+            if !interrupted_effects.reconciled(&deferred.run).await?
+                || run_holds_open_request(driver.as_deref(), &deferred.run).await
+            {
                 continue;
             }
             match prepare_deferred_provider_turn(&ctx, &descriptor, &deferred.run, &deferred, &active_controls).await? {
@@ -642,7 +644,12 @@ pub(crate) async fn codex_life(
                 seq: own.movement.seq.0,
             };
             if matches!(is_provider_turn_input(&descriptor, &turn.envelope), Ok(true)) {
-                match operator_turn_requires_deferral_with_context(&ctx, &descriptor, &handoff_session, &run, &turn).await {
+                let deferral = if run_holds_open_request(driver.as_deref(), &run).await {
+                    Ok(true)
+                } else {
+                    operator_turn_requires_deferral_with_context(&ctx, &descriptor, &handoff_session, &run, &turn).await
+                };
+                match deferral {
                     Ok(true) => {
                         persist_deferred_provider_turn(&ctx, &run, &turn)?;
                         deferred_turns

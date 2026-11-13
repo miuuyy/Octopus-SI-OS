@@ -469,6 +469,13 @@ pub(crate) async fn operator_turn_requires_deferral_with_context(
     )
 }
 
+pub(crate) async fn run_holds_open_request(driver: Option<&CodexAppServerInterfaceDriver>, run: &RunId) -> bool {
+    match driver {
+        Some(driver) => driver.has_pending_request(&crate::handler::TransportStateScope::from_run(run)).await,
+        None => false,
+    }
+}
+
 pub(crate) fn input_awaits_open_handoff(ctx: &InterfaceLiftContext, run: &RunId, turn: &QueuedTurn) -> Result<bool, String> {
     let path = ctx.root_slot("run_records_root")?.join(format!("{}.json", run.as_str()));
     let bytes = std::fs::read(&path)
