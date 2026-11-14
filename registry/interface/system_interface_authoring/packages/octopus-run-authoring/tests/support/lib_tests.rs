@@ -3339,7 +3339,7 @@
         let receipt_file = InterfaceArtifactFile::write(var_dir.join("applied-write"), "file.write.result",
             &serde_json::to_vec(&serde_json::json!({
                 "label":"file.write.result", "tool":"file.write", "correlation_id":authored.correlation_id, "ok":true,
-                "body":{"result":"files_written", "writes":[{"path":run_path, "before_hash":authored.before_hash,
+                "body":{"result":"files_written", "writes":[{"path":handoff.run_path, "before_hash":authored.before_hash,
                     "after_hash":authored.after_hash, "bytes":authored.content.len()}]}
             })).unwrap()).unwrap();
         let edge = |seq: u64, bytes: &[u8], checkpoint: &CheckpointId, file: &InterfaceArtifactFile, target: &InterfaceId| {
