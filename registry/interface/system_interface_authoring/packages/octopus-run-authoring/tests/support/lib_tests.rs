@@ -3828,6 +3828,9 @@
         initial["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING] =
             serde_json::to_value(&handoff.bound_topology).unwrap();
         let initial = serde_json::to_vec(&initial).unwrap();
+        let source_file = InterfaceArtifactFile::write(handoff.var_dir.join("approval-source"), "interface.artifact.input", br#"{"text":"perform the approved operation"}"#).unwrap();
+        let source_movement = profile_edge(&handoff.ctx, 0, &initial, &CheckpointId::new("stable_input"), &source_file, &provider,
+            handoff.invocation_metadata.grant.clone());
         assert_eq!(
             provider_context_bindings(&RunRecord::from_bytes(&initial).unwrap(), &provider).unwrap(),
             context_bindings,
@@ -3989,7 +3992,7 @@
             &handoff.ctx.movements_path,
             format!(
                 "{}\n{}\n",
-                serde_json::to_string(&ledger_row(0)).unwrap(),
+                serde_json::to_string(&source_movement).unwrap(),
                 serde_json::to_string(&movement).unwrap()
             ),
         )
@@ -4119,7 +4122,7 @@
         queued_movement.invocation_metadata = Some(queued_metadata.into());
         let mut log = format!(
             "{}\n{}\n{}\n",
-            serde_json::to_string(&ledger_row(0)).unwrap(),
+            serde_json::to_string(&source_movement).unwrap(),
             serde_json::to_string(&movement).unwrap(),
             serde_json::to_string(&queued_movement).unwrap()
         );
