@@ -2820,6 +2820,25 @@
         next.validate(&next.provider_interface, &next.run).unwrap();
     }
 
+    fn profile_edge(ctx: &InterfaceLiftContext, seq: u64, bytes: &[u8], checkpoint: &CheckpointId, file: &InterfaceArtifactFile, target: &InterfaceId, grant: GrantProjection) -> Movement {
+        let record = RunRecord::from_bytes(bytes).unwrap();
+        let checkpoint = record.checkpoint(checkpoint).unwrap();
+        let hash = ContentHash::of_bytes(bytes);
+        std::fs::write(ctx.blobs_dir.join(hash.to_hex()), bytes).unwrap();
+        let manifest = file.read_manifest().unwrap();
+        let metadata = InvocationMetadata::new(grant)
+            .with_runtime(RuntimeInvocationMetadata {run:record.id.clone(), ee:record.ee.clone(), worker:record.worker.clone(),
+                checkpoint:checkpoint.id.clone(), interface:target.clone(), epoch:checkpoint.epoch.0, run_record_hash:Some(hash.to_hex())})
+            .with_checkpoint_binding_policy(CheckpointBindingPolicySnapshot {inbound:checkpoint.interface_binding.clone().unwrap(), outbound:checkpoint.outbound_interface_bindings.clone()})
+            .with_outbound_interface_bindings(checkpoint.outbound_interfaces().cloned().collect())
+            .with_required_verified_artifacts(checkpoint.required_verified_artifacts.clone())
+            .with_checkpoint_admission(octopus_ledger::CheckpointAdmissionMetadata {artifact_label:manifest.label,
+                required_artifact_labels:checkpoint.required_verified_artifacts.iter().map(|required| required.artifact_label.clone()).collect(), complete:true});
+        Movement {trace:checkpoint.trace.clone(), kind:MovementKind::InterfaceOutbound,
+            from:Endpoint::Interface(checkpoint.inbound_interface().unwrap().clone()), to:Endpoint::Interface(target.clone()),
+            artifact:Some(pin_artifact(file, &ctx.blobs_dir)), invocation_metadata:Some(metadata.into()), ..ledger_row(seq)}
+    }
+
     #[test]
     fn base_provider_profile_lifts_derives_and_persists_exact_run_handoff() {
         use octopus_descriptors::EeId;
@@ -3342,28 +3361,11 @@
                 "body":{"result":"files_written", "writes":[{"path":handoff.run_path, "before_hash":authored.before_hash,
                     "after_hash":authored.after_hash, "bytes":authored.content.len()}]}
             })).unwrap()).unwrap();
-        let edge = |seq: u64, bytes: &[u8], checkpoint: &CheckpointId, file: &InterfaceArtifactFile, target: &InterfaceId| {
-            let record = RunRecord::from_bytes(bytes).unwrap();
-            let checkpoint = record.checkpoint(checkpoint).unwrap();
-            let hash = ContentHash::of_bytes(bytes);
-            std::fs::write(ctx.blobs_dir.join(hash.to_hex()), bytes).unwrap();
-            let manifest = file.read_manifest().unwrap();
-            let metadata = InvocationMetadata::new(input.metadata().unwrap().grant.clone())
-                .with_runtime(RuntimeInvocationMetadata {run:record.id.clone(), ee:record.ee.clone(), worker:record.worker.clone(),
-                    checkpoint:checkpoint.id.clone(), interface:target.clone(), epoch:checkpoint.epoch.0, run_record_hash:Some(hash.to_hex())})
-                .with_checkpoint_binding_policy(CheckpointBindingPolicySnapshot {inbound:checkpoint.interface_binding.clone().unwrap(), outbound:checkpoint.outbound_interface_bindings.clone()})
-                .with_outbound_interface_bindings(checkpoint.outbound_interfaces().cloned().collect())
-                .with_required_verified_artifacts(checkpoint.required_verified_artifacts.clone())
-                .with_checkpoint_admission(octopus_ledger::CheckpointAdmissionMetadata {artifact_label:manifest.label,
-                    required_artifact_labels:checkpoint.required_verified_artifacts.iter().map(|required| required.artifact_label.clone()).collect(), complete:true});
-            Movement {trace:checkpoint.trace.clone(), kind:MovementKind::InterfaceOutbound,
-                from:Endpoint::Interface(checkpoint.inbound_interface().unwrap().clone()), to:Endpoint::Interface(target.clone()),
-                artifact:Some(pin_artifact(file, &ctx.blobs_dir)), invocation_metadata:Some(metadata.into()), ..ledger_row(seq)}
-        };
+
         let mut rows = (0..23).map(ledger_row).collect::<Vec<_>>();
-        rows.push(edge(23, &run_bytes, &CheckpointId::new("stable_input"), &input.artifact_file, &provider));
-        rows.push(edge(24, &run_bytes, &CheckpointId::new("authoring_call"), &call_file, &authored.authoring_result_interface));
-        rows.push(edge(25, authored.content.as_bytes(), &authored.authoring_result_checkpoint, &receipt_file, &provider));
+        rows.push(profile_edge(&ctx, 23, &run_bytes, &CheckpointId::new("stable_input"), &input.artifact_file, &provider, input.metadata().unwrap().grant.clone()));
+        rows.push(profile_edge(&ctx, 24, &run_bytes, &CheckpointId::new("authoring_call"), &call_file, &authored.authoring_result_interface, input.metadata().unwrap().grant.clone()));
+        rows.push(profile_edge(&ctx, 25, authored.content.as_bytes(), &authored.authoring_result_checkpoint, &receipt_file, &provider, input.metadata().unwrap().grant.clone()));
         pin_artifact(&output_file, &ctx.blobs_dir);
         std::fs::write(&ctx.movements_path, rows.iter().map(|row| format!("{}\n", serde_json::to_string(row).unwrap())).collect::<String>()).unwrap();
         std::fs::write(&run_path, authored.content.as_bytes()).unwrap();
@@ -4121,6 +4123,20 @@
             serde_json::to_string(&movement).unwrap(),
             serde_json::to_string(&queued_movement).unwrap()
         );
+        let call_file = handoff.materialize_file_write_call(&authored_response).unwrap();
+        let receipt_file = InterfaceArtifactFile::write(handoff.var_dir.join("phase-write"), &profile.file_write_result_label,
+            &serde_json::to_vec(&serde_json::json!({
+                "label":profile.file_write_result_label, "tool":profile.file_write_tool, "correlation_id":authored_response.correlation_id, "ok":true,
+                "body":{"result":"files_written", "writes":[{"path":handoff.run_path, "before_hash":authored_response.before_hash,
+                    "after_hash":authored_response.after_hash, "bytes":authored_response.content.len()}]}
+            })).unwrap()).unwrap();
+        let mut grant = queued.metadata().unwrap().grant.clone();
+        grant.mark_outcomes = marks.iter().cloned().collect();
+        let call_checkpoint = active_checkpoint_for_role(&request_record, &request_config, RunAuthoringCheckpointRole::AuthoringCall).unwrap();
+        for row in [
+            profile_edge(&handoff.ctx, 3, authored_request.content.as_bytes(), &call_checkpoint.id, &call_file, &authored_response.authoring_result_interface, grant.clone()),
+            profile_edge(&handoff.ctx, 4, authored_response.content.as_bytes(), &authored_response.authoring_result_checkpoint, &receipt_file, &provider, grant),
+        ] { log.push_str(&format!("{}\n", serde_json::to_string(&row).unwrap())); }
         std::fs::write(&handoff.ctx.movements_path, &log).unwrap();
         std::fs::write(&handoff.run_path, authored_response.content.as_bytes()).unwrap();
         let descriptor = local_profile_descriptor();
@@ -4142,7 +4158,7 @@
         );
         let phase_ref = pin_artifact(&carrier, &handoff.ctx.blobs_dir);
         let phase_item = &authored_response.pending_handoff.items[0];
-        let mut admitted_phase = ledger_row(3);
+        let mut admitted_phase = ledger_row(5);
         admitted_phase.kind = MovementKind::InterfaceArrival;
         admitted_phase.from = Endpoint::Interface(provider.clone());
         admitted_phase.to = Endpoint::Interface(request_record.worker.clone());

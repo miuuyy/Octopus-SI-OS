@@ -555,7 +555,9 @@ mod tests {
         assert_eq!(serde_json::to_value(&request).unwrap(),wire);
         let mut mixed=wire.clone();mixed["application"]=serde_json::json!({});
         assert!(serde_json::from_value::<ToolOperatorRequest>(mixed).is_err());
-        let mut changed=wire.clone();changed["upload"]["files"][0]["artifact_ref"]["content"][0]=serde_json::json!(255);
+        let mut changed=wire.clone();
+        let byte = changed["upload"]["files"][0]["artifact_ref"]["content"][0].as_u64().unwrap();
+        changed["upload"]["files"][0]["artifact_ref"]["content"][0]=serde_json::json!(byte ^ 1);
         assert!(serde_json::from_value::<ToolOperatorRequest>(changed).is_err());
         let projection=request.0.projection();
         assert_eq!(projection["kind"],"browser_file_upload");assert!(projection["detail"].get("application").is_none());
