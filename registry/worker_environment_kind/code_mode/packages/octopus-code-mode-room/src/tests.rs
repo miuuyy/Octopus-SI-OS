@@ -2613,6 +2613,9 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
     std::fs::write(&run_path,serde_json::to_vec_pretty(&neighbor).unwrap()).unwrap();
     let effects = admission.file_writes.load(Ordering::SeqCst);
     assert!(admission.door.lock().await.decode_record(first_return.0,&first_return.2,super::decode_code_mode_door_artifact,octopus_tool_door_runtime::ToolDoorArtifactDecodePurpose::Dispatch).is_err());
+    assert!(admission.provider_handoff().unwrap().is_some());
+    neighbor["interface_state"]["world_provider_test"]["unrelated_change"] = json!(true);
+    std::fs::write(&run_path,serde_json::to_vec_pretty(&neighbor).unwrap()).unwrap();
     assert!(admission.provider_handoff().is_err());
     assert_eq!(admission.file_writes.load(Ordering::SeqCst),effects);
     std::fs::write(&run_path,&exact_before).unwrap();

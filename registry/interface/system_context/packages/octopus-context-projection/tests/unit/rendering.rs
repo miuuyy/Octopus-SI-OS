@@ -104,10 +104,10 @@ fn an_input_consumed_after_later_outputs_keeps_its_window() {
         entry("interface.artifact.output",111,json!({"text":"done"})),
         entry("email.event",3,json!({"message":{"subject":"queued while the turn worked"}})),
         entry("turn.agent_message",157,json!({"text":"read the letter"}))];
-    let projected = project_window(&config, "ee", &carrier, 160, &json!({"text":"read the letter"}), None, &entries).unwrap();
+    let projected = project_window(&config, "ee", &config.source_worker_interface, &carrier, 160, &json!({"text":"read the letter"}), None, &entries).unwrap();
     assert_eq!(projected["evidence"][0]["source_movement_seq"], 3);
     entries.push(entries[2].clone());
-    assert!(project_window(&config, "ee", &carrier, 160, &json!({"text":"read the letter"}), None, &entries).is_err());
+    assert!(project_window(&config, "ee", &config.source_worker_interface, &carrier, 160, &json!({"text":"read the letter"}), None, &entries).is_err());
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn an_external_input_is_selected_whole() {
     let carrier: ArtifactRef = serde_json::from_value(json!({"id":"interface.artifact.output:terminal","content":vec![9u8;32]})).unwrap();
     let entries = vec![entry("watch.notice",4,json!({"trigger":"fired","message/body":{"subject":"news"},"session_context":{"parent":null}})),
         entry("turn.agent_message",5,json!({"text":"read it"}))];
-    let projected = project_window(&parsed, "ee", &carrier, 6, &json!({"text":"read it"}), None, &entries).unwrap();
+    let projected = project_window(&parsed, "ee", &parsed.source_worker_interface, &carrier, 6, &json!({"text":"read it"}), None, &entries).unwrap();
     assert_eq!(projected["selected_input"]["fields"], json!({"/trigger":"fired","/message~1body":{"subject":"news"}}));
     config["input_rules"][1]["pointers"] = json!(["/trigger"]);
     let mixed: ContextProjectionConfig = serde_json::from_value(config).unwrap();
