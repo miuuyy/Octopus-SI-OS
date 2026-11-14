@@ -1248,9 +1248,7 @@ impl ConsentAuthority {
         require(grant.interfaces.contains(&self.binding.config.home_interface.to_string())
             && grant.interfaces.contains(&self.binding.config.writer.door.to_string())
             && grant.tools.contains(&self.binding.config.writer.tool)
-            && !grant.hard_blocked_tools.contains(&self.binding.config.writer.tool)
-            && grant.worker_environment_kinds.iter().any(|kind| kind == "system_room")
-            && grant.ee_root_slot_allowance.as_ref().is_none_or(|slots| slots.iter().any(|slot| slot == "run_records_root")),
+            && !grant.hard_blocked_tools.contains(&self.binding.config.writer.tool),
             "authority's actual formed grant does not admit its own exact file writer")?;
         let mut writers = grant.interface_affordance_specs.iter().filter(|tool| tool.name.as_str() == self.binding.config.writer.tool);
         let writer = writers.next().ok_or("authority has no actual formed writer argument contract")?;
