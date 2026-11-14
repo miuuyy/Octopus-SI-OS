@@ -168,7 +168,6 @@ impl WriterRunBinding {
         let target = target(&initial, provider)?;
         if self.run == record.id
             || initial.id != self.run
-            || initial.worker != record.worker
             || target.run != record.id
             || target.provider != *provider
             || target.generation != 0
@@ -176,7 +175,7 @@ impl WriterRunBinding {
             || initial.active_checkpoints.len() != 2
         {
             return Err(
-                "separate writer declaration changed its exact run, worker or initial boundary"
+                "separate writer declaration changed its exact run or initial boundary"
                     .into(),
             );
         }
@@ -843,7 +842,6 @@ fn next_writer(before: &[u8], config: &RunAuthoringConfig, format: JsonFormat, m
         .as_ref()
         .ok_or("writer run not selected")?;
     if record.id != binding.run
-        || record.worker != config.worker
         || declaration.run != config.run
         || declaration.provider != config.provider_interface
         || declaration.source != config.authoring_source_interface
@@ -1361,7 +1359,7 @@ fn history(
                 .ok_or("writer call checkpoint absent")?;
             let template = config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringCall)?;
             if runtime.ee != pinned.ee
-                || runtime.worker != config.worker
+                || runtime.worker != pinned.worker
                 || runtime.interface != declared.door
                 || !pinned.active_checkpoints.contains(&cp.id)
                 || runtime.epoch != cp.epoch.0

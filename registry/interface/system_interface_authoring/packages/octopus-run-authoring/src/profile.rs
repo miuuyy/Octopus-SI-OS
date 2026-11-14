@@ -394,7 +394,8 @@ pub(crate) fn resolve_profile_invocation(
         }
     };
     topology.validate_identity(record, provider)?;
-    let config = topology.config(profile);
+    let mut config = topology.config(profile);
+    config.worker = record.worker.clone();
     config.validate(provider, run)?;
     refuse_selected_consent_state(record, provider)?;
     validate_bound_run_authoring_topology(record, &config, source_checkpoint)?;
