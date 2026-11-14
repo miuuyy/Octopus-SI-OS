@@ -3335,6 +3335,37 @@
             input_change["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"][0]["include_context"] = serde_json::json!(false);
             assert!(output_connections::protected_record(authored.content.as_bytes(), &encode(&input_change), &handoff.config).unwrap().is_none(), "input changes are not routing additions");
         }
+        let call_file = handoff.materialize_file_write_call(&authored).unwrap();
+        let receipt_file = InterfaceArtifactFile::write(var_dir.join("applied-write"), "file.write.result",
+            &serde_json::to_vec(&serde_json::json!({
+                "label":"file.write.result", "tool":"file.write", "correlation_id":authored.correlation_id, "ok":true,
+                "body":{"result":"files_written", "writes":[{"path":run_path, "before_hash":authored.before_hash,
+                    "after_hash":authored.after_hash, "bytes":authored.content.len()}]}
+            })).unwrap()).unwrap();
+        let edge = |seq: u64, bytes: &[u8], checkpoint: &CheckpointId, file: &InterfaceArtifactFile, target: &InterfaceId| {
+            let record = RunRecord::from_bytes(bytes).unwrap();
+            let checkpoint = record.checkpoint(checkpoint).unwrap();
+            let hash = ContentHash::of_bytes(bytes);
+            std::fs::write(ctx.blobs_dir.join(hash.to_hex()), bytes).unwrap();
+            let manifest = file.read_manifest().unwrap();
+            let metadata = InvocationMetadata::new(input.metadata().unwrap().grant.clone())
+                .with_runtime(RuntimeInvocationMetadata {run:record.id.clone(), ee:record.ee.clone(), worker:record.worker.clone(),
+                    checkpoint:checkpoint.id.clone(), interface:target.clone(), epoch:checkpoint.epoch.0, run_record_hash:Some(hash.to_hex())})
+                .with_checkpoint_binding_policy(CheckpointBindingPolicySnapshot {inbound:checkpoint.interface_binding.clone().unwrap(), outbound:checkpoint.outbound_interface_bindings.clone()})
+                .with_outbound_interface_bindings(checkpoint.outbound_interfaces().cloned().collect())
+                .with_required_verified_artifacts(checkpoint.required_verified_artifacts.clone())
+                .with_checkpoint_admission(octopus_ledger::CheckpointAdmissionMetadata {artifact_label:manifest.label,
+                    required_artifact_labels:checkpoint.required_verified_artifacts.iter().map(|required| required.artifact_label.clone()).collect(), complete:true});
+            Movement {trace:checkpoint.trace.clone(), kind:MovementKind::InterfaceOutbound,
+                from:Endpoint::Interface(checkpoint.inbound_interface().unwrap().clone()), to:Endpoint::Interface(target.clone()),
+                artifact:Some(pin_artifact(file, &ctx.blobs_dir)), invocation_metadata:Some(metadata.into()), ..ledger_row(seq)}
+        };
+        let mut rows = (0..23).map(ledger_row).collect::<Vec<_>>();
+        rows.push(edge(23, &run_bytes, &CheckpointId::new("stable_input"), &input.artifact_file, &provider));
+        rows.push(edge(24, &run_bytes, &CheckpointId::new("authoring_call"), &call_file, &authored.authoring_result_interface));
+        rows.push(edge(25, authored.content.as_bytes(), &authored.authoring_result_checkpoint, &receipt_file, &provider));
+        pin_artifact(&output_file, &ctx.blobs_dir);
+        std::fs::write(&ctx.movements_path, rows.iter().map(|row| format!("{}\n", serde_json::to_string(row).unwrap())).collect::<String>()).unwrap();
         std::fs::write(&run_path, authored.content.as_bytes()).unwrap();
         let replay = session
             .from_invocation(&ctx, &descriptor, &run, &input, 23, &run_bytes)
