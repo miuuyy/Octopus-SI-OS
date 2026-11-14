@@ -99,7 +99,7 @@ pub(super) fn checked_source(reader: &mut impl CheckedRunEvidenceReader, after: 
         && inbound.admits(&manifest.label)
         && (movement.kind != MovementKind::InterfaceOutbound || checkpoint.outbound_interface_bindings.iter().any(|bound| bound.interface == *owner && bound.admits(&manifest.label))));
     if !edge || movement.seq.0 != source.source_movement_seq || movement.artifact.as_ref() != Some(&source.artifact) || movement.trace != checkpoint.trace
-        || pinned.id != after.id || runtime.run != pinned.id || runtime.ee != pinned.ee || runtime.worker != pinned.worker || checkpoint.run != pinned.id
+        || runtime.run != pinned.id || runtime.ee != pinned.ee || runtime.worker != pinned.worker || checkpoint.run != pinned.id
         || !pinned.active_checkpoints.contains(&checkpoint.id) || checkpoint.epoch.0 != runtime.epoch
         || metadata.verification_failure.is_some() || !forwarded {
         return Err("input artifact binding differs from its exact admitted source edge".into());

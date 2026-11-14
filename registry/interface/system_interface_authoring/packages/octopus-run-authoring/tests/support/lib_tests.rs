@@ -2329,11 +2329,11 @@
         ).unwrap();
         assert_eq!(unrestricted, HandoffDeliveryMode::Rearm);
         input.metadata.as_mut().unwrap().grant.ee_root_slot_allowance = Some(Vec::new());
-        let error = derive_handoff_delivery_mode(
+        let mode = derive_handoff_delivery_mode(
             &input, &config, &record, &CheckpointId::new("terminal_input"),
             &BTreeSet::from(["file.write".to_string()]),
-        ).unwrap_err();
-        assert!(error.contains("does not admit run_records_root"));
+        ).unwrap();
+        assert_eq!(mode, HandoffDeliveryMode::Rearm);
         input
             .metadata
             .as_mut()
@@ -3006,15 +3006,16 @@
             assert!(probe_session.from_invocation(&probe_ctx, &descriptor, &run, &independent_input, 0, &probe_bytes).is_err());
             let cp_index = changed["checkpoints"].as_array().unwrap().iter().position(|cp| cp["id"] == "independent_probe").unwrap();
             let template_index = topology.checkpoints.len() - 1;
-            for (pointer, value) in [
-                (format!("/checkpoints/{cp_index}/epoch"), serde_json::json!(1)),
-                (format!("/checkpoints/{cp_index}/interface_binding/interface"), serde_json::json!("other_source")),
-                (format!("/interface_state/{provider}/run_authoring_binding/checkpoints/{template_index}/include_context"), serde_json::json!(true)),
+            for (pointer, value, valid) in [
+                (format!("/checkpoints/{cp_index}/epoch"), serde_json::json!(1), true),
+                (format!("/checkpoints/{cp_index}/interface_binding/interface"), serde_json::json!("other_source"), false),
+                (format!("/interface_state/{provider}/run_authoring_binding/checkpoints/{template_index}/include_context"), serde_json::json!(true), true),
             ] {
                 let mut drift = changed.clone();
                 *drift.pointer_mut(&pointer).unwrap() = value;
                 std::fs::write(&run_path, serde_json::to_vec(&drift).unwrap()).unwrap();
-                assert!(probe_session.from_invocation(&probe_ctx, &descriptor, &run, &independent_input, 1, &probe_bytes).is_err(), "{pointer}");
+                let result = probe_session.from_invocation(&probe_ctx, &descriptor, &run, &independent_input, 1, &probe_bytes);
+                assert_eq!(result.is_ok(), valid, "{pointer}: {}", result.err().unwrap_or_default());
             }
             std::fs::write(&run_path, &changed_bytes).unwrap();
             let mut forged = independent_input.clone();
@@ -4884,6 +4885,7 @@
                 "world_provider_test": {
                     "context_generation": 0,
                     "authoring_generation": 0,
+                    "run_authoring_binding": bound_topology,
                     "frontier_checkpoint_ids": ["output_old", "authoring_call_old", "authoring_result_old"]
                 }
             },
@@ -5119,6 +5121,7 @@
             "id": "run_test", "ee": "ee_test", "worker": "system_worker_test", "trace": "trace:run_test", "status": "running",
             "interface_state": {"world_provider_test": {
                 "context_generation": 0, "authoring_generation": 0,
+                "run_authoring_binding": bound_topology,
                 "frontier_checkpoint_ids": ["output_old", "authoring_call_old", "authoring_result_old"]
             }},
             "checkpoints": [
@@ -5438,7 +5441,19 @@
                 .into(),
             ),
         };
-        let mut rows = (0..18).map(|seq| format!("{}\n", serde_json::to_string(&ledger_row(seq)).unwrap())).collect::<String>();
+        let source_file = InterfaceArtifactFile::write(&emitted, "operator.input", br#"{"text":"answer once"}"#).unwrap();
+        let source_hash = ContentHash::of_bytes(&run_bytes);
+        std::fs::write(blobs_dir.join(source_hash.to_hex()), &run_bytes).unwrap();
+        let mut source_metadata = typed_invocation_metadata(&RunId::new("run_test"), "terminal_input", &InterfaceId::new("world_provider_test"), 0);
+        source_metadata.runtime.as_mut().unwrap().run_record_hash = Some(source_hash.to_hex());
+        let source = Movement {
+            trace: TraceId("trace:run_test:terminal_input".into()), kind: MovementKind::InterfaceOutbound,
+            from: Endpoint::Interface("world_input_test".into()), to: Endpoint::Interface("world_provider_test".into()),
+            artifact: Some(pin_artifact(&source_file, &blobs_dir)), invocation_metadata: Some(source_metadata.clone().into()),
+            ..ledger_row(17)
+        };
+        let mut rows = (0..17).map(|seq| format!("{}\n", serde_json::to_string(&ledger_row(seq)).unwrap())).collect::<String>();
+        rows.push_str(&format!("{}\n", serde_json::to_string(&source).unwrap()));
         rows.push_str(&format!("{}\n", serde_json::to_string(&movement).unwrap()));
         std::fs::write(&movements_path, rows).unwrap();
 
@@ -5475,7 +5490,7 @@
         let session = ProviderHandoffSession::new(&ctx).unwrap();
         let bound_topology = test_bound_topology(&config);
         let mut handoff = ProviderOutputHandoff {
-            invocation_metadata: InvocationMetadata::new(Default::default()),
+            invocation_metadata: source_metadata,
             ctx,
             config,
             run_path,

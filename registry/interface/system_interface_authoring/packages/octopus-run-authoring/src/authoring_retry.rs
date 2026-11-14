@@ -726,6 +726,27 @@ fn keyed_checkpoints(
     Ok(by_id)
 }
 
+fn merge_checkpoint_ids(
+    before: &serde_json::Value,
+    planned: &serde_json::Value,
+    current: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let old: BTreeSet<CheckpointId> = serde_json::from_value(before.clone()).map_err(|error| error.to_string())?;
+    let next: Vec<CheckpointId> = serde_json::from_value(planned.clone()).map_err(|error| error.to_string())?;
+    let retained = next.iter().collect::<BTreeSet<_>>();
+    let mut merged: Vec<CheckpointId> = serde_json::from_value(current.clone()).map_err(|error| error.to_string())?;
+    merged.retain(|id| !old.contains(id) || retained.contains(id));
+    for id in next {
+        if !old.contains(&id) {
+            if merged.contains(&id) {
+                return Err("authoring retry duplicated a concurrent checkpoint reference".into());
+            }
+            merged.push(id);
+        }
+    }
+    serde_json::to_value(merged).map_err(|error| error.to_string())
+}
+
 pub(super) fn validate_rebased_authored_run(
     before: &[u8],
     current: &[u8],
@@ -801,28 +822,17 @@ pub(super) fn rebase_authored_run(
             .filter(|row| changed.contains(row["id"].as_str().unwrap_or_default()))
             .cloned(),
     );
-    let old_active: BTreeSet<CheckpointId> =
-        serde_json::from_value(before["active_checkpoints"].clone())
-            .map_err(|error| error.to_string())?;
-    let new_active: BTreeSet<CheckpointId> =
-        serde_json::from_value(planned["active_checkpoints"].clone())
-            .map_err(|error| error.to_string())?;
-    let mut active: Vec<CheckpointId> =
-        serde_json::from_value(merged["active_checkpoints"].clone())
-            .map_err(|error| error.to_string())?;
-    active.retain(|id| !old_active.contains(id) || new_active.contains(id));
-    for id in serde_json::from_value::<Vec<CheckpointId>>(planned["active_checkpoints"].clone())
-        .map_err(|error| error.to_string())?
-    {
-        if !old_active.contains(&id) {
-            if active.contains(&id) {
-                return Err("authoring retry duplicated a concurrent active checkpoint".into());
-            }
-            active.push(id);
-        }
-    }
-    merged["active_checkpoints"] =
-        serde_json::to_value(active).map_err(|error| error.to_string())?;
+    merged["active_checkpoints"] = merge_checkpoint_ids(
+        &before["active_checkpoints"], &planned["active_checkpoints"], &merged["active_checkpoints"],
+    )?;
+    let provider = config.provider_interface.as_str();
+    let frontier = merge_checkpoint_ids(
+        &before["interface_state"][provider][FRONTIER_CHECKPOINT_IDS],
+        &planned["interface_state"][provider][FRONTIER_CHECKPOINT_IDS],
+        &merged["interface_state"][provider][FRONTIER_CHECKPOINT_IDS],
+    )?;
+    before["interface_state"][provider][FRONTIER_CHECKPOINT_IDS] = merged["interface_state"][provider][FRONTIER_CHECKPOINT_IDS].clone();
+    planned["interface_state"][provider][FRONTIER_CHECKPOINT_IDS] = frontier;
     merge_object_changes(
         before["interface_state"]
             .as_object()

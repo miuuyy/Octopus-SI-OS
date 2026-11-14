@@ -250,6 +250,7 @@ impl ProviderOutputHandoff {
                 .then_some(&runtime.checkpoint),
         )?;
         let independent_input_unchanged = consumed_context_free_independent_input.is_some()
+            && current_config.checkpoints.iter().filter(|template| *template == &consumed_templates[0]).count() == 1
             && current_record.checkpoint(&runtime.checkpoint) == Some(consumed_checkpoint)
             && current_record.active_checkpoints.contains(&runtime.checkpoint)
             && bound_topology.payload_artifact_bindings == current_topology.payload_artifact_bindings

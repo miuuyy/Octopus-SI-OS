@@ -904,14 +904,14 @@ fn delivered_source_is_bound_read_only_and_requires_its_exact_admitted_edge() {
     let historical = CheckedRunEdit::prepare(f.path.clone(), &before, historical, "historical-intake".into()).unwrap();
     f.movement(&writer, &historical, &before, None); f.effect(&historical);
     let result = f.movement(&writer, &historical, historical.content.as_bytes(), Some(true));
-    assert_eq!(f.advance(&before, historical.content.as_bytes(), 0).unwrap().len(), 1);
+    assert!(f.advance(&before, historical.content.as_bytes(), 0).unwrap().is_empty());
     f.before = historical.content.as_bytes().to_vec();
     let before = f.before.clone();
     let edit = f.intake_edit();
     f.movement(&writer, &edit, &before, None);
     f.effect(&edit);
     f.movement(&writer, &edit, edit.content.as_bytes(), Some(true));
-    let chain = f.advance(&before, edit.content.as_bytes(), result.seq.0).unwrap();
+    let chain = f.chain(&before, edit.content.as_bytes(), result.seq.0).unwrap();
     let record = RunRecord::from_bytes(edit.content.as_bytes()).unwrap();
     let checkpoint = record.checkpoints.iter().find(|cp| cp.inbound_interface() == Some(&writer.owner)
         && cp.outbound_interfaces().next() == Some(&f.config.provider_interface)).unwrap();

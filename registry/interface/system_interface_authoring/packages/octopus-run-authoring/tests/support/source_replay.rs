@@ -755,6 +755,7 @@ impl CompletedInputReplayFixture {
         let input = artifact_identity(&file,&handoff.var_dir).unwrap().artifact;
         let mut fixture = Self { _root:root,handoff,rows:Vec::new(),input,input_file:file.clone() };
         fixture.edge(&initial,&"input".into(),&file,"provider".into(),MovementKind::InterfaceOutbound);
+        fixture.handoff.invocation_metadata = fixture.rows[0].invocation_metadata.as_ref().unwrap().invocation().unwrap().clone();
         fixture.edge(&initial,&"alternate".into(),&file,"provider".into(),MovementKind::InterfaceOutbound);
         append_session_payload(&mut fixture.handoff.state.try_lock().unwrap().session_context,"tool.result",
             &file.read_payload_bytes().unwrap(),&fixture.input,Some(0),"prior exact input").unwrap();
