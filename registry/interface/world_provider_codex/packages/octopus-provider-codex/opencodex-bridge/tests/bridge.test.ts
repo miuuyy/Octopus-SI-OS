@@ -523,6 +523,9 @@ test("a claude-cli turn follows the CLI past a refusal frame and ends as refused
   const init = { type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] };
   const refused = [
     { type: "stream_event", event: { type: "message_start" } },
+    { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+    { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "refused partial" } } },
+    { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "refused partial" }] } },
     { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "refusal" } } },
   ];
   const answer = [
@@ -553,10 +556,12 @@ test("a claude-cli turn follows the CLI past a refusal frame and ends as refused
   expect(retried).toContain("CLI continuation");
   expect(retried).toContain("response.completed");
   expect(retried).not.toContain("response.failed");
+  expect(retried).not.toContain("refused partial");
   const final = await turn([init, ...answer, ...refused, result]);
   expect(final).toContain("response.failed");
   expect(final).toContain("invalid_prompt");
   expect(final).not.toContain("protocol_error");
+  expect(final).not.toContain("refused partial");
 });
 
 test("grok-cli turns run the signed-in Grok CLI in an isolated home and hand back the catalog calls it makes", async () => {

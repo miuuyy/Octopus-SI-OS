@@ -9,40 +9,69 @@ const MAX_LINE_BYTES = 64 * 1024;
 const TRACED_CODES = new Set(["protocol_error", "tool_bridge_init_missing"]);
 const REFUSAL_BOUNDARY = "Claude Code's final response ended with stop_reason refusal.";
 
+type Observation = { forward: string[]; boundary?: string };
+
 export class FrameTrace {
   private entries: Array<{ text: string; count: number }> = [];
   private dropped = 0;
   private openMessage = false;
+  private held: string[] | undefined;
+  private discarding = false;
   refused = false;
 
-  boundary(line: string): string | undefined {
-    let frame: unknown;
-    try {
-      frame = JSON.parse(line);
-    } catch {
-      return undefined;
+  observe(line: string): Observation {
+    const frame = line.length > MAX_LINE_BYTES ? undefined : parse(line);
+    this.record(frame === undefined && line.length > MAX_LINE_BYTES ? "oversized" : summarizeFrame(line));
+    const type = field(frame, "type");
+    if (type === "result") {
+      const boundary = this.ending();
+      return boundary ? { forward: [], boundary } : { forward: [...this.release(), line] };
     }
-    if (field(frame, "type") === "result") return this.ending();
-    if (field(frame, "type") !== "stream_event") return undefined;
-    const event = field(frame, "event");
-    const kind = field(event, "type");
-    if (kind === "message_start") {
-      const cut = this.openMessage;
-      this.openMessage = true;
-      this.refused = false;
-      return cut ? "Claude Code started another assistant message before the previous one finished; the cut message and the CLI's own continuation are discarded." : undefined;
-    }
-    if (kind === "message_stop") this.openMessage = false;
-    if (kind === "message_delta") {
-      const reason = field(field(event, "delta"), "stop_reason");
-      if (reason === "refusal") {
-        this.refused = true;
-        this.openMessage = false;
-      } else if (typeof reason === "string") {
+    if (type === "stream_event") {
+      const event = field(frame, "event");
+      const kind = field(event, "type");
+      if (kind === "message_start") {
+        if (this.openMessage) {
+          return { forward: [], boundary: "Claude Code started another assistant message before the previous one finished; the cut message and the CLI's own continuation are discarded." };
+        }
+        this.openMessage = true;
         this.refused = false;
+        this.discarding = false;
+        this.held = [line];
+        return { forward: [] };
+      }
+      if (kind === "message_delta") {
+        const reason = field(field(event, "delta"), "stop_reason");
+        if (reason === "refusal") {
+          this.refused = true;
+          this.openMessage = false;
+          this.discarding = true;
+          this.held = undefined;
+          return { forward: [] };
+        }
+        if (typeof reason === "string") {
+          this.refused = false;
+          return { forward: [...this.release(), line] };
+        }
+      }
+      if (kind === "message_stop") {
+        this.openMessage = false;
+        if (this.discarding) return { forward: [] };
+        return { forward: [...this.release(), line] };
       }
     }
-    return undefined;
+    if ((type === "stream_event" || type === "assistant") && this.discarding) return { forward: [] };
+    if (this.held) {
+      this.held.push(line);
+      return { forward: [] };
+    }
+    return { forward: [line] };
+  }
+
+  release(): string[] {
+    const held = this.held ?? [];
+    this.held = undefined;
+    return held;
   }
 
   ending(): string | undefined {
@@ -112,37 +141,42 @@ export function summarizeFrame(line: string): string {
   return type;
 }
 
+function parse(line: string): unknown {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
 function observeLines(trace: FrameTrace): Transform {
   const decoder = new TextDecoder();
   let pending = "";
-  let skipping = false;
   return new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       const lines = (pending + decoder.decode(chunk, { stream: true })).split("\n");
       pending = lines.pop() ?? "";
+      const forward: string[] = [];
       for (const line of lines) {
-        if (skipping) {
-          skipping = false;
-          trace.record("oversized");
-        } else if (line.trim()) {
-          trace.record(summarizeFrame(line));
-          const boundary = trace.boundary(line);
-          if (boundary) {
-            callback(new Error(boundary));
-            return;
-          }
+        if (!line.trim()) {
+          forward.push(line);
+          continue;
+        }
+        const observed = trace.observe(line);
+        forward.push(...observed.forward);
+        if (observed.boundary) {
+          callback(new Error(observed.boundary));
+          return;
         }
       }
-      if (pending.length > MAX_LINE_BYTES) {
-        pending = "";
-        skipping = true;
-      }
-      callback(null, chunk);
+      callback(null, forward.length ? forward.map((line) => `${line}\n`).join("") : undefined);
     },
     flush(callback) {
-      const last = skipping ? "" : (pending + decoder.decode()).trim();
-      if (last) trace.record(summarizeFrame(last));
-      const boundary = (last ? trace.boundary(last) : undefined) ?? trace.ending();
+      const last = pending + decoder.decode();
+      const observed = last.trim() ? trace.observe(last) : { forward: [] as string[] };
+      const forward = [...observed.forward, ...trace.release()];
+      if (forward.length) this.push(forward.map((line) => `${line}\n`).join(""));
+      const boundary = observed.boundary ?? trace.ending();
       callback(boundary ? new Error(boundary) : null);
     },
   });

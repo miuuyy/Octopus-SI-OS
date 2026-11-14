@@ -705,7 +705,9 @@ finished, the bridge ends the leg at that frame and names the reason, so a
 continuation the CLI produced on its own never reaches the model and Codex
 samples the step again from recorded history. A `refusal` stop is not a
 boundary: Claude Code may answer again after it, so the bridge follows the
-stream to its real end. Only a leg whose final response stops with `refusal`
+stream to its real end. The bridge hands on each assistant message once its stop
+reason is known, so a refused message, partial text included, never becomes part
+of the turn. Only a leg whose final response stops with `refusal`
 ends as a terminal refusal Codex does not retry: the model decided, and
 resending the same context cannot change that. A
 stream that ends while a captured tool call is still open fails closed as
