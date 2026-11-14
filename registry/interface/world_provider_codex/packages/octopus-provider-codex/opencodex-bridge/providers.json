@@ -143,6 +143,28 @@
       "web_search": { "backend": "gemini", "model": "gemini-4-hydrogen" }
     },
     {
+      "interface": "world_provider_vertex",
+      "source_name": "vertex",
+      "adapter": "google",
+      "endpoint": "https://aiplatform.googleapis.com",
+      "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheaper capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own. Every call is billed to the Google Cloud project this provider is configured with.",
+      "name": "Google Vertex AI",
+      "developer": "Google",
+      "description": "Gemini models billed to your Google Cloud project through Vertex AI.",
+      "icon": "gemini-color.svg",
+      "input_modalities": ["text", "image"],
+      "vertex": {
+        "location": "global",
+        "project": { "env": "OCTOPUS_PROVIDER_VERTEX_PROJECT", "label": "Google Cloud project ID" },
+        "credentials": { "env": "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE", "label": "Credentials file: path to a service account key or application default credentials JSON" }
+      },
+      "models": [
+        {"slug": "gemini-4-hydrogen", "display_name": "Gemini 4 Hydrogen", "context_window": 1048576, "efforts": ["low", "medium", "high"], "default_effort": "high"},
+        {"slug": "gemini-4-argon", "display_name": "Gemini 4 Argon", "context_window": 1048576, "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-4-carbon", "display_name": "Gemini 4 Carbon", "context_window": 1048576, "efforts": ["low", "medium", "high"], "default_effort": "medium"}
+      ]
+    },
+    {
       "interface": "world_provider_xai",
       "source_name": "xai",
       "registry_entry": "xai",

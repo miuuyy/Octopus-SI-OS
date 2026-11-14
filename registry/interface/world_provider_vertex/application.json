@@ -1,0 +1,32 @@
+{
+  "schema_version": 3,
+  "id": "world_provider_vertex",
+  "name": "Google Vertex AI",
+  "description": "Gemini models billed to your Google Cloud project through Vertex AI.",
+  "category": "provider",
+  "developer": "Google",
+  "version": "1.0.0",
+  "icon": "sparkles",
+  "logo": "application-logo.svg",
+  "interfaces": [
+    "world_provider_vertex"
+  ],
+  "setup": {
+    "fields": [
+      {
+        "interface": "world_provider_vertex",
+        "pointer": "/interface_driver_config/private_config/opencodex/vertex/project_env",
+        "label": "Google Cloud project ID",
+        "kind": "text",
+        "required": true
+      },
+      {
+        "interface": "world_provider_vertex",
+        "pointer": "/interface_driver_config/private_config/opencodex/vertex/credentials_file_env",
+        "label": "Credentials file: path to a service account key or application default credentials JSON",
+        "kind": "text",
+        "required": true
+      }
+    ]
+  }
+}

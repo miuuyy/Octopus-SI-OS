@@ -684,6 +684,27 @@ schemas for that endpoint and retries transient refusals. It starts no IDE or
 CLI, and the only system text is the caller's. This subscription transport is
 unofficial; Google may restrict access independently of the local contract.
 
+Vertex AI is a `providers.json` entry with `vertex` in place of a key: the
+Google adapter in Vertex mode, a location (`global` for the Gemini 4 models,
+which other locations do not serve), and two setup values that name a Google
+Cloud project and an absolute path to a `service_account` or `authorized_user`
+credentials JSON. Calls are billed to that project. The project and the file are
+per-install configuration in the Home's environment; the life process may read
+exactly that file, and the bridge receives the project, the location and the
+path in its config. Before it serves, the bridge checks the file's shape, drops
+every ambient Google variable (`GOOGLE_CLOUD_API_KEY`, `GOOGLE_CLOUD_PROJECT`,
+`GCLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `CLOUDSDK_CONFIG`) and points
+OpenCodex's ADC at that file alone, so neither the gcloud default nor the
+metadata server can stand in for it. A Vertex provider authenticates with
+exactly one of an API key or a credentials file, declares no account, registry
+entry or web search, and its base URL must be the Vertex host of its location.
+OpenCodex exchanges the credential for an access token, caches it and refreshes
+it a minute before it expires; the file is read on every request, so replacing
+it takes effect without restarting the provider. Thought signatures for
+stateless tool turns are kept in the bridge's own working directory and
+survive a bridge restart. Token usage reaches `turn.token_usage` as for every
+provider; prices are not part of the provider.
+
 Web search is declared per provider in `providers.json` as `web_search`: the
 OpenCodex search backend and the model that runs each search. Antigravity names
 OpenCodex's `gemini` backend, so its runs have Codex's hosted `web_search` live,
@@ -695,6 +716,14 @@ turn, at most three per turn, and the turn continues with the grounded results
 and their sources. A provider without `web_search` keeps Codex web search
 disabled, and a hosted `web_search` that reaches its bridge anyway is refused
 instead of being dropped.
+
+A provider answer no retry can change ends the turn: a 401, 402, 403 or 404,
+and a 429 whose body reports exhausted quota, reach Codex as a 400 whose message
+starts with `Provider HTTP <status>:` and carries the provider's reason, so
+Codex does not retry it and the turn error names the cause (a disabled billing
+account, a project without access, a model the location does not serve). A
+credential the token endpoint refuses ends the turn the same way; a token
+endpoint that times out or answers 429 or 5xx stays a retryable upstream error.
 
 The curated OpenCodex home keeps Codex's own retries at Codex's defaults. A
 dropped response stream is retried up to five times (`stream_max_retries = 5`):

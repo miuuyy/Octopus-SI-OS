@@ -1,0 +1,83 @@
+{
+  "processes": [
+    {
+      "bin": "interface://world_provider_codex/packages/octopus-provider-codex/life-bin/octopus-provider-opencodex-life",
+      "doctor": {
+        "args": [
+          "--doctor"
+        ],
+        "timeout_ms": 5000
+      },
+      "io_limits": {
+        "max_control_frame_bytes": 1048576,
+        "max_stderr_bytes": 262144,
+        "max_manifest_bytes": 1048576,
+        "max_payload_bytes": 268435456
+      },
+      "args": [],
+      "read_handles": [
+        "ledger",
+        "ledger_index",
+        "blobs"
+      ],
+      "coordinate_root_slots": [
+        "run_records_root",
+        "app_server_control_root",
+        "registry_interface_root"
+      ],
+      "inherit_env": [
+        "HOME",
+        "PATH",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY"
+      ],
+      "authority": {
+        "read_root_slots": [
+          "run_records_root",
+          "registry_interface_root"
+        ],
+        "write_root_slots": [
+          "interface_hand_in_root"
+        ],
+        "executable_root_slots": [],
+        "read_paths": [
+          "/etc"
+        ],
+        "write_paths": [
+          "/tmp/octopus-provider-cwd"
+        ],
+        "executable_paths": [],
+        "executable_root_subpaths": [
+          {
+            "root_slot": "registry_interface_root",
+            "relative_path": "world_provider_codex/packages/bin/codex"
+          },
+          {
+            "root_slot": "registry_interface_root",
+            "relative_path": "world_provider_codex/packages/bin/codex-code-mode-host"
+          },
+          {
+            "root_slot": "registry_interface_root",
+            "relative_path": "world_provider_codex/packages/octopus-provider-codex/opencodex-bridge/bin/octopus-opencodex-bridge"
+          }
+        ],
+        "executable_commands": [],
+        "read_env_paths": [
+          "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE"
+        ],
+        "write_env_paths": [],
+        "executable_env_paths": [],
+        "read_env_subpaths": [],
+        "allow_network": true,
+        "allow_local_ipc": true
+      },
+      "inherit_env_from_interface": [
+        "/interface_driver_config/private_config/process_env_names",
+        "/interface_driver_config/private_config/opencodex/vertex/project_env",
+        "/interface_driver_config/private_config/opencodex/vertex/credentials_file_env"
+      ]
+    }
+  ]
+}

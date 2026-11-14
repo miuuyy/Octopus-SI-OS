@@ -43,6 +43,7 @@
     "world_provider_openrouter",
     "world_provider_stepfun",
     "world_provider_together",
+    "world_provider_vertex",
     "world_provider_vllm",
     "world_provider_xai",
     "world_provider_xiaomi",

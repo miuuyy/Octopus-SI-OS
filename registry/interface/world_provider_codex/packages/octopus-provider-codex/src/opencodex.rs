@@ -154,6 +154,8 @@ pub(crate) struct OpenCodexDescriptorConfig {
     pub limits: OpenCodexLimits,
     #[serde(default)]
     pub web_search: Option<OpenCodexWebSearch>,
+    #[serde(default)]
+    pub vertex: Option<OpenCodexVertex>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -161,6 +163,14 @@ pub(crate) struct OpenCodexDescriptorConfig {
 pub(crate) struct OpenCodexWebSearch {
     pub backend: String,
     pub model: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenCodexVertex {
+    pub location: String,
+    pub project_env: String,
+    pub credentials_file_env: String,
 }
 
 #[derive(Serialize)]
@@ -196,6 +206,15 @@ struct BridgeProvider {
     options: OpenCodexProviderOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     web_search: Option<OpenCodexWebSearch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vertex: Option<BridgeVertex>,
+}
+
+#[derive(Serialize)]
+struct BridgeVertex {
+    project: String,
+    location: String,
+    credentials_file: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -327,6 +346,9 @@ pub(crate) fn descriptor_config(
     }) {
         return Err("opencodex web_search requires a backend and a search model".to_string());
     }
+    if let Some(vertex) = &parsed.vertex {
+        validate_vertex_descriptor(descriptor, &parsed, vertex)?;
+    }
     if let Some(path) = parsed.options.responses_path.as_deref() {
         if !path.starts_with('/') || path.contains(['?', '#']) || path.contains("://") {
             return Err(
@@ -371,6 +393,7 @@ pub(crate) async fn connect_interface_driver(
     validate_static_headers(transport)?;
     let api_key = resolve_api_key(ctx, descriptor, transport, config, &private_values)?;
     let account = resolve_account(ctx, descriptor, config)?;
+    let vertex = resolve_vertex(config, &private_values)?;
     if let Some(name) = transport.auth_env_key.as_deref()
         && config.bridge_env_names.iter().any(|candidate| candidate == name)
     {
@@ -442,6 +465,7 @@ pub(crate) async fn connect_interface_driver(
             cache_retention: config.cache_retention.clone(),
             options: config.options.clone(),
             web_search: config.web_search.clone(),
+            vertex,
         },
         limits: BridgeLimits {
             max_request_bytes: config.limits.max_request_bytes,
@@ -561,6 +585,14 @@ impl PrivateValues {
             transport.auth_env_key.as_deref(),
             transport.base_url_env.as_deref(),
             config.model_env.as_deref(),
+            config
+                .vertex
+                .as_ref()
+                .map(|vertex| vertex.project_env.as_str()),
+            config
+                .vertex
+                .as_ref()
+                .map(|vertex| vertex.credentials_file_env.as_str()),
         ]
         .into_iter()
         .flatten()
@@ -711,6 +743,129 @@ fn resolve_account(
     Ok(Some(BridgeAccount {
         provider: provider.clone(),
         directory,
+    }))
+}
+
+fn validate_vertex_descriptor(
+    descriptor: &InterfaceDescriptor,
+    config: &OpenCodexDescriptorConfig,
+    vertex: &OpenCodexVertex,
+) -> Result<(), String> {
+    if config.adapter != "google"
+        || config.oauth_provider.is_some()
+        || config.registry_entry.is_some()
+        || config.web_search.is_some()
+        || config.model_env.is_some()
+    {
+        return Err(format!(
+            "interface '{}' declares Vertex on something other than a plain google adapter",
+            descriptor.id
+        ));
+    }
+    if !valid_env_name(&vertex.project_env)
+        || !valid_env_name(&vertex.credentials_file_env)
+        || vertex.project_env == vertex.credentials_file_env
+        || config.bridge_env_names.iter().any(|name| {
+            name == &vertex.project_env || name == &vertex.credentials_file_env
+        })
+    {
+        return Err(
+            "opencodex vertex project_env and credentials_file_env must be two distinct valid env names kept out of the bridge environment"
+                .to_string(),
+        );
+    }
+    if !valid_location_label(&vertex.location) {
+        return Err("opencodex vertex location must be one lowercase Google Cloud location label".to_string());
+    }
+    let transport = descriptor
+        .interface_driver_config
+        .as_ref()
+        .and_then(|driver| driver.transport.as_ref());
+    if transport.is_some_and(|transport| {
+        transport.auth_env_key.is_some()
+            || transport.auth_secret_ref.is_some()
+            || transport.auth_header.is_some()
+            || transport.auth_value_prefix.is_some()
+            || transport.base_url_env.is_some()
+    }) {
+        return Err(format!(
+            "interface '{}' authenticates Vertex with its credentials file; an API key or a configurable base URL cannot be combined with it",
+            descriptor.id
+        ));
+    }
+    let origin = if vertex.location == "global" {
+        "https://aiplatform.googleapis.com".to_string()
+    } else {
+        format!("https://{}-aiplatform.googleapis.com", vertex.location)
+    };
+    if transport.is_none_or(|transport| transport.base_url.trim_end_matches('/') != origin) {
+        return Err(format!(
+            "interface '{}' serves Vertex location '{}' from {origin}",
+            descriptor.id, vertex.location
+        ));
+    }
+    Ok(())
+}
+
+fn valid_location_label(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=63).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && bytes.first() != Some(&b'-')
+        && bytes.last() != Some(&b'-')
+}
+
+fn resolve_vertex(
+    config: &OpenCodexDescriptorConfig,
+    private_values: &PrivateValues,
+) -> Result<Option<BridgeVertex>, String> {
+    let Some(vertex) = &config.vertex else {
+        return Ok(None);
+    };
+    let project = private_values
+        .get(&vertex.project_env)?
+        .filter(|value| valid_text_atom(value))
+        .ok_or_else(|| {
+            format!(
+                "Vertex project is not configured: env var '{}' is unset, empty or untrimmed",
+                vertex.project_env
+            )
+        })?;
+    let file = private_values
+        .get(&vertex.credentials_file_env)?
+        .filter(|value| valid_text_atom(value))
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            format!(
+                "Vertex credentials file is not configured: env var '{}' is unset, empty or untrimmed",
+                vertex.credentials_file_env
+            )
+        })?;
+    if !file.is_absolute() {
+        return Err(format!(
+            "Vertex credentials file '{}' named by '{}' must be an absolute path",
+            file.display(),
+            vertex.credentials_file_env
+        ));
+    }
+    let metadata = std::fs::metadata(&file).map_err(|error| {
+        format!(
+            "Vertex credentials file '{}' cannot be inspected: {error}",
+            file.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Vertex credentials file '{}' is not a regular file",
+            file.display()
+        ));
+    }
+    Ok(Some(BridgeVertex {
+        project,
+        location: vertex.location.clone(),
+        credentials_file: file,
     }))
 }
 

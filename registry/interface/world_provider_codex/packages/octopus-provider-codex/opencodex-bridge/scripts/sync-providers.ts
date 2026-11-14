@@ -31,6 +31,7 @@ type ProviderSpec = {
   models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
   model_guide?: string;
   web_search?: { backend: "gemini"; model: string };
+  vertex?: { location: string; project: { env: string; label: string }; credentials: { env: string; label: string } };
 };
 
 type Spec = { schema_version: 1; template_interface: string; providers: ProviderSpec[] };
@@ -268,6 +269,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     allow_private_network: spec.local === true || spec.allow_private_network === true,
     ...(adapter === "anthropic" ? { cache_retention: "short" } : {}),
     ...(spec.web_search ? { web_search: spec.web_search } : {}),
+    ...(spec.vertex ? { vertex: { location: spec.vertex.location, project_env: spec.vertex.project.env, credentials_file_env: spec.vertex.credentials.env } } : {}),
     limits: {
       max_request_bytes: 33554432,
       max_translated_call_bytes: 2097152,
@@ -307,6 +309,10 @@ function life(spec: ProviderSpec, template: any) {
     ...(spec.key ? ["/interface_driver_config/transport/auth_env_key"] : []),
     ...(spec.base_url ? ["/interface_driver_config/transport/base_url_env"] : []),
     ...(spec.model ? ["/interface_driver_config/private_config/opencodex/model_env"] : []),
+    ...(spec.vertex ? [
+      "/interface_driver_config/private_config/opencodex/vertex/project_env",
+      "/interface_driver_config/private_config/opencodex/vertex/credentials_file_env",
+    ] : []),
   ];
   for (const process of out.processes) {
     process.bin = LIFE_BIN;
@@ -315,6 +321,7 @@ function life(spec: ProviderSpec, template: any) {
     const authority = process.authority;
     authority.read_env_paths = authority.read_env_paths.filter((name: string) => !MACHINE_AUTH_ENVS.includes(name));
     authority.write_env_paths = authority.write_env_paths.filter((name: string) => !MACHINE_AUTH_ENVS.includes(name));
+    if (spec.vertex) authority.read_env_paths = [...authority.read_env_paths, spec.vertex.credentials.env];
     authority.executable_root_subpaths = [
       ...authority.executable_root_subpaths,
       { root_slot: "registry_interface_root", relative_path: BRIDGE_SUBPATH },
@@ -334,6 +341,10 @@ function application(spec: ProviderSpec, logos: { logo?: string; logo_dark?: str
     ...(spec.key ? [{ interface: spec.interface, pointer: "/interface_driver_config/transport/auth_env_key", label: spec.key.label, kind: "secret", required: true }] : []),
     ...(spec.base_url ? [{ interface: spec.interface, pointer: "/interface_driver_config/transport/base_url_env", label: spec.base_url.label, kind: "url", required: true }] : []),
     ...(spec.model ? [{ interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/model_env", label: spec.model.label, kind: "text", required: true }] : []),
+    ...(spec.vertex ? [
+      { interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/vertex/project_env", label: spec.vertex.project.label, kind: "text", required: true },
+      { interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/vertex/credentials_file_env", label: spec.vertex.credentials.label, kind: "text", required: true },
+    ] : []),
   ];
   return {
     schema_version: 3,
@@ -398,7 +409,17 @@ for (const provider of spec.providers) {
   const seed = entry ? providerConfigSeed(entry) : undefined;
   const adapter = provider.adapter ?? seed?.adapter;
   if (typeof adapter !== "string" || !supportsAdapter(adapter)) throw new Error(`${provider.interface}: adapter ${adapter} is not served by the bridge`);
-  if (!provider.key && !provider.local && !provider.cli && !provider.account) throw new Error(`${provider.interface}: a remote provider needs a key field, an account or a signed-in CLI`);
+  if (!provider.key && !provider.local && !provider.cli && !provider.account && !provider.vertex) throw new Error(`${provider.interface}: a remote provider needs a key field, an account, a signed-in CLI or Vertex credentials`);
+  if (provider.vertex) {
+    const { location, project, credentials } = provider.vertex;
+    if (adapter !== "google" || provider.key || provider.account || provider.cli || provider.local || provider.registry_entry || provider.base_url || provider.model || provider.web_search) {
+      throw new Error(`${provider.interface}: a Vertex provider is a google adapter with only its project and credentials file`);
+    }
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(location)) throw new Error(`${provider.interface}: Vertex location must be one lowercase label`);
+    const origin = location === "global" ? "https://aiplatform.googleapis.com" : `https://${location}-aiplatform.googleapis.com`;
+    if (provider.endpoint !== origin) throw new Error(`${provider.interface}: a Vertex provider in ${location} serves from ${origin}`);
+    if (project.env === credentials.env) throw new Error(`${provider.interface}: Vertex project and credentials need their own env names`);
+  }
   if (provider.cli && provider.key) throw new Error(`${provider.interface}: a CLI provider keeps its sign-in inside the CLI`);
   if (provider.account && (provider.key || provider.cli || provider.local || provider.model)) throw new Error(`${provider.interface}: an account is the provider's only credential`);
   if (provider.account && !/^packages\/[A-Za-z0-9_-]+\.cjs$/.test(provider.account.client_module)) throw new Error(`${provider.interface}: the account module is a .cjs file in the interface's packages folder`);

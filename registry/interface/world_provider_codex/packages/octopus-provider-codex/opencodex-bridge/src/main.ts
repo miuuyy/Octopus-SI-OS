@@ -1,4 +1,5 @@
 import { createProviderAdapter, supportsAdapter } from "./adapters.ts";
+import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { accountStatus, loginOAuthAccount, logoutOAuthAccount, resolveOAuthAccount, OAuthAccountError, type OAuthAccountConfig } from "./account.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
@@ -25,6 +26,9 @@ import {
 } from "../node_modules/@bitkyc08/opencodex/src/lib/destination-policy.ts";
 import { isLocalUpstream } from "../node_modules/@bitkyc08/opencodex/src/lib/local-upstream.ts";
 import { redactSecretString } from "../node_modules/@bitkyc08/opencodex/src/lib/redact.ts";
+import { parseGcpCredentialJson } from "../node_modules/@bitkyc08/opencodex/src/lib/gcp-adc.ts";
+import { googleVertexLocationConfigError } from "../node_modules/@bitkyc08/opencodex/src/providers/google-vertex-location.ts";
+import { isQuotaExhaustedBody } from "../node_modules/@bitkyc08/opencodex/src/adapters/google-errors.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
 import { runWithWebSearch } from "../node_modules/@bitkyc08/opencodex/src/web-search/loop.ts";
 import { buildWebSearchTool } from "../node_modules/@bitkyc08/opencodex/src/web-search/synthetic-tool.ts";
@@ -56,6 +60,8 @@ type ProviderOptions = {
 
 type WebSearch = { backend: "gemini"; model: string };
 
+type Vertex = { project: string; location: string; credentials_file?: string };
+
 type RuntimeProvider = {
   adapter: AdapterName;
   allow_private_network: boolean;
@@ -73,6 +79,7 @@ type RuntimeProvider = {
   registry_entry?: string;
   account?: OAuthAccountConfig;
   web_search?: WebSearch;
+  vertex?: Vertex;
 };
 
 type BridgeConfig = {
@@ -137,6 +144,52 @@ function webSearchValue(value: unknown, account: OAuthAccountConfig | undefined)
     throw new Error("provider.web_search.backend 'gemini' searches through the provider's own Antigravity account");
   }
   return { backend: value.backend, model: stringValue(value.model, "provider.web_search.model") };
+}
+
+const VERTEX_PROJECT = /^(?:[a-z0-9][a-z0-9.-]{0,61}[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+const VERTEX_AMBIENT_ENV = [
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_API_KEY",
+  "GOOGLE_CLOUD_PROJECT",
+  "GCLOUD_PROJECT",
+  "GOOGLE_CLOUD_LOCATION",
+  "CLOUDSDK_CONFIG",
+];
+
+function vertexValue(value: unknown): Vertex {
+  if (!isObject(value)) throw new Error("provider.vertex must be an object");
+  exactKeys(value, ["project", "location", "credentials_file"], "provider.vertex");
+  const project = stringValue(value.project, "provider.vertex.project");
+  if (!VERTEX_PROJECT.test(project)) throw new Error("provider.vertex.project is not a Google Cloud project id");
+  const location = stringValue(value.location, "provider.vertex.location");
+  const locationError = googleVertexLocationConfigError(location);
+  if (locationError) throw new Error(`provider.vertex.location: ${locationError}`);
+  if (value.credentials_file === undefined) return { project, location };
+  const credentialsFile = stringValue(value.credentials_file, "provider.vertex.credentials_file");
+  if (!isAbsolute(credentialsFile) || credentialsFile.includes("\0")) throw new Error("provider.vertex.credentials_file must be absolute");
+  return { project, location, credentials_file: credentialsFile };
+}
+
+function vertexOrigin(location: string): string {
+  return location === "global" ? "https://aiplatform.googleapis.com" : `https://${location}-aiplatform.googleapis.com`;
+}
+
+function bindVertexCredentials(vertex: Vertex): void {
+  for (const name of VERTEX_AMBIENT_ENV) delete process.env[name];
+  process.env.OPENCODEX_HOME = process.cwd();
+  const file = vertex.credentials_file;
+  if (file === undefined) return;
+  let source: string;
+  try {
+    source = readFileSync(file, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "unreadable";
+    throw new Error(`Vertex credentials file ${file} cannot be read (${code})`);
+  }
+  if (!parseGcpCredentialJson(source)) {
+    throw new Error(`Vertex credentials file ${file} is neither a service_account nor an authorized_user credential`);
+  }
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = file;
 }
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number, path: string): number {
@@ -240,6 +293,7 @@ function parseConfig(value: unknown): BridgeConfig {
     "account",
     "model_aliases",
     "web_search",
+    "vertex",
   ], "provider");
   const adapter = stringValue(value.provider.adapter, "provider.adapter") as AdapterName;
   if (!supportsAdapter(adapter)) throw new Error(`provider.adapter '${adapter}' is unsupported`);
@@ -269,6 +323,20 @@ function parseConfig(value: unknown): BridgeConfig {
   }
   const modelAliases = modelAliasesValue(value.provider.model_aliases, models);
   const apiKey = value.provider.api_key === undefined ? undefined : stringValue(value.provider.api_key, "provider.api_key");
+  const vertex = value.provider.vertex === undefined ? undefined : vertexValue(value.provider.vertex);
+  if (vertex) {
+    if (adapter !== "google") throw new Error("provider.vertex requires the google adapter");
+    if (account || registryEntry !== undefined || webSearch) {
+      throw new Error("A Vertex provider declares no account, registry entry or web search");
+    }
+    if ((vertex.credentials_file === undefined) === (apiKey === undefined)) {
+      throw new Error("A Vertex provider authenticates with exactly one of an API key or a credentials file");
+    }
+    const origin = vertexOrigin(vertex.location);
+    if (parsedUrl.origin !== origin || parsedUrl.pathname !== "/" || parsedUrl.search) {
+      throw new Error(`provider.base_url must be ${origin} for Vertex location '${vertex.location}'`);
+    }
+  }
   const authHeader = value.provider.auth_header === undefined ? undefined : stringValue(value.provider.auth_header, "provider.auth_header");
   const authValuePrefix = value.provider.auth_value_prefix === undefined
     ? ""
@@ -297,6 +365,7 @@ function parseConfig(value: unknown): BridgeConfig {
       ...(registryEntry === undefined ? {} : { registry_entry: registryEntry }),
       ...(account === undefined ? {} : { account }),
       ...(webSearch === undefined ? {} : { web_search: webSearch }),
+      ...(vertex === undefined ? {} : { vertex }),
       model_aliases: modelAliases,
       base_url: baseUrl,
       models,
@@ -357,6 +426,7 @@ function upstreamProvider(config: RuntimeProvider): OcxProviderConfig {
     ...(config.options.direct_gemini_wire_renames === undefined ? {} : { directGeminiWireRenames: config.options.direct_gemini_wire_renames }),
     ...(config.options.supports_service_tier === undefined ? {} : { supportsServiceTier: config.options.supports_service_tier }),
     ...(config.options.upstream_http_version === undefined ? {} : { upstreamHttpVersion: config.options.upstream_http_version }),
+    ...(config.vertex === undefined ? {} : { googleMode: "vertex" as const, project: config.vertex.project, location: config.vertex.location }),
   };
   if (entry) enrichProviderFromRegistry(entry.id, provider);
   return provider;
@@ -835,17 +905,29 @@ async function upstreamAttempt(
       });
   } catch (error) {
     built?.releaseBodyObservation?.();
-    const message = error instanceof Error ? error.message : "provider request failed";
-    return isTranslatorBudgetExceededError(error)
-      ? formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the configured limit")
-      : formatErrorResponse(built ? 502 : 400, built ? "upstream_error" : "invalid_request_error", message);
+    const reason = error instanceof Error ? error.message : "provider request failed";
+    const message = config.provider.vertex && /token exchange failed/.test(reason)
+      ? `Vertex credentials file ${config.provider.vertex.credentials_file} was refused by Google: ${reason}`
+      : reason;
+    if (isTranslatorBudgetExceededError(error)) {
+      return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the configured limit");
+    }
+    return built || transientCredentialFailure(error, abort.signal)
+      ? formatErrorResponse(502, "upstream_error", message)
+      : formatErrorResponse(400, "invalid_request_error", message);
   }
   built.releaseBodyObservation?.();
   if (!upstream.ok) {
     try {
       const text = await boundedText(upstream, Math.min(config.limits.max_response_bytes, 1024 * 1024));
-      const detail = upstreamErrorReason(text, adapter.formatErrorBody?.(upstream.status, upstream.headers, text) ?? "");
-      return formatErrorResponse(upstream.status, "upstream_error", detail || `Provider error ${upstream.status}`, {
+      const detail = upstreamErrorReason(text, adapter.formatErrorBody?.(upstream.status, upstream.headers, text) ?? "") || `Provider error ${upstream.status}`;
+      if (unrecoverableProviderStatus(upstream.status, text)) {
+        return formatErrorResponse(400, "upstream_error", `Provider HTTP ${upstream.status}: ${detail}`, {
+          code: `provider_http_${upstream.status}`,
+          classified: true,
+        });
+      }
+      return formatErrorResponse(upstream.status, "upstream_error", detail, {
         retryAfter: upstream.headers.get("retry-after"),
       });
     } catch (error) {
@@ -861,6 +943,16 @@ async function upstreamAttempt(
     }
   }
   return adapter.parseStream(bounded, budget, built.tierLog);
+}
+
+function unrecoverableProviderStatus(status: number, body: string): boolean {
+  return status === 401 || status === 402 || status === 403 || status === 404 || (status === 429 && isQuotaExhaustedBody(body));
+}
+
+function transientCredentialFailure(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted || !(error instanceof Error)) return false;
+  if (/token exchange failed \((?:429|5\d\d)\)$/.test(error.message)) return true;
+  return error.name === "TimeoutError" || typeof (error as NodeJS.ErrnoException).code === "string";
 }
 
 function turnEvents(
@@ -987,6 +1079,7 @@ try {
   });
   if (destinationError) throw new Error(`provider ${config.provider.id} ${destinationError}`);
   if (config.provider.account) process.env.OPENCODEX_HOME = config.provider.account.directory;
+  if (config.provider.vertex) bindVertexCredentials(config.provider.vertex);
   await serve(config);
 } catch (error) {
   const message = redactSecretString(error instanceof Error ? error.message : "unknown error").slice(0, 600);

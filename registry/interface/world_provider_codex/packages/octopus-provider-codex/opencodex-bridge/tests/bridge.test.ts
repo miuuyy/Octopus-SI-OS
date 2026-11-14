@@ -719,3 +719,37 @@ test("an account provider serves Cloud Code Assist turns with its stored sign-in
   expect(await child.exited).toBe(1);
   expect(await new Response(child.stderr).text()).toContain("Antigravity is not signed in");
 });
+
+test("a Vertex provider binds exactly one declared credential and a provider status no retry can change ends the turn", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "octopus-vertex-"));
+  directories.push(directory);
+  const credentials = join(directory, "adc.json");
+  writeFileSync(credentials, JSON.stringify({ type: "authorized_user", client_id: "id", client_secret: "secret", refresh_token: "refresh" }));
+  const vertex = (overrides: Record<string, unknown>, provider: Record<string, unknown> = {}) => config("https://aiplatform.googleapis.com", {
+    adapter: "google",
+    api_key: undefined,
+    auth_header: undefined,
+    allow_private_network: false,
+    headers: {},
+    vertex: { project: "octopus-test-1", location: "global", credentials_file: credentials, ...overrides },
+    ...provider,
+  });
+  const refused = async (value: unknown) => {
+    const child = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: {} });
+    children.push(child);
+    child.stdin.write(JSON.stringify(value));
+    child.stdin.end();
+    expect(await child.exited).toBe(1);
+    return new Response(child.stderr).text();
+  };
+  expect(await refused(vertex({}, { api_key: "key", auth_header: "x-goog-api-key" }))).toContain("exactly one of an API key or a credentials file");
+  expect(await refused(vertex({ location: "us-central1" }))).toContain("must be https://us-central1-aiplatform.googleapis.com");
+  expect(await refused(vertex({ credentials_file: join(directory, "absent.json") }))).toContain("cannot be read (ENOENT)");
+  writeFileSync(join(directory, "key.json"), JSON.stringify({ type: "api_key" }));
+  expect(await refused(vertex({ credentials_file: join(directory, "key.json") }))).toContain("neither a service_account nor an authorized_user");
+  const denied = await exchange({ adapter: "google", base_url: "", auth_header: "x-goog-api-key", auth_value_prefix: "" },
+    Response.json({ error: { code: 403, message: "Billing is disabled for this project.", status: "PERMISSION_DENIED" } }, { status: 403 }));
+  expect(denied.status).toBe(400);
+  expect(JSON.parse(denied.text).error.message).toStartWith("Provider HTTP 403: ");
+  expect(denied.text).toContain("Billing is disabled for this project.");
+});

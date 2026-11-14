@@ -328,3 +328,27 @@ fn opencodex_web_search_names_the_backend_that_runs_it() {
         .unwrap_err()
         .contains("names no OpenCodex search backend"));
 }
+
+#[test]
+fn opencodex_vertex_authenticates_only_with_its_declared_credentials_file() {
+    let mut descriptor: InterfaceDescriptor = serde_json::from_str(include_str!(
+        "../../../../../world_provider_vertex/interface.json"
+    ))
+    .unwrap();
+    let vertex = descriptor_config(&descriptor).unwrap().unwrap().vertex.unwrap();
+    assert_eq!(
+        (vertex.location.as_str(), vertex.project_env.as_str(), vertex.credentials_file_env.as_str()),
+        ("global", "OCTOPUS_PROVIDER_VERTEX_PROJECT", "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE")
+    );
+    let transport = descriptor
+        .interface_driver_config
+        .as_mut()
+        .unwrap()
+        .transport
+        .as_mut()
+        .unwrap();
+    transport.auth_env_key = Some("OCTOPUS_PROVIDER_VERTEX_API_KEY".to_string());
+    assert!(descriptor_config(&descriptor)
+        .unwrap_err()
+        .contains("cannot be combined"));
+}
