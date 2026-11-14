@@ -102,6 +102,26 @@ fn retired<'a>(before: &'a BoundRunAuthoringTopology, after: &'a BoundRunAuthori
     before.checkpoints.iter().filter(move |prior| successors(prior, after).is_empty())
 }
 
+pub fn retired_static_context(before: &Value, after: &Value) -> Result<Vec<ArtifactId>, String> {
+    let topology = |value: &Value| serde_json::from_value::<BoundRunAuthoringTopology>(value.clone()).map_err(|e| e.to_string());
+    Ok(retired_context(&topology(before)?, &topology(after)?))
+}
+
+pub(super) fn retired_context(before: &BoundRunAuthoringTopology, after: &BoundRunAuthoringTopology) -> Vec<ArtifactId> {
+    let stable = |cp: &&RunAuthoringCheckpoint| cp.role == RunAuthoringCheckpointRole::Stable && cp.include_context;
+    let mut ids = Vec::new();
+    for prior in before.checkpoints.iter().filter(stable) {
+        let next = successors(prior, after);
+        let [next] = next.as_slice() else { continue };
+        for id in prior.static_artifact_bindings.iter().filter(|id| !next.static_artifact_bindings.contains(id)) {
+            if !ids.contains(id) && !after.checkpoints.iter().filter(stable).any(|kept| kept.static_artifact_bindings.contains(id)) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    ids
+}
+
 fn retirable_standing_input(record: &RunRecord, template: &RunAuthoringCheckpoint, before: &BoundRunAuthoringTopology, after: &BoundRunAuthoringTopology) -> bool {
     let interface = template.interface();
     template.role == RunAuthoringCheckpointRole::Stable
@@ -124,6 +144,7 @@ fn validate_templates(record: &RunRecord, before: &BoundRunAuthoringTopology, af
     if old_header != new_header || !extends(&before.payload_artifact_bindings, &after.payload_artifact_bindings) {
         return Err("capability amendment cannot change run, worker, provider, writer or retained payload identities".into());
     }
+    let dropped = retired_context(before, after);
     let mut names = BTreeSet::new();
     for next in &after.checkpoints {
         exact(&next.name, "checkpoint name")?;
@@ -140,7 +161,7 @@ fn validate_templates(record: &RunRecord, before: &BoundRunAuthoringTopology, af
         }
         let mut old = prior.clone();
         let mut new = next.clone();
-        if !extends(&old.static_artifact_bindings, &new.static_artifact_bindings) {
+        if old.static_artifact_bindings.iter().any(|id| !new.static_artifact_bindings.contains(id) && !dropped.contains(id)) {
             return Err(format!("capability amendment removes static context from '{}'", prior.name));
         }
         old.static_artifact_bindings.clear();
@@ -224,7 +245,9 @@ fn validate_delta(before: &RunRecord, delta: &CapabilityDelta, profile: &RunAuth
         exact(id.as_str(), "static artifact")?;
         if prior_context.contains(id) || !added.insert(id) { return Err("capability amendment repeats a static context addition".into()); }
     }
-    if !added.is_empty() && delta.before.checkpoints.iter().any(|cp| cp.role == RunAuthoringCheckpointRole::Stable
+    let dropped = retired_context(&delta.before, &delta.after);
+    if added.iter().any(|id| dropped.contains(id)) { return Err("capability amendment adds static context its templates retire".into()); }
+    if !(added.is_empty() && dropped.is_empty()) && delta.before.checkpoints.iter().any(|cp| cp.role == RunAuthoringCheckpointRole::Stable
         && cp.include_context && !cp.required_verified_artifacts.is_empty()) {
         return Err("capability context extension requires settling the existing verified stable input first".into());
     }
@@ -279,9 +302,12 @@ fn delta(amendment: &ProviderCapabilityAmendment) -> Result<CapabilityDelta, Str
     }
     let prior_context = context(&before, &old)?;
     let future_context = context(&after, &new)?;
-    if !extends(&prior_context, &future_context) { return Err("capability amendment removes retained context".into()); }
+    let dropped = retired_context(&old, &new);
+    if prior_context.iter().any(|id| !future_context.contains(id) && !dropped.contains(id)) {
+        return Err("capability amendment removes retained context".into());
+    }
     let additions = future_context.into_iter().filter(|id| !prior_context.contains(id)).collect::<Vec<_>>();
-    if !additions.is_empty() && old.checkpoints.iter().any(|cp| cp.role == RunAuthoringCheckpointRole::Stable
+    if !(additions.is_empty() && dropped.is_empty()) && old.checkpoints.iter().any(|cp| cp.role == RunAuthoringCheckpointRole::Stable
         && cp.include_context && !cp.required_verified_artifacts.is_empty()) {
         return Err("capability context extension requires settling the existing verified stable input first".into());
     }
@@ -499,16 +525,20 @@ fn apply_delta(current: &RunRecord, ordinary: &mut Value, delta: &CapabilityDelt
     amended_config.checkpoints = amended.checkpoints.clone();
     amended_config.payload_artifact_bindings = amended.payload_artifact_bindings.clone();
     amended_config.validate(provider, &initial.id)?;
-    let mut live_context = current_context_artifacts(&initial, config)?;
-    for id in &delta.static_artifact_additions { append_artifact(&mut live_context, id.clone()); }
     let roles = current_mandatory_role_artifacts(&initial, config)?;
+    let dropped = retired_context(&delta.before, &delta.after).into_iter().filter(|id| !roles.contains(id)).collect::<Vec<_>>();
+    let mut live_context = current_context_artifacts(&initial, config)?;
+    let bound = live_context.len();
+    live_context.retain(|id| !dropped.contains(id));
+    let context_changed = live_context.len() != bound || !delta.static_artifact_additions.is_empty();
+    for id in &delta.static_artifact_additions { append_artifact(&mut live_context, id.clone()); }
     let bindings = live_context.iter().map(|id| json!({"id":id})).collect::<Vec<_>>();
     let role_bindings = roles.iter().map(|id| json!({"id":id})).collect::<Vec<_>>();
     let state = initial.interface_state.get(provider).ok_or("capability provider state absent")?;
     let generation = optional_u64(state, "authoring_generation")?;
     let prefix = format!("cp_amendment_{}_{}", ContentHash::of_bytes(key.as_bytes()).to_hex(), generation);
     let root = ordinary.as_object_mut().ok_or("capability candidate is not an object")?;
-    if !delta.static_artifact_additions.is_empty() {
+    if context_changed {
         let mut context_config = config.clone();
         context_config.checkpoints.retain(|template| !retired(&delta.before, &delta.after).any(|old| old.name == template.name));
         for template in &mut context_config.checkpoints {
@@ -585,13 +615,14 @@ fn apply_delta(current: &RunRecord, ordinary: &mut Value, delta: &CapabilityDelt
     let state = states.get_mut(provider.as_str()).and_then(Value::as_object_mut).ok_or("capability provider state absent")?;
     state.insert(RUN_AUTHORING_BINDING.into(), json!(amended));
     state.insert(FRONTIER_CHECKPOINT_IDS.into(), json!(frontier));
-    if !delta.static_artifact_additions.is_empty() {
+    if context_changed {
         let before_generation = optional_u64(current.interface_state.get(provider).ok_or("current provider state absent")?, "context_generation")?;
         let next_generation = before_generation.checked_add(1).ok_or("context generation overflow")?;
         if state.get("context_generation").and_then(Value::as_u64).is_none_or(|authored| authored < next_generation) {
             state.insert("context_generation".into(), json!(next_generation));
         }
         if let Some(values) = state.get_mut("pending_handoff").and_then(|pending| pending.get_mut("context_publication")).and_then(Value::as_array_mut) {
+            values.retain(|value| !dropped.iter().any(|id| value.as_str() == Some(id.as_str())));
             for id in &delta.static_artifact_additions { if !values.contains(&json!(id)) { values.push(json!(id)); } }
         }
     }

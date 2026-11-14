@@ -379,15 +379,28 @@ impl ProviderOutputHandoff {
         let context_payloads = context_artifact_payloads(&initial_record, input.metadata().map_err(|error| error.to_string())?, &input.artifact_binding_payloads)?;
         let instruction_sources = bound_instruction_sources(&context_payloads, &[])?;
         let declared_static = declared_static_context(&config, &consumed_templates[0]);
+        let waited = consumed_templates[0].role == RunAuthoringCheckpointRole::ResultInput;
+        let call_evidence = if waited {
+            result_inputs::bound_call_evidence(&initial_record, &config.provider_interface, &runtime.checkpoint)?
+        } else { None };
+        let standing_static = config.checkpoints.iter()
+            .filter(|template| template.role == RunAuthoringCheckpointRole::Stable && template.include_context)
+            .flat_map(|template| template.static_artifact_bindings.iter()).collect::<BTreeSet<_>>();
         for bound in &context_payloads {
-            if consumes_context && consumed_templates[0].role != RunAuthoringCheckpointRole::ResultInput {
+            if consumes_context && !waited {
                 append_artifact(&mut context_artifacts, bound.artifact.id.clone());
             }
             if input.metadata().map_err(|error| error.to_string())?.grant.role_artifacts.iter()
                 .any(|id| id == bound.artifact.id.as_str())
-                || instruction_sources.contains(&bound.artifact.id)
-                || declared_static.contains(&bound.artifact.id) {
+                || instruction_sources.contains(&bound.artifact.id) {
                 append_artifact(&mut static_context_artifacts, bound.artifact.id.clone());
+                continue;
+            }
+            if declared_static.contains(&bound.artifact.id) {
+                let left = waited && !standing_static.contains(&bound.artifact.id)
+                    && !context_artifacts.contains(&bound.artifact.id)
+                    && call_evidence.as_ref().map(|call| &call.id) != Some(&bound.artifact.id);
+                if !left { append_artifact(&mut static_context_artifacts, bound.artifact.id.clone()); }
                 continue;
             }
             collect_bound_context(

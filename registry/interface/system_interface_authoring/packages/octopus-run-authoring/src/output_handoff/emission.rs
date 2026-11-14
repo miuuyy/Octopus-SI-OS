@@ -491,12 +491,13 @@ impl ProviderOutputHandoff {
             let topology = capability_amendment::apply_to_authored_run(
                 &state.run_record_bytes, &mut authored, amendment, &active.config, &active.var_dir,
             )?;
+            let dropped = capability_amendment::retired_context(&active.bound_topology, &topology);
             active.config.checkpoints = topology.checkpoints.clone();
             active.config.payload_artifact_bindings = topology.payload_artifact_bindings.clone();
             active.bound_topology = topology;
             let amended = RunRecord::from_bytes(authored.content.as_bytes()).map_err(|error| error.to_string())?;
-            extend_amendment_context_bindings(
-                &amended, &active.config.provider_interface, &mut next_context, &mut next_static_context,
+            adopt_amendment_context_bindings(
+                &amended, &active.config.provider_interface, &dropped, &mut next_context, &mut next_static_context,
             )?;
         }
         if let Some((predecessor, context_generation)) = settlement_of {

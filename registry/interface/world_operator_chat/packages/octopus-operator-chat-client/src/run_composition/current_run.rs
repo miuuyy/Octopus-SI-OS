@@ -150,7 +150,7 @@ fn parse<T: serde::de::DeserializeOwned>(value: &Value) -> Result<T, String> {
 
 fn retain_selection<T: PartialEq>(prior: &[T], next: &[T], field: &str) -> Result<(), String> {
     if prior.iter().any(|value| !next.contains(value)) {
-        return Err(format!("current-run amendment cannot remove or change retained {field}; only a standing external input can be removed"));
+        return Err(format!("current-run amendment cannot remove or change retained {field}"));
     }
     Ok(())
 }
@@ -480,7 +480,6 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
     retain_selection(&previous.selected_worker_environment_kinds, &selected.selected_worker_environment_kinds, "worker environment kinds")?;
     retain_selection(&previous.external_relays, &selected.external_relays, "external relays")?;
     retain_selection(&previous.model_outputs, &selected.model_outputs, "model outputs")?;
-    retain_selection(&previous.context_artifact_bindings, &selected.context_artifact_bindings, "context artifacts")?;
     retain_selection(&previous.payload_artifact_bindings, &selected.payload_artifact_bindings, "payload artifacts")?;
     for (door, slots) in &previous.door_host_slots {
         if selected.door_host_slots.get(door) != Some(slots) { return Err(format!("current-run amendment changes retained door roots '{door}'")); }
@@ -518,6 +517,8 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
         if matches!(template["role"].as_str(), Some("verified_input" | "result_input")) && !templates.contains(template) { templates.push(template.clone()); }
     }
     let current_context = octopus_run_authoring::provider_context_bindings(current, provider)?;
+    let dropped = octopus_run_authoring::capability_amendment::retired_static_context(current_topology,
+        &candidate["interface_state"][provider.as_str()]["run_authoring_binding"])?;
     let future_templates = candidate["interface_state"][provider.as_str()]["run_authoring_binding"]["checkpoints"].as_array().ok_or("planned templates absent")?.clone();
     for cp in candidate["checkpoints"].as_array_mut().ok_or("planned checkpoints absent")? {
         if future_templates.iter().any(|template| template["role"] == "stable" && template["include_context"] == true
@@ -525,7 +526,9 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
             && template["required_verified_artifacts"] == cp["required_verified_artifacts"]) {
             let selected = cp["artifact_bindings"].as_array().ok_or("planned context absent")?.clone();
             let mut retained = Vec::new();
-            for binding in current_context.iter().map(|binding| json!(binding)).chain(selected) {
+            let kept = current_context.iter().filter(|binding| !dropped.contains(&binding.id)
+                || selected.iter().any(|next| next["id"] == json!(binding.id))).map(|binding| json!(binding)).collect::<Vec<_>>();
+            for binding in kept.into_iter().chain(selected) {
                 if !retained.iter().any(|value: &Value| value["id"] == binding["id"]) { retained.push(binding); }
             }
             cp["artifact_bindings"] = json!(retained);

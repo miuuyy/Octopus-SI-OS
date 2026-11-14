@@ -1028,14 +1028,19 @@ pub fn checked_provider_run_advance(
     checked_selected_run_advance(ctx, path, before, after, after_seq, &config)
 }
 
-pub(crate) fn extend_amendment_context_bindings(
+pub(crate) fn adopt_amendment_context_bindings(
     record: &RunRecord,
     provider: &InterfaceId,
+    dropped: &[ArtifactId],
     context: &mut Vec<ArtifactId>,
     static_context: &mut Vec<ArtifactId>,
 ) -> Result<(), String> {
+    let bound = provider_context_bindings(record, provider)?;
+    let left = |id: &ArtifactId| dropped.contains(id) && !bound.iter().any(|binding| &binding.id == id);
+    context.retain(|id| !left(id));
+    static_context.retain(|id| !left(id));
     let prior_context = context.iter().cloned().collect::<BTreeSet<_>>();
-    for binding in provider_context_bindings(record, provider)? {
+    for binding in bound {
         if binding.access.read && !prior_context.contains(&binding.id) {
             append_artifact(static_context, binding.id.clone());
             append_artifact(context, binding.id);

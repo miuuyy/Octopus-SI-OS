@@ -137,7 +137,7 @@ fn capability_attachment_preserves_real_pending_and_waits_and_validates_checked_
     assert!(!checked_topology_advance(&config.provider_interface, &initial_topology, &unexplained, &[transition(&before,&authored)]).unwrap());
     let mut context=vec!["role".into(),"dynamic_call".into()];
     let mut static_context=vec!["role".into()];
-    extend_amendment_context_bindings(&installed,&config.provider_interface,&mut context,&mut static_context).unwrap();
+    adopt_amendment_context_bindings(&installed,&config.provider_interface,&[],&mut context,&mut static_context).unwrap();
     assert_eq!(static_context,vec![ArtifactId::from("role"),"new_context".into()]);
     assert_eq!(context,vec![ArtifactId::from("role"),"dynamic_call".into(),"new_context".into()]);
     let mut forged = transition(&before,&authored);
