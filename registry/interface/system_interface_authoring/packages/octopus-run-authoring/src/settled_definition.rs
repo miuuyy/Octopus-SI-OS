@@ -120,7 +120,6 @@ fn preserves_settled_continuity(
     provider: &InterfaceId,
 ) -> Result<bool, String> {
     if accepted.id != current.id
-        || accepted.worker != current.worker
         || accepted.trace != current.trace
     {
         return Ok(false);

@@ -42,7 +42,7 @@ pub(crate) fn validate_revision_attempt_predecessor(
 ) -> Result<(), String> {
     let original = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
     let record = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
-    if original.id != record.id || original.worker != record.worker || original.trace != record.trace {
+    if original.id != record.id || original.trace != record.trace {
         return Err("revision predecessor changed its original run identity".into());
     }
     let path = ctx.root_slot("run_records_root")?.canonicalize().map_err(|error| error.to_string())?
@@ -98,7 +98,6 @@ pub(crate) fn persisted_authoring_attempt(
                 .ok_or("provider authoring attempt has no canonical preimage")?;
             let before = pinned_run_record(ctx, &hash, "provider authoring attempt")?;
             if before.1.id != record.id
-                || before.1.worker != record.worker
                 || before.1.trace != record.trace
                 || (generation == expected_generation && before.1.interface_state.get(&config.provider_interface)
                     != record.interface_state.get(&config.provider_interface))

@@ -302,7 +302,7 @@ pub(super) fn identity_for(record: &RunRecord, provider: &InterfaceId, pending: 
 impl ProviderOutputHandoff {
     pub(super) fn retained_output_identity(&self, pending: &PendingHandoff) -> Result<Option<(String, u64)>, String> {
         let [item] = pending.items.as_slice() else { return Err("rejected final requires exactly one output".into()); };
-        let identity = self.pending_delivery_identity(pending, item);
+        let identity = self.pending_delivery_identity(pending, item)?;
         if !identity.exists(&self.ctx)? { return Ok(None); }
         let mut index = self.session.index()?;
         index.retained_delivery.refresh()?;
@@ -313,15 +313,23 @@ impl ProviderOutputHandoff {
         &self,
         pending: &PendingHandoff,
         item: &PendingHandoffItem,
-    ) -> Identity {
-        Identity {
+    ) -> Result<Identity, String> {
+        let worker = if pending.source_movement_seq == self.source_movement_seq {
+            self.invocation_metadata.runtime.as_ref()
+                .ok_or("retained provider output has no admitted source coordinate")?.worker.clone()
+        } else {
+            self.session.index()?.exact_provider_source_outbound(
+                &self.config.run, &self.config.provider_interface, pending.source_movement_seq,
+            )?.1.worker
+        };
+        Ok(Identity {
             schema_version: 1,
             provider: self.config.provider_interface.clone(),
             run: self.config.run.clone(),
-            worker: self.config.worker.clone(),
+            worker,
             source_movement_seq: pending.source_movement_seq,
             item: item.clone(),
-        }
+        })
     }
 
     pub(super) fn pending_delivery_complete(
@@ -329,7 +337,7 @@ impl ProviderOutputHandoff {
         pending: &PendingHandoff,
         item: &PendingHandoffItem,
     ) -> Result<bool, String> {
-        let identity = self.pending_delivery_identity(pending, item);
+        let identity = self.pending_delivery_identity(pending, item)?;
         if !identity.exists(&self.ctx)? {
             let mut index = self.session.index()?;
             index.retained_delivery.refresh()?;
@@ -355,7 +363,7 @@ impl ProviderOutputHandoff {
     pub(super) fn pending_output_has_submission(
         &self, pending: &PendingHandoff, item: &PendingHandoffItem,
     ) -> Result<bool, String> {
-        let identity = self.pending_delivery_identity(pending, item);
+        let identity = self.pending_delivery_identity(pending, item)?;
         if identity.exists(&self.ctx)? { return Ok(true); }
         let (_, reference) = load_pending_artifact(&self.var_dir, item)?;
         let key = artifact_ref_key(&reference);
@@ -370,7 +378,7 @@ impl ProviderOutputHandoff {
         pending: &PendingHandoff,
         item: &PendingHandoffItem,
     ) -> Result<Identity, String> {
-        let identity = self.pending_delivery_identity(pending, item);
+        let identity = self.pending_delivery_identity(pending, item)?;
         if identity.exists(&self.ctx)? {
             return Ok(identity);
         }

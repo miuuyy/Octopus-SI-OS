@@ -763,7 +763,6 @@ pub(super) fn rebase_authored_run(
     let protected = revision.as_ref().map_or_else(|| extension.as_ref().map_or(current, |extension| extension.protected.as_slice()), |revision| revision.protected.as_slice());
     let actual = RunRecord::from_bytes(protected).map_err(|error| error.to_string())?;
     if original.id != actual.id
-        || original.worker != actual.worker
         || original.trace != actual.trace
         || original.interface_state.get(&config.provider_interface)
             != actual.interface_state.get(&config.provider_interface)
