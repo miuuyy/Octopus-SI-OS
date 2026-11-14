@@ -453,6 +453,32 @@ for (const provider of spec.providers) {
   outputs.set(path.join(packageRoot, `${provider.interface}.json`), json(localPackage(provider, spec.template_interface)));
 }
 
+// A worker ceiling or an EE template that admits one provider of this list admits all of
+// them: the list is kept here, and every allowance that names it follows it.
+const registryRoot = path.resolve(interfaceRoot, "..");
+const allowances = [
+  ...fs.readdirSync(interfaceRoot).map((id) => path.join(interfaceRoot, id, "policy.json")),
+  ...fs.readdirSync(path.join(registryRoot, "ee_template")).map((id) => path.join(registryRoot, "ee_template", id, "ee_template.json")),
+].filter((file) => fs.existsSync(file));
+for (const file of allowances) {
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  const held = new Map<string, number>();
+  lines.forEach((line, index) => {
+    const id = /^\s*"(world_provider_[a-z0-9_]+)",?\s*$/.exec(line)?.[1];
+    if (id) held.set(id, index);
+  });
+  if (![...held.keys()].some((id) => seen.has(id))) continue;
+  const missing = spec.providers.map((provider) => provider.interface).filter((id) => !held.has(id));
+  if (!missing.length) continue;
+  const last = Math.max(...held.values());
+  const indent = /^\s*/.exec(lines[last])![0];
+  const closes = !lines[last].trimEnd().endsWith(",");
+  if (closes) lines[last] = `${lines[last].trimEnd()},`;
+  const added = missing.map((id, index) => `${indent}"${id}"${closes && index === missing.length - 1 ? "" : ","}`);
+  lines.splice(last + 1, 0, ...added);
+  outputs.set(file, lines.join("\n"));
+}
+
 const drift: string[] = [];
 for (const [file, body] of outputs) {
   const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;

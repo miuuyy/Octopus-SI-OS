@@ -34,6 +34,8 @@
       "world_provider_zai",
       "world_provider_kimi_code",
       "world_provider_azure_openai",
+      "world_provider_claude_cli",
+      "world_provider_grok_cli",
       "system_context",
       "system_worker_startup_manager",
       "system_worker_planner",
