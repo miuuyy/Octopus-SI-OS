@@ -1,5 +1,8 @@
 pub mod process_authority;
 
+#[cfg(target_os = "linux")]
+mod linux_process;
+
 pub use octopus_descriptors::ProcessAuthoritySpec;
 use octopus_descriptors::{Descriptor, VerifierId};
 use octopus_ledger::BlobStore;
@@ -10,7 +13,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -785,10 +788,9 @@ fn run_process_with_timeout(
     stdin_bytes: Option<&[u8]>,
 ) -> Result<(bool, String, String), serde_json::Value> {
     let executable = prepared.executable.display().to_string();
-    let mut child = Command::new(&prepared.program)
-        .args(prepared.args)
+    let mut child = prepared.command()
         .env_clear()
-        .envs(prepared.environment)
+        .envs(&prepared.environment)
         .envs(environment)
         .env("TMPDIR", cwd)
         .current_dir(cwd)

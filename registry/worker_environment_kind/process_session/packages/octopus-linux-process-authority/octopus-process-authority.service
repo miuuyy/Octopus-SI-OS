@@ -1,0 +1,24 @@
+[Unit]
+Description=Octopus process authority for Ubuntu
+After=apparmor.service
+Requires=apparmor.service
+
+[Service]
+Type=notify
+ExecStart=/usr/libexec/octopus/octopus-linux-process-authority
+User=root
+Group=octopus-process
+UMask=0007
+RuntimeDirectory=octopus-process-authority
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Delegate=yes
+TasksMax=infinity
+KillMode=process
+Restart=on-failure
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_MAC_ADMIN CAP_DAC_OVERRIDE CAP_SYS_PTRACE
+
+[Install]
+WantedBy=multi-user.target

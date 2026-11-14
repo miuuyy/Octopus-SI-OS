@@ -1,0 +1,16 @@
+[package]
+name = "octopus-linux-process-authority"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "octopus-linux-process-authority"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+octopus-verifiers = { path = "../../../../../crates/octopus-verifiers" }

@@ -5298,6 +5298,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "octopus-linux-process-authority"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "octopus-verifiers",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "octopus-login"
 version = "0.1.0"
 dependencies = [
@@ -6057,6 +6067,7 @@ dependencies = [
 name = "octopus-verifiers"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "object",
  "octopus-descriptors",
  "octopus-file-storage",
@@ -6137,6 +6148,7 @@ dependencies = [
  "octopus-sandbox-substrate",
  "octopus-util-pathuri",
  "octopus-util-pty",
+ "octopus-verifiers",
  "octopus-worker-env",
  "serde",
  "serde_json",

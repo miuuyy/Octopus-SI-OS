@@ -2532,7 +2532,7 @@ impl ToolProcessClient {
         }
         let executable = prepared.executable.clone();
         let sandbox_profile = prepared.sandbox_profile.clone();
-        let mut command = tokio::process::Command::new(&prepared.program);
+        let mut command = tokio::process::Command::from(prepared.command());
         #[cfg(unix)]
         command.process_group(0);
         configure_tool_process_owner_lease(&mut command, &owner_lease);
@@ -2540,7 +2540,6 @@ impl ToolProcessClient {
             .env_clear()
             .envs(prepared.environment)
             .envs(environment)
-            .args(prepared.args)
             .current_dir(&executable_base)
             .env("OCTOPUS_INTERFACE_ID", ctx.interface.as_str())
             .env("OCTOPUS_INTERFACE_DIR", ctx.interface_registry_dir())

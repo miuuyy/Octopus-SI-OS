@@ -15,47 +15,6 @@ use octopus_worker_env::{
 #[cfg(target_os = "linux")]
 use octopus_worker_env::NetworkCeiling;
 
-#[cfg(target_os = "linux")]
-fn locate_bwrap() -> Option<std::path::PathBuf> {
-    crate::find_bwrap_for_sandbox()
-}
-
-#[cfg(target_os = "linux")]
-fn build_bwrap_argv(sandbox: &ProjectedSandbox, cwd: &Path, argv: &[String]) -> Vec<String> {
-    let mut a: Vec<String> = Vec::new();
-    a.push("--new-session".to_string());
-    a.push("--die-with-parent".to_string());
-    a.push("--ro-bind".to_string());
-    a.push("/".to_string());
-    a.push("/".to_string());
-    a.push("--dev".to_string());
-    a.push("/dev".to_string());
-    a.push("--proc".to_string());
-    a.push("/proc".to_string());
-    for root in sandbox.writable_roots() {
-        a.push("--bind".to_string());
-        a.push(root.as_str().to_string());
-        a.push(root.as_str().to_string());
-    }
-    for sub in sandbox.read_only_subpaths() {
-        if Path::new(sub.as_str()).exists() {
-            a.push("--ro-bind".to_string());
-            a.push(sub.as_str().to_string());
-            a.push(sub.as_str().to_string());
-        }
-    }
-    a.push("--unshare-user".to_string());
-    a.push("--unshare-pid".to_string());
-    if sandbox.network() != NetworkCeiling::Full {
-        a.push("--unshare-net".to_string());
-    }
-    a.push("--chdir".to_string());
-    a.push(cwd.to_string_lossy().to_string());
-    a.push("--".to_string());
-    a.extend(argv.iter().cloned());
-    a
-}
-
 pub fn sandboxed_room_process_argv(
     sandbox: &ProjectedSandbox,
     sandbox_mode: ProcessSandboxMode,
@@ -107,18 +66,50 @@ fn set_tmp_dir(command: &mut Command, tmp_dir: Option<&Path>) {
 #[cfg(target_os = "linux")]
 fn platform_sandboxed_room_process_argv(
     sandbox: &ProjectedSandbox,
-    cwd: &AbsPath,
+    _cwd: &AbsPath,
     argv: Vec<String>,
 ) -> Result<Vec<String>, WorkerEnvError> {
-    let bwrap = locate_bwrap().ok_or_else(|| {
-        WorkerEnvError::ExecFailed(
-            "bubblewrap (bwrap) not found in PATH or packaged sandbox resources; refusing to run the build unsandboxed \
-             (fail-closed)"
-                .into(),
-        )
+    use octopus_verifiers::process_authority::linux::{LinuxRoomPolicy, PLATFORM_EXECUTABLE};
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(PLATFORM_EXECUTABLE).map_err(|error| {
+        WorkerEnvError::ExecFailed(format!("Ubuntu process-authority component is unavailable: {error}; install it as described in docs/linux.md"))
     })?;
-    let mut process_argv = vec![bwrap.to_string_lossy().into_owned()];
-    process_argv.extend(build_bwrap_argv(sandbox, cwd.as_path(), &argv));
+    if !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o022 != 0
+        || metadata.mode() & 0o111 == 0
+    {
+        return Err(WorkerEnvError::ExecFailed(
+            "Ubuntu process-authority component is not a protected root-owned executable".into(),
+        ));
+    }
+    let policy = LinuxRoomPolicy {
+        readable: sandbox
+            .readable_roots()
+            .iter()
+            .map(|root| root.as_path().to_path_buf())
+            .collect(),
+        writable: sandbox
+            .writable_roots()
+            .iter()
+            .map(|root| root.as_path().to_path_buf())
+            .collect(),
+        read_only: sandbox
+            .read_only_subpaths()
+            .iter()
+            .map(|root| root.as_path().to_path_buf())
+            .collect(),
+        allow_network: sandbox.network() == NetworkCeiling::Full,
+    };
+    let policy = serde_json::to_string(&policy)
+        .map_err(|error| WorkerEnvError::ExecFailed(error.to_string()))?;
+    let mut process_argv = vec![
+        PLATFORM_EXECUTABLE.into(),
+        "exec".into(),
+        policy,
+        "--".into(),
+    ];
+    process_argv.extend(argv);
     Ok(process_argv)
 }
 
@@ -191,32 +182,7 @@ pub fn run_sandboxed_in_room(
         cancelled,
     )?;
 
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    if sandbox_mode == ProcessSandboxMode::Enforced
-        && output.exit_code == 1
-        && is_bwrap_setup_failure(&stderr_text)
-    {
-        return Err(WorkerEnvError::ExecFailed(format!(
-            "bubblewrap could not establish the sandbox (no unsandboxed fallback): {}",
-            stderr_text.trim()
-        )));
-    }
-
     Ok(output)
-}
-
-#[cfg(target_os = "linux")]
-fn is_bwrap_setup_failure(stderr: &str) -> bool {
-    const MARKERS: &[&str] = &[
-        "bwrap:",
-        "No permissions to create a new namespace",
-        "setting up uid map",
-        "loopback: Failed",
-        "Creating new namespace failed",
-        "Can't mount",
-        "Unexpected close of bwrap",
-    ];
-    MARKERS.iter().any(|m| stderr.contains(m))
 }
 
 #[cfg(target_os = "macos")]

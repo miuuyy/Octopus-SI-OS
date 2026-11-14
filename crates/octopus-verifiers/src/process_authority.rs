@@ -8,6 +8,9 @@ use octopus_descriptors::{
     ProcessArgumentPathSpec, ProcessAuthoritySpec, ProcessEnvironmentSubpathSpec,
 };
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 #[derive(Clone, Debug)]
 pub struct ResolvedProcessAuthority {
     pub authority: ProcessAuthority,
@@ -40,6 +43,20 @@ pub struct PreparedProcess {
     pub executable: PathBuf,
     pub environment: BTreeMap<OsString, OsString>,
     pub sandbox_profile: Option<std::sync::Arc<SandboxProfileFile>>,
+    #[cfg(target_os = "linux")]
+    linux_lease: Option<std::sync::Arc<crate::linux_process::LinuxLease>>,
+}
+
+impl PreparedProcess {
+    pub fn command(&self) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.args);
+        #[cfg(target_os = "linux")]
+        if let Some(lease) = &self.linux_lease {
+            lease.configure(&mut command);
+        }
+        command
+    }
 }
 
 #[derive(Debug)]
@@ -156,6 +173,8 @@ impl ProcessAuthority {
                 executable,
                 environment: BTreeMap::new(),
                 sandbox_profile: None,
+                #[cfg(target_os = "linux")]
+                linux_lease: None,
             });
         }
         #[cfg(target_os = "macos")]
@@ -164,11 +183,8 @@ impl ProcessAuthority {
         }
         #[cfg(target_os = "linux")]
         {
-            let _ = (self, executable, args, cwd, search_path, profile_root);
-            return Err(
-                "no Linux process-authority backend enforces independent read, write, and execute roots"
-                    .to_string(),
-            );
+            let _ = profile_root;
+            return linux::prepare(self, executable, args, &cwd);
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -978,6 +994,8 @@ pub fn validate_executable_runtime(executable: &Path) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     macos_process_closure(BTreeSet::from([executable.to_path_buf()]), &macos_runtime_roots())?;
+    #[cfg(target_os = "linux")]
+    linux::runtime_executables(BTreeSet::from([executable.to_path_buf()]))?;
     Ok(())
 }
 
@@ -2190,7 +2208,7 @@ fn append_macos_typed_exact_access(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn path_ancestors(paths: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
     let mut ancestors = BTreeSet::new();
     for path in paths {

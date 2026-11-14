@@ -3048,7 +3048,7 @@ fn spawn_process_command_life(
         {
             return Err("interface life executable escapes its exact owner before spawn".into());
         }
-        let mut command = tokio::process::Command::new(&prepared.program);
+        let mut command = tokio::process::Command::from(prepared.command());
         let child_ownership = crate::InterfaceLifeOwnership::try_acquire_life(
             ctx.var_dir.parent().ok_or("interface life has no private root")?, &ctx.interface,
         )?.ok_or("interface process lost its lifetime ownership before spawn")?;
@@ -3097,7 +3097,6 @@ fn spawn_process_command_life(
             .env_clear()
             .envs(prepared.environment)
             .envs(environment)
-            .args(prepared.args)
             .current_dir(&executable_base)
             .env("OCTOPUS_INTERFACE_ID", ctx.interface.as_str())
             .env("OCTOPUS_INTERFACE_DIR", ctx.interface_registry_dir())

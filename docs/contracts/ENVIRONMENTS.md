@@ -172,6 +172,32 @@ exit remains distinct from closure, including a PTY whose streams close while
 another group member is still running. Observation and cleanup failures remain
 visible and never become successful closure.
 
+## Ubuntu process authority
+
+On Ubuntu, process authority is enforced by an AppArmor profile before exec.
+The platform service owns only profile loading, child attachment and profile
+release; it runs no tool command and changes no command's Unix credentials.
+Its peer pidfd and temporary ptrace hold bind attachment to the preparing
+process or its actual child without a recycled PID. A process already confined by Octopus can prepare another profile
+only with declared sandbox-delegation authority. Another user namespace cannot
+reach that delegation. Exact file grants include the publication protocol's
+bounded metadata filenames, without granting adjacent files.
+Before exec, the native launcher prepares the exact ancestor and publication
+directories as the ordinary user, without following symlinks; the profile
+grants reads and locks without making those parents writable. Preparation
+can leave created directories if a later setup operation fails. Workspace
+commands use an unprivileged entry point of the same platform component and
+receive a new profile over their formed roots, protected subpaths and network
+ceiling. They receive no sandbox-delegation authority.
+
+Preparation ownership and cgroup population retain the profile independently
+of the launching process. A surviving keeper therefore keeps its confinement;
+release requires both a closed preparation and an empty cgroup. Platform-service
+restart retains those cgroups and profiles and recovers their own records.
+Unavailable enforcement refuses launch. Full-host and explicitly disabled
+sandbox modes keep their existing semantics. Installation and requirements are
+described in [Process isolation on Ubuntu](../linux.md).
+
 ## Choosing a room
 
 Selecting a room is the intersection of four explicit links:
