@@ -225,7 +225,7 @@ pub fn form_worker_run_policy(
             formed.pin.inputs.insert(name, *hash);
         }
     }
-    narrow_context_to_authored_doors(&mut formed, authored, formation_source_hashes)?;
+    narrow_context_to_authored_doors(&mut formed, authored, formation_source_hashes, lineage)?;
     for interface in formed.context.interfaces.iter() {
         let name = interface_descriptor_source_name(interface);
         let hash = formation_source_hashes.get(&name).ok_or_else(|| {
@@ -265,25 +265,45 @@ pub fn form_worker_run_policy(
 /// and its descriptor is in the loaded registry snapshot; a pin to a folder that is
 /// gone drops here, and the runtime refuses that route at send time (§6).
 /// Tools narrow to those an admitted door owns; WEK narrows to the kinds those
-/// surviving tools reach.
+/// surviving tools reach. A pinned private copy is admitted by its declared original
+/// (§5): the reach holds the original, the grant holds the copy the run pins, and a
+/// tool copy of an admitted door is held when the reach holds its original.
 fn narrow_context_to_authored_doors(
     formed: &mut FormedPolicy,
     authored: &AuthoredBindings<'_>,
     formation_source_hashes: &BTreeMap<DescriptorName, DescriptorHash>,
+    lineage: &CopyLineage,
 ) -> Result<(), WorkerPolicyError> {
     let reach = &formed.context.interfaces;
     let doors: BTreeSet<InterfaceId> = authored
         .interfaces
         .iter()
         .filter(|folder| {
-            reach.contains(folder)
+            lineage.admits_interface(reach, folder)
                 && formation_source_hashes.contains_key(&interface_descriptor_source_name(folder))
         })
         .cloned()
         .collect();
     formed.context.interfaces = CapSet::from_allowed(doors);
 
-    formed.context.tools = admissible_interface_tools(&formed.context, authored.tool_ownership);
+    let held = formed.context.tools.clone();
+    let copies = authored
+        .tool_ownership
+        .owned_tools()
+        .filter(|(tool, door)| {
+            !held.contains(tool)
+                && formed.context.interfaces.contains(door)
+                && lineage.admits_tool(&held, tool)
+                && !lineage.denies_tool(&formed.context.hard_blocks_tools, tool)
+        })
+        .map(|(tool, _)| tool.clone())
+        .collect::<Vec<_>>();
+    formed.context.tools = CapSet::from_allowed(
+        admissible_interface_tools(&formed.context, authored.tool_ownership)
+            .iter()
+            .cloned()
+            .chain(copies),
+    );
 
     let reachable_wek: BTreeSet<WorkerEnvironmentKindId> = formed
         .context
@@ -324,4 +344,60 @@ fn narrow_context_to_authored_doors(
         .collect::<Result<BTreeSet<_>, _>>()?;
     formed.context.tools = CapSet::from_allowed(tools);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use octopus_policy::{ArtifactVerb, DenySet};
+
+    #[test]
+    fn a_pin_that_holds_the_originals_grants_the_private_copies_a_run_pins() {
+        let id = InterfaceId::new;
+        let context = ContextGrant {
+            tools: CapSet::from_allowed([ToolId::new("file.write"), ToolId::new("artifact.read")]),
+            interfaces: CapSet::from_allowed([id("world_client"), id("system_room")]),
+            wek: CapSet::from_allowed([WorkerEnvironmentKindId::new("system_room")]),
+            mark_outcomes: CapSet::from_allowed(std::iter::empty()),
+            hard_blocks_tools: DenySet::from_denied([ToolId::new("artifact.read")]),
+            interface_policy: Default::default(),
+            artifact_verbs: CapSet::from_allowed(ArtifactVerb::ALL),
+            artifact_access: Default::default(),
+        };
+        let pinned = [id("world_client_k"), id("system_room_k"), id("world_other_k")];
+        let ownership = InterfaceToolOwnerMap::from_pairs([
+            (ToolId::new("file.write"), id("system_room")),
+            (ToolId::new("file.write__k"), id("system_room_k")),
+            (ToolId::new("artifact.read__k"), id("system_room_k")),
+            (ToolId::new("web.search__k"), id("system_room_k")),
+        ]);
+        let kinds = ["file.write", "file.write__k", "artifact.read__k", "web.search__k"]
+            .into_iter()
+            .map(|tool| (ToolId::new(tool), BTreeSet::from([WorkerEnvironmentKindId::new("system_room")])))
+            .collect::<BTreeMap<_, _>>();
+        let hashes = pinned
+            .iter()
+            .map(|folder| (interface_descriptor_source_name(folder), DescriptorHash::of_canonical_json(&serde_json::json!({}))))
+            .collect::<BTreeMap<_, _>>();
+        let access = BTreeMap::new();
+        let authored = AuthoredBindings { interfaces: &pinned, tool_ownership: &ownership, tool_supported_weks: &kinds, artifact_access: &access };
+        let form = |lineage: &CopyLineage| {
+            let mut formed = FormedPolicy { boundary: context.clone(), context: context.clone(), pin: FormationPin { inputs: BTreeMap::new() } };
+            narrow_context_to_authored_doors(&mut formed, &authored, &hashes, lineage).unwrap();
+            formed.context
+        };
+        let mut lineage = CopyLineage::default();
+        lineage.insert_interface(id("world_client_k"), id("world_client"));
+        lineage.insert_interface(id("system_room_k"), id("system_room"));
+        lineage.insert_interface(id("world_other_k"), id("world_other"));
+        lineage.insert_tool(ToolId::new("file.write__k"), ToolId::new("file.write"));
+        lineage.insert_tool(ToolId::new("artifact.read__k"), ToolId::new("artifact.read"));
+        lineage.insert_tool(ToolId::new("web.search__k"), ToolId::new("web.search"));
+        let granted = form(&lineage);
+        assert_eq!(granted.interfaces, CapSet::from_allowed([id("world_client_k"), id("system_room_k")]));
+        assert_eq!(granted.tools, CapSet::from_allowed([ToolId::new("file.write__k")]));
+        let unrelated = form(&CopyLineage::default());
+        assert_eq!(unrelated.interfaces, CapSet::from_allowed(std::iter::empty()));
+        assert_eq!(unrelated.tools, CapSet::from_allowed(std::iter::empty()));
+    }
 }

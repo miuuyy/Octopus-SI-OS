@@ -938,7 +938,10 @@ impl LoadedRegistrySnapshot {
         let interfaces = formed.boundary.interfaces.iter().chain(formed.context.interfaces.iter()).cloned().collect::<BTreeSet<_>>();
         let mut originals = BTreeMap::new();
         for interface in &interfaces {
-            if let Some(original) = self.admitted_original(interface, &ee_layers) {
+            let held_by_original = || self.copy_lineage.interface_original(interface)
+                .filter(|original| !formed.boundary.interfaces.contains(interface) && formed.boundary.interfaces.contains(original))
+                .cloned();
+            if let Some(original) = self.admitted_original(interface, &ee_layers).or_else(held_by_original) {
                 let source = crate::worker_policy::interface_descriptor_source_name(&original);
                 let hash = self.formation_source_hashes.get(&source).ok_or_else(|| {
                     format!("original '{}' of interface '{}' has no formation source", original.as_str(), interface.as_str())

@@ -15,6 +15,10 @@ impl InterfaceToolOwnerMap {
         }
     }
 
+    pub fn owned_tools(&self) -> impl Iterator<Item = (&ToolId, &InterfaceId)> {
+        self.owner.iter()
+    }
+
     pub fn owning_interface(&self, tool_id: &ToolId) -> Option<&InterfaceId> {
         self.owner.get(tool_id)
     }
