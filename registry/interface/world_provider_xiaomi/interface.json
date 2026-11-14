@@ -3292,7 +3292,7 @@
             {
               "name": "preview_revision",
               "operation": "preview_revision",
-              "description": "Validate exact edits to an existing peer run and related descriptors without applying them. Preserve accepted checkpoint contracts and inspect every publication stage. Do not edit the in-flight caller through this operation.",
+              "description": "Validate exact edits to an existing peer run and related descriptors without applying them. Any part of the run record may change, and every interface holding state in it reads the result under its own contract. Inspect every publication stage. Do not edit the in-flight caller through this operation.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3432,7 +3432,7 @@
             {
               "name": "revise_run",
               "operation": "revise_run",
-              "description": "Apply checked, validated file edits to an existing peer run and its descriptor dependencies. Optional seed emits through its exact declared interface; without seed, publishes the authored waits. Do not edit the in-flight caller through this operation.",
+              "description": "Apply checked, validated file edits to an existing peer run and its descriptor dependencies. Any part of the run record may change. Optional seed emits through its exact declared interface; without seed, publishes the authored waits. Do not edit the in-flight caller through this operation.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,

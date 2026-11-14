@@ -421,6 +421,20 @@ fn patched_current_run(roots: &CompositionRoots, current: &RunRecord, authored: 
     Ok(PlannedCurrentRun { expected_before, run_record, writes: authored.writes })
 }
 
+fn planned_companion_extension(before: &[u8], after: &[u8]) -> Result<(), String> {
+    let before = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
+    let after = RunRecord::from_bytes(after).map_err(|error| error.to_string())?;
+    if before.id != after.id || before.ee != after.ee || before.worker != after.worker || before.trace != after.trace
+        || before.status != after.status || before.interface_state != after.interface_state
+        || !after.checkpoints.starts_with(&before.checkpoints)
+        || before.active_checkpoints.iter().any(|checkpoint| !after.active_checkpoints.contains(checkpoint))
+        || after.active_checkpoints.iter().any(|id| !before.active_checkpoints.contains(id) && before.checkpoint(id).is_some())
+    {
+        return Err(format!("current-run amendment would rewrite the live companion run '{}'; revise it with its exact authored files", before.id.as_str()));
+    }
+    Ok(())
+}
+
 fn pending_turn(record: &RunRecord, provider: &InterfaceId) -> bool {
     record.interface_state.get(provider).and_then(|state| state.get("pending_handoff")).is_some_and(|pending| !pending.is_null())
 }
@@ -676,7 +690,7 @@ fn plan_current_run_amendment_with_source(roots: &CompositionRoots, current: &Ru
         if write.path == run_path { return Err("caller run publication belongs to its checked provider handoff".into()); }
         if write.path.parent() == Some(roots.run_records_root.as_path()) && write.path.exists() {
             let bytes = std::fs::read(&write.path).map_err(|e| e.to_string())?;
-            crate::run_revision::validate_checkpoint_extension(&bytes, write.content.as_bytes())?;
+            planned_companion_extension(&bytes, write.content.as_bytes())?;
         }
         let before = match std::fs::read(&write.path) { Ok(bytes) => Some(bytes), Err(e) if e.kind() == std::io::ErrorKind::NotFound => None, Err(e) => return Err(e.to_string()) };
         if before.as_ref().is_some_and(|bytes| bytes == write.content.as_bytes()) { continue; }

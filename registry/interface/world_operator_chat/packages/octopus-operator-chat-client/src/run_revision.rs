@@ -27,40 +27,6 @@ pub enum RevisionOperation {
     Payloads { selected: Vec<ArtifactRef> },
 }
 
-/// Ordinary exact-record authoring may append future checkpoints while keeping
-/// accepted contracts and provider continuity as data. Replacing
-/// input generations or retiring active waits belongs to the existing typed
-/// provider input revision/rearm path with its admitted writer evidence.
-pub fn validate_checkpoint_extension(before: &[u8], after: &[u8]) -> Result<(), String> {
-    let before = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
-    let after = RunRecord::from_bytes(after).map_err(|error| error.to_string())?;
-    if before.id != after.id
-        || before.ee != after.ee
-        || before.worker != after.worker
-        || before.trace != after.trace
-        || before.status != after.status
-        || before.interface_state != after.interface_state
-        || !after.checkpoints.starts_with(&before.checkpoints)
-        || before
-            .active_checkpoints
-            .iter()
-            .any(|checkpoint| !after.active_checkpoints.contains(checkpoint))
-    {
-        return Err("exact run revision must preserve identity, provider state, existing checkpoints and active waits; generation replacement requires the typed input revision owner".into());
-    }
-    if after
-        .active_checkpoints
-        .iter()
-        .any(|id| !before.active_checkpoints.contains(id) && before.checkpoint(id).is_some())
-    {
-        return Err(
-            "exact run revision cannot reactivate a historical checkpoint; author a fresh id/epoch"
-                .into(),
-        );
-    }
-    Ok(())
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunRevisionRequest {

@@ -820,7 +820,7 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
 }
 
 #[test]
-fn exact_runs_allow_no_provider_or_client_and_revision_preserves_existing_contracts() {
+fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let request = support::fixture(&root);
@@ -860,11 +860,6 @@ fn exact_runs_allow_no_provider_or_client_and_revision_preserves_existing_contra
         .as_array_mut()
         .unwrap()
         .push(json!("wait-next"));
-    octopus_operator_chat_client::run_revision::validate_checkpoint_extension(
-        &before,
-        &serde_json::to_vec(&extended).unwrap(),
-    )
-    .unwrap();
     let run_path = request.roots.run_records_root.join("parked.json");
     std::fs::create_dir_all(&request.roots.run_records_root).unwrap();
     std::fs::write(&run_path, &before).unwrap();
@@ -958,11 +953,8 @@ fn exact_runs_allow_no_provider_or_client_and_revision_preserves_existing_contra
             .checkpoints
     );
     extended["checkpoints"][0]["epoch"] = json!(1);
-    assert!(
-        octopus_operator_chat_client::run_revision::validate_checkpoint_extension(
-            &before,
-            &serde_json::to_vec(&extended).unwrap()
-        )
-        .is_err()
-    );
+    extended["status"] = json!("idle");
+    octopus_run_authoring::foreign_edit::validate(&before, &serde_json::to_vec(&extended).unwrap()).unwrap();
+    extended["id"] = json!("another");
+    assert!(octopus_run_authoring::foreign_edit::validate(&before, &serde_json::to_vec(&extended).unwrap()).is_err());
 }

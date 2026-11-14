@@ -331,8 +331,8 @@ pub(crate) fn checked_run_file_chain_with_reader(
     let original = RunRecord::from_bytes(before).map_err(|e| e.to_string())?;
     if let Some(after) = after {
         let target = RunRecord::from_bytes(after).map_err(|e| e.to_string())?;
-        if original.id != target.id || original.worker != target.worker {
-            return Err("checked authoring chain changed run or worker".into());
+        if original.id != target.id {
+            return Err("checked authoring chain changed its run".into());
         }
     }
     validate_checked_run_writers(writers)?;
@@ -347,7 +347,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
     let mut transitions = Vec::new();
     let mut uncertain = Vec::new();
     let mut observations = Vec::new();
-    let mut placement_candidates = Vec::new();
+    let mut foreign_candidates = Vec::new();
     let mut sequence = first_seq;
     loop {
         if before_seq.is_some_and(|end| sequence >= end) { break; }
@@ -364,27 +364,27 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 .ok_or("checked historical outbound has no actual admission metadata")?;
             let runtime = metadata.runtime.as_ref().ok_or("checked historical outbound has no run coordinate")?;
             if runtime.run == original.id {
-                if runtime.worker != original.worker || metadata.verification_failure.is_some() {
-                    return Err("checked historical interval changed run worker or admitted failed evidence".into());
+                if metadata.verification_failure.is_some() {
+                    return Err("checked historical interval admitted failed evidence".into());
                 }
                 let hash = runtime.run_record_hash.as_deref().and_then(ContentHash::from_hex)
                     .ok_or("checked historical outbound has no pinned snapshot")?;
-                observations.push((movement.seq.0, hash, (!selected_reads.is_empty()).then(|| metadata.clone())));
+                observations.push((movement.seq.0, hash, runtime.worker.clone(), (!selected_reads.is_empty()).then(|| metadata.clone())));
             }
         }
         let source_writer = writers.iter().find(|w| movement.from == Endpoint::Interface(w.source.clone()) && movement.to == Endpoint::Interface(w.door.clone()));
         let result_writer = writers.iter().find(|w| movement.from == Endpoint::Interface(w.door.clone()) && movement.to == Endpoint::Interface(w.owner.clone()));
         if source_writer.is_none() && result_writer.is_none() {
             if selected_install.is_none() && movement.artifact.is_some() {
-                placement_candidates.push(movement);
+                foreign_candidates.push(movement);
             }
             continue;
         }
         if source_writer.is_some() && observed_sequence.is_some_and(|sequence| movement.seq.0 >= sequence) { continue; }
         let metadata = movement.invocation_metadata.as_ref().and_then(|m| m.invocation()).ok_or("checked authoring evidence has no invocation metadata")?;
         let runtime = metadata.runtime.as_ref().ok_or("checked authoring evidence has no runtime coordinate")?;
-        if runtime.worker != original.worker || metadata.verification_failure.is_some() {
-            return Err("checked authoring evidence has another worker or a verification failure".into());
+        if metadata.verification_failure.is_some() {
+            return Err("checked authoring evidence has a verification failure".into());
         }
         let artifact = movement.artifact.as_ref().ok_or("checked authoring movement has no artifact")?;
         let (manifest, payload) = reader.artifact(artifact)?;
@@ -392,7 +392,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
         let snapshot = reader.snapshot(&snapshot_hash)?;
         if ContentHash::of_bytes(&snapshot) != snapshot_hash { return Err("checked authoring snapshot failed integrity".into()); }
         let snapshot_record = RunRecord::from_bytes(&snapshot).map_err(|e| e.to_string())?;
-        if snapshot_record.id != runtime.run || snapshot_record.ee != runtime.ee || snapshot_record.worker != original.worker {
+        if snapshot_record.id != runtime.run || snapshot_record.ee != runtime.ee || snapshot_record.worker != runtime.worker {
             return Err("checked authoring snapshot differs from its movement scope".into());
         }
         if let Some(writer) = source_writer {
@@ -406,7 +406,10 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 let (before, arguments) = ordered.checked_call(writer,&snapshot,path,reader.max_payload_bytes())?;
                 (arguments,Some(ordered),before)
             } else {
-                if runtime.run != original.id { continue; }
+                if runtime.run != original.id {
+                    if selected_install.is_none() { foreign_candidates.push(movement); }
+                    continue;
+                }
                 let arguments: FileWriteCallArguments = serde_json::from_value(call.arguments).map_err(|e|e.to_string())?;
                 if arguments.path != path { continue; }
                 (arguments,None,snapshot)
@@ -425,13 +428,16 @@ pub(crate) fn checked_run_file_chain_with_reader(
             let result: ToolResultArtifact = serde_json::from_slice(&payload).map_err(|e| e.to_string())?;
             if result.tool != writer.tool || result.label != writer.result_label { continue; }
             let correlation = result.correlation_id.clone().ok_or("checked run result has no immutable correlation")?;
-            let Some(candidate) = calls.remove(&(writer.owner.clone(), correlation)) else { continue; };
+            let Some(candidate) = calls.remove(&(writer.owner.clone(), correlation)) else {
+                if selected_install.is_none() { foreign_candidates.push(movement); }
+                continue;
+            };
             if candidate.writer != *writer { return Err("checked run result came from a different declared writer".into()); }
             if let Some(ordered) = &candidate.ordered {
                 let effect = ordered.checked_result(writer,metadata,&snapshot,&result,reader.max_payload_bytes(),candidate.call.seq.0)?;
                 if effect == writer_run::OrderedTargetEffect::Refused || writer_run::target_untouched(&result, effect) { continue; }
                 let prospective = apply_run_json_patch(&candidate.before,&candidate.arguments.patch,&candidate.arguments.expected_after_hash, candidate.arguments.json_format)?.into_bytes();
-                let transition = CheckedRunTransition {writer:candidate.writer,before:candidate.before,after:prospective,call:candidate.call,result:movement,placement:false};
+                let transition = CheckedRunTransition {writer:candidate.writer,before:candidate.before,after:prospective,call:candidate.call,result:movement,foreign:false};
                 if matches!(effect, writer_run::OrderedTargetEffect::Uncertain | writer_run::OrderedTargetEffect::UncertainWriter) {
                     if uncertain.len() >= 1024 { return Err("checked uncertain transitions exceed their evidence bound".into()); }
                     uncertain.push(transition);
@@ -469,7 +475,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 || !snapshot_record.active_checkpoints.contains(&checkpoint.id) || candidate.call.seq >= movement.seq {
                 return Err("checked run result differs from its exact admitted write and prospective snapshot".into());
             }
-            let transition = CheckedRunTransition { writer: candidate.writer, before: candidate.before, after: prospective, call: candidate.call, result: movement, placement: false };
+            let transition = CheckedRunTransition { writer: candidate.writer, before: candidate.before, after: prospective, call: candidate.call, result: movement, foreign: false };
             if transitions.len() >= 1024 { return Err("checked authoring transitions exceed their evidence bound".into()); }
             generated_artifacts::validate_generated_transition(reader,&transition)?;
             input_artifacts::validate_input_transition(reader, &transition)?;
@@ -504,14 +510,14 @@ pub(crate) fn checked_run_file_chain_with_reader(
     let mut chain = Vec::new();
     let mut previous_call = after_seq;
     let mut connection_versions = BTreeMap::new();
-    let mut placement_edits: Option<Vec<placement::ProvenWrite>> = None;
+    let mut foreign_edits: Option<Vec<foreign_edit::ProvenWrite>> = None;
     while hash != end {
-        if !by_before.contains_key(&hash) && !placement_candidates.is_empty() {
-            let edits = match &mut placement_edits {
+        if !by_before.contains_key(&hash) && !foreign_candidates.is_empty() {
+            let edits = match &mut foreign_edits {
                 Some(edits) => edits,
-                None => placement_edits.insert(placement::proven_writes(reader, path, &original.id, &placement_candidates)?),
+                None => foreign_edits.insert(foreign_edit::proven_writes(reader, path, &foreign_candidates)?),
             };
-            if let Some(transition) = placement::transition_from(edits, &current, previous_call)? {
+            if let Some(transition) = foreign_edit::transition_from(edits, &current, previous_call)? {
                 by_before.insert(hash.clone(), transition);
             }
         }
@@ -610,8 +616,12 @@ pub(crate) fn checked_run_file_chain_with_reader(
         }
     }
     let mut observed_position = 0;
-    for (seq, hash, metadata) in observations {
+    for (seq, hash, worker, metadata) in observations {
         let position = *versions.get(&hash.to_hex()).ok_or("checked historical movement used an unproven or withdrawn snapshot")?;
+        let pinned = if position == 0 { original.worker.clone() } else {
+            RunRecord::from_bytes(&chain[position - 1].after).map_err(|e| e.to_string())?.worker
+        };
+        if worker != pinned { return Err("checked historical movement names another worker than its pinned snapshot".into()); }
         if position < observed_position
             || (position > 0 && chain[position - 1].call.seq.0 >= seq)
             || chain.iter().skip(position).any(|transition| transition.result.seq.0 <= seq) {
@@ -1119,7 +1129,7 @@ pub fn validate_unchanged_admitted_checkpoint(before: &[u8], after: &[u8], check
 }
 
 pub fn validate_checked_provider_transition(transition: &CheckedRunTransition) -> Result<(), String> {
-    if transition.placement { return placement::validate_placement_change(&transition.before, &transition.after); }
+    if transition.foreign { return foreign_edit::validate(&transition.before, &transition.after); }
     let before = RunRecord::from_bytes(&transition.before).map_err(|e| e.to_string())?;
     let after = RunRecord::from_bytes(&transition.after).map_err(|e| e.to_string())?;
     if before.ee != after.ee { return Err("a run's own writer cannot change its placement".into()); }
@@ -1293,7 +1303,7 @@ pub fn checked_declared_run_snapshot(
     for transition in &transitions { validate_checked_owner_transition(transition)?; }
     let after = transitions.last().map_or_else(|| before.to_vec(), |transition| transition.after.clone());
     let target = RunRecord::from_bytes(&after).map_err(|error| error.to_string())?;
-    if ContentHash::of_bytes(&after) != hash || target.id != record.id || target.worker != record.worker {
+    if ContentHash::of_bytes(&after) != hash || target.id != record.id {
         return Err("observed run snapshot differs from its exact checked target scope".into());
     }
     Ok(after)
@@ -1372,7 +1382,7 @@ pub(crate) fn validate_verified_input_transition(reader: &mut impl CheckedRunEvi
 }
 
 pub fn validate_checked_owner_transition(transition: &CheckedRunTransition) -> Result<(), String> {
-    if transition.placement { return placement::validate_placement_change(&transition.before, &transition.after); }
+    if transition.foreign { return foreign_edit::validate(&transition.before, &transition.after); }
     let record = RunRecord::from_bytes(&transition.before).map_err(|e| e.to_string())?;
     if record.ee != RunRecord::from_bytes(&transition.after).map_err(|e| e.to_string())?.ee {
         return Err("a run's own writer cannot change its placement".into());

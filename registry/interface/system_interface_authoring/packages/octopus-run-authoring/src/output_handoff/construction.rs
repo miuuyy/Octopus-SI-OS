@@ -303,7 +303,7 @@ impl ProviderOutputHandoff {
             || output_connections::is_withdrawal(&bound_topology, &current_topology);
         let revised_inputs = input_revision::is_revision(&bound_topology, &current_topology);
         let revised_payloads = coauthor_chain.iter().any(|transition| {
-            !transition.placement && transition.writer.owner == config.provider_interface
+            !transition.foreign && transition.writer.owner == config.provider_interface
                 && input_revision::validate_payload_revision(&transition.before, &transition.after, &transition.writer).is_ok()
         });
         let amended_capabilities = capability_amendment::checked_topology_advance(

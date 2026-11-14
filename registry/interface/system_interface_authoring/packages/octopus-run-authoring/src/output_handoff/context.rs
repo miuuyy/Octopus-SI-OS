@@ -92,7 +92,7 @@ impl ProviderOutputHandoff {
                 for (position, transition) in chain.iter().enumerate() {
                     let record = RunRecord::from_bytes(&transition.after).map_err(|error| error.to_string())?;
                     let next = persisted_pending_handoff(&record, &config.provider_interface)?;
-                    if !transition.placement && transition.writer.owner == config.provider_interface && next.as_ref().is_some_and(|next| {
+                    if !transition.foreign && transition.writer.owner == config.provider_interface && next.as_ref().is_some_and(|next| {
                         next.source_movement_seq == sequence && next.terminal && next.source_without_context
                     }) {
                         if pending.as_ref().is_some_and(|pending| Some(pending) != next.as_ref()) {
@@ -110,7 +110,7 @@ impl ProviderOutputHandoff {
                         for (position, transition) in chain.iter().enumerate() {
                             let record = RunRecord::from_bytes(&transition.after).map_err(|error| error.to_string())?;
                             let next = persisted_pending_handoff(&record, &config.provider_interface)?;
-                            if !transition.placement && transition.writer.owner == config.provider_interface
+                            if !transition.foreign && transition.writer.owner == config.provider_interface
                                 && next.as_ref() == Some(expected) {
                                 terminal.get_or_insert(position);
                                 pending = next;

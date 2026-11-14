@@ -101,7 +101,6 @@ pub(super) fn validate_initial_history(
             .get(&writer.owner)
             .ok_or("initial writer preimage lost its provider")?;
         if original.id != record.id
-            || original.worker != record.worker
             || optional_u64(state, "authoring_generation")? != 0
             || optional_u64(state, "context_generation")? != 0
             || persisted_pending_handoff(&original, &writer.owner)?.is_some()

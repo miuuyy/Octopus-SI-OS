@@ -457,6 +457,7 @@ mod failed_source;
 pub use failed_source::{payload_carries_session_context, FailedSourceHandoffError};
 mod writer_run;
 pub mod placement;
+pub mod foreign_edit;
 pub use writer_run::{separate_writer_run, separate_owner_writer_run, owner_writer_binding, OwnerWriterEdit, OwnerWriterEvidence, WriterRunBinding};
 mod source_replay;
 mod source_settlement;

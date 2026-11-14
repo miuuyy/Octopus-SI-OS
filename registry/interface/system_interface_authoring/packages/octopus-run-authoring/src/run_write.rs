@@ -96,7 +96,7 @@ pub struct CheckedRunTransition {
     pub after: Vec<u8>,
     pub call: Movement,
     pub result: Movement,
-    pub placement: bool,
+    pub foreign: bool,
 }
 
 #[derive(Debug)]

@@ -1508,3 +1508,56 @@ fn current_change_preserves_delegated_output_selection_and_parent_return_roles()
         "parent return worker role must stay bound on amended context inputs"
     );
 }
+
+#[test]
+fn another_run_re_forms_a_composed_runs_model_interface_from_another_provider_by_exact_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let request = support::client_fixture(&root);
+    for name in ["interface.json", "life.json"] {
+        let mut value: Value = serde_json::from_slice(&std::fs::read(root.join("registry/interface/world_provider_fixture").join(name)).unwrap()).unwrap();
+        if name == "interface.json" {
+            value["id"] = json!("world_provider_other");
+            value["interface_driver_config"]["private_config"]["instruction_artifacts"] = json!(["other-guide"]);
+        } else if value.get("interface").is_some() { value["interface"] = json!("world_provider_other"); }
+        write(&root, &format!("registry/interface/world_provider_other/{name}"), value);
+    }
+    write(&root, "registry/artifact/other-guide/artifact.json", json!({"id":"other-guide","label":"context.reference","text":"Other provider guide"}));
+    for (file, pointer) in [("registry/ee_template/existence/ee_template.json", "/allowed_interfaces"),
+        ("ee/ee_existence.json", "/policy_narrowing/allowed_interfaces"), ("registry/interface/system_worker_template/policy.json", "/ceiling/interfaces")] {
+        let mut value: Value = serde_json::from_slice(&std::fs::read(root.join(file)).unwrap()).unwrap();
+        value.pointer_mut(pointer).unwrap().as_array_mut().unwrap().push(json!("world_provider_other"));
+        if file.ends_with("policy.json") {
+            let models = value["ceiling"]["interface_policy"]["world_provider_fixture"].clone();
+            value["ceiling"]["interface_policy"]["world_provider_other"] = models;
+        }
+        write(&root, file, value);
+    }
+    let composition = plan_run_composition(&request).unwrap();
+    for file in composition_candidate_writes(&composition) {
+        std::fs::create_dir_all(file.path.parent().unwrap()).unwrap();
+        std::fs::write(file.path, file.content).unwrap();
+    }
+    let caller = RunRecord::from_bytes(br#"{"id":"caller","ee":"ee_existence","worker":"system_worker_parent","trace":"trace:caller","status":"running","interface_state":{},"checkpoints":[],"active_checkpoints":[]}"#).unwrap();
+    let run_id = composition.run_id.clone();
+    let provider = composition.provider_interface_id.clone();
+    let descriptor_path = root.join("registry/interface").join(provider.as_str()).join("interface.json");
+    let mut descriptor: Value = serde_json::from_slice(&std::fs::read(&descriptor_path).unwrap()).unwrap();
+    assert_eq!(descriptor["copy_of"], "world_provider_fixture");
+    descriptor["copy_of"] = json!("world_provider_other");
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&composition.run_write.path).unwrap()).unwrap();
+    let client = record["interface_state"].as_object().unwrap().iter()
+        .find(|(_, state)| state.get("client_surface_role").is_some()).unwrap().0.clone();
+    record["interface_state"][&client]["provider_choice_interface"] = json!("world_provider_other");
+    let authored = |descriptor: &Value| AuthoredRunComposition { run_id: run_id.clone(), writes: vec![
+        RegistryCandidateWrite { path: descriptor_path.clone(), content: serde_json::to_string_pretty(descriptor).unwrap(),
+            expected_before_hash: Some(octopus_ledger::ContentHash::of_bytes(&std::fs::read(&descriptor_path).unwrap()).to_hex()) },
+        RegistryCandidateWrite { path: composition.run_write.path.clone(), content: serde_json::to_string_pretty(&record).unwrap(),
+            expected_before_hash: Some(octopus_ledger::ContentHash::of_bytes(&std::fs::read(&composition.run_write.path).unwrap()).to_hex()) },
+    ], outgoing_bindings: Vec::new(), publication_read_refs: Vec::new(), seed: None };
+    let plan = plan_authored_run_composition(&request.roots, &caller, authored(&descriptor), true).unwrap();
+    assert!(plan.validation.safe_to_apply, "{:?}", plan.validation.regressions);
+    descriptor["copy_of"] = json!("world_provider_absent");
+    assert!(plan_authored_run_composition(&request.roots, &caller, authored(&descriptor), true)
+        .map(|plan| plan.validation.safe_to_apply) != Ok(true));
+}

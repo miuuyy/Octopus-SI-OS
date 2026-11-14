@@ -163,7 +163,7 @@ impl ProviderOutputHandoff {
                     .await?;
                     if chain.is_empty()
                         || chain.iter().any(|transition| {
-                            !transition.placement && transition.writer.owner == self.config.provider_interface && !input_revision::checked_revision(transition)
+                            !transition.foreign && transition.writer.owner == self.config.provider_interface && !input_revision::checked_revision(transition)
                         })
                     {
                         return Err(format!(

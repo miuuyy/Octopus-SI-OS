@@ -97,7 +97,7 @@ fn transition(before: &Value, authored: &AuthoredRun) -> CheckedRunTransition {
         trace:octopus_ledger::TraceId("run".into()),kind:MovementKind::InterfaceOutbound,from:Endpoint::Interface("writer".into()),to:Endpoint::Interface("writer_room".into()),artifact:None,invocation_metadata:None};
     CheckedRunTransition { before:serde_json::to_vec(before).unwrap(),after:authored.content.as_bytes().to_vec(),call:movement(20),result:movement(21),
         writer:CheckedRunWriter {owner:"provider".into(),source:"writer".into(),door:"writer_room".into(),tool:"write".into(),call_label:"tool.call".into(),result_label:"write.result".into()},
-        placement:false }
+        foreign:false }
 }
 
 #[test]

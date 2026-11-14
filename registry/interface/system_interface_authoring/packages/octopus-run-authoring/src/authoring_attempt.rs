@@ -28,7 +28,7 @@ pub(crate) fn revision_attempt_generations(
     let path = ctx.root_slot("run_records_root")?.canonicalize().map_err(|error| error.to_string())?
         .join(format!("{}.json", record.id));
     let chain = checked_selected_run_advance(ctx, &path, &before, current, pending.source_movement_seq, &original_config)?;
-    for transition in chain.iter().rev().filter(|transition| !transition.placement && transition.writer.owner == config.provider_interface) {
+    for transition in chain.iter().rev().filter(|transition| !transition.foreign && transition.writer.owner == config.provider_interface) {
         if !input_revision::checked_revision(transition) { break; }
         let prior = RunRecord::from_bytes(&transition.before).map_err(|error| error.to_string())?;
         generations.insert(optional_u64(prior.interface_state.get(&config.provider_interface)
@@ -50,7 +50,7 @@ pub(crate) fn validate_revision_attempt_predecessor(
     let path = ctx.root_slot("run_records_root")?.canonicalize().map_err(|error| error.to_string())?
         .join(format!("{}.json", record.id));
     let chain = checked_selected_run_advance(ctx, &path, before, current, source, config)?;
-    let provider = chain.iter().filter(|transition| !transition.placement && transition.writer.owner == config.provider_interface).collect::<Vec<_>>();
+    let provider = chain.iter().filter(|transition| !transition.foreign && transition.writer.owner == config.provider_interface).collect::<Vec<_>>();
     if provider.is_empty() || provider.iter().any(|transition| !input_revision::checked_revision(transition)) {
         return Err("saved response has no exact input-revision predecessor proof".into());
     }
@@ -171,7 +171,7 @@ pub(crate) fn persisted_authoring_attempt(
         if chain.is_empty()
             || chain
                 .iter()
-                .any(|transition| !transition.placement && transition.writer.owner == config.provider_interface && !input_revision::checked_revision(transition))
+                .any(|transition| !transition.foreign && transition.writer.owner == config.provider_interface && !input_revision::checked_revision(transition))
         {
             return Err("provider authoring retry changed its original intent or independent write evidence".into());
         }

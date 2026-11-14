@@ -164,7 +164,7 @@ async fn exact_intake_composition_rearms_only_owned_edges_and_retains_crash_inte
             after: edit.edit.content.as_bytes().to_vec(),
             call: call.clone(),
             result: call,
-            placement: false,
+            foreign: false,
         };
         validate_checked_owner_transition(&transition).unwrap();
         let mut foreign = transition.clone();

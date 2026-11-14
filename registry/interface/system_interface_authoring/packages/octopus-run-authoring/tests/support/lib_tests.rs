@@ -3955,13 +3955,13 @@
         let mut call = ledger_row(100);
         call.invocation_metadata = Some(InvocationMetadata::new(GrantProjection { mark_outcomes:marks.iter().cloned().collect(), ..Default::default() }).into());
         for (before, after) in [(&initial, authored_request.content.as_bytes()), (&authored_request.content.as_bytes().to_vec(), authored_response.content.as_bytes())] {
-            let change = CheckedRunTransition {writer:writer.clone(),before:before.to_vec(),after:after.to_vec(),call:call.clone(),result:ledger_row(101),placement:false};
+            let change = CheckedRunTransition {writer:writer.clone(),before:before.to_vec(),after:after.to_vec(),call:call.clone(),result:ledger_row(101),foreign:false};
             validate_checked_provider_transition(&change).unwrap();
             validate_verified_input_transition(&mut reader, &change).unwrap();
         }
         let mut wrong:serde_json::Value=serde_json::from_str(&authored_response.content).unwrap();
         wrong["interface_state"][provider.as_str()]["pending_handoff"]["source_movement_seq"]=serde_json::json!(0);
-        let forged=CheckedRunTransition {writer,before:authored_request.content.as_bytes().to_vec(),after:serde_json::to_vec(&wrong).unwrap(),call,result:ledger_row(101),placement:false};
+        let forged=CheckedRunTransition {writer,before:authored_request.content.as_bytes().to_vec(),after:serde_json::to_vec(&wrong).unwrap(),call,result:ledger_row(101),foreign:false};
         assert!(validate_verified_input_transition(&mut reader, &forged).is_err());
         let session = ProviderHandoffSession::new(&handoff.ctx).unwrap();
         validate_retired_verified_input(

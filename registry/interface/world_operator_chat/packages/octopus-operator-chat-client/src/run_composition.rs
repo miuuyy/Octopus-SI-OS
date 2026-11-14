@@ -258,13 +258,12 @@ pub fn plan_authored_run_composition(
     let path = roots
         .run_records_root
         .join(format!("{}.json", authored.run_id));
-    let run_write = authored
-        .writes
-        .iter()
-        .find(|write| write.path == path)
-        .ok_or("authored run requires its complete exact run-record file")?;
-    let run =
-        RunRecord::from_bytes(run_write.content.as_bytes()).map_err(|error| error.to_string())?;
+    let run = match authored.writes.iter().find(|write| write.path == path) {
+        Some(write) => RunRecord::from_bytes(write.content.as_bytes()),
+        None if revise => RunRecord::from_bytes(&std::fs::read(&path).map_err(|error| error.to_string())?),
+        None => return Err("authored run requires its complete exact run-record file".into()),
+    }
+    .map_err(|error| error.to_string())?;
     if run.id.as_str() != authored.run_id {
         return Err("authored run id differs from its record".into());
     }
@@ -295,7 +294,7 @@ pub fn plan_authored_run_composition(
                 return Err("authored graph run identity differs from its filename".into());
             }
             match std::fs::read(&write.path) {
-                Ok(before) => crate::run_revision::validate_checkpoint_extension(
+                Ok(before) => octopus_run_authoring::foreign_edit::validate(
                     &before,
                     write.content.as_bytes(),
                 )?,

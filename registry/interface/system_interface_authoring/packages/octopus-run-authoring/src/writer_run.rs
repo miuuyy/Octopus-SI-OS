@@ -1470,7 +1470,7 @@ fn settle_target_attempt(
             after: args.writes[1].content(maximum)?.into_bytes(),
             call,
             result,
-            placement: false,
+            foreign: false,
         };
         validate_checked_owner_transition(&transition)?;
         generated_artifacts::validate_generated_transition(reader, &transition)?;
