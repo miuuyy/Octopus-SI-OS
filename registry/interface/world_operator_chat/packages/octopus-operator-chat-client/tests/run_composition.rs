@@ -94,7 +94,7 @@ fn current_amendment_checks_future_routes_before_they_can_disable_control() {
     let error = plan_current_run_amendment(&request.roots, &current, &provider.into(), CurrentRunRequest { change: None,
         amendment_key:"missing-future-role".into(), publications:vec![], selection:None,
         authored:Some(AuthoredCurrentRun { expected_before_hash:ContentHash::of_bytes(pending.as_bytes()).to_hex(),
-            expected_before:json!(current), run_record:after, writes:vec![activation] }),
+            patch:json_patch::diff(&serde_json::from_str(&pending).unwrap(), &after), writes:vec![activation] }),
     }, ProviderCapabilityBridge { tool:reader.clone(), correlation_id:"readback".into(),
         arguments_hash:ContentHash::of_bytes(b"{}").to_hex(), return_interface:door.clone().into() }, &[(reader,door.into())]).err().expect("an unbound future role must reject the amendment");
     assert!(error.contains("role-future-peer"), "{error}");
@@ -200,7 +200,7 @@ fn current_change_retires_a_standing_external_input() {
         let error = plan_current_run_amendment(&request.roots, &current, &provider, CurrentRunRequest { change: None,
             amendment_key: "drop-own-route".into(), publications: vec![], selection: None,
             authored: Some(AuthoredCurrentRun { expected_before_hash: ContentHash::of_bytes(waiting.as_bytes()).to_hex(),
-                expected_before: json!(current), run_record: future, writes: vec![] }) },
+                patch: json_patch::diff(&serde_json::from_str(&waiting).unwrap(), &future), writes: vec![] }) },
             bridge.clone(), &[(writer.clone(), door.clone().into())]).err().expect("the run's own client route must stay");
         assert!(error.contains("removes or duplicates retained template"), "{error}");
     }
@@ -356,9 +356,11 @@ fn current_default_tool_selection_preserves_provider_life_while_attaching() {
     let profile_path=owner.join("interface.json");let before=std::fs::read(&profile_path).unwrap();
     let mut value:Value=serde_json::from_slice(&before).unwrap();value["interface_driver_config"]["private_config"]["run_affordances"]["defaults"]["tools"]=json!([]);
     let mut writes=vec![RegistryCandidateWrite {path:profile_path,content:serde_json::to_string(&value).unwrap(),expected_before_hash:Some(ContentHash::of_bytes(&before).to_hex())}];
+    let stale=AuthoredCurrentRun {expected_before_hash:ContentHash::of_bytes(b"older").to_hex(),patch:serde_json::from_value(json!([{"op":"test","path":"/id","value":current.id}])).unwrap(),writes:vec![]};
+    assert!(plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest { change: None,publications:vec![],amendment_key:"stale".into(),selection:None,authored:Some(stale)},bridge.clone(),&retained).unwrap_err().contains("read it again"));
     for new_file in [false,true] {
         if new_file {writes=vec![RegistryCandidateWrite {path:owner.join("new.json"),content:"{}".into(),expected_before_hash:None}];}
-        let authored=AuthoredCurrentRun {expected_before_hash:ContentHash::of_bytes(composition.run_write.content.as_bytes()).to_hex(),expected_before:json!(current),run_record:json!(current),writes:writes.clone()};
+        let authored=AuthoredCurrentRun {expected_before_hash:ContentHash::of_bytes(composition.run_write.content.as_bytes()).to_hex(),patch:serde_json::from_value(json!([{"op":"test","path":"/id","value":current.id}])).unwrap(),writes:writes.clone()};
         assert!(plan_current_run_amendment(&request.roots,&current,&provider,CurrentRunRequest { change: None,publications:vec![],amendment_key:"unsafe".into(),selection:None,authored:Some(authored)},bridge.clone(),&retained).unwrap_err().contains("in-flight provider"));
     }
     assert_eq!(std::fs::read(&composition.run_write.path).unwrap(),composition.run_write.content.as_bytes());

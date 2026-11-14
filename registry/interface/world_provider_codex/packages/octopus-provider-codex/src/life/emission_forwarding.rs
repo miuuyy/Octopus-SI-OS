@@ -61,16 +61,17 @@ pub(crate) async fn forward_provider_emissions(
                 forwarded.outputs += 1;
             }
             ProviderStreamEmission::CurrentRunRecord {
-                expected_before,
+                expected_before_hash,
                 reply,
             } => {
                 forwarded.outputs += flush_stream_batch(&handoff, &mut pending, false).await?;
                 let current = handoff.reconciled_run_record_bytes().await?;
-                let current = match expected_before {
-                    Some((hash, record)) => {
-                        handoff.checked_capability_baseline(&hash, &record).await
-                    }
-                    None => Ok(current),
+                let current = match expected_before_hash {
+                    Some(hash) => handoff
+                        .checked_capability_baseline(&hash)
+                        .await
+                        .map(|(observed, current)| (current, Some(observed))),
+                    None => Ok((current, None)),
                 };
                 reply
                     .send(current)

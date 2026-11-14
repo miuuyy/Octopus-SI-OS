@@ -96,8 +96,8 @@ pub(crate) enum ProviderStreamEmission {
         admitted: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
     CurrentRunRecord {
-        expected_before: Option<(String, serde_json::Value)>,
-        reply: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+        expected_before_hash: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<(Vec<u8>, Option<Vec<u8>>), String>>,
     },
 }
 
@@ -242,9 +242,9 @@ impl ProviderOutputStream {
             .map_err(ControlOutputError::Failed)
     }
 
-    pub(crate) async fn current_run_record(&self, expected_before: Option<(String, serde_json::Value)>) -> Result<Vec<u8>, InterfaceDriverError> {
+    pub(crate) async fn current_run_record(&self, expected_before_hash: Option<String>) -> Result<(Vec<u8>, Option<Vec<u8>>), InterfaceDriverError> {
         let (reply, receipt) = tokio::sync::oneshot::channel();
-        self.sender.send(ProviderStreamEmission::CurrentRunRecord { expected_before, reply })
+        self.sender.send(ProviderStreamEmission::CurrentRunRecord { expected_before_hash, reply })
             .map_err(|_| InterfaceDriverError::Transport("provider output stream closed before the checked run read".into()))?;
         receipt.await
             .map_err(|_| InterfaceDriverError::Transport("provider output stream dropped the checked run read".into()))?

@@ -386,11 +386,11 @@ pub fn prospective_capability_record(amendment: &ProviderCapabilityAmendment) ->
 }
 
 impl ProviderOutputHandoff {
-    pub async fn checked_capability_baseline(&self, hash: &str, expected_before: &Value) -> Result<Vec<u8>, String> {
+    pub async fn checked_capability_baseline(&self, hash: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
         let hash = ContentHash::from_hex(hash).filter(|value|value.to_hex()==hash).ok_or("capability baseline needs an exact content hash")?;
         let limits = self.ctx.required_host_io_limits()?;
         let observed = octopus_interfaces::read_artifact_carrier_file_bounded(&self.ctx.blobs_dir.join(hash.to_hex()),limits.max_payload_bytes).map_err(|e|e.to_string())?;
-        if ContentHash::of_bytes(&observed) != hash || serde_json::from_slice::<Value>(&observed).map_err(|e|e.to_string())? != *expected_before {
+        if ContentHash::of_bytes(&observed) != hash {
             return Err("capability baseline differs from its exact pinned snapshot".into());
         }
         let before = RunRecord::from_bytes(&observed).map_err(|e|e.to_string())?;
@@ -408,7 +408,7 @@ impl ProviderOutputHandoff {
             let start = pending_handoff(&before,&self.config.provider_interface)?.map(|pending|pending.source_movement_seq).unwrap_or(0);
             checked_declared_run_advance(&evidence,&self.run_path,&observed,&state.run_record_bytes,start,vec![writer])?;
         }
-        Ok(state.run_record_bytes.clone())
+        Ok((observed, state.run_record_bytes.clone()))
     }
 }
 

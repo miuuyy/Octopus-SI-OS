@@ -213,13 +213,13 @@ async fn native_planning_reads_the_acknowledged_tip_after_progress_without_repla
                             assert!(outputs.try_recv().is_err());
                             match mode {
                                 "missing" => reply.send(Err("checked run snapshot is missing".into())).unwrap(),
-                                "malformed" => reply.send(Ok(b"{".to_vec())).unwrap(),
+                                "malformed" => reply.send(Ok((b"{".to_vec(), None))).unwrap(),
                                 "wrong_identity" => {
                                     let mut other = tip.clone(); other.worker = "system_worker_other".into();
-                                    reply.send(Ok(serde_json::to_vec(&other).unwrap())).unwrap();
+                                    reply.send(Ok((serde_json::to_vec(&other).unwrap(), None))).unwrap();
                                 }
                                 "dropped" => drop(reply),
-                                _ => reply.send(Ok(serde_json::to_vec(&tip).unwrap())).unwrap(),
+                                _ => reply.send(Ok((serde_json::to_vec(&tip).unwrap(), None))).unwrap(),
                             }
                         }
                         _ => panic!("checked read emitted a write, transport dispatch or binding mutation"),

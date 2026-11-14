@@ -64,7 +64,7 @@
       "run_affordance_profile": {
         "catalog": {
           "label": "context.reference",
-          "text": "These operations compose ordinary Octopus runs through checked file effects. create_run starts a task in one call from the installation defaults. followup_task, send_message and interrupt_run reach a connected run; list_runs shows this run and its connected runs; wait_for_runs waits for their communication. To attach tools, rooms, context or routes to this run, use preview_current_run and then amend_current_run with the same amendment_key and either a change (entries to add or remove) or an explicit complete selection; inspect_authoring shows the current one. preview_run, preview_revision and revise_run work with exact authored files. A new run forms its authority from its own worker ceiling and EE chain; a descriptor on disk alone grants nothing.",
+          "text": "These operations compose ordinary Octopus runs through checked file effects. create_run starts a task in one call from the installation defaults. followup_task, send_message and interrupt_run reach a connected run; list_runs shows this run and its connected runs; wait_for_runs waits for their communication. To attach tools, rooms, context or routes to this run, use preview_current_run and then amend_current_run with the same amendment_key and either a change (entries to add or remove) or an explicit complete selection; inspect_authoring shows the current one. To edit the run's future contract directly, send authored: the content_hash your file.read returned and an RFC 6902 patch of that record, never the record itself. preview_run, preview_revision and revise_run work with exact authored files. A new run forms its authority from its own worker ceiling and EE chain; a descriptor on disk alone grants nothing.",
           "operations": [
             {
               "name": "inspect_authoring",
@@ -410,14 +410,47 @@
                     "additionalProperties": false,
                     "required": [
                       "expected_before_hash",
-                      "expected_before",
-                      "run_record",
+                      "patch",
                       "writes"
                     ],
+                    "description": "A direct edit of this run's future contract, guarded like a file.write patch. The patch is applied to the checked current record, which must descend from the record you read; values the patch depends on can be pinned with test operations.",
                     "properties": {
-                      "run_record": {
-                        "type": "object",
-                        "description": "Complete proposed future record based on expected_before. Preserve private continuity, accepted checkpoints and current identity; the owner rebases only the validated future-contract delta onto the checked tip."
+                      "expected_before_hash": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Exact content_hash returned by the granted file.read of this run."
+                      },
+                      "patch": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "RFC 6902 operations on the run record you read. Preserve private continuity, accepted checkpoints and current identity; only the validated future-contract delta is applied to the checked tip.",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "op",
+                            "path"
+                          ],
+                          "properties": {
+                            "op": {
+                              "enum": [
+                                "add",
+                                "remove",
+                                "replace",
+                                "move",
+                                "copy",
+                                "test"
+                              ]
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "from": {
+                              "type": "string"
+                            },
+                            "value": {}
+                          }
+                        }
                       },
                       "writes": {
                         "type": "array",
@@ -446,15 +479,6 @@
                             }
                           }
                         }
-                      },
-                      "expected_before_hash": {
-                        "type": "string",
-                        "pattern": "^[a-f0-9]{64}$",
-                        "description": "Exact content_hash returned by the granted file.read of this run before editing its future contract."
-                      },
-                      "expected_before": {
-                        "type": "object",
-                        "description": "The complete observed run record before the proposed edit. Its hash and checked history must be proved before any effect."
                       }
                     }
                   },
@@ -1365,14 +1389,47 @@
                     "additionalProperties": false,
                     "required": [
                       "expected_before_hash",
-                      "expected_before",
-                      "run_record",
+                      "patch",
                       "writes"
                     ],
+                    "description": "A direct edit of this run's future contract, guarded like a file.write patch. The patch is applied to the checked current record, which must descend from the record you read; values the patch depends on can be pinned with test operations.",
                     "properties": {
-                      "run_record": {
-                        "type": "object",
-                        "description": "Complete proposed future record based on expected_before. Preserve private continuity, accepted checkpoints and current identity; the owner rebases only the validated future-contract delta onto the checked tip."
+                      "expected_before_hash": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "description": "Exact content_hash returned by the granted file.read of this run."
+                      },
+                      "patch": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "RFC 6902 operations on the run record you read. Preserve private continuity, accepted checkpoints and current identity; only the validated future-contract delta is applied to the checked tip.",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "op",
+                            "path"
+                          ],
+                          "properties": {
+                            "op": {
+                              "enum": [
+                                "add",
+                                "remove",
+                                "replace",
+                                "move",
+                                "copy",
+                                "test"
+                              ]
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "from": {
+                              "type": "string"
+                            },
+                            "value": {}
+                          }
+                        }
                       },
                       "writes": {
                         "type": "array",
@@ -1401,15 +1458,6 @@
                             }
                           }
                         }
-                      },
-                      "expected_before_hash": {
-                        "type": "string",
-                        "pattern": "^[a-f0-9]{64}$",
-                        "description": "Exact content_hash returned by the granted file.read of this run before editing its future contract."
-                      },
-                      "expected_before": {
-                        "type": "object",
-                        "description": "The complete observed run record before the proposed edit. Its hash and checked history must be proved before any effect."
                       }
                     }
                   },

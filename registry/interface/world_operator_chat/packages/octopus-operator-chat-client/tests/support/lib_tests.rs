@@ -1275,7 +1275,7 @@
         narrowed["ceiling"]["mark_outcomes"].as_array_mut().unwrap().retain(|mark|mark.as_str()!=Some(result_mark));
         let current_bytes = std::fs::read(roots.run_records_root.join(format!("{}.json",current.id))).unwrap();
         let authored = AuthoredCurrentRun {expected_before_hash:octopus_ledger::ContentHash::of_bytes(&current_bytes).to_hex(),
-            expected_before:serde_json::json!(current),run_record:serde_json::json!(current),writes:vec![crate::run_composition::RegistryCandidateWrite {
+            patch:serde_json::from_value(serde_json::json!([{"op":"test","path":"/id","value":current.id}])).unwrap(),writes:vec![crate::run_composition::RegistryCandidateWrite {
                 path:policy_path.clone(),content:narrowed.to_string(),expected_before_hash:Some(octopus_ledger::ContentHash::of_bytes(&policy_bytes).to_hex()),
             }]};
         assert!(plan_current_run_amendment(&roots,&current,&provider,CurrentRunRequest { change: None,amendment_key:"nested-mark-denied".into(),selection:None,authored:Some(authored),publications:vec![]},bridge,&retained)

@@ -18,9 +18,14 @@ pub struct CurrentRunSelection {
 #[serde(deny_unknown_fields)]
 pub struct AuthoredCurrentRun {
     pub expected_before_hash: String,
-    pub expected_before: Value,
-    pub run_record: Value,
+    pub patch: json_patch::Patch,
     pub writes: Vec<RegistryCandidateWrite>,
+}
+
+struct PlannedCurrentRun {
+    expected_before: Value,
+    run_record: Value,
+    writes: Vec<RegistryCandidateWrite>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -393,12 +398,35 @@ fn current_selection_with_worker(roots: &CompositionRoots, current: &RunRecord, 
     }, (capabilities, worker))))
 }
 
+fn patched_current_run(roots: &CompositionRoots, current: &RunRecord, authored: AuthoredCurrentRun, checked_baseline: Option<&[u8]>) -> Result<PlannedCurrentRun, String> {
+    if octopus_ledger::ContentHash::from_hex(&authored.expected_before_hash).is_none_or(|hash|hash.to_hex()!=authored.expected_before_hash) {
+        return Err("authored current-run patch requires the exact content_hash of the run it was read from".into());
+    }
+    if authored.patch.0.is_empty() { return Err("authored current-run patch must not be empty".into()); }
+    let observed = match checked_baseline {
+        Some(bytes) => bytes.to_vec(),
+        None => {
+            let bytes = std::fs::read(roots.run_records_root.join(format!("{}.json", current.id))).map_err(|e| e.to_string())?;
+            if RunRecord::from_bytes(&bytes).map_err(|e| e.to_string())? != *current { return Err("current run changed during amendment planning".into()); }
+            bytes
+        }
+    };
+    if octopus_ledger::ContentHash::of_bytes(&observed).to_hex() != authored.expected_before_hash {
+        return Err("current run changed since it was read; read it again and author the patch against that content_hash".into());
+    }
+    let expected_before: Value = serde_json::from_slice(&observed).map_err(|e| e.to_string())?;
+    let mut run_record = expected_before.clone();
+    json_patch::patch(&mut run_record, &authored.patch)
+        .map_err(|error| format!("authored current-run patch does not apply to the record it was read from: {error}"))?;
+    Ok(PlannedCurrentRun { expected_before, run_record, writes: authored.writes })
+}
+
 fn pending_turn(record: &RunRecord, provider: &InterfaceId) -> bool {
     record.interface_state.get(provider).and_then(|state| state.get("pending_handoff")).is_some_and(|pending| !pending.is_null())
 }
 
 fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &InterfaceId, key: &str, selection: CurrentRunSelection,
-    publications: Vec<octopus_context_collections::CollectionSelection>, native_metadata: Option<&InvocationMetadata>) -> Result<(AuthoredCurrentRun, Vec<crate::publication_selection::PublicationSelectionEvidence>), String> {
+    publications: Vec<octopus_context_collections::CollectionSelection>, native_metadata: Option<&InvocationMetadata>) -> Result<(PlannedCurrentRun, Vec<crate::publication_selection::PublicationSelectionEvidence>), String> {
     let idle;
     let rebased = pending_turn(current, provider);
     let current = if rebased {
@@ -564,22 +592,24 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
             }
         }
     }
-    let bytes = std::fs::read(roots.run_records_root.join(format!("{}.json",current.id))).map_err(|e|e.to_string())?;
-    Ok((AuthoredCurrentRun { expected_before_hash:octopus_ledger::ContentHash::of_bytes(&bytes).to_hex(), expected_before:current_value, run_record: candidate, writes }, plan.publication_evidence))
+    Ok((PlannedCurrentRun { expected_before:current_value, run_record: candidate, writes }, plan.publication_evidence))
 }
 
 pub fn plan_current_run_amendment(roots: &CompositionRoots, current: &RunRecord, provider: &InterfaceId, request: CurrentRunRequest,
     bridge: ProviderCapabilityBridge, retained_tools: &[(String, InterfaceId)]) -> Result<CurrentRunPlan, String> {
-    plan_current_run_amendment_with_source(roots, current, provider, request, bridge, retained_tools, None)
+    plan_current_run_amendment_with_source(roots, current, provider, request, bridge, retained_tools, None, None)
 }
 
 pub fn plan_current_run_amendment_for_native(roots: &CompositionRoots, current: &RunRecord, provider: &InterfaceId, request: CurrentRunRequest,
-    bridge: ProviderCapabilityBridge, retained_tools: &[(String, InterfaceId)], metadata: &InvocationMetadata) -> Result<CurrentRunPlan, String> {
+    bridge: ProviderCapabilityBridge, retained_tools: &[(String, InterfaceId)], metadata: &InvocationMetadata, checked_baseline: Option<&[u8]>) -> Result<CurrentRunPlan, String> {
+    if request.authored.is_some() && checked_baseline.is_none() {
+        return Err("authored current-run patch requires the provider's checked baseline of the record it was read from".into());
+    }
     let runtime = metadata.runtime.as_ref().ok_or("native current-run selection requires admitted runtime coordinates")?;
     if runtime.run != current.id || runtime.worker != current.worker {
         return Err("native current-run selection differs from its admitted run/worker coordinates".into());
     }
-    plan_current_run_amendment_with_source(roots, current, provider, request, bridge, retained_tools, Some(metadata))
+    plan_current_run_amendment_with_source(roots, current, provider, request, bridge, retained_tools, Some(metadata), checked_baseline)
 }
 
 fn prospective_bridge_inputs(record: &RunRecord, provider: &InterfaceId, tool: &str, door: &InterfaceId)
@@ -614,7 +644,7 @@ fn prospective_bridge_inputs(record: &RunRecord, provider: &InterfaceId, tool: &
 }
 
 fn plan_current_run_amendment_with_source(roots: &CompositionRoots, current: &RunRecord, provider: &InterfaceId, request: CurrentRunRequest,
-    bridge: ProviderCapabilityBridge, retained_tools: &[(String, InterfaceId)], native_metadata: Option<&InvocationMetadata>) -> Result<CurrentRunPlan, String> {
+    bridge: ProviderCapabilityBridge, retained_tools: &[(String, InterfaceId)], native_metadata: Option<&InvocationMetadata>, checked_baseline: Option<&[u8]>) -> Result<CurrentRunPlan, String> {
     safe_segment(&request.amendment_key, "amendment_key")?;
     let exact_authored = request.authored.is_some();
     let (authored, publication_evidence) = match (request.selection, request.change, request.authored) {
@@ -625,16 +655,13 @@ fn plan_current_run_amendment_with_source(roots: &CompositionRoots, current: &Ru
             let selection = apply_current_run_change(selection, change)?;
             plan_selection(roots, current, provider, &request.amendment_key, selection, request.publications, native_metadata)?
         }
-        (None, None, Some(authored)) if request.publications.is_empty() => (authored, Vec::new()),
+        (None, None, Some(authored)) if request.publications.is_empty() => (patched_current_run(roots, current, authored, checked_baseline)?, Vec::new()),
         (None, None, Some(_)) => return Err("exact authored current-run records cannot also request publication selection".into()),
         _ => return Err("current-run amendment requires exactly one of a complete selection, a change or an authored record".into()),
     };
     let descriptor = load_interface_descriptor(&roots.registry_root.join("interface"), provider.as_str())?;
     let authoring_profile = parse(descriptor.interface_driver_config.as_ref()
         .and_then(|config|config.private_config.get("run_authoring_profile")).ok_or("current provider has no declared run authoring profile")?)?;
-    if octopus_ledger::ContentHash::from_hex(&authored.expected_before_hash).is_none_or(|hash|hash.to_hex()!=authored.expected_before_hash) {
-        return Err("authored current-run baseline requires an exact content hash".into());
-    }
     let amendment = ProviderCapabilityAmendment { amendment_key: request.amendment_key, provider_interface: provider.clone(), before:authored.expected_before, after:authored.run_record, bridge, authoring_profile };
     let amendment = if exact_authored || pending_turn(current, provider) { rebase_plan(current,amendment)? } else { prepare_plan(amendment)? };
     let future = RunRecord::from_bytes(&serde_json::to_vec(&amendment.after).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;

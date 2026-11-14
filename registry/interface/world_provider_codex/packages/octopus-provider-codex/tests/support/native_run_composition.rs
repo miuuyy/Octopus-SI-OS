@@ -139,7 +139,7 @@ fn native_creation_routes_use_authored_defaults_and_explicit_empty_overrides() {
             "source":ArtifactRef { id:"collection".into(), content:ContentHash::of_bytes(b"collection") },
             "entry_id":"published-entry", "revision":ContentHash::of_bytes(b"entry").to_hex(),
         }]})).unwrap();
-        let authored = json!({"expected_before_hash":"0".repeat(64), "expected_before":{}, "run_record":{}, "writes":[]});
+        let authored = json!({"expected_before_hash":"0".repeat(64), "patch":[{"op":"test","path":"/id","value":"run"}], "writes":[]});
         validator.validate(&json!({"amendment_key":"authored", "authored":authored})).unwrap();
         assert!(validator.validate(&json!({"amendment_key":"mixed", "authored":authored, "publications":[]})).is_err());
     }
@@ -182,7 +182,7 @@ fn native_publication_pins_require_each_exact_readable_source_and_keep_empty_ove
     let mixed = json!({"creation_key":"mixed", "publications":pins, "authored":{
         "run_id":"new-run", "writes":[{"path":request.roots.run_records_root.join("new-run.json"), "content":"{}", "expected_before_hash":null}], "outgoing_bindings":[],
     }});
-    assert!(affordances.plan_call(&metadata, &request.admitted_parent_record, &request.admitted_parent_record, "mixed", "create_run", &mixed)
+    assert!(affordances.plan_call(&metadata, &request.admitted_parent_record, &request.admitted_parent_record, "mixed", "create_run", &mixed, None)
         .unwrap_err().contains("exact authored files cannot be combined"));
 }
 
@@ -287,7 +287,7 @@ fn native_publication_composition_validates_private_scope_and_stages_inline_cont
     });
     let args = json!({"creation_key":"reuse", "text":"Exact selected context", "publications":request.publications});
     let NativeStep::Complete { result: preview } = affordances.plan_call(&request.metadata, &request.admitted_parent_record,
-        &request.admitted_parent_record, "public-preview", "preview_run", &args).unwrap() else { panic!("expected public preview"); };
+        &request.admitted_parent_record, "public-preview", "preview_run", &args, None).unwrap() else { panic!("expected public preview"); };
     assert_eq!(preview["ok"], true, "{preview}");
     assert_eq!(preview["authored"]["publication_read_refs"], json!(publication_read_refs(&reused.publication_evidence).unwrap()));
     assert!(preview.get("publication_read_refs").is_none());
@@ -301,7 +301,7 @@ fn native_publication_composition_validates_private_scope_and_stages_inline_cont
     let mut withdrawn = entry.clone(); withdrawn["state"] = json!("withdrawn");
     support::write(&root, "registry/artifact/bound-publication/entries/guidance.json", withdrawn);
     let NativeStep::Effect { pending, .. } = affordances.plan_call(&request.metadata, &request.admitted_parent_record,
-        &request.admitted_parent_record, "accepted-reuse", "create_run", &authored_args).unwrap() else { panic!("expected accepted public authored writer"); };
+        &request.admitted_parent_record, "accepted-reuse", "create_run", &authored_args, None).unwrap() else { panic!("expected accepted public authored writer"); };
     let mut missing_reads = json!(pending);
     missing_reads["state"].as_object_mut().unwrap().remove("publication_read_refs");
     assert!(serde_json::from_value::<NativePending>(missing_reads).is_err());
@@ -357,8 +357,8 @@ fn current_run_requires_complete_effects_and_exact_final_readback_with_original_
     affordances.catalog.operations.push(RunCatalogEntry {name:"attach_here".into(),description:"Attach".into(),input_schema:json!({"type":"object"}),operation:RunOperation::AmendCurrentRun});
     affordances.enabled.insert("attach_here".into());
     let observed_hash=ContentHash::of_bytes(composition.run_write.content.as_bytes()).to_hex();
-    let arguments=json!({"amendment_key":"amend","authored":{"expected_before_hash":observed_hash,"expected_before":before,"run_record":before,"writes":[]}});
-    assert_eq!(affordances.planning_baseline("attach_here",&arguments).unwrap(),Some((observed_hash,before.clone())));
+    let arguments=json!({"amendment_key":"amend","authored":{"expected_before_hash":observed_hash,"patch":[{"op":"test","path":"/id","value":before["id"]}],"writes":[]}});
+    assert_eq!(affordances.planning_baseline("attach_here",&arguments).unwrap(),Some(observed_hash));
     assert!(affordances.planning_baseline("attach_here",&json!({"amendment_key":"amend","authored":{}})).is_err());
     assert!(affordances.planning_baseline("create_run",&json!({})).unwrap().is_none());
     let provider: InterfaceId = composition.provider_interface_id.clone().into();
@@ -483,7 +483,7 @@ fn creation_uses_admitted_coordinates_after_the_authoring_frontier_advances() {
         enabled:BTreeSet::from(["create_work".into()]),
     };
     let args = json!({"text":"Independent verification"});
-    let step = affordances.plan_call(&metadata, &admitted, &current, "call-1", "create_work", &args).unwrap();
+    let step = affordances.plan_call(&metadata, &admitted, &current, "call-1", "create_work", &args, None).unwrap();
     let NativeStep::Effect { effect, pending, .. } = step else { panic!("expected file authoring"); };
     assert_eq!(effect.tool, "file.write");
     assert!(effect.arguments["writes"].as_array().unwrap().iter().all(|write|
@@ -500,10 +500,10 @@ fn creation_uses_admitted_coordinates_after_the_authoring_frontier_advances() {
     assert_eq!(outgoing_bindings.len(), 1);
     assert_eq!(current, current_before);
     assert!(!request.roots.run_records_root.exists());
-    assert!(affordances.plan_call(&metadata, &current, &current, "call-2", "create_work", &args).unwrap_err().contains("admitted parent record disagree"));
+    assert!(affordances.plan_call(&metadata, &current, &current, "call-2", "create_work", &args, None).unwrap_err().contains("admitted parent record disagree"));
     let mut stale = metadata.clone();
     stale.runtime.as_mut().unwrap().epoch += 1;
-    assert!(affordances.plan_call(&stale, &admitted, &current, "call-3", "create_work", &args).unwrap_err().contains("epoch is stale"));
+    assert!(affordances.plan_call(&stale, &admitted, &current, "call-3", "create_work", &args, None).unwrap_err().contains("epoch is stale"));
     affordances.config.defaults.as_mut().unwrap().context_artifacts = vec![ArtifactRef { id: "unbound-creation-document".into(), content: ContentHash::of_bytes(b"document") }];
     let input = InterfaceInvocationEnvelope {
         artifact: affordances.config.catalog_artifact.clone(),
@@ -514,7 +514,7 @@ fn creation_uses_admitted_coordinates_after_the_authoring_frontier_advances() {
     };
     let loaded = RunAffordances::from_invocation(&input, &json!({"run_affordances": affordances.config})).unwrap().unwrap();
     assert!(loaded.contains("create_work"));
-    assert!(loaded.plan_call(&metadata, &admitted, &current, "call-unbound", "create_work", &args).unwrap_err().contains("not an exact readable metadata binding"));
+    assert!(loaded.plan_call(&metadata, &admitted, &current, "call-unbound", "create_work", &args, None).unwrap_err().contains("not an exact readable metadata binding"));
 
 }
 
@@ -641,7 +641,7 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
             &request.admitted_parent_record,
             "preview-1",
             "preview_run",
-            &args(&authored),
+            &args(&authored), None
         )
         .unwrap()
     else {
@@ -683,7 +683,7 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
             &request.admitted_parent_record,
             "preview-2",
             "preview_run",
-            &args(&authored),
+            &args(&authored), None
         )
         .unwrap()
     else {
@@ -707,7 +707,7 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
             &request.admitted_parent_record,
             "apply",
             "create_run",
-            &args(&authored),
+            &args(&authored), None
         )
         .unwrap()
     else {
@@ -837,7 +837,7 @@ fn exact_runs_allow_no_provider_or_client_and_revision_preserves_existing_contra
             &request.admitted_parent_record,
             "parked-preview",
             "preview_run",
-            &json!({"creation_key":"parked","authored":authored}),
+            &json!({"creation_key":"parked","authored":authored}), None
         )
         .unwrap()
     else {
@@ -878,7 +878,7 @@ fn exact_runs_allow_no_provider_or_client_and_revision_preserves_existing_contra
             &request.admitted_parent_record,
             "revision-preview",
             "preview_revision",
-            &args,
+            &args, None
         )
         .unwrap()
     else {
@@ -900,7 +900,7 @@ fn exact_runs_allow_no_provider_or_client_and_revision_preserves_existing_contra
             &request.admitted_parent_record,
             "revision-apply",
             "revise_run",
-            &args,
+            &args, None
         )
         .unwrap()
     else {

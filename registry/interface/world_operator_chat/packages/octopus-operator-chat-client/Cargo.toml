@@ -14,6 +14,7 @@ path = "src/bin/octopus-operator-chat-artifact.rs"
 
 [dependencies]
 blake3.workspace = true
+json-patch.workspace = true
 octopus-app-server = { path = "../../../../../crates/octopus-app-server" }
 octopus-context-collections = { path = "../../../system_context/packages/octopus-context-collections" }
 octopus-context-projection = { path = "../../../system_context/packages/octopus-context-projection" }

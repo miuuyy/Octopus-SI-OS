@@ -735,7 +735,7 @@ pub struct RunAffordances {
 
 impl RunAffordances {
     fn current_run_step(&self, metadata: &InvocationMetadata, current: &RunRecord, call_id: &str, operation_name: &str,
-        request: CurrentRunRequest, preview: bool) -> Result<NativeStep, String> {
+        request: CurrentRunRequest, preview: bool, checked_baseline: Option<&[u8]>) -> Result<NativeStep, String> {
         for publication in &request.publications {
             require_readable_refs(metadata, std::slice::from_ref(&publication.source))?;
         }
@@ -756,7 +756,7 @@ impl RunAffordances {
         let identity = call_identity(current.id.as_str(), &request.amendment_key)?;
         let readback = NativeEffect { tool:reader.clone(), arguments:json!({"path":source_path}), correlation_id:format!("{identity}:readback") };
         let read_bridge = current_run_bridge(&readback, retained_tools[1].1.clone())?;
-        let mut plan = plan_current_run_amendment_for_native(roots, current, provider, request, read_bridge, &retained_tools, metadata)?;
+        let mut plan = plan_current_run_amendment_for_native(roots, current, provider, request, read_bridge, &retained_tools, metadata, checked_baseline)?;
         let batch = |writes: &[octopus_operator_chat_client::run_composition::RegistryCandidateWrite], suffix: &str| -> Result<Option<(NativeEffect, Vec<FileProof>)>, String> {
             if writes.is_empty() { return Ok(None); }
             let writes = writes.iter().map(|write| PlannedClientWrite { path:write.path.clone(), content:write.content.clone(),
@@ -949,7 +949,7 @@ impl RunAffordances {
         self.enabled.contains(name)
     }
 
-    pub fn planning_baseline(&self, operation_name: &str, arguments: &Value) -> Result<Option<(String, Value)>, String> {
+    pub fn planning_baseline(&self, operation_name: &str, arguments: &Value) -> Result<Option<String>, String> {
         let row = self.catalog.operations.iter().find(|row|row.name == operation_name).ok_or("native operation is absent from its declared catalog")?;
         if !self.contains(operation_name) { return Err("native operation is not granted".into()); }
         if !matches!(row.operation,RunOperation::PreviewCurrentRun | RunOperation::AmendCurrentRun) { return Ok(None); }
@@ -960,13 +960,13 @@ impl RunAffordances {
                 if ContentHash::from_hex(&authored.expected_before_hash).is_none_or(|hash|hash.to_hex()!=authored.expected_before_hash) {
                     return Err("authored current-run baseline requires an exact content hash".into());
                 }
-                RunRecord::from_bytes(&serde_json::to_vec(&authored.expected_before).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-                Ok(Some((authored.expected_before_hash,authored.expected_before)))
+                Ok(Some(authored.expected_before_hash))
             }
             _=>Err("current-run amendment requires exactly one of a complete selection, a change or an authored record".into()),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_call(
         &self,
         metadata: &InvocationMetadata,
@@ -975,6 +975,7 @@ impl RunAffordances {
         call_id: &str,
         operation_name: &str,
         arguments: &Value,
+        checked_baseline: Option<&[u8]>,
     ) -> Result<NativeStep, String> {
         exact_string(call_id, "native call_id")?;
         require_readable_refs(
@@ -1009,7 +1010,7 @@ impl RunAffordances {
                 validate_run_authoring_source(metadata, admitted_parent)?;
                 self.current_run_step(metadata, parent_record, call_id, operation_name,
                     serde_json::from_value(arguments.clone()).map_err(|e| e.to_string())?,
-                    row.operation == RunOperation::PreviewCurrentRun)
+                    row.operation == RunOperation::PreviewCurrentRun, checked_baseline)
             }
             RunOperation::CreateRun
             | RunOperation::PreviewRun
@@ -2123,7 +2124,7 @@ mod tests {
                 enabled: BTreeSet::from(["peer_action".into()]),
             };
             let NativeStep::Effect { effect, outgoing_bindings, .. } = affordances.plan_call(
-                &metadata, &record, &record, "call", "peer_action", &json!({"interface":"system_worker_peer","text":"hello"})
+                &metadata, &record, &record, "call", "peer_action", &json!({"interface":"system_worker_peer","text":"hello"}), None
             ).unwrap() else { panic!("expected ordinary effect"); };
             assert_eq!(effect.tool, "selected.sender");
             assert_eq!(outgoing_bindings.len(), 1);
@@ -2132,7 +2133,7 @@ mod tests {
             assert!(outgoing_bindings[0].artifact_bindings.is_empty());
             let mut unbound = record.clone(); unbound.active_checkpoints.clear();
             assert!(affordances.plan_call(&metadata, &record, &unbound, "call", "peer_action",
-                &json!({"interface":"system_worker_peer","text":"hello"})).is_err());
+                &json!({"interface":"system_worker_peer","text":"hello"}), None).is_err());
         }
         record.active_checkpoints.clear();
         assert!(require_peer_target(&metadata, &record, "system_worker_peer", None).is_err());

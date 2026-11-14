@@ -526,6 +526,7 @@ fn native_amendment_and_continuation_preserve_accepted_capabilities_and_publicat
         bridge.clone(),
         &[(writer.clone(), door.clone())],
         &metadata,
+        None,
     )
     .unwrap();
     assert!(
@@ -570,7 +571,8 @@ fn native_amendment_and_continuation_preserve_accepted_capabilities_and_publicat
             amendment,
             bridge,
             &[(writer, door)],
-            &denied
+            &denied,
+            None
         )
         .unwrap_err()
         .contains("not readable")

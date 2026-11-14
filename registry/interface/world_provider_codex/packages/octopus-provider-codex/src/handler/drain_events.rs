@@ -705,8 +705,8 @@ impl CodexAppServerInterfaceDriver {
                         }
                     };
                     let checking_baseline = baseline.is_some();
-                    let current_bytes = match sink.emit.current_run_record(baseline).await {
-                        Ok(bytes) => bytes,
+                    let (current_bytes, observed_baseline) = match sink.emit.current_run_record(baseline).await {
+                        Ok(read) => read,
                         Err(InterfaceDriverError::FailedClosed(error)) if checking_baseline => {
                             let result = serde_json::json!({"ok":false,"error":error});
                             sink.send(CodexTurnOutput::dynamic_tool_completed(
@@ -753,6 +753,7 @@ impl CodexAppServerInterfaceDriver {
                             &call_id,
                             &tool,
                             &arguments,
+                            observed_baseline.as_deref(),
                         )
                         .unwrap_or_else(|error| NativeStep::Complete {
                             result: serde_json::json!({"ok": false, "error": error}),

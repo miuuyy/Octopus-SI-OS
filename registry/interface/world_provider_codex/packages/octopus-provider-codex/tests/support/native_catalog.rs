@@ -30,7 +30,7 @@ fn current_run_catalogs_match_the_typed_authoring_request() {
                 expected_before_hash:octopus_ledger::ContentHash::of_bytes(
                     &serde_json::to_vec(&before).unwrap(),
                 ).to_hex(),
-                expected_before:before.clone(), run_record:before, writes:vec![],
+                patch:serde_json::from_value(serde_json::json!([{"op":"test","path":"/id","value":before["id"]}])).unwrap(), writes:vec![],
             }),
         },
     ];

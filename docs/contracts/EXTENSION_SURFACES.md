@@ -552,6 +552,14 @@ context the stable context inputs declare, amended included, as static. Every re
 validates the ordinary step the amendment carries as its own patch and the
 amendment as an exact transformation of it.
 
+A model can also edit its run's future contract directly. It sends the
+`content_hash` its `file.read` of the run returned and an RFC 6902 patch of
+that record, the same guard `file.write` uses, never the record itself. The
+provider proves that hash names a checked state of the run, the patch applies
+to exactly those bytes, and only the validated delta is rebased onto the
+current record; a hash the run never had, or a patch that does not apply,
+fails before any effect.
+
 A change may remove a standing external input: a requirement-free stable input
 with no owner and no result receiving, such as a trigger the run no longer
 wants, whose interface keeps no other route or state in the run. The run's
