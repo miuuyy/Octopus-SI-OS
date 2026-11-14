@@ -130,12 +130,10 @@ pub(super) fn transition_from(
     writes: &[ProvenWrite],
     current: &[u8],
     previous_call: u64,
-    declared: &[CheckedRunWriter],
 ) -> Result<Option<CheckedRunTransition>, String> {
     let hash = ContentHash::of_bytes(current).to_hex();
-    let record = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
-    let matches = writes.iter().filter(|write| write.before_hash == hash && write.call.seq.0 > previous_call
-        && (write.by != record.id || !declared.iter().any(|writer| writer.door == write.writer.door))).collect::<Vec<_>>();
+    let run = RunRecord::from_bytes(current).map_err(|error| error.to_string())?.id;
+    let matches = writes.iter().filter(|write| write.by != run && write.before_hash == hash && write.call.seq.0 > previous_call).collect::<Vec<_>>();
     let write = match matches.as_slice() {
         [] => return Ok(None),
         [write] => *write,
@@ -146,9 +144,6 @@ pub(super) fn transition_from(
         return Err("a proven run-record write does not reconstruct its admitted file effect".into());
     }
     validate(current, &after)?;
-    if write.by == record.id && RunRecord::from_bytes(&after).map_err(|error| error.to_string())?.ee != record.ee {
-        return Err("a run never changes its own place; another run whose grant covers its record moves it".into());
-    }
     Ok(Some(CheckedRunTransition {
         writer: write.writer.clone(),
         before: current.to_vec(),
@@ -162,36 +157,7 @@ pub(super) fn transition_from(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    fn proven(by: &str, door: &str, before: &[u8], after: &[u8]) -> ProvenWrite {
-        let row = |seq: u64| Movement {
-            seq: octopus_ledger::Seq(seq), lamport: octopus_ledger::Lamport(seq + 1), recorded_at_unix_ms: seq + 1,
-            trace: octopus_ledger::TraceId("trace:edit".into()), kind: MovementKind::InterfaceOutbound,
-            from: Endpoint::Interface(InterfaceId::new("world_provider_a")), to: Endpoint::Interface(InterfaceId::new(door)),
-            artifact: None, invocation_metadata: None,
-        };
-        ProvenWrite {
-            writer: CheckedRunWriter { owner: InterfaceId::new("world_provider_a"), source: InterfaceId::new("world_provider_a"),
-                door: InterfaceId::new(door), tool: "file.write".into(), call_label: "file.write".into(), result_label: "file.write.result".into() },
-            call: row(5), result: row(6), write: serde_json::json!({"content": String::from_utf8(after.to_vec()).unwrap()}),
-            before_hash: ContentHash::of_bytes(before).to_hex(), after_hash: ContentHash::of_bytes(after).to_hex(), by: RunId::new(by),
-        }
-    }
-
-    #[test]
-    fn a_run_edits_its_own_record_by_an_ordinary_write_but_never_its_place_or_through_a_declared_writer() {
-        let before = br#"{"id":"run_a","ee":"ee_existence","worker":"system_worker_a","trace":"trace:run_a","status":"idle","interface_state":{},"checkpoints":[],"active_checkpoints":[]}"#;
-        let edited = br#"{"id":"run_a","ee":"ee_existence","worker":"system_worker_b","trace":"trace:run_a","status":"idle","interface_state":{"world_provider_b":{}},"checkpoints":[],"active_checkpoints":[]}"#;
-        let moved = br#"{"id":"run_a","ee":"ee_memory","worker":"system_worker_a","trace":"trace:run_a","status":"idle","interface_state":{},"checkpoints":[],"active_checkpoints":[]}"#;
-        let declared = [CheckedRunWriter { owner: InterfaceId::new("world_provider_a"), source: InterfaceId::new("system_interface_authoring_a"),
-            door: InterfaceId::new("system_room_authoring_a"), tool: "file.write".into(), call_label: "file.write".into(), result_label: "file.write.result".into() }];
-        let own = transition_from(&[proven("run_a", "system_room_a", before, edited)], before, 0, &declared).unwrap().unwrap();
-        assert!(own.foreign && own.after == edited);
-        assert!(transition_from(&[proven("run_a", "system_room_authoring_a", before, edited)], before, 0, &declared).unwrap().is_none());
-        assert!(transition_from(&[proven("run_a", "system_room_a", before, moved)], before, 0, &declared).unwrap_err().contains("its own place"));
-        assert!(transition_from(&[proven("run_b", "system_room_b", before, moved)], before, 0, &declared).unwrap().is_some());
-    }
+    use super::validate;
 
     #[test]
     fn a_proven_write_may_change_anything_but_which_run_the_record_is() {
