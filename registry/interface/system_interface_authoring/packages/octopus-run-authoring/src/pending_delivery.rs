@@ -158,7 +158,6 @@ impl Ledger {
             .map_err(|error| error.to_string())?;
         let has_output = edges.iter().any(|(coordinate, _)| {
             coordinate.run == identity.run
-                && coordinate.worker == identity.worker
                 && coordinate.interface == identity.provider
                 && coordinate.checkpoint == identity.item.checkpoint.id
                 && coordinate.epoch == identity.item.checkpoint.epoch
@@ -173,7 +172,7 @@ impl Ledger {
     }
 
     pub(super) fn same_output_delivery(
-        &mut self, run: &RunId, worker: &InterfaceId, artifact: &ArtifactRef, left: u64, right: u64,
+        &mut self, run: &RunId, artifact: &ArtifactRef, left: u64, right: u64,
     ) -> Result<bool, String> {
         self.refresh()?;
         let (Some(a), Some(b)) = (self.arrival_scopes.get(&left), self.arrival_scopes.get(&right)) else {
@@ -185,7 +184,7 @@ impl Ledger {
         for (sequence, arrival) in [(left, a), (right, b)] {
             let Some((coordinate, RetainedArrivalState::Finished(verdict))) = edges.iter()
                 .find(|(coordinate, _)| RuntimeCoordinateKey::from_runtime(coordinate) == arrival.2) else { return Ok(false); };
-            if coordinate.run != *run || coordinate.worker != *worker || coordinate.interface != self.interface { return Ok(false); }
+            if coordinate.run != *run || coordinate.interface != self.interface { return Ok(false); }
             if let DeliveryVerdict::Admitted { seq } = verdict {
                 if *seq != sequence { return Ok(false); }
                 admitted = true;

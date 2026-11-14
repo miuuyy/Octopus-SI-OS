@@ -365,7 +365,7 @@ fn context_publications_preserve_fanout_evidence_without_repeating_the_output() 
         for seq in &arrivals { fixture.handoff.record_context_publication(&mut publications,&artifact,*seq).unwrap(); }
         assert_eq!(publications[&artifact_ref_key(&artifact)], arrivals.iter().copied().collect());
         assert!(fixture.handoff.record_context_publication(&mut publications,&artifact,0).is_err());
-        assert!(!fixture.handoff.session.index().unwrap().retained_delivery.same_output_delivery(&"foreign".into(),&"worker".into(),&artifact,arrivals[0],arrivals[1]).unwrap());
+        assert!(!fixture.handoff.session.index().unwrap().retained_delivery.same_output_delivery(&"foreign".into(),&artifact,arrivals[0],arrivals[1]).unwrap());
         let entry=|seq| SessionContextArtifact {label:"tool.call".into(),payload:serde_json::json!({"label":"tool.call"}),source_artifact:artifact.clone(),source_movement_seq:Some(seq)};
         let existing=vec![entry(arrivals[0])];let mut recovered=vec![entry(arrivals[1])];
         assert!(reconcile_recovered_session_snapshot(&existing,&mut recovered,&publications,&artifact).unwrap());

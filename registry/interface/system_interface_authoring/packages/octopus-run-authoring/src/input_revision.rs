@@ -447,7 +447,7 @@ fn validate_static_revision_evidence(
             && checkpoint_record_matches_template(checkpoint, template, &record.id)
             && indexed_evidence_matches_checkpoint(source, template)
     }).collect::<Vec<_>>();
-    if original.id != record.id || original.worker.as_str() != coordinate.worker
+    if original.id != record.id || original.worker != source.worker
         || original.checkpoint(&checkpoint.id) != Some(checkpoint)
         || !original.active_checkpoints.contains(&checkpoint.id)
         || coordinate.checkpoint != checkpoint.id.as_str() || coordinate.epoch != checkpoint.epoch.0
@@ -470,7 +470,7 @@ fn validate_static_revision_evidence(
         { return Err("static correction was not readable in the exact failed input".into()); }
     }
     for (other, rows) in &index.coordinate_outbounds {
-        if other.run != coordinate.run || other.worker != coordinate.worker || other.interface != coordinate.interface { continue; }
+        if other.run != coordinate.run || other.interface != coordinate.interface { continue; }
         for row in rows.iter().filter(|row| row.seq < before_seq && row.seq != source.seq) {
             if (other.checkpoint == coordinate.checkpoint && other.epoch == coordinate.epoch)
                 || (row.seq > source.seq && topology.checkpoints.iter().any(|template| {
@@ -730,7 +730,7 @@ fn completed_inputs<R: CheckedRunEvidenceReader + ?Sized>(
                 && checkpoint_record_matches_template(checkpoint, template, &pinned.id)
                 && indexed_evidence_matches_checkpoint(input, template)
         }).count();
-        if matches != 1 || pinned.id != record.id || pinned.worker.as_str() != coordinate.worker
+        if matches != 1 || pinned.id != record.id || pinned.worker != input.worker
             || coordinate.interface != writer.owner.as_str() || !pinned.active_checkpoints.contains(&checkpoint_id)
             || checkpoint.epoch.0 != coordinate.epoch
             || !artifact_refs_match_bindings(&input.artifact_binding_refs, &checkpoint.artifact_bindings) {

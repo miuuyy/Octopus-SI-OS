@@ -587,6 +587,7 @@ impl ProviderLedgerEvidenceIndex {
                 .or_default()
                 .push(IndexedOutboundArtifact {
                     source: source.clone(),
+                    worker: runtime.worker.clone(),
                     artifact: artifact.clone(),
                     seq: movement.seq.0,
                     run_record_hash: runtime.run_record_hash.clone(),

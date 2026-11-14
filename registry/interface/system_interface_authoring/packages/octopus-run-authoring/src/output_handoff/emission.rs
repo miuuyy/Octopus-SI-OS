@@ -180,7 +180,7 @@ impl ProviderOutputHandoff {
             return Err("independent input snapshot hash differs".into());
         }
         let pinned = RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
-        if pinned.id != self.config.run || pinned.worker.as_str() != coordinate.worker {
+        if pinned.id != self.config.run || pinned.worker != evidence.worker {
             return Err("independent input snapshot changed its run or worker".into());
         }
         let id = CheckpointId::new(&coordinate.checkpoint);

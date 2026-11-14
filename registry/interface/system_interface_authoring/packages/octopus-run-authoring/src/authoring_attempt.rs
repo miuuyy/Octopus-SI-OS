@@ -508,7 +508,7 @@ pub(crate) fn recover_source_session_context_with_static_correction(
     )?;
     let hash = source.run_record_hash.as_deref().and_then(ContentHash::from_hex).ok_or("source context has no pinned run record")?;
     let (_, pinned) = pinned_run_record_from_cache(blobs_dir, limits, &hash, "provider source context")?;
-    if pinned.id != record.id || pinned.worker.as_str() != coordinate.worker {
+    if pinned.id != record.id || pinned.worker != source.worker {
         return Err(format!(
             "provider source movement {source_movement_seq} pinned a different run identity"
         ));

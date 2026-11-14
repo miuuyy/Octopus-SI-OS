@@ -209,13 +209,29 @@ struct OneShotAdmittedArtifact {
     mark_seq: u64,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+/// LEDGER_INDEX.md: a checkpoint generation is `(run, checkpoint, epoch)` on its interface.
+/// The worker a movement names is its provenance, not part of that identity.
+#[derive(Clone, Debug)]
 struct RuntimeCoordinateKey {
     run: String,
     worker: String,
     interface: String,
     checkpoint: String,
     epoch: u64,
+}
+
+impl PartialEq for RuntimeCoordinateKey {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.run, &self.interface, &self.checkpoint, self.epoch) == (&other.run, &other.interface, &other.checkpoint, other.epoch)
+    }
+}
+
+impl Eq for RuntimeCoordinateKey {}
+
+impl std::hash::Hash for RuntimeCoordinateKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (&self.run, &self.interface, &self.checkpoint, self.epoch).hash(state);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -266,6 +282,7 @@ type ContextPublications = BTreeMap<String, BTreeSet<u64>>;
 #[derive(Clone, PartialEq, Eq)]
 struct IndexedOutboundArtifact {
     source: InterfaceId,
+    worker: InterfaceId,
     artifact: ArtifactRef,
     seq: u64,
     run_record_hash: Option<String>,

@@ -298,7 +298,7 @@ impl ProviderOutputHandoff {
             let mut same_delivery = false;
             for known in sequences.iter().copied() {
                 if self.session.index()?.retained_delivery.same_output_delivery(
-                    &self.config.run, &self.config.worker, artifact, known, sequence,
+                    &self.config.run, artifact, known, sequence,
                 )? { same_delivery = true; break; }
             }
             if !same_delivery {
@@ -372,7 +372,7 @@ impl ProviderOutputHandoff {
         let [template] = templates.as_slice() else {
             return Err("context recovery source has no unique provider input contract".into());
         };
-        if record.worker.as_str() != coordinate.worker
+        if record.worker != evidence.worker
             || !record.active_checkpoints.contains(&checkpoint.id)
             || checkpoint.epoch.0 != coordinate.epoch
             || template.interface() != &evidence.source

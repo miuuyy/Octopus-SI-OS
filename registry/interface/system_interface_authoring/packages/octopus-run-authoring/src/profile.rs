@@ -458,7 +458,7 @@ pub(crate) fn validate_retired_verified_input(
         })
         .collect::<Vec<_>>();
     if pinned.id != initial_record.id
-        || pinned.worker.as_str() != coordinate.worker
+        || pinned.worker != evidence.worker
         || !pinned.active_checkpoints.contains(&id)
         || checkpoint.epoch.0 != coordinate.epoch
         || candidates.len() != 1
