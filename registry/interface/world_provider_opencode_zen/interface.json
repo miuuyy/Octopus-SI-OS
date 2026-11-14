@@ -3119,7 +3119,7 @@
             {
               "name": "send_message",
               "operation": "send_message",
-              "description": "Queue an artifact-backed message for a connected run at its exact receive interface.",
+              "description": "Queue an artifact-backed message for a connected run at its exact receive interface. It starts no turn: a running turn or a wait_for_runs receives it, and an idle run stays idle and sees it only when its next turn starts. To make an idle run act, use followup_task.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3168,7 +3168,7 @@
             {
               "name": "followup_task",
               "operation": "followup_task",
-              "description": "Send a follow-up to a connected run through its declared receive interface under the current grant.",
+              "description": "Send a follow-up to a connected run through its declared receive interface under the current grant. It steers the run's running turn, or starts a turn on an idle run.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
