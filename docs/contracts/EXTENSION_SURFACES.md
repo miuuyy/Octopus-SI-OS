@@ -894,20 +894,16 @@ completed that source. The request instead waits for the next arrival while a
 control applied to the waiting turn has no handed receipt, while a movement the
 turn never saw owns the run frontier, or when a provider error notification
 precedes it. A continuation that run authoring refuses fails closed.
-Standing output delivery belongs to the exact persisted handoff boundary of
-its source movement. A new arrival's first output establishes that source's
-non-terminal boundary through an ordinary checked write; it cannot journal
-against an earlier source's terminal handoff. This also applies when an
-intermediate result only emits progress or context updates while sibling
-calls remain pending. Otherwise two result movements could accumulate standing
-items without either having authored the boundary that owns them.
-Subsequent outputs of the same non-terminal source use standing delivery
-without rewriting the run. A result continuing that source can still join its
-standing deliveries in the next checked write. Recovery reads only entries
-matching the persisted boundary and source, retains their context generations,
-and checks exact admission evidence before replay. A terminal handoff is not
-an open boundary for a later source; foreign-source journal entries remain
-an error rather than being silently reassigned or discarded.
+Standing output delivery belongs to the persisted handoff boundary of its
+own source. The first output of a new arrival authors that source's
+non-terminal boundary through an ordinary checked write, even when it carries
+only progress or context updates; a terminal handoff of an earlier source is
+never an open boundary for a later one. Later outputs of the same source use
+standing delivery without rewriting the run, and a result continuing that
+source joins its standing deliveries in its next checked write. Recovery
+replays only entries of the persisted boundary and its source, with their
+context generations and exact admission evidence; an entry of a foreign
+source is an error, never reassigned or discarded.
 
 Results settle their own call in any order. When the native turn has already
 ended while several of its calls are outstanding, whether the app-server
@@ -956,9 +952,10 @@ still owed is never settled this way. A turn input that reaches a run whose
 native turn still has a call open is deferred, never started into that turn:
 the provider asks the transport itself whether it holds an open request for the
 run, the same state the handler refuses a new turn on, so the input waits even
-in the interval before the call is handed and admitted. Owner-authored inputs wait behind earlier open handoffs, including standing
-deliveries, just like stable and independent inputs. Deferred release checks
-the same boundary before preparing a context-bearing input. A deferred input is
+in the interval before the call is handed and admitted. Every input that
+starts a turn — stable, independent or owner-authored — also waits while an
+earlier source holds an open handoff or standing deliveries, and release checks
+the same boundary first. A deferred input is
 released when the turn has ended: rebased onto a later session snapshot when one
 exists, otherwise as its original envelope once the session shows no call
 pending. A terminal error
