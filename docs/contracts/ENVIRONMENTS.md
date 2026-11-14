@@ -172,9 +172,9 @@ exit remains distinct from closure, including a PTY whose streams close while
 another group member is still running. Observation and cleanup failures remain
 visible and never become successful closure.
 
-## Ubuntu process authority
+## Linux process authority
 
-On Ubuntu, process authority is enforced by an AppArmor profile before exec.
+The Linux backend enforces process authority through an AppArmor profile before exec.
 The platform service owns only profile loading, child attachment and profile
 release; it runs no tool command and changes no command's Unix credentials.
 Its peer pidfd and temporary ptrace hold bind attachment to the preparing
@@ -196,7 +196,7 @@ release requires both a closed preparation and an empty cgroup. Platform-service
 restart retains those cgroups and profiles and recovers their own records.
 Unavailable enforcement refuses launch. Full-host and explicitly disabled
 sandbox modes keep their existing semantics. Installation and requirements are
-described in [Process isolation on Ubuntu](../linux.md).
+described in [Process isolation on Linux](../linux.md).
 
 ## Choosing a room
 

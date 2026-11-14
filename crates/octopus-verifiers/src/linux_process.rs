@@ -61,7 +61,7 @@ impl LinuxLease {
         }
         let unavailable = |error| {
             format!(
-            "Ubuntu process authority is unavailable: {error}; install and start the process-authority service described in docs/linux.md"
+            "Linux process authority is unavailable: {error}; install and start the process-authority service described in docs/linux.md"
         )
         };
         let metadata = std::fs::symlink_metadata(CONTROL_SOCKET)

@@ -1,4 +1,4 @@
-# Ubuntu process-authority service
+# Linux process-authority service
 
 This package supplies the privileged AppArmor profile loader used by the
 platform process-authority boundary. The runtime, verifiers, interface lives
@@ -16,6 +16,6 @@ formed workspace commands. That process requests a profile through the same
 service and replaces itself with the command, preserving its PID and streams.
 Only the service invocation runs as root.
 
-See [Ubuntu process isolation](../../../../../docs/linux.md) for requirements,
+See [Linux process isolation](../../../../../docs/linux.md) for requirements,
 installation, lifetime semantics and diagnostics. The installer is run by an
 administrator; Octopus never installs or starts this service implicitly.

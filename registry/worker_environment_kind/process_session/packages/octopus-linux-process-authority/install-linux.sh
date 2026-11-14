@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$(id -u)" -ne 0 ] || [ "$#" -ne 2 ]; then
-    printf '%s\n' 'Usage: sudo sh install-ubuntu.sh /absolute/path/to/octopus-linux-process-authority operator-user' >&2
+    printf '%s\n' 'Usage: sudo sh install-linux.sh /absolute/path/to/octopus-linux-process-authority operator-user' >&2
     exit 2
 fi
 

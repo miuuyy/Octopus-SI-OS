@@ -6,12 +6,12 @@ mod service;
 fn main() {
     #[cfg(target_os = "linux")]
     if let Err(error) = run() {
-        eprintln!("Ubuntu process authority: {error}");
+        eprintln!("Linux process authority: {error}");
         std::process::exit(1);
     }
     #[cfg(not(target_os = "linux"))]
     {
-        eprintln!("Ubuntu process authority requires Linux and AppArmor");
+        eprintln!("Process authority requires Linux and AppArmor");
         std::process::exit(1);
     }
 }

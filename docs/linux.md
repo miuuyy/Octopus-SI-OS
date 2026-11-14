@@ -1,6 +1,6 @@
-# Process isolation on Ubuntu
+# Process isolation on Linux
 
-Ubuntu uses AppArmor to enforce a process's declared read, write, execute,
+Octopus's Linux backend uses AppArmor to enforce a process's declared read, write, execute,
 network, local IPC and signal authority. The same launch path serves verifier
 scripts, interface lives and tool processes. A missing platform service or a
 refused profile stops the launch before the target executes. Full-host grants
@@ -19,14 +19,20 @@ in the process's runtime closure.
 
 ## Install the platform component
 
-Use Ubuntu with Linux 6.5 or later, AppArmor 4 or later, the AppArmor 4.0 policy
-ABI, systemd and cgroup v2. Install AppArmor as an administrator:
+The backend requires Linux 6.5 or later, AppArmor 4 or later, the AppArmor 4.0
+policy ABI, systemd and cgroup v2. It has no distribution-specific execution
+branch. The installation must provide `/usr/sbin/apparmor_parser`,
+`/etc/apparmor.d/abi/4.0` and `apparmor.service`. Enforced launches are unavailable
+on systems without these prerequisites.
+
+Install the distribution's AppArmor package as an administrator. For example,
+on Ubuntu:
 
 ```sh
 sudo apt-get install apparmor
 ```
 
-Build the service on the Ubuntu machine from the same checkout as Octopus:
+Build the service on the Linux machine from the same checkout as Octopus:
 
 ```sh
 cargo build --locked --release -p octopus-linux-process-authority
@@ -36,7 +42,7 @@ Install it for the Unix account that will run Octopus, replacing `operator`
 with that account's login:
 
 ```sh
-sudo sh registry/worker_environment_kind/process_session/packages/octopus-linux-process-authority/install-ubuntu.sh \
+sudo sh registry/worker_environment_kind/process_session/packages/octopus-linux-process-authority/install-linux.sh \
   "$PWD/target/release/octopus-linux-process-authority" operator
 ```
 

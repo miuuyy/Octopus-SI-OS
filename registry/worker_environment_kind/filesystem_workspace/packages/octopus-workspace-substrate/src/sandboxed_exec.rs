@@ -72,7 +72,7 @@ fn platform_sandboxed_room_process_argv(
     use octopus_verifiers::process_authority::linux::{LinuxRoomPolicy, PLATFORM_EXECUTABLE};
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(PLATFORM_EXECUTABLE).map_err(|error| {
-        WorkerEnvError::ExecFailed(format!("Ubuntu process-authority component is unavailable: {error}; install it as described in docs/linux.md"))
+        WorkerEnvError::ExecFailed(format!("Linux process-authority component is unavailable: {error}; install it as described in docs/linux.md"))
     })?;
     if !metadata.is_file()
         || metadata.uid() != 0
@@ -80,7 +80,7 @@ fn platform_sandboxed_room_process_argv(
         || metadata.mode() & 0o111 == 0
     {
         return Err(WorkerEnvError::ExecFailed(
-            "Ubuntu process-authority component is not a protected root-owned executable".into(),
+            "Linux process-authority component is not a protected root-owned executable".into(),
         ));
     }
     let policy = LinuxRoomPolicy {

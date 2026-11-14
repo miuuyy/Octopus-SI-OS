@@ -1,5 +1,5 @@
 [Unit]
-Description=Octopus process authority for Ubuntu
+Description=Octopus process authority for Linux
 After=apparmor.service
 Requires=apparmor.service
 
