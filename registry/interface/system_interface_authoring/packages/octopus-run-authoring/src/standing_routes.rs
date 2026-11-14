@@ -494,6 +494,13 @@ pub(super) struct StandingJournal {
     context_generations: u64,
 }
 
+pub(super) fn standing_boundary_owned_by(pending: &PendingHandoff, source_movement_seq: u64) -> bool {
+    pending.withdrawal.is_none()
+        && !pending.publication_unfinished()
+        && !pending.terminal
+        && pending.source_movement_seq == source_movement_seq
+}
+
 pub(super) fn continued_result_source(
     pending: Option<&PendingHandoff>,
     source_movement_seq: u64,

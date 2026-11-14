@@ -894,6 +894,21 @@ completed that source. The request instead waits for the next arrival while a
 control applied to the waiting turn has no handed receipt, while a movement the
 turn never saw owns the run frontier, or when a provider error notification
 precedes it. A continuation that run authoring refuses fails closed.
+Standing output delivery belongs to the exact persisted handoff boundary of
+its source movement. A new arrival's first output establishes that source's
+non-terminal boundary through an ordinary checked write; it cannot journal
+against an earlier source's terminal handoff. This also applies when an
+intermediate result only emits progress or context updates while sibling
+calls remain pending. Otherwise two result movements could accumulate standing
+items without either having authored the boundary that owns them.
+Subsequent outputs of the same non-terminal source use standing delivery
+without rewriting the run. A result continuing that source can still join its
+standing deliveries in the next checked write. Recovery reads only entries
+matching the persisted boundary and source, retains their context generations,
+and checks exact admission evidence before replay. A terminal handoff is not
+an open boundary for a later source; foreign-source journal entries remain
+an error rather than being silently reassigned or discarded.
+
 Results settle their own call in any order. When the native turn has already
 ended while several of its calls are outstanding, whether the app-server
 completed or aborted it or the provider process died, each late result except

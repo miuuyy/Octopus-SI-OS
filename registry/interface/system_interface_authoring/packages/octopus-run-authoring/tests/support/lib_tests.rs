@@ -2073,6 +2073,22 @@
     }
 
     #[test]
+    fn sibling_results_establish_distinct_standing_boundaries() {
+        let mut pending: PendingHandoff = serde_json::from_value(serde_json::json!({
+            "source_movement_seq": 35984, "items": [], "terminal": true, "dispatch_fenced": true
+        })).unwrap();
+        for source in [36490, 36532] {
+            assert!(!standing_routes::standing_boundary_owned_by(&pending, source));
+            pending.source_movement_seq = source;
+            pending.terminal = false;
+            assert!(standing_routes::standing_boundary_owned_by(&pending, source));
+            assert_eq!(standing_routes::continued_result_source(Some(&pending), source + 1, true), Some(source));
+            pending.terminal = true;
+            assert!(!standing_routes::standing_boundary_owned_by(&pending, source));
+        }
+    }
+
+    #[test]
     fn result_input_owns_standing_deliveries_of_the_turn_it_continues() {
         let pending = |source: u64, terminal: bool| -> PendingHandoff {
             serde_json::from_value(serde_json::json!({

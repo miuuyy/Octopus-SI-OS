@@ -430,13 +430,7 @@ impl ProviderOutputHandoff {
             && !self.failed_source
             && self.checked_settlement_output.is_none()
             && persisted_pending_handoff(&record, &self.config.provider_interface)?.is_some_and(|pending| {
-                pending.withdrawal.is_none()
-                    && !pending.publication_unfinished()
-                    && if pending.terminal {
-                        pending.source_movement_seq < self.source_movement_seq
-                    } else {
-                        pending.source_movement_seq == self.source_movement_seq
-                    }
+                standing_routes::standing_boundary_owned_by(&pending, self.source_movement_seq)
             })
         {
             standing_checkpoints_by_output.into_iter().collect::<Option<Vec<_>>>()
