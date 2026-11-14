@@ -461,8 +461,11 @@ async fn home_accepts_independent_task_terminal_and_error_returns_through_real_a
         .arg(source.join("app/scripts/test-home-widget-projection.cjs")).arg("--publication-fixture")
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
     use std::io::Write;
-    renderer.stdin.take().unwrap().write_all(&serde_json::to_vec(&json!({"rows":rows,
-        "scope":{"runId":plan.run_id,"interfaceId":plan.chat_interface_id},"summary":document["data"]["summary"]})).unwrap()).unwrap();
+    let input_result = renderer.stdin.take().unwrap().write_all(&serde_json::to_vec(&json!({"rows":rows,
+        "scope":{"runId":plan.run_id,"interfaceId":plan.chat_interface_id},"summary":document["data"]["summary"]})).unwrap());
+    if let Err(error) = input_result {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
     let rendered = renderer.wait_with_output().unwrap();
     assert!(rendered.status.success(), "{}\n{}", String::from_utf8_lossy(&rendered.stdout), String::from_utf8_lossy(&rendered.stderr));
     let update_pin = contract["delivery"]["voice_update"]["interface"]
