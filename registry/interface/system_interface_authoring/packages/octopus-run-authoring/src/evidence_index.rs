@@ -1042,7 +1042,6 @@ impl ProviderLedgerEvidenceIndex {
     pub(crate) fn exact_provider_source_outbound(
         &mut self,
         run: &RunId,
-        worker: &InterfaceId,
         provider: &InterfaceId,
         sequence: u64,
     ) -> Result<(RuntimeCoordinateKey, IndexedOutboundArtifact), String> {
@@ -1053,7 +1052,6 @@ impl ProviderLedgerEvidenceIndex {
             .iter()
             .filter(|(coordinate, _)| {
                 coordinate.run == run.as_str()
-                    && coordinate.worker == worker.as_str()
                     && coordinate.interface == provider.as_str()
             })
             .flat_map(|(coordinate, evidence)| {

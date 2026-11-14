@@ -424,8 +424,7 @@ fn validate_static_revision_evidence(
     let checkpoint = static_revision_checkpoint(&record, writer, next)?;
     let pending = persisted_pending_handoff(&record, &writer.owner)?.ok_or("failed source absent")?;
     let matches = index.coordinate_outbounds.iter().filter(|(coordinate, _)| {
-        coordinate.run == record.id.as_str() && coordinate.worker == record.worker.as_str()
-            && coordinate.interface == writer.owner.as_str()
+        coordinate.run == record.id.as_str() && coordinate.interface == writer.owner.as_str()
     }).flat_map(|(coordinate, rows)| rows.iter().filter(|row| row.seq == pending.source_movement_seq)
         .map(move |row| (coordinate, row))).collect::<Vec<_>>();
     let [(coordinate, source)] = matches.as_slice() else { return Err("failed source has no unique admitted provider input".into()); };
@@ -448,7 +447,7 @@ fn validate_static_revision_evidence(
             && checkpoint_record_matches_template(checkpoint, template, &record.id)
             && indexed_evidence_matches_checkpoint(source, template)
     }).collect::<Vec<_>>();
-    if original.id != record.id || original.worker != record.worker
+    if original.id != record.id || original.worker.as_str() != coordinate.worker
         || original.checkpoint(&checkpoint.id) != Some(checkpoint)
         || !original.active_checkpoints.contains(&checkpoint.id)
         || coordinate.checkpoint != checkpoint.id.as_str() || coordinate.epoch != checkpoint.epoch.0
@@ -613,7 +612,7 @@ fn payload_index_ready<R: CheckedRunEvidenceReader + ?Sized>(
     }
     let mut newer = BTreeMap::new();
     for (coordinate, rows) in &index.coordinate_outbounds {
-        if coordinate.run != record.id.as_str() || coordinate.worker != record.worker.as_str() {
+        if coordinate.run != record.id.as_str() {
             continue;
         }
         for row in rows.iter().filter(|row| row.seq < before_seq) {
@@ -731,7 +730,7 @@ fn completed_inputs<R: CheckedRunEvidenceReader + ?Sized>(
                 && checkpoint_record_matches_template(checkpoint, template, &pinned.id)
                 && indexed_evidence_matches_checkpoint(input, template)
         }).count();
-        if matches != 1 || pinned.id != record.id || pinned.worker != record.worker
+        if matches != 1 || pinned.id != record.id || pinned.worker.as_str() != coordinate.worker
             || coordinate.interface != writer.owner.as_str() || !pinned.active_checkpoints.contains(&checkpoint_id)
             || checkpoint.epoch.0 != coordinate.epoch
             || !artifact_refs_match_bindings(&input.artifact_binding_refs, &checkpoint.artifact_bindings) {

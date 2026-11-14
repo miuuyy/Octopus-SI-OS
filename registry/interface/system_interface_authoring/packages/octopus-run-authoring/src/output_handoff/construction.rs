@@ -276,7 +276,7 @@ impl ProviderOutputHandoff {
                     }
                     let mut index = session.index()?;
                     let (coordinate, evidence) = index.exact_provider_source_outbound(
-                        run, &runtime.worker, &ctx.interface, source_movement_seq,
+                        run, &ctx.interface, source_movement_seq,
                     )?;
                     let metadata = input.metadata().map_err(|error| error.to_string())?;
                     if coordinate.checkpoint != runtime.checkpoint.as_str() || coordinate.epoch != runtime.epoch

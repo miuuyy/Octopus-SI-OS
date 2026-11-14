@@ -18,9 +18,7 @@ pub(crate) fn revision_attempt_generations(
         return Ok(generations);
     }
     let Some(pending) = persisted_pending_handoff(record, &config.provider_interface)? else { return Ok(generations); };
-    let (_, source) = session.index()?.exact_provider_source_outbound(
-        &record.id, &record.worker, &config.provider_interface, pending.source_movement_seq,
-    )?;
+    let (_, source) = session.index()?.exact_provider_source_outbound(&record.id, &config.provider_interface, pending.source_movement_seq)?;
     let hash = source.run_record_hash.as_deref().and_then(ContentHash::from_hex)
         .ok_or("input revision recovery source has no exact snapshot")?;
     let (before, original) = pinned_run_record(ctx, &hash, "input revision recovery source")?;
@@ -505,13 +503,12 @@ pub(crate) fn recover_source_session_context_with_static_correction(
 ) -> Result<(ResolvedSessionContext, Option<SessionSnapshotHead>, Vec<ArtifactId>), String> {
     let (coordinate, source) = session.index()?.exact_provider_source_outbound(
         &record.id,
-        &record.worker,
         &config.provider_interface,
         source_movement_seq,
     )?;
     let hash = source.run_record_hash.as_deref().and_then(ContentHash::from_hex).ok_or("source context has no pinned run record")?;
     let (_, pinned) = pinned_run_record_from_cache(blobs_dir, limits, &hash, "provider source context")?;
-    if pinned.id != record.id || pinned.worker != record.worker {
+    if pinned.id != record.id || pinned.worker.as_str() != coordinate.worker {
         return Err(format!(
             "provider source movement {source_movement_seq} pinned a different run identity"
         ));

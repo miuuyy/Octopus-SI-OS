@@ -531,7 +531,6 @@ impl ProviderOutputHandoff {
     pub(super) fn completed_source_chain(&self, current: &[u8]) -> Result<Vec<CheckedRunTransition>, String> {
         let (_, source) = self.session.index()?.exact_provider_source_outbound(
             &self.config.run,
-            &self.config.worker,
             &self.config.provider_interface,
             self.source_movement_seq,
         )?;

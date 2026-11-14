@@ -131,9 +131,7 @@ impl ProviderOutputHandoff {
         &self, sequence: u64, artifact: &ArtifactRef,
     ) -> Result<(Vec<u8>, RunRecord), String> {
         let mut index = self.session.index()?;
-        let (coordinate, source) = index.exact_provider_source_outbound(
-            &self.config.run, &self.config.worker, &self.config.provider_interface, sequence,
-        )?;
+        let (coordinate, source) = index.exact_provider_source_outbound(&self.config.run, &self.config.provider_interface, sequence)?;
         if source.artifact != *artifact {
             return Err("completed input source has a different exact artifact".into());
         }
@@ -160,7 +158,7 @@ impl ProviderOutputHandoff {
             template.role.is_provider_input() && template.interface() == &source.source
                 && checkpoint_record_matches_template(checkpoint, template, &self.config.run)
         ).collect::<Vec<_>>();
-        if record.id != self.config.run || record.worker != self.config.worker
+        if record.id != self.config.run || record.worker.as_str() != coordinate.worker
             || !record.active_checkpoints.contains(&checkpoint_id) || checkpoint.epoch.0 != coordinate.epoch
             || templates.len() != 1 || !indexed_evidence_matches_checkpoint(&source, templates[0])
             || !artifact_refs_match_bindings(&source.artifact_binding_refs, &checkpoint.artifact_bindings)
@@ -179,7 +177,7 @@ impl ProviderOutputHandoff {
             return Err("overtaken source requires a later checked handoff".into());
         }
         let (_, source) = self.session.index()?.exact_provider_source_outbound(
-            &self.config.run, &self.config.worker, &self.config.provider_interface,
+            &self.config.run, &self.config.provider_interface,
             self.source_movement_seq,
         )?;
         let (before, original) = self.checked_input_artifact_record(self.source_movement_seq, &source.artifact)?;
@@ -331,12 +329,12 @@ impl ProviderOutputHandoff {
         if !pending.terminal {
             return Err(format!("provider source {} has no completed terminal input handoff", pending.source_movement_seq));
         }
-        let (_, source) = self.session.index()?.exact_provider_source_outbound(
-            &self.config.run, &self.config.worker, &self.config.provider_interface,
+        let (coordinate, source) = self.session.index()?.exact_provider_source_outbound(
+            &self.config.run, &self.config.provider_interface,
             pending.source_movement_seq,
         )?;
         let (_, pinned) = self.checked_input_artifact_record(pending.source_movement_seq, &source.artifact)?;
-        if pinned.id != original.id || pinned.worker != original.worker {
+        if pinned.id != original.id || pinned.worker.as_str() != coordinate.worker {
             return Err("completed input handoff changed its admitted run".into());
         }
         let carries_context = !self.source_is_context_free(pending.source_movement_seq)?;

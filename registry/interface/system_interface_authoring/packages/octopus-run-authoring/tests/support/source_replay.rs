@@ -491,7 +491,7 @@ fn failed_owner_input_static_revision_requires_checked_terminal_source() {
         };
         chain.push(checked_declared_run_install(&evidence, &fixture.handoff.run_path, &before, &install, vec![writer.clone()]).unwrap());
         let (coordinate, source) = fixture.handoff.session.index().unwrap().exact_provider_source_outbound(
-            &record.id, &record.worker, &writer.owner, source).unwrap();
+            &record.id, &writer.owner, source).unwrap();
         let hash = ContentHash::of_bytes(&initial);
         let checkpoint = record.checkpoint(&"input".into()).unwrap();
         assert!(input_revision::checked_failed_source_static_context(&evidence, &fixture.handoff.run_path, &[], &writer.owner, &source).unwrap().is_none());
@@ -626,7 +626,7 @@ fn selected_home_source_context_preserves_admitted_roles_and_input() {
     let (outputs, snapshots) = provider_context_label_sets(&descriptor).unwrap();
     let session = ProviderHandoffSession::new(&ctx).unwrap();
     for source in std::env::var("OCTOPUS_REPLAY_SOURCE").unwrap().split(',').map(|value| value.parse::<u64>().unwrap()) {
-        let (_, admitted) = session.index().unwrap().exact_provider_source_outbound(&run, &record.worker, &provider, source).unwrap();
+        let (_, admitted) = session.index().unwrap().exact_provider_source_outbound(&run, &provider, source).unwrap();
         assert!(!admitted.role_artifacts.is_empty());
         let (history, _, statics) = recover_source_session_context_from_cache(&ctx.blobs_dir, ctx.required_host_io_limits().unwrap(),
             &session, &record, &config, source, &[], &outputs, &snapshots).unwrap();
@@ -676,7 +676,7 @@ async fn selected_home_failed_capture_recovers_original_inputs_without_deliverin
     assert!(contexts.contains_key(&failed), "lost the source whose final capture failed");
     let recovered = &contexts[&failed].0.artifacts;
     assert_eq!(recovered.iter().filter(|entry| entry.source_movement_seq == Some(failed)).count(), 1);
-    let (_, source) = session.index().unwrap().exact_provider_source_outbound(&run, &handoff.config.worker, &provider, failed).unwrap();
+    let (_, source) = session.index().unwrap().exact_provider_source_outbound(&run, &provider, failed).unwrap();
     assert!(recovered.iter().any(|entry| entry.source_artifact == source.artifact));
     assert_eq!(std::fs::read(path).unwrap(), before);
     eprintln!("recovered exact source {failed} and {} admitted history artifacts; no outputs delivered", recovered.len());
@@ -1814,9 +1814,7 @@ async fn selected_home_independent_handoff_replays_unconsumed_source() {
     assert!(pending.context_publication.is_none());
     assert!(handoff.recover_authoring_failure(&record, &current).unwrap().is_none());
     assert!(matches!(handoff.recover_authoring_attempt(&record, &current).unwrap(), AuthoringAttemptRecovery::None));
-    let (_, source) = handoff.session.index().unwrap().exact_provider_source_outbound(
-        &handoff.config.run, &handoff.config.worker, &provider, source_movement_seq,
-    ).unwrap();
+    let (_, source) = handoff.session.index().unwrap().exact_provider_source_outbound(&handoff.config.run, &provider, source_movement_seq).unwrap();
     let (manifest, payload) = read_pinned_artifact(&handoff.ctx, &source.artifact).unwrap();
     append_session_payload(&mut handoff.state.lock().await.session_context,
         &manifest.label, &payload, &source.artifact, Some(source_movement_seq), "replayed input").unwrap();

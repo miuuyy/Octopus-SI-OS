@@ -164,7 +164,6 @@ impl ProviderOutputHandoff {
     ) -> Result<Option<RunAuthoringCheckpoint>, String> {
         let (coordinate, evidence) = self.session.index()?.exact_provider_source_outbound(
             &self.config.run,
-            &self.config.worker,
             &self.config.provider_interface,
             source_movement_seq,
         )?;
@@ -181,7 +180,7 @@ impl ProviderOutputHandoff {
             return Err("independent input snapshot hash differs".into());
         }
         let pinned = RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
-        if pinned.id != self.config.run || pinned.worker != self.config.worker {
+        if pinned.id != self.config.run || pinned.worker.as_str() != coordinate.worker {
             return Err("independent input snapshot changed its run or worker".into());
         }
         let id = CheckpointId::new(&coordinate.checkpoint);

@@ -132,7 +132,8 @@ pub(super) fn transition_from(
     previous_call: u64,
 ) -> Result<Option<CheckedRunTransition>, String> {
     let hash = ContentHash::of_bytes(current).to_hex();
-    let matches = writes.iter().filter(|write| write.before_hash == hash && write.call.seq.0 > previous_call).collect::<Vec<_>>();
+    let run = RunRecord::from_bytes(current).map_err(|error| error.to_string())?.id;
+    let matches = writes.iter().filter(|write| write.by != run && write.before_hash == hash && write.call.seq.0 > previous_call).collect::<Vec<_>>();
     let write = match matches.as_slice() {
         [] => return Ok(None),
         [write] => *write,
@@ -143,11 +144,6 @@ pub(super) fn transition_from(
         return Err("a proven run-record write does not reconstruct its admitted file effect".into());
     }
     validate(current, &after)?;
-    let place = |bytes: &[u8]| RunRecord::from_bytes(bytes).map(|record| (record.id, record.ee)).map_err(|error| error.to_string());
-    let (run, before_place) = place(current)?;
-    if write.by == run && place(&after)?.1 != before_place {
-        return Err("a run never changes its own place; another run whose grant covers its record moves it".into());
-    }
     Ok(Some(CheckedRunTransition {
         writer: write.writer.clone(),
         before: current.to_vec(),

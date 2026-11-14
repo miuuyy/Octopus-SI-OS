@@ -198,7 +198,7 @@ pub(super) fn source_snapshot_from_evidence(
         evidence: Arc::new(Mutex::new(ProviderLedgerEvidenceIndex::with_spotlight(config.provider_interface.clone(),
             evidence.movements_path.to_path_buf(), evidence.max_control_frame_bytes, evidence.ledger_index_path))) };
     session.index()?.through_seq = rebase.is_empty().then_some(source);
-    let (_, admitted) = session.index()?.exact_provider_source_outbound(&record.id, &record.worker, &config.provider_interface, source)?;
+    let (_, admitted) = session.index()?.exact_provider_source_outbound(&record.id, &config.provider_interface, source)?;
     let (outputs, snapshots) = if let Some(ctx) = ctx.filter(|ctx| ctx.interface == config.provider_interface) {
         provider_context_label_sets(ctx.descriptor_snapshot.as_ref().ok_or("withdrawal has no declared context contract")?)?
     } else {
@@ -210,7 +210,7 @@ pub(super) fn source_snapshot_from_evidence(
             file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
             file_write_result_label: config.file_write_result_label.clone(),
         })?;
-        let (coordinate, _) = session.index()?.exact_provider_source_outbound(&record.id, &record.worker, &config.provider_interface, source)?;
+        let (coordinate, _) = session.index()?.exact_provider_source_outbound(&record.id, &config.provider_interface, source)?;
         let checkpoint = pinned.checkpoint(&CheckpointId::new(&coordinate.checkpoint)).ok_or("withdrawal source checkpoint is absent")?;
         let templates = source_config.checkpoints.iter().filter(|template| template.role.is_provider_input()
             && template.include_context && checkpoint_record_matches_template(checkpoint, template, &pinned.id)).collect::<Vec<_>>();
@@ -437,7 +437,7 @@ impl ProviderOutputHandoff {
                 || pending.items[0].artifact_id != intent.artifact.id || pending.items[0].artifact_content_hash != intent.artifact.content.to_hex()
             { return Err("withdrawal intent changed before its checked write".into()); }
             self.independent_input_at_source(&state.run_record_bytes, control_source)?.ok_or("withdrawal requires an exact context-free independent input")?;
-            let (_, source) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.worker, &self.config.provider_interface, self.source_movement_seq)?;
+            let (_, source) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.provider_interface, self.source_movement_seq)?;
             let replaced_context = provider_context_bindings(&record, &self.config.provider_interface)?.iter()
                 .filter(|binding| !state.static_context_artifacts.contains(&binding.id)).map(|binding| {
                 let entry = state.session_context.artifacts.iter().find(|entry| entry.source_artifact.id == binding.id).ok_or("withdrawal has unproved dynamic context")?;
@@ -459,7 +459,7 @@ impl ProviderOutputHandoff {
         let record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
         let mut pending = persisted_pending_handoff(&record, &self.config.provider_interface)?.ok_or("source withdrawal lost its checked closure")?;
         if pending.source_movement_seq != self.source_movement_seq {
-            let (_, source) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.worker, &self.config.provider_interface, self.source_movement_seq)?;
+            let (_, source) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.provider_interface, self.source_movement_seq)?;
             let hash = source.run_record_hash.as_deref().and_then(ContentHash::from_hex).ok_or("withdrawal lost its pinned original source")?;
             let (before, _) = pinned_run_record(&self.ctx, &hash, "withdrawal original source")?;
             let chain = checked_selected_run_advance_state(&self.ctx, &self.run_path, &before, &state.run_record_bytes, self.source_movement_seq, &self.config).map_err(String::from)?;

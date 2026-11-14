@@ -29,7 +29,6 @@ impl ProviderOutputHandoff {
         }
         let (coordinate, source) = self.session.index()?.exact_provider_source_outbound(
             &record.id,
-            &record.worker,
             &self.config.provider_interface,
             self.source_movement_seq,
         )?;

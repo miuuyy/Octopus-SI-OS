@@ -25,19 +25,16 @@ impl ProviderOutputHandoff {
                     index.catch_up()?;
                     index.coordinate_outbounds.iter().any(|(coordinate, rows)| {
                         coordinate.run == self.config.run.as_str()
-                            && coordinate.worker == self.config.worker.as_str()
                             && coordinate.interface == self.config.provider_interface.as_str()
                             && rows.iter().any(|row| row.seq == self.source_movement_seq)
                     })
                 };
                 if has_source {
-                    let (_, source) = self.session.index()?.exact_provider_source_outbound(
-                        &self.config.run, &self.config.worker, &self.config.provider_interface, self.source_movement_seq,
-                    )?;
+                    let (_, source) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.provider_interface, self.source_movement_seq)?;
                     seeds.push(indexed_source_run_record(&self.ctx, &source, self.source_movement_seq)?);
                 }
                 for record in seeds {
-                    if record.id != current_record.id || record.worker != current_record.worker {
+                    if record.id != current_record.id {
                         return Err("failed context history changed run scope".into());
                     }
                     if let Some(pending) = persisted_pending_handoff(&record, &self.config.provider_interface)? {
@@ -61,9 +58,7 @@ impl ProviderOutputHandoff {
             };
             let mut recovered = BTreeMap::new();
             for (sequence, expected_pending) in candidates {
-                let (coordinate, source) = self.session.index()?.exact_provider_source_outbound(
-                    &self.config.run, &self.config.worker, &self.config.provider_interface, sequence,
-                )?;
+                let (coordinate, source) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.provider_interface, sequence)?;
                 let hash = source.run_record_hash.as_deref().and_then(ContentHash::from_hex)
                     .ok_or("failed context source has no pinned run snapshot")?;
                 let (before, original) = pinned_run_record(&self.ctx, &hash, "failed context source")?;
@@ -358,9 +353,7 @@ impl ProviderOutputHandoff {
         if source == self.source_movement_seq {
             return Ok(!self.source_carries_context);
         }
-        let (coordinate, evidence) = self.session.index()?.exact_provider_source_outbound(
-            &self.config.run, &self.config.worker, &self.config.provider_interface, source,
-        )?;
+        let (coordinate, evidence) = self.session.index()?.exact_provider_source_outbound(&self.config.run, &self.config.provider_interface, source)?;
         let record = indexed_source_run_record(&self.ctx, &evidence, source)?;
         let checkpoint = record.checkpoint(&CheckpointId::new(&coordinate.checkpoint))
             .ok_or("context recovery source lost its admitted checkpoint")?;
@@ -379,7 +372,7 @@ impl ProviderOutputHandoff {
         let [template] = templates.as_slice() else {
             return Err("context recovery source has no unique provider input contract".into());
         };
-        if record.worker != self.config.worker
+        if record.worker.as_str() != coordinate.worker
             || !record.active_checkpoints.contains(&checkpoint.id)
             || checkpoint.epoch.0 != coordinate.epoch
             || template.interface() != &evidence.source

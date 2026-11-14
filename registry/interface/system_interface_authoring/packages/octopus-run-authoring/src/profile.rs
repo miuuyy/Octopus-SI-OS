@@ -439,7 +439,6 @@ pub(crate) fn validate_retired_verified_input(
     }
     let (coordinate, evidence) = session.index()?.exact_provider_source_outbound(
         &current.run,
-        &current.worker,
         &current.provider_interface,
         pending.source_movement_seq,
     )?;
@@ -462,7 +461,7 @@ pub(crate) fn validate_retired_verified_input(
         })
         .collect::<Vec<_>>();
     if pinned.id != initial_record.id
-        || pinned.worker != initial_record.worker
+        || pinned.worker.as_str() != coordinate.worker
         || !pinned.active_checkpoints.contains(&id)
         || checkpoint.epoch.0 != coordinate.epoch
         || candidates.len() != 1
