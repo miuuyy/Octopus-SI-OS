@@ -14,13 +14,13 @@ class DaylightSavingSchedule(unittest.TestCase):
     def setUp(self):
         test_one_shot.OneShotContract.setUp(self)
 
-    def fired(self, cron, start, hours):
+    def fired(self, cron, start, hours, late=timedelta()):
         clock = [start.replace(tzinfo=NEW_YORK).astimezone(timezone.utc)]
         end = clock[0] + timedelta(hours=hours)
         fired = []
 
         def sleep(seconds):
-            clock[0] += timedelta(seconds=seconds)
+            clock[0] += timedelta(seconds=seconds) + late
             if clock[0] > end:
                 raise InterruptedError
 
@@ -38,6 +38,16 @@ class DaylightSavingSchedule(unittest.TestCase):
         ]:
             with self.subTest(cron=cron, start=start):
                 self.assertEqual(self.fired(cron, start, hours), expected)
+
+    def test_a_late_wake_fires_the_due_minute_once(self):
+        self.assertEqual(
+            self.fired("*/30 * * * *", datetime(2026, 6, 1, 0, 50), 1.6, late=timedelta(minutes=2, seconds=5)),
+            ["06-01 05:00Z", "06-01 05:30Z", "06-01 06:00Z"],
+        )
+        self.assertEqual(
+            self.fired("* * * * *", datetime(2026, 6, 1, 0, 50), 0.2, late=timedelta(minutes=3)),
+            ["06-01 04:54Z", "06-01 04:58Z", "06-01 05:02Z"],
+        )
 
 if __name__ == "__main__":
     unittest.main()

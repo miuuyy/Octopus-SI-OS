@@ -560,6 +560,14 @@ def next_cron_minute(compiled, moment):
     raise ValueError("cron expression has no occurrence in the next eight years")
 
 
+def latest_due_cron_minute(compiled, due, moment):
+    while True:
+        following = next_cron_minute(compiled, due)
+        if following.timestamp() > moment.timestamp():
+            return due
+        due = following
+
+
 def atomic_write_json(path, value, maximum_bytes=None):
     body = canonical_json(value)
     limit = HOST_IO_LIMITS["max_control_frame_bytes"] if maximum_bytes is None else maximum_bytes
@@ -1352,9 +1360,11 @@ def run_cron(schedule, reminder):
         scheduled = next_cron_minute(compiled, current)
         time.sleep(max(0.0, scheduled.timestamp() - current.timestamp()))
         moment = now(schedule)
-        minute = moment.replace(second=0, microsecond=0)
+        if moment.timestamp() < scheduled.timestamp():
+            continue
+        minute = latest_due_cron_minute(compiled, scheduled, moment)
         minute_key = minute.isoformat(timespec="minutes")
-        if cron_due(compiled, minute, minute_before(minute)) and minute_key != last_minute:
+        if minute_key != last_minute:
             hold_while_pinning_runs_work()
             emit_time_artifact(minute, reminder, "cron", schedule)
             last_minute = minute_key

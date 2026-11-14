@@ -24,6 +24,11 @@ fall-back hour a fixed time runs once, while wildcard minutes and hours keep
 firing through both occurrences; a fixed time skipped by a spring-forward jump
 runs at the first minute after the jump.
 
+A life that wakes late — a host under load, a suspended machine — fires the
+latest occurrence that came due since it went to sleep, once; the earlier ones
+in that gap are not replayed. Only an occurrence that comes due while the life
+is stopped is not sent on restart.
+
 An inactivity condition for user-facing tasks is:
 
 ```json
