@@ -2,7 +2,7 @@
   "schema": "octopus.local_package",
   "schema_version": 1,
   "id": "driver.system_room",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "product_kind": "driver",
   "product_id": "system_room",
   "release_status": "optional",
@@ -190,6 +190,27 @@
     {
       "registry_kind": "tool",
       "owner": "file.write",
+      "configuration": [
+        {
+          "path": "tool.json",
+          "fields": [
+            {
+              "pointer": "/process/authority/sandbox_mode",
+              "schema": {
+                "type": "string",
+                "enum": [
+                  "enforced",
+                  "disabled"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "registry_kind": "tool",
+      "owner": "file.delete",
       "configuration": [
         {
           "path": "tool.json",

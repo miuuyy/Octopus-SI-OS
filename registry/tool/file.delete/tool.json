@@ -1,0 +1,101 @@
+{
+  "id": "file.delete",
+  "interface": "system_room",
+  "process": {
+    "bin": "target/debug/octopus-file-write-tool",
+    "interrupted_effect_recovery": "reinvoke_exact_artifact",
+    "authority": {
+      "read_root_slots": [],
+      "write_root_slots": [],
+      "executable_root_slots": [],
+      "read_paths": [],
+      "write_paths": [],
+      "executable_paths": [],
+      "executable_commands": [],
+      "read_env_paths": [],
+      "write_env_paths": [],
+      "executable_env_paths": [],
+      "write_argument_paths": [
+        {
+          "pointer": "/deletes/*/path",
+          "within_root_slots": [
+            "run_records_root",
+            "registry_artifact_root",
+            "registry_interface_root",
+            "registry_ee_template_root",
+            "registry_mark_root",
+            "registry_tool_root",
+            "registry_verifier_root",
+            "registry_worker_environment_kind_root",
+            "ee_instances_root"
+          ],
+          "include_parent": true
+        },
+        {
+          "pointer": "/empty_directories/*",
+          "within_root_slots": [
+            "run_records_root",
+            "registry_artifact_root",
+            "registry_interface_root",
+            "registry_ee_template_root",
+            "registry_mark_root",
+            "registry_tool_root",
+            "registry_verifier_root",
+            "registry_worker_environment_kind_root",
+            "ee_instances_root"
+          ],
+          "include_parent": true
+        }
+      ],
+      "allow_network": false,
+      "allow_local_ipc": false
+    }
+  },
+  "supported_worker_environment_kinds": [
+    "system_room"
+  ],
+  "handler_config": {
+    "operation": "delete"
+  },
+  "description": "Delete files under this room's granted roots: run records, EE instances and descriptor files. Needs the delete artifact verb in the formed grant. Each file is removed only while its content hash equals expected_before_hash, the hash file.read returned. empty_directories are removed afterwards when nothing is left in them, so a folder is deleted by naming its files and then the folder. The result names every deleted path; movements and artifacts already in the ledger are not touched.",
+  "args_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "deletes"
+    ],
+    "properties": {
+      "deletes": {
+        "type": "array",
+        "description": "Files to delete, each guarded by its exact current content hash.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "expected_before_hash"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path of a file under this room's granted roots."
+            },
+            "expected_before_hash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "content_hash of the file as file.read returned it."
+            }
+          }
+        }
+      },
+      "empty_directories": {
+        "type": "array",
+        "description": "Absolute paths of directories to remove once they are empty, deepest first.",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "is_world_effect": true
+}

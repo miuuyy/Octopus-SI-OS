@@ -85,6 +85,7 @@
       "browser.wait",
       "browser.wait_complete",
       "file.write",
+      "file.delete",
       "browser.viewport_set",
       "browser.viewport_reset",
       "code_mode.run",
@@ -174,7 +175,8 @@
     "artifact_verbs": [
       "read",
       "create",
-      "change"
+      "change",
+      "delete"
     ]
   },
   "role_artifacts": [

@@ -19,6 +19,7 @@ mod collection_tools;
 mod artifact_send;
 mod bound_surface;
 mod file_write;
+mod file_delete;
 mod file_read;
 mod memory_bound;
 mod memory_observation;
@@ -68,14 +69,21 @@ impl ToolProcessHandler for FileWriteProcess {
             let formation = invocation.worker_environment.as_ref().ok_or_else(|| {
                 capability("file.write invocation has no formed worker environment")
             })?;
-            let response = match file_write::execute_file_write_result(
-                &invocation.envelope,
-                &call.arguments,
-                &room_kinds,
-                &write_roots(&invocation.descriptor.process.authority, &self.root_slots),
-                &self.effect_root,
-                self.max_payload_bytes,
-            ) {
+            let roots = write_roots(&invocation.descriptor.process.authority, &self.root_slots);
+            let outcome = match invocation.descriptor.handler_config.get("operation").and_then(serde_json::Value::as_str) {
+                None => file_write::execute_file_write_result(
+                    &invocation.envelope,
+                    &call.arguments,
+                    &room_kinds,
+                    &roots,
+                    &self.effect_root,
+                    self.max_payload_bytes,
+                ),
+                Some("delete") => file_delete::execute_file_delete(&invocation.envelope, &call.arguments, &room_kinds, &roots)
+                    .map_err(|error| octopus_tool_handlers::ToolResultError::new("tool_execution_failed", error)),
+                Some(other) => return Err(capability(format!("file tool descriptor names unknown operation '{other}'"))),
+            };
+            let response = match outcome {
                 Ok(body) => {
                     io.record_worker_environment_lifecycle(
                         formation,

@@ -829,6 +829,13 @@
     ],
     "query_arguments": []
   },
+  "file.delete": {
+    "kind": "tool",
+    "conversation_visible": false,
+    "label": "Delete",
+    "target_arguments": [],
+    "query_arguments": []
+  },
   "file.list": {
     "kind": "list",
     "conversation_visible": true,

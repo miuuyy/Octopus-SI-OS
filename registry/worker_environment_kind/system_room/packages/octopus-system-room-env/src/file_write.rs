@@ -531,7 +531,7 @@ pub(crate) fn install_effect_record(path: &Path, bytes: &[u8]) -> Result<(), Str
     }
 }
 
-fn ensure_room_kind_granted(
+pub(crate) fn ensure_room_kind_granted(
     input: &InterfaceInvocationEnvelope,
     room_kinds: &[String],
 ) -> Result<(), String> {
@@ -564,7 +564,7 @@ fn invocation_granted_wek(input: &InterfaceInvocationEnvelope) -> Result<Vec<Str
         .to_vec())
 }
 
-fn configured_write_roots(values: &[PathBuf]) -> Result<Vec<AbsPath>, String> {
+pub(crate) fn configured_write_roots(values: &[PathBuf]) -> Result<Vec<AbsPath>, String> {
     let mut roots = Vec::with_capacity(values.len());
     let mut unresolved = Vec::new();
     for path in values {
@@ -646,7 +646,7 @@ fn retain_write_inputs(effect_root: &Path, requests: &[WriteRequest]) -> Result<
     Ok(())
 }
 
-fn canonicalize_declared_path(path: &Path) -> Result<AbsPath, String> {
+pub(crate) fn canonicalize_declared_path(path: &Path) -> Result<AbsPath, String> {
     let normalized = AbsPath::new(path)
         .map_err(|error| format!("path '{}' is invalid: {error}", path.display()))?;
     let mut existing = normalized.as_path().to_path_buf();
