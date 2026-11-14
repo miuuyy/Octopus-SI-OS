@@ -3237,6 +3237,9 @@
         ).unwrap();
         let connected_record = RunRecord::from_bytes(connected.content.as_bytes()).unwrap();
         let connected_config = config_from_persisted_profile(&connected_record, &provider, &profile).unwrap();
+        let mut repinned = connected_record.clone();
+        repinned.worker = InterfaceId::new("system_worker_other");
+        assert_eq!(config_from_persisted_profile(&repinned, &provider, &profile).unwrap().worker, repinned.worker);
         let connected_topology: BoundRunAuthoringTopology = serde_json::from_value(
             connected_record.interface_state[&provider][RUN_AUTHORING_BINDING].clone()
         ).unwrap();

@@ -104,7 +104,8 @@ pub(crate) fn config_from_persisted_profile(
             )
         })?;
     topology.validate_identity(record, provider)?;
-    let config = topology.config(profile);
+    let mut config = topology.config(profile);
+    config.worker = record.worker.clone();
     config.validate(provider, &record.id)?;
     validate_bound_run_authoring_topology(record, &config, None)?;
     Ok(config)

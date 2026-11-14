@@ -288,7 +288,6 @@ pub fn verify_selected_source_input(
     .map_err(|e| e.to_string())?;
     if runtime.interface.as_str() != scope.provider
         || topology.run != record.id
-        || topology.worker != record.worker
         || topology.provider_interface.as_str() != scope.provider
         || !topology.checkpoints.iter().any(|template| {
             template.role.is_provider_input()

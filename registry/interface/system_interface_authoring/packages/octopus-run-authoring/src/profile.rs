@@ -217,7 +217,7 @@ pub(crate) fn validate_declared_provider_writer(record: &RunRecord, writer: &Che
     let topology: BoundRunAuthoringTopology = serde_json::from_value(record.interface_state.get(&writer.owner)
         .and_then(|state| state.get(RUN_AUTHORING_BINDING)).cloned()
         .ok_or("independent provider writer has no owner-authored topology")?).map_err(|e| e.to_string())?;
-    if topology.schema_version != 2 || topology.run != record.id || topology.worker != record.worker
+    if topology.schema_version != 2 || topology.run != record.id
         || topology.provider_interface != writer.owner || topology.authoring_source_interface != writer.source {
         return Err("independent provider writer differs from its exact owner topology".into());
     }
@@ -262,15 +262,11 @@ impl BoundRunAuthoringTopology {
                 record.id.as_str()
             ));
         }
-        if self.run != record.id
-            || self.worker != record.worker
-            || self.provider_interface != *provider
-        {
+        if self.run != record.id || self.provider_interface != *provider {
             return Err(format!(
-                "provider run '{}' run_authoring_binding identity does not match run='{}' worker='{}' provider='{}'",
+                "provider run '{}' run_authoring_binding identity does not match run='{}' provider='{}'",
                 record.id.as_str(),
                 record.id.as_str(),
-                record.worker.as_str(),
                 provider.as_str()
             ));
         }
