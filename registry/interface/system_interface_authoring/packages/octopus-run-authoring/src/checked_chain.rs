@@ -517,7 +517,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 Some(edits) => edits,
                 None => foreign_edits.insert(foreign_edit::proven_writes(reader, path, &foreign_candidates)?),
             };
-            if let Some(transition) = foreign_edit::transition_from(edits, &current, previous_call)? {
+            if let Some(transition) = foreign_edit::transition_from(edits, &current, previous_call, writers)? {
                 by_before.insert(hash.clone(), transition);
             }
         }
