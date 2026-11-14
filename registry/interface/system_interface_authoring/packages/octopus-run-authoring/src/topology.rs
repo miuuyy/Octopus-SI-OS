@@ -784,10 +784,6 @@ pub(crate) fn derive_handoff_delivery_mode(
         if hard_blocked.contains(&config.file_write_tool) {
             return Err("provider's declared writer tool is hard-blocked".into());
         }
-        if metadata.grant().ee_root_slot_allowance_set()
-            .is_some_and(|allowance| !allowance.contains("run_records_root")) {
-            return Err("provider's declared writer Run is outside the EE root-slot allowance".into());
-        }
         return Ok(HandoffDeliveryMode::Rearm);
     }
     if granted_tools.contains(&config.file_write_tool) {
@@ -822,13 +818,6 @@ pub(crate) fn derive_handoff_delivery_mode(
         if authoring_call.outbound_interfaces().next() != Some(authoring_result.interface()) {
             return Err(format!(
                 "provider run '{}' authoring path is incomplete",
-                config.run.as_str()
-            ));
-        }
-        if metadata.grant().ee_root_slot_allowance_set()
-            .is_some_and(|allowance| !allowance.contains("run_records_root")) {
-            return Err(format!(
-                "provider run '{}' formed grant does not admit run_records_root",
                 config.run.as_str()
             ));
         }

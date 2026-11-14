@@ -432,14 +432,7 @@ pub(super) fn consume_result(
         return Ok(false);
     }
     let target = target(record, &ctx.interface)?;
-    let root = ctx
-        .root_slot("run_records_root")?
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let bytes =
-        std::fs::read(root.join(format!("{}.json", target.run))).map_err(|e| e.to_string())?;
-    let original = RunRecord::from_bytes(&bytes).map_err(|e| e.to_string())?;
-    let config = config_from_persisted_profile(&original, &ctx.interface, profile)?;
+    let config = result_call_config(ctx, cache, profile, movement, record, &target)?;
     if config
         .writer_run
         .as_ref()
@@ -458,6 +451,66 @@ pub(super) fn consume_result(
     } else {
         Err("writer result has no exact checked ordered effect".into())
     }
+}
+
+fn result_call_config(
+    ctx: &InterfaceLiftContext, cache: &Mutex<BTreeMap<RunId, WriterHistory>>,
+    profile: &RunAuthoringProfile, result_movement: &Movement,
+    writer_record: &RunRecord, target: &Target,
+) -> Result<RunAuthoringConfig, String> {
+    let limits = ctx.required_host_io_limits()?;
+    let evidence = CheckedRunEvidence {
+        movements_path: &ctx.movements_path, ledger_index_path: &ctx.ledger_index_path,
+        blobs_dir: &ctx.blobs_dir, max_control_frame_bytes: limits.max_control_frame_bytes,
+        max_manifest_bytes: limits.max_manifest_bytes, max_payload_bytes: limits.max_payload_bytes,
+    };
+    let mut reader = FileCheckedRunReader::open(&evidence, None)?.with_provider_context(ctx);
+    let (_, payload) = reader.artifact(result_movement.artifact.as_ref().ok_or("writer result has no artifact")?)?;
+    let result: ToolResultArtifact = serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+    let correlation = result.correlation_id.as_ref().ok_or("writer result has no correlation")?;
+    let retained_call = cache.lock().map_err(|_| "writer evidence cache poisoned")?
+        .get(&writer_record.id).and_then(|history| {
+            history.result_calls.get(&result_movement.seq.0).cloned().or_else(|| {
+                history.pending.as_ref().filter(|(id, _, _)| id == correlation)
+                    .and_then(|(_, _, movement)| movement.artifact.clone())
+            })
+        });
+    let read_config = |reader: &mut FileCheckedRunReader<'_>, reference: &ArtifactRef| -> Result<Option<RunAuthoringConfig>, String> {
+        let (manifest, payload) = reader.artifact(reference)?;
+        if manifest.label != profile.file_write_label { return Ok(None); }
+        let call: octopus_tool_handlers::ToolCallArtifact = serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
+        if call.correlation_id.as_ref() != Some(correlation) || call.tool != profile.file_write_tool { return Ok(None); }
+        let args: OrderedArguments = serde_json::from_value(call.arguments).map_err(|error| error.to_string())?;
+        let entry = args.writes.get(1).ok_or("writer call has no target entry")?;
+        let original = RunRecord::from_bytes(entry.before(limits.max_payload_bytes)?.as_bytes()).map_err(|error| error.to_string())?;
+        if original.id != target.run { return Err("writer result call names another target run".into()); }
+        config_from_persisted_profile(&original, &ctx.interface, profile).map(Some)
+    };
+    if let Some(reference) = retained_call {
+        return read_config(&mut reader, &reference)?.ok_or_else(|| "retained writer call differs from its result".into());
+    }
+    let mut indexed = reader.indexed_outbound_edges(&[(&target.source, &target.door)])?;
+    let mut selected = None;
+    loop {
+        if let Some(row) = indexed.as_mut().and_then(|rows| rows.pop_front()) {
+            if row.seq >= result_movement.seq.0 { break; }
+            reader.reader.seek(std::io::SeekFrom::Start(row.start_offset)).map_err(|error| error.to_string())?;
+            reader.next_seq = row.seq;
+        }
+        if reader.next_seq >= result_movement.seq.0 { break; }
+        let sequence = reader.next_seq;
+        let Some(call_movement) = reader.movement_with_grant_if(sequence, |_| false)? else {
+            return Err("writer result has no complete call prefix".into());
+        };
+        if call_movement.kind != MovementKind::InterfaceOutbound
+            || call_movement.from != Endpoint::Interface(target.source.clone())
+            || call_movement.to != Endpoint::Interface(target.door.clone())
+            || call_movement.runtime().is_none_or(|runtime| runtime.run != writer_record.id) { continue; }
+        if let Some(config) = read_config(&mut reader, call_movement.artifact.as_ref().ok_or("writer call has no artifact")?)? {
+            if selected.replace(config).is_some() { return Err("writer result has ambiguous correlated calls".into()); }
+        }
+    }
+    selected.ok_or_else(|| "writer result has no admitted correlated call".into())
 }
 
 pub fn separate_writer_run(
@@ -717,13 +770,9 @@ impl OwnerWriterEvidence {
             .completed
             .get(&ContentHash::of_bytes(entry.content(maximum)?.as_bytes()).to_hex())
             .map(|(_, applied)| *applied);
-        if result.is_none()
-            && progress.current
-                != attempt.arguments.writes[0]
-                    .before(maximum)?
-                    .as_bytes()
-        {
-            return Err("owner writer preimage has no exact checked history".into());
+        if result.is_none() && !preserves_writer_execution(&progress.current,
+            attempt.arguments.writes[0].before(maximum)?.as_bytes(), &attempt.writer.owner)? {
+            return Err("owner writer preimage changed its retained execution evidence".into());
         }
         Ok(result)
     }
@@ -853,52 +902,44 @@ fn next_writer(before: &[u8], config: &RunAuthoringConfig, format: JsonFormat, m
         .checked_add(1)
         .ok_or("writer generation overflow")?
         .max(minimum_generation);
-    let initial =
-        RunRecord::from_bytes(&binding.initial_bytes()?).map_err(|e| e.to_string())?;
-    if record.ee != initial.ee || record.trace != initial.trace || record.status != initial.status {
-        return Err("writer continuation changed EE, trace or status".into());
+    let initial = RunRecord::from_bytes(&binding.initial_bytes()?).map_err(|error| error.to_string())?;
+    let mut next: Value = serde_json::from_slice(before).map_err(|error| error.to_string())?;
+    next["interface_state"][config.provider_interface.as_str()][DECLARATION]["generation"] = json!(generation);
+    for role in [RunAuthoringCheckpointRole::AuthoringCall, RunAuthoringCheckpointRole::AuthoringResult] {
+        let template = config.checkpoint_for_role(role)?;
+        let select = |record: &RunRecord| -> Result<CheckpointId, String> {
+            let checkpoints = record.checkpoints.iter().filter(|checkpoint| {
+                record.active_checkpoints.contains(&checkpoint.id)
+                    && checkpoint_record_matches_template(checkpoint, template, &record.id)
+            }).collect::<Vec<_>>();
+            let [checkpoint] = checkpoints.as_slice() else {
+                return Err("writer generation has no unique declared call or result route".into());
+            };
+            Ok(checkpoint.id.clone())
+        };
+        let previous_id = select(&record)?;
+        let id = format!("{}_{}", select(&initial)?, generation);
+        if record.checkpoints.iter().any(|checkpoint| checkpoint.id.as_str() == id) {
+            return Err("writer generation collides with an existing checkpoint".into());
+        }
+        let rows = next["checkpoints"].as_array_mut().ok_or("writer checkpoints absent")?;
+        let checkpoint = rows.iter_mut().find(|checkpoint| checkpoint["id"].as_str() == Some(previous_id.as_str()))
+            .ok_or("writer generation lost its selected checkpoint")?;
+        checkpoint["id"] = json!(id);
+        checkpoint["trace"] = json!(format!("trace:{}:{id}", record.id));
+        let active = next["active_checkpoints"].as_array_mut().ok_or("writer active checkpoints absent")?;
+        let selected = active.iter_mut().find(|checkpoint| checkpoint.as_str() == Some(previous_id.as_str()))
+            .ok_or("writer generation lost its active checkpoint")?;
+        *selected = json!(id);
     }
-    if writer_generation(
-        binding,
-        &config.provider_interface,
-        declaration.generation,
-    )? != serde_json::from_slice::<Value>(before).map_err(|error| error.to_string())?
-    {
-        return Err("writer Run differs from its declared generation".into());
-    }
-    format.encode(&writer_generation(
-        binding,
-        &config.provider_interface,
-        generation,
-    )?)
+    format.encode(&next)
 }
 
-fn writer_generation(
-    binding: &WriterRunBinding,
-    provider: &InterfaceId,
-    generation: u64,
-) -> Result<Value, String> {
-    let mut next = binding.initial_record.clone();
-    if generation == 0 {
-        return Ok(next);
-    }
-    next["interface_state"][provider.as_str()][DECLARATION]["generation"] = json!(generation);
-    let mut ids = Vec::new();
-    for cp in next["checkpoints"]
-        .as_array_mut()
-        .ok_or("writer checkpoints absent")?
-    {
-        let id = format!(
-            "{}_{}",
-            cp["id"].as_str().ok_or("writer id absent")?,
-            generation
-        );
-        cp["id"] = json!(id);
-        cp["trace"] = json!(format!("trace:{}:{id}", binding.run));
-        ids.push(id);
-    }
-    next["active_checkpoints"] = json!(ids);
-    Ok(next)
+fn preserves_writer_execution(before: &[u8], after: &[u8], provider: &InterfaceId) -> Result<bool, String> {
+    let before = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
+    let after = RunRecord::from_bytes(after).map_err(|error| error.to_string())?;
+    Ok(before.id == after.id && target(&before, provider)? == target(&after, provider)?
+        && before.interface_state.get(provider) == after.interface_state.get(provider))
 }
 
 impl OrderedArguments {
@@ -953,10 +994,7 @@ impl OrderedArguments {
         }
         let prospective =
             RunRecord::from_bytes(edit_content.as_bytes()).map_err(|e| e.to_string())?;
-        if record.id != prospective.id
-            || record.ee != prospective.ee
-            || record.worker != prospective.worker
-        {
+        if record.id != prospective.id || record.ee != prospective.ee {
             return Err("ordered call changes its target identity".into());
         }
         let arguments = FileWriteCallArguments {
@@ -1016,9 +1054,15 @@ impl OrderedArguments {
         });
         let unresolved = indeterminate || definite_refusal(result).is_some();
         let stopped = writer_stop(result);
-        let writer_unadvanced = snapshot == decoded[0].0.as_bytes();
+        let matches_receiving_snapshot = |expected: &[u8]| -> Result<bool, String> {
+            let expected_record = RunRecord::from_bytes(expected).map_err(|error| error.to_string())?;
+            Ok(preserves_writer_execution(expected, snapshot, &writer.owner)?
+                && expected_record.active_checkpoints.contains(&runtime.checkpoint)
+                && expected_record.checkpoint(&runtime.checkpoint) == Some(cp))
+        };
+        let writer_unadvanced = matches_receiving_snapshot(decoded[0].0.as_bytes())?;
         let mismatches = [
-            (snapshot != decoded[0].1.as_bytes() && !((unresolved || stopped.is_some()) && writer_unadvanced), "run record bytes"),
+            (!matches_receiving_snapshot(decoded[0].1.as_bytes())? && !((unresolved || stopped.is_some()) && writer_unadvanced), "receiving checkpoint and execution evidence"),
             (runtime.run != record.id, "run"),
             (runtime.ee != record.ee, "execution environment"),
             (runtime.worker != record.worker, "worker"),
@@ -1170,6 +1214,7 @@ pub(super) struct WriterHistory {
     pending: Option<(String, OrderedArguments, Movement)>,
     completed: BTreeMap<String, (u64, bool)>,
     applied_calls: BTreeMap<String, u64>,
+    result_calls: BTreeMap<u64, ArtifactRef>,
     last_applied_target: Option<(u64, Vec<u8>)>,
     unresolved: Option<UnresolvedTarget>,
     voided: BTreeMap<u64, u64>,
@@ -1208,6 +1253,7 @@ fn history(
         pending: None,
         completed: BTreeMap::new(),
         applied_calls: BTreeMap::new(),
+        result_calls: BTreeMap::new(),
         last_applied_target: None,
         unresolved: None,
         voided: BTreeMap::new(),
@@ -1339,8 +1385,8 @@ fn history(
                 let observed = ContentHash::of_bytes(&before).to_hex();
                 resolve_target_attempt(&mut current, &mut reader, &declared, &target_path, &config.provider_interface, limits.max_payload_bytes, &observed, Some(&snapshot))?;
             }
-            if snapshot != current.current {
-                return Err("writer call changed its proven preimage".into());
+            if snapshot != current.current && !preserves_writer_execution(&current.current, &snapshot, &config.provider_interface)? {
+                return Err("writer call changed its retained execution evidence".into());
             }
             let before = RunRecord::from_bytes(&before).map_err(|e| e.to_string())?;
             if owner_config(&before, &declared)?
@@ -1404,6 +1450,7 @@ fn history(
                 return Err("writer result correlation or label differs".into());
             }
             let effect = args.checked_result(&declared, metadata, &snapshot, &result, limits.max_payload_bytes, call.seq.0)?;
+            current.result_calls.insert(movement.seq.0, call.artifact.clone().ok_or("writer call has no retained artifact")?);
             current.current = snapshot;
             if target_untouched(&result, effect) {
                 let writer = RunRecord::from_bytes(args.writes[0].content(limits.max_payload_bytes)?.as_bytes()).map_err(|e| e.to_string())?;
@@ -1730,16 +1777,8 @@ impl ProviderOutputHandoff {
             if generation != expected {
                 validate_revision_attempt_predecessor(&self.ctx, before_bytes.as_bytes(), record_bytes,
                     attempt.source_movement_seq, &attempt_config(&before, &self.config)?)?;
-            } else if before.interface_state.get(&self.config.provider_interface)
-                != record.interface_state.get(&self.config.provider_interface)
-            {
-                let protected = output_connections::protected_record(before_bytes.as_bytes(), record_bytes, &self.config)?
-                    .ok_or("private writer recovery changed provider-owned target state")?;
-                let protected = RunRecord::from_bytes(&protected).map_err(|error| error.to_string())?;
-                if before.interface_state.get(&self.config.provider_interface)
-                    != protected.interface_state.get(&self.config.provider_interface) {
-                    return Err("private writer recovery changed protected provider-owned target state".into());
-                }
+            } else if !preserves_provider_evidence(before_bytes.as_bytes(), record_bytes, &self.config.provider_interface)? {
+                return Err("private writer recovery changed target execution evidence".into());
             }
             if let Some(previous) = &selected {
                 let previous: &Attempt = previous;
@@ -1832,9 +1871,9 @@ impl ProviderOutputHandoff {
                     )
                 })
                 .await?;
-                let routing_only = output_connections::protected_record(before, &current, &self.config)?
-                    .is_some_and(|protected| ContentHash::of_bytes(&protected) == ContentHash::of_bytes(before));
-                if (chain.is_empty() && !routing_only) || chain
+                let configuration_edit = before != current.as_slice()
+                    && preserves_provider_evidence(before, &current, &self.config.provider_interface)?;
+                if (chain.is_empty() && !configuration_edit) || chain
                         .iter()
                         .any(|t| t.writer.owner == self.config.provider_interface && !input_revision::checked_revision(t))
                 {
@@ -1866,14 +1905,16 @@ impl ProviderOutputHandoff {
                     .parent()
                     .ok_or("run parent absent")?
                     .join(format!("{}.json", binding.run));
-                if std::fs::read(&path).map_err(|e| e.to_string())? != progress.current {
-                    return Err("writer Run changed without admitted ordered-write evidence".into());
+                let current_writer = std::fs::read(&path).map_err(|error| error.to_string())?;
+                if current_writer != progress.current
+                    && !preserves_writer_execution(&progress.current, &current_writer, &self.config.provider_interface)? {
+                    return Err("writer Run changed its retained execution evidence".into());
                 }
                 if ContentHash::of_bytes(&state.run_record_bytes).to_hex() != planned.before_hash {
                     return Err("writer lost its planned target preimage".into());
                 }
                 let minimum = progress.voided.values().max().copied().unwrap_or(0).checked_add(1).ok_or("writer attempt generation overflow")?;
-                let next = next_writer(&progress.current, &self.config, JsonFormat::Compact, minimum)?;
+                let next = next_writer(&current_writer, &self.config, JsonFormat::Compact, minimum)?;
                 let next_record = RunRecord::from_bytes(&next).map_err(|e| e.to_string())?;
                 let generation = target(&next_record, &self.config.provider_interface)?.generation;
                 let call = OrderedCall {
@@ -1886,12 +1927,12 @@ impl ProviderOutputHandoff {
                     arguments: OrderedArguments {
                         ordered: true,
                         writes: vec![
-                            OrderedEntry::prepare(path, &progress.current, &next, Some(JsonFormat::Compact))?,
+                            OrderedEntry::prepare(path, &current_writer, &next, Some(JsonFormat::Compact))?,
                             OrderedEntry::prepare(self.run_path.clone(), &state.run_record_bytes, planned.content.as_bytes(), planned.json_format)?,
                         ],
                     },
                 };
-                call.arguments.checked_call(&writer(&self.config)?, &progress.current, &self.run_path, maximum)?;
+                call.arguments.checked_call(&writer(&self.config)?, &current_writer, &self.run_path, maximum)?;
                 let manifest = InterfaceArtifactFile::write(
                     &self.hand_in_root,
                     &self.config.file_write_label,

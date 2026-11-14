@@ -2,7 +2,7 @@ use super::*;
 use serde_json::{Value, json};
 
 #[test]
-fn definition_changes_preserve_writer_identity_and_private_continuity() {
+fn definition_changes_preserve_execution_evidence_without_freezing_configuration() {
     let provider = InterfaceId::new("provider");
     let original = json!({"id":"run", "ee":"ee", "worker":"worker", "trace":"trace",
         "status":"idle", "checkpoints":[], "active_checkpoints":[],
@@ -20,23 +20,21 @@ fn definition_changes_preserve_writer_identity_and_private_continuity() {
         "name":"input","role":"stable","interface_binding":{"interface":"input","config":{"artifact_policy":{"mode":"all"}}},
         "outbound_interface_bindings":[{"interface":"provider","config":{"artifact_policy":{"mode":"all"}}}],"include_context":true,
         "required_verified_artifacts":[]}]);
+    changed["worker"] = json!("another_worker");
+    changed["trace"] = json!("another_trace");
+    changed["interface_state"]["provider"]["run_authoring_binding"]["authoring_source_interface"] = json!("another_writer");
+    changed["interface_state"]["provider"]["run_authoring_binding"]["payload_artifact_bindings"] = json!([{"id":"context","content":vec![0;32]}]);
     assert!(preserves_settled_continuity(&accepted, &decode(&changed), &provider).unwrap());
     for pointer in [
         "/interface_state/provider/authoring_generation",
         "/interface_state/provider/context_generation",
         "/interface_state/provider/pending_handoff",
-        "/interface_state/provider/run_authoring_binding/authoring_source_interface",
-        "/interface_state/provider/run_authoring_binding/payload_artifact_bindings",
-        "/worker",
-        "/trace",
+        "/id",
     ] {
         let mut forged = changed.clone();
         *forged.pointer_mut(pointer).unwrap() = match pointer {
             p if p.ends_with("generation") => json!(999),
             p if p.ends_with("pending_handoff") => json!({"terminal":false}),
-            p if p.ends_with("payload_artifact_bindings") => {
-                json!([{"id":"foreign","content":vec![0;32]}])
-            }
             _ => json!("forged"),
         };
         assert!(

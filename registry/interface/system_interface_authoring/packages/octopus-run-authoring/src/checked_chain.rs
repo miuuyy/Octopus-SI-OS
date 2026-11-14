@@ -46,7 +46,7 @@ pub trait CheckedRunEvidenceReader {
         let observed = last_segment.map_or(after_seq, |sequence| sequence.saturating_sub(1));
         for sequence in 0..=observed {
             let row = self.admitted_movement(sequence)?.ok_or("checked writer evidence interval is incomplete")?;
-            if detached_writer_starts_at(self, ledger_rows::OutboundRow::of(&row).as_ref(), path, record, before, &hash, writers)? {
+            if detached_writer_starts_at(self, ledger_rows::OutboundRow::of(&row).as_ref(), path, before, &hash, writers)? {
                 return sequence.checked_sub(1).ok_or("observed writer call has no earlier evidence boundary".into());
             }
         }
@@ -321,7 +321,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
     selected_install: Option<&CheckedRunInstall>,
 ) -> Result<Vec<CheckedRunTransition>, CheckedRunError> {
     if connection_config.is_some() && (before_seq.is_some() || !selected_reads.is_empty() || matches!(target, CheckedRunTarget::Observed { .. })) {
-        return Err("observed connections cannot bridge historical or selected-read evidence".into());
+        return Err("observed configuration cannot bridge historical or selected-read evidence".into());
     }
     let start = ContentHash::of_bytes(before).to_hex();
     let (end, after, observed_sequence) = match target {
@@ -523,23 +523,20 @@ pub(crate) fn checked_run_file_chain_with_reader(
         }
         let Some(transition) = by_before.remove(&hash) else {
             if let Some(config) = connection_config {
-                // These are validated endpoint bytes, never synthetic writer
-                // receipts. Only routing may differ between adjacent segments.
                 let mut successors = BTreeMap::new();
                 for bytes in by_before.values().filter(|next| next.call.seq.0 > previous_call).map(|next| next.before.as_slice())
                     .chain(calls.values().filter(|next| next.call.seq.0 > previous_call).map(|next| next.before.as_slice()))
                     .chain(after.into_iter()) {
-                    if output_connections::protected_record(&current, bytes, config)?
-                        .is_some_and(|protected| protected == current) {
+                    if preserves_provider_evidence(&current, bytes, &config.provider_interface)? {
                         successors.insert(ContentHash::of_bytes(bytes).to_hex(), bytes);
                     }
                 }
                 if successors.len() > 1 {
-                    return Err("observed outgoing connections have ambiguous checked successors".into());
+                    return Err("observed configuration has ambiguous checked successors".into());
                 }
                 if let Some((next, bytes)) = successors.into_iter().next() {
                     if connection_versions.insert(next.clone(), chain.len()).is_some() {
-                        return Err("observed outgoing connections cycle through a snapshot".into());
+                        return Err("observed configuration cycles through a snapshot".into());
                     }
                     hash = next;
                     current = bytes.to_vec();
@@ -602,7 +599,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
     }
     for (hash, position) in connection_versions {
         if versions.insert(hash, position).is_some() {
-            return Err("observed connection reuses a checked snapshot".into());
+            return Err("observed configuration reuses a checked snapshot".into());
         }
     }
     for (index, transition) in chain.iter().enumerate() {
@@ -701,8 +698,8 @@ pub fn checked_declared_run_install(
     }
     let transition = checked_run_install(&mut reader, path, install, &writers)?;
     let before = RunRecord::from_bytes(&transition.before).map_err(|e| e.to_string())?;
-    if before.id != record.id || before.worker != record.worker {
-        return Err("checked installation changed its declared target scope".into());
+    if before.id != record.id {
+        return Err("checked installation changed its declared target run".into());
     }
     validate_checked_owner_transition(&transition)?;
     Ok(transition)
@@ -846,7 +843,7 @@ pub(crate) fn observed_run_evidence_start(
 
 pub(crate) fn detached_writer_starts_at(
     reader: &mut (impl CheckedRunEvidenceReader + ?Sized), call: Option<&ledger_rows::OutboundRow>, path: &Path,
-    record: &RunRecord, before: &[u8], before_hash: &str, writers: &[CheckedRunWriter],
+    before: &[u8], before_hash: &str, writers: &[CheckedRunWriter],
 ) -> Result<bool, String> {
     let Some(call) = call else { return Ok(false); };
     let Some(writer) = writers.iter().find(|writer| call.from == Endpoint::Interface(writer.source.clone())
@@ -865,8 +862,8 @@ pub(crate) fn detached_writer_starts_at(
     let snapshot = reader.snapshot(&hash)?;
     if ContentHash::of_bytes(&snapshot) != hash { return Err("observed writer snapshot failed integrity".into()); }
     let declaration = RunRecord::from_bytes(&snapshot).map_err(|error| error.to_string())?;
-    if declaration.id != runtime.run || declaration.ee != runtime.ee || declaration.worker != record.worker
-        || runtime.worker != record.worker || runtime.interface != writer.door {
+    if declaration.id != runtime.run || declaration.ee != runtime.ee || declaration.worker != runtime.worker
+        || runtime.interface != writer.door {
         return Err("observed writer snapshot changed its exact admitted scope".into());
     }
     let (preimage, _) = ordered.checked_call(writer, &snapshot, path, reader.max_payload_bytes())?;
@@ -897,7 +894,7 @@ pub(crate) fn concurrent_writer_evidence_start(
     if let Some(sequences) = indexed {
         for seq in sequences {
             let row = reader.admitted_movement(seq)?.ok_or("checked writer evidence interval is incomplete")?;
-            if detached_writer_starts_at(&mut reader, ledger_rows::OutboundRow::of(&row).as_ref(), path, record, before, &before_hash, writers)? {
+            if detached_writer_starts_at(&mut reader, ledger_rows::OutboundRow::of(&row).as_ref(), path, before, &before_hash, writers)? {
                 return seq.checked_sub(1).ok_or("observed writer call has no earlier evidence boundary".into());
             }
         }
@@ -911,7 +908,7 @@ pub(crate) fn concurrent_writer_evidence_start(
         if let Some(artifact) = row.artifact.as_ref() {
             if ledger_rows::writer_call_excluded(evidence, artifact, writer, &before_hash)? { continue; }
         }
-        if detached_writer_starts_at(&mut reader, Some(&row), path, record, before, &before_hash, writers)? {
+        if detached_writer_starts_at(&mut reader, Some(&row), path, before, &before_hash, writers)? {
             return seq.checked_sub(1).ok_or("observed writer call has no earlier evidence boundary".into());
         }
     }
@@ -934,18 +931,7 @@ pub(crate) fn checked_selected_run_advance_state(
     ctx: &InterfaceLiftContext, path: &Path, before: &[u8], after: &[u8], after_seq: u64,
     config: &RunAuthoringConfig,
 ) -> Result<Vec<CheckedRunTransition>, CheckedRunError> {
-    let writers = config.checkpoints.iter().filter_map(|cp| cp.owner_authoring.clone()).collect::<Vec<_>>();
-    let original = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
-    let current = RunRecord::from_bytes(after).map_err(|error| error.to_string())?;
-    let payload_revision = input_revision::is_payload_revision(&original, &current, &config.provider_interface)?;
-    if writers.is_empty() && !payload_revision && !result_inputs::enabled(config)
-        && payload_artifact_bindings(&original, &config.provider_interface)?.is_empty()
-        && payload_artifact_bindings(&current, &config.provider_interface)?.is_empty() {
-        if let Some(protected) = output_connections::protected_record(before, after, config)? {
-            if ContentHash::of_bytes(before) != ContentHash::of_bytes(&protected) {
-                return Err("outgoing connection changed protected provider state without a checked writer chain".into());
-            }
-        }
+    if preserves_provider_evidence(before, after, &config.provider_interface)? {
         return Ok(Vec::new());
     }
     checked_provider_run_advance_state(ctx, path, before, after, after_seq, config)
@@ -975,7 +961,8 @@ pub(crate) fn checked_provider_run_advance_state(
     for transition in &chain {
         let original = RunRecord::from_bytes(&transition.before).map_err(|error| error.to_string())?;
         let next = RunRecord::from_bytes(&transition.after).map_err(|error| error.to_string())?;
-        if payload_artifact_bindings(&original, &config.provider_interface)? != payload_artifact_bindings(&next, &config.provider_interface)?
+        if !transition.foreign
+            && payload_artifact_bindings(&original, &config.provider_interface)? != payload_artifact_bindings(&next, &config.provider_interface)?
             && !(transition.writer == provider_writer && input_revision::is_payload_revision(&original, &next, &config.provider_interface)?) {
             return Err("checked owner advance changed the exact payload selection".into());
         }
@@ -1127,7 +1114,7 @@ pub fn validate_unchanged_admitted_checkpoint(before: &[u8], after: &[u8], check
     let before = RunRecord::from_bytes(before).map_err(|e| e.to_string())?;
     let after = RunRecord::from_bytes(after).map_err(|e| e.to_string())?;
     let original = before.checkpoint(checkpoint).ok_or("shared run input lost its original checkpoint")?;
-    if before.id != after.id || before.worker != after.worker || after.checkpoint(checkpoint) != Some(original) || !after.active_checkpoints.contains(checkpoint) {
+    if before.id != after.id || after.checkpoint(checkpoint) != Some(original) || !after.active_checkpoints.contains(checkpoint) {
         return Err("shared run changed the exact admitted checkpoint before consumption".into());
     }
     Ok(())
@@ -1368,8 +1355,8 @@ pub(crate) fn validate_verified_input_transition(reader: &mut impl CheckedRunEvi
     let matches = prior.iter().filter(|cp| checkpoint_record_matches_template(checkpoint, cp, &before.id)).collect::<Vec<_>>();
     if source.kind != MovementKind::InterfaceOutbound || source.seq.0 >= transition.call.seq.0
         || source.to != Endpoint::Interface(transition.writer.owner.clone()) || runtime.interface != transition.writer.owner
-        || runtime.run != before.id || runtime.worker != before.worker || runtime.ee != pinned.ee
-        || pinned.id != before.id || pinned.worker != before.worker
+        || runtime.run != before.id || runtime.worker != pinned.worker || runtime.ee != pinned.ee
+        || pinned.id != before.id
         || !pinned.active_checkpoints.contains(&runtime.checkpoint) || !before.active_checkpoints.contains(&runtime.checkpoint)
         || before.checkpoint(&runtime.checkpoint) != Some(checkpoint) || runtime.epoch != checkpoint.epoch.0 || matches.len() != 1
         || metadata.verification_failure.is_some() || metadata.checkpoint_binding_policy.as_ref() != Some(&matches[0].binding_policy_snapshot())

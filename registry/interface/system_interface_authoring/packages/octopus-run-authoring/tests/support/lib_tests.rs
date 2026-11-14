@@ -738,6 +738,14 @@
         let labels = BTreeSet::from(["interface.artifact.output".into()]);
         let local = InterfaceId::new("world_provider_local");
         let peer = InterfaceId::new("world_provider_peer");
+        let mut retained = Vec::new();
+        let mut context = ResolvedSessionContext { provider_interface: local.clone(), artifacts: Vec::new() };
+        let mut head = None;
+        collect_bound_context_from_cache(&blobs, limits, &mut retained, &mut context, &mut head,
+            &entry.source_artifact, &serde_json::to_vec(&entry.payload).unwrap(),
+            BoundArtifactProvenance::default(), &labels, &local).unwrap();
+        assert_eq!(retained, vec![entry.source_artifact.id.clone()]);
+        assert!(context.artifacts.is_empty() && head.is_none());
         validate_session_source_payload(&entry, &blobs, limits, &labels, 0, &local).unwrap();
         assert!(validate_session_source_payload(&entry, &blobs, limits, &labels, 0, &peer).is_err());
         entry.payload.as_object_mut().unwrap().remove(SESSION_CONTEXT_FIELD);

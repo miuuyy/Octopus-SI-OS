@@ -1355,7 +1355,6 @@ fn validate_new_marks(
         || before_seq.is_some_and(|sequence| source.seq.0 >= sequence)
         || source.to != Endpoint::Interface(config.provider_interface.clone())
         || runtime.run != before.id
-        || runtime.worker != before.worker
         || runtime.interface != config.provider_interface
         || metadata.verification_failure.is_some()
         || !metadata
@@ -1455,11 +1454,10 @@ fn validate_result_source(
         || source.from != Endpoint::Interface(template.interface().clone())
         || source.to != Endpoint::Interface(config.provider_interface.clone())
         || runtime.run != before.id
-        || runtime.worker != before.worker
         || runtime.ee != pinned.ee
         || runtime.interface != config.provider_interface
         || pinned.id != before.id
-        || pinned.worker != before.worker
+        || pinned.worker != runtime.worker
         || !pinned.active_checkpoints.contains(&checkpoint.id)
         || !before.active_checkpoints.contains(&checkpoint.id)
         || before.checkpoint(&checkpoint.id) != Some(checkpoint)

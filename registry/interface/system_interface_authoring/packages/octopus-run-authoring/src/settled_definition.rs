@@ -119,9 +119,7 @@ fn preserves_settled_continuity(
     current: &RunRecord,
     provider: &InterfaceId,
 ) -> Result<bool, String> {
-    if accepted.id != current.id
-        || accepted.trace != current.trace
-    {
+    if accepted.id != current.id {
         return Ok(false);
     }
     let protected = |record: &RunRecord| -> Result<BTreeMap<String, serde_json::Value>, String> {
@@ -130,24 +128,7 @@ fn preserves_settled_continuity(
             .get(provider)
             .ok_or("settled definition lost its provider state")?
             .clone();
-        let mut topology: BoundRunAuthoringTopology = serde_json::from_value(
-            state
-                .get(RUN_AUTHORING_BINDING)
-                .ok_or("settled definition lost its authoring binding")?
-                .clone(),
-        )
-        .map_err(|error| error.to_string())?;
-        topology.checkpoints.retain(|template| {
-            matches!(
-                template.role,
-                RunAuthoringCheckpointRole::AuthoringCall
-                    | RunAuthoringCheckpointRole::AuthoringResult
-            )
-        });
-        state.insert(
-            RUN_AUTHORING_BINDING.into(),
-            serde_json::to_value(topology).map_err(|error| error.to_string())?,
-        );
+        state.remove(RUN_AUTHORING_BINDING);
         state.remove(FRONTIER_CHECKPOINT_IDS);
         Ok(state)
     };

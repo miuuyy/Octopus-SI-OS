@@ -70,8 +70,8 @@ fn rejection(
     })?;
     let Some(scope) = index.retained_arrival_scope(provider, &identity).map_err(|e| e.to_string())? else { return Ok(None); };
     let edges = index.retained_arrival_edges(scope.seq.0).map_err(|e| e.to_string())?;
-    let intended = |runtime: &octopus_ledger::RuntimeInvocationMetadata| runtime.run == record.id && runtime.ee == record.ee
-        && runtime.worker == record.worker && runtime.interface == *provider
+    let intended = |runtime: &octopus_ledger::RuntimeInvocationMetadata| runtime.run == record.id
+        && runtime.interface == *provider
         && runtime.checkpoint == item.checkpoint.id && runtime.epoch == item.checkpoint.epoch;
     let targets = edges.iter().filter(|(runtime, _)| intended(runtime)).collect::<Vec<_>>();
     let [(_, target)] = targets.as_slice() else { return Err("rejected final scope lost its intended output".into()); };
@@ -214,7 +214,7 @@ fn validate_proof(reader: &mut impl CheckedRunEvidenceReader, record: &RunRecord
     let bytes = reader.snapshot(&hash)?;
     if ContentHash::of_bytes(&bytes) != hash { return Err("replacement preimage failed integrity".into()); }
     let predecessor = RunRecord::from_bytes(&bytes).map_err(|e| e.to_string())?;
-    if predecessor.id != record.id || predecessor.ee != record.ee || predecessor.worker != record.worker
+    if predecessor.id != record.id
         || persisted_pending_handoff(&predecessor, provider)?.as_ref() != Some(&proof.predecessor) {
         return Err("replacement proof changed its original run or pending output".into());
     }

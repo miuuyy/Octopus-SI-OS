@@ -215,9 +215,9 @@ impl ProviderHandoffSession {
                 run.as_str()
             )
         })?;
-        if record.id != *run || record.worker != runtime.worker {
+        if record.id != *run {
             return Err(format!(
-                "failed provider source run '{}' current record names another run or worker",
+                "failed provider source run '{}' current record names another run",
                 run.as_str()
             ));
         }
@@ -397,7 +397,7 @@ impl ProviderOutputHandoff {
             if row.seq.0 >= before_seq { break; }
             if row.seq.0 <= pending.source_movement_seq || row.kind != MovementKind::InterfaceArrival
                 || row.from != Endpoint::Interface(self.config.provider_interface.clone())
-                || row.to != Endpoint::Interface(self.config.worker.clone())
+                || row.runtime().is_none_or(|runtime| row.to != Endpoint::Interface(runtime.worker.clone()))
                 || row.run() != Some(&self.config.run)
             { continue; }
             if row.invocation_metadata.as_ref().and_then(|metadata| metadata.invocation())
@@ -412,7 +412,7 @@ impl ProviderOutputHandoff {
             let hash = row.runtime().and_then(|runtime| runtime.run_record_hash.as_deref())
                 .and_then(ContentHash::from_hex).ok_or("source failure has no exact pinned run record")?;
             let (_, record) = pinned_run_record(&self.ctx, &hash, "unsubmitted source failure")?;
-            if record.id != self.config.run || record.worker != self.config.worker
+            if record.id != self.config.run || row.runtime().is_none_or(|runtime| record.worker != runtime.worker || record.ee != runtime.ee)
                 || persisted_pending_handoff(&record, &self.config.provider_interface)?.as_ref() != Some(pending)
             { continue; }
             if self.pending_source_unsubmitted(&record, pending)? { return Ok(true); }
@@ -460,8 +460,8 @@ impl ProviderOutputHandoff {
             let runtime = movement.runtime().ok_or("pending refusal has no exact runtime coordinate")?;
             let item = &pending.items[index];
             if runtime.checkpoint != item.checkpoint.id || runtime.epoch != item.checkpoint.epoch { continue; }
-            if runtime.interface != self.config.provider_interface || runtime.worker != record.worker
-                || movement.to != Endpoint::Interface(record.worker.clone())
+            if runtime.interface != self.config.provider_interface
+                || movement.to != Endpoint::Interface(runtime.worker.clone())
                 || (refusal && !matches!(movement.invocation_metadata.as_ref().and_then(|metadata| metadata.delivery_verdict()), Some(DeliveryVerdict::Refused { .. })))
             {
                 return Err("pending refusal changed its exact interface or run scope".into());
@@ -474,7 +474,7 @@ impl ProviderOutputHandoff {
             let bytes = reader.snapshot(&hash)?;
             if ContentHash::of_bytes(&bytes) != hash { return Err("pending refusal snapshot integrity mismatch".into()); }
             let snapshot = RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
-            if snapshot.id != record.id || snapshot.worker != record.worker || snapshot.ee != runtime.ee
+            if snapshot.id != record.id || snapshot.worker != runtime.worker || snapshot.ee != runtime.ee
                 || persisted_pending_handoff(&snapshot, &self.config.provider_interface)?.as_ref() != Some(pending)
             {
                 return Err("pending refusal does not prove the current exact handoff".into());

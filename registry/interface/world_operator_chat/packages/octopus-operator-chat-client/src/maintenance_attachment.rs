@@ -151,7 +151,6 @@ fn validate_retained(existing: &Value, declaration: &Value, identity: &PlannedId
     }
     for (field, expected) in [
         ("source_run", &identity.run_id),
-        ("source_worker_interface", &identity.worker_interface_id),
         ("source_provider_interface", &identity.model_interface_id),
         ("source_client_interface", &identity.chat_interface_id),
     ] {

@@ -34,6 +34,13 @@ class TrimmingEvidenceTests(unittest.TestCase):
                                         "source_worker_interface": "worker", "source_provider_interface": "provider",
                                         "source_client_interface": "client"}})
 
+    def test_source_worker_is_observed_per_event(self):
+        self.value["source"]["worker_interface"] = "another_worker"
+        self.check(self.value)
+        self.value["source"]["worker_interface"] = ""
+        with self.assertRaisesRegex(AssertionError, "observed worker"):
+            self.check(self.value)
+
     def test_all_retained_field_locations_are_checked(self):
         for location, key in [("input", "trimmed_fields"), ("input", "original_trimmed_fields"),
                               ("terminal", "terminal_trimmed_fields"), ("evidence", "trimmed_fields")]:

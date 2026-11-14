@@ -55,14 +55,32 @@ impl ProviderOutputHandoff {
                 self.run_path.display()
             )
         })?;
-        if record.id != self.config.run || record.worker != self.config.worker {
-            return Err(format!(
-                "provider run topology drifted: file has run='{}' worker='{}', config requires run='{}' worker='{}'",
-                record.id.as_str(),
-                record.worker.as_str(),
-                self.config.run.as_str(),
-                self.config.worker.as_str()
-            ));
+        if record.id != self.config.run {
+            return Err(format!("provider record names run '{}', expected '{}'", record.id, self.config.run));
+        }
+        let current_config = attempt_config(&record, &self.config)?;
+        if current_config != self.config {
+            if current_config.authoring_source_interface != self.config.authoring_source_interface
+                || current_config.writer_run != self.config.writer_run
+                || current_config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringCall)?
+                    != self.config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringCall)?
+                || current_config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult)?
+                    != self.config.checkpoint_for_role(RunAuthoringCheckpointRole::AuthoringResult)?
+            {
+                return Err("authoring path changed while this response was prepared; the next arrival must use the current path".into());
+            }
+            if outputs.iter().any(|output| !current_config.checkpoints.contains(&output.output_checkpoint)) {
+                return Err("a prepared output's route changed before publication".into());
+            }
+            let mut current_handoff = self.clone();
+            current_handoff.bound_topology = serde_json::from_value(record.interface_state
+                .get(&self.config.provider_interface).and_then(|state| state.get(RUN_AUTHORING_BINDING))
+                .cloned().ok_or("current run has no authoring declaration")?)
+                .map_err(|error| error.to_string())?;
+            current_handoff.config = current_config;
+            return current_handoff.author_run_with_generations(current, context_artifacts, outputs,
+                refresh_context, context_generations, consumed_context_free_independent_input,
+                consumed_verified_input, terminal, bindings, standing, continuation);
         }
         let continued_context = continuation
             .map(|prior| source_continuation::continued_context(&record, &self.config, prior, context_artifacts, outputs))
@@ -305,7 +323,8 @@ impl ProviderOutputHandoff {
                 &artifact_bindings,
             )?;
         }
-        if let Some(template) = consumed_context_free_independent_input {
+        if let Some(template) = consumed_context_free_independent_input
+            .filter(|template| self.config.checkpoints.contains(template)) {
             replace_consumed_independent_input_checkpoint(
                 root,
                 template,
@@ -713,7 +732,6 @@ impl ProviderOutputHandoff {
         }
         let runtime = envelope.runtime().map_err(|error| error.to_string())?;
         if runtime.run != self.config.run
-            || runtime.worker != self.config.worker
             || runtime.interface != self.config.provider_interface
             || runtime.checkpoint != authored.authoring_result_checkpoint
             || runtime.epoch != 0
@@ -754,13 +772,12 @@ impl ProviderOutputHandoff {
             ));
         }
         let pinned = self.ctx.pinned_run_record_bytes(envelope)?;
-        if pinned != authored.content.as_bytes() {
-            if !self.config.checkpoints.iter().any(|cp| cp.owner_authoring.is_some()) {
-                return Err("provider authoring result did not pin the exact authored run bytes".into());
-            }
-            validate_unchanged_admitted_checkpoint(authored.content.as_bytes(), &pinned,
-                &authored.authoring_result_checkpoint)?;
+        let admitted = RunRecord::from_bytes(&pinned).map_err(|error| error.to_string())?;
+        if admitted.id != runtime.run || admitted.worker != runtime.worker || admitted.ee != runtime.ee {
+            return Err("provider authoring result differs from its admitted run scope".into());
         }
+        validate_unchanged_admitted_checkpoint(authored.content.as_bytes(), &pinned,
+            &authored.authoring_result_checkpoint)?;
         Ok(())
     }
 
@@ -777,19 +794,9 @@ impl ProviderOutputHandoff {
                 self.run_path.display()
             )
         })?;
-        if actual != authored.content.as_bytes() {
-            if !self.config.checkpoints.iter().any(|cp| cp.owner_authoring.is_some()) {
-                return Err("provider file.write result does not match the bytes on disk".into());
-            }
-            validate_unchanged_admitted_checkpoint(authored.content.as_bytes(), &actual,
-                &authored.authoring_result_checkpoint)?;
+        if RunRecord::from_bytes(&actual).map_err(|error| error.to_string())?.id != self.config.run {
+            return Err("provider file.write target now names another run".into());
         }
-        RunRecord::from_bytes(&actual).map_err(|error| {
-            format!(
-                "provider run '{}' authored file is malformed after write: {error}",
-                self.config.run.as_str()
-            )
-        })?;
         Ok(())
     }
 

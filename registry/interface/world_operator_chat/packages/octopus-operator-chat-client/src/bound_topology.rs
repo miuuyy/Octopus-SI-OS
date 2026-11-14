@@ -55,7 +55,6 @@ pub(crate) fn existing_bound_run_authoring_topology(
         .map_err(|error| format!("existing run authoring binding is malformed: {error}"))?;
     if binding.schema_version != 2
         || binding.run.as_str() != identity.run_id
-        || binding.worker.as_str() != identity.worker_interface_id
         || binding.provider_interface.as_str() != identity.model_interface_id
         || binding.authoring_source_interface.as_str() != identity.authoring_source_id
     {

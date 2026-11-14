@@ -31,9 +31,10 @@ def verify(request):
     assert request["artifact_label"] == value["label"] == "memory.experience.input" and value["schema_version"] == 1, "projected experience identity mismatch"
     assert "session_context" not in value and exact(value["text"]), "foreign continuity or absent ordinary input text"
     source = value["source"]
-    for field, key in [("run", "source_run"), ("worker_interface", "source_worker_interface"), ("provider_interface", "source_provider_interface"), ("client_interface", "source_client_interface")]:
+    for field, key in [("run", "source_run"), ("provider_interface", "source_provider_interface"), ("client_interface", "source_client_interface")]:
         assert source[field] == params[key], "projected source identity mismatch: " + field
     assert exact(source["ee"]), "projected source has no observed EE"
+    assert exact(source["worker_interface"]), "projected source has no observed worker"
     assert reference(source["terminal_artifact"]), "terminal reference malformed"
     assert isinstance(source["terminal_source_movement_seq"], int) and isinstance(source["projection_source_movement_seq"], int), "original terminal movement proof absent"
     selected = value["selected_input"]

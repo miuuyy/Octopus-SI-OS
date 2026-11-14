@@ -1366,7 +1366,7 @@ mod movement_gate {
                     source_artifact: wrapped_ref.clone(), source_movement_seq: Some(wrapped.seq.0),
                 };
                 let scope = SnapshotSourceScope {
-                    run: plan.run_id.clone(), worker: plan.worker_interface_id.clone(),
+                    run: plan.run_id.clone(),
                     provider: source_provider.into(), client: config.source_client_interface.clone(), relay: config.source_relay_interface.clone(),
                 };
                 let origin = config.input_rules.iter().find(|rule| rule.labels.contains(&intake.input_label)).unwrap().origin.as_ref();

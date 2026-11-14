@@ -147,3 +147,76 @@ pub(crate) fn validate_write_result_evidence(
         authored.content.len(),
     )
 }
+
+pub(crate) fn preserves_provider_evidence(before: &[u8], after: &[u8], provider: &InterfaceId) -> Result<bool, String> {
+    let before = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
+    let after = RunRecord::from_bytes(after).map_err(|error| error.to_string())?;
+    if before.id != after.id || before.ee != after.ee { return Ok(false); }
+    let execution = |record: &RunRecord| {
+        record.interface_state.get(provider).map(|state| {
+            let mut state = state.clone();
+            state.remove(RUN_AUTHORING_BINDING);
+            state.remove(FRONTIER_CHECKPOINT_IDS);
+            state
+        })
+    };
+    Ok(execution(&before) == execution(&after))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderedFileWriteReceipt {
+    path: PathBuf,
+    before_hash: Option<String>,
+    after_hash: String,
+    bytes: u64,
+    outcome: String,
+    observed_hash: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderedFileWriteReceipts {
+    result: String,
+    writes: Vec<OrderedFileWriteReceipt>,
+}
+
+pub(crate) fn applied_file_write_receipts(result: &ToolResultArtifact) -> Result<Option<Vec<Option<FileWriteEvidence>>>, String> {
+    let body = if result.ok && result.error.is_none() {
+        result.body.as_ref()
+    } else if !result.ok && result.body.is_none() {
+        result.error.as_ref().filter(|error| error.code == "file_write_incomplete")
+            .and_then(|error| error.details.as_ref()).and_then(|details| details.get("file_write"))
+    } else { None };
+    let Some(body) = body else { return Ok(None); };
+    match body.get("result").and_then(serde_json::Value::as_str) {
+        Some("files_written") if result.ok => {
+            let body: FileWriteResultBody = serde_json::from_value(body.clone()).map_err(|error| error.to_string())?;
+            Ok(Some(body.writes.into_iter().map(Some).collect()))
+        }
+        Some("ordered_file_writes") => {
+            let body: OrderedFileWriteReceipts = serde_json::from_value(body.clone()).map_err(|error| error.to_string())?;
+            if body.result != "ordered_file_writes" { return Err("ordered write receipt changed its operation".into()); }
+            let mut stopped = false;
+            let mut applied = Vec::with_capacity(body.writes.len());
+            for receipt in body.writes {
+                match receipt.outcome.as_str() {
+                    "applied" if !stopped => {
+                        if receipt.observed_hash.as_ref() != Some(&receipt.after_hash) || receipt.error.is_some() {
+                            return Err("applied ordered write has no exact effect receipt".into());
+                        }
+                        applied.push(Some(FileWriteEvidence { path: receipt.path, before_hash: receipt.before_hash,
+                            after_hash: receipt.after_hash, bytes: receipt.bytes }));
+                    }
+                    "refused" | "uncertain" if !stopped && !result.ok => { stopped = true; applied.push(None); }
+                    "not_attempted" if stopped && !result.ok => applied.push(None),
+                    _ => return Err("ordered write receipts do not describe an applied prefix".into()),
+                }
+            }
+            if !result.ok && !stopped { return Err("incomplete ordered write has no stopped entry".into()); }
+            Ok(Some(applied))
+        }
+        _ => Ok(None),
+    }
+}

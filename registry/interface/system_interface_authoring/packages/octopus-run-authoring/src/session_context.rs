@@ -423,6 +423,7 @@ pub(crate) fn collect_bound_context_from_cache(
             &snapshot.provider_interface,
         )?;
         if snapshot.provider_interface != *provider {
+            append_artifact(static_context_artifacts, artifact.id.clone());
             return Ok(());
         }
         let label = label.as_deref().ok_or_else(|| {

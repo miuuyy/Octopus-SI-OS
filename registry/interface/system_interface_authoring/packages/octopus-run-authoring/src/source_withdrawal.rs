@@ -131,7 +131,7 @@ pub(super) fn validate_source(reader: &mut impl CheckedRunEvidenceReader, record
     let runtime = metadata.runtime.as_ref().ok_or("withdrawal source has no runtime coordinate")?;
     if movement.seq.0 != seq || movement.kind != MovementKind::InterfaceOutbound
         || movement.to != Endpoint::Interface(provider.clone()) || movement.artifact.as_ref() != Some(reference)
-        || runtime.run != record.id || runtime.worker != record.worker
+        || runtime.run != record.id
         || runtime.interface != *provider || metadata.verification_failure.is_some()
         || !metadata.checkpoint_admission.as_ref().is_some_and(|admission| admission.complete)
     { return Err("withdrawal changed its exact admitted source coordinate".into()); }
@@ -140,7 +140,8 @@ pub(super) fn validate_source(reader: &mut impl CheckedRunEvidenceReader, record
     if ContentHash::of_bytes(&bytes) != hash { return Err("withdrawal source snapshot hash mismatch".into()); }
     let pinned = RunRecord::from_bytes(&bytes).map_err(|error| error.to_string())?;
     let checkpoint = pinned.checkpoint(&runtime.checkpoint).ok_or("withdrawal source checkpoint is absent")?;
-    if pinned.id != record.id || !pinned.active_checkpoints.contains(&runtime.checkpoint) || checkpoint.epoch.0 != runtime.epoch
+    if pinned.id != record.id || pinned.worker != runtime.worker || pinned.ee != runtime.ee
+        || !pinned.active_checkpoints.contains(&runtime.checkpoint) || checkpoint.epoch.0 != runtime.epoch
         || checkpoint.interface_binding.as_ref().map(|binding| Endpoint::Interface(binding.interface.clone())).as_ref() != Some(&movement.from)
         || !checkpoint.outbound_interface_bindings.iter().any(|binding| binding.interface == *provider)
     { return Err("withdrawal source differs from its exact pinned admission".into()); }

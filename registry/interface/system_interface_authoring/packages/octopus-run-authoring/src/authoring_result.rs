@@ -691,7 +691,7 @@ pub(crate) fn validate_authoring_attempt_source(
         source_withdrawal::validate_saved_attempt(ctx, record_bytes, &stepped_bytes, config)?;
         rejected_final::validate_saved_attempt(ctx, record_bytes, &stepped_bytes, config)?;
     }
-    if candidate.id != record.id || candidate.worker != record.worker {
+    if candidate.id != record.id {
         return Err(
             "provider authoring failure source call carries the wrong run topology".to_string(),
         );

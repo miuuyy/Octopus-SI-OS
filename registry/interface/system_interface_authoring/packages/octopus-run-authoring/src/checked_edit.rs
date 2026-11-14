@@ -43,12 +43,8 @@ impl CheckedRunEdit {
         let before = RunRecord::from_bytes(current).map_err(|e| e.to_string())?;
         let bytes = json_format.unwrap_or_default().encode(&prospective)?;
         let after = RunRecord::from_bytes(&bytes).map_err(|e| e.to_string())?;
-        if before.id != after.id
-            || before.ee != after.ee
-            || before.worker != after.worker
-            || before.trace != after.trace
-        {
-            return Err("checked run edit changed the original run identity".into());
+        if before.id != after.id {
+            return Err("checked run edit changed which run the file names".into());
         }
         let previous = serde_json::from_slice(current).map_err(|e| e.to_string())?;
         let patch = json_patch::diff(&previous, &prospective);
@@ -100,6 +96,7 @@ impl CheckedRunEdit {
     ) -> Result<(), String> {
         let record = RunRecord::from_bytes(self.content.as_bytes()).map_err(|e| e.to_string())?;
         validate_unchanged_admitted_checkpoint(self.content.as_bytes(), installed, checkpoint)?;
+        let admitted = RunRecord::from_bytes(installed).map_err(|e| e.to_string())?;
         let expected = record
             .checkpoint(checkpoint)
             .ok_or("checked authoring result checkpoint is absent")?;
@@ -123,8 +120,8 @@ impl CheckedRunEdit {
                 .and_then(|m| m.invocation())
                 != Some(metadata)
             || runtime.run != record.id
-            || runtime.ee != RunRecord::from_bytes(installed).map_err(|e| e.to_string())?.ee
-            || runtime.worker != record.worker
+            || runtime.ee != admitted.ee
+            || runtime.worker != admitted.worker
             || runtime.interface != *target
             || runtime.checkpoint != *checkpoint
             || runtime.epoch != expected.epoch.0

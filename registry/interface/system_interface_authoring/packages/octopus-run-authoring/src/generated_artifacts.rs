@@ -179,7 +179,7 @@ fn validate_result_outputs(
             let matches = candidate.kind == MovementKind::InterfaceArrival
                 && candidate.from == result_movement.from && candidate.artifact.as_ref() == Some(&output.artifact)
                 && candidate.invocation_metadata.as_ref().and_then(|m|m.invocation()).is_some_and(|m|
-                    m.runtime.as_ref().is_some_and(|r|r.run == runtime.run && r.worker == runtime.worker)
+                    m.runtime.as_ref().is_some_and(|r|r.run == runtime.run)
                     && m.verification_failure.is_none() && m.required_verified_artifacts.is_empty() && m.outbound_interface_bindings.is_empty()
                     && m.checkpoint_binding_policy.as_ref().is_some_and(|policy|policy.outbound.is_empty()
                         && matches!(&policy.inbound.config.artifact_policy, BindingArtifactPolicy::Allow {names,namespaces} if namespaces.is_empty() && names.as_slice() == [label.clone()])));
@@ -221,9 +221,7 @@ fn validate_result_outputs(
             || arrival.kind != MovementKind::InterfaceArrival
             || arrival.artifact.as_ref() != Some(&output.artifact)
             || call_runtime.run != runtime.run
-            || call_runtime.worker != runtime.worker
             || raw_runtime.run != runtime.run
-            || raw_runtime.worker != runtime.worker
             || raw_metadata.verification_failure.is_some()
             || !raw_metadata.required_verified_artifacts.is_empty()
             || !raw_metadata.outbound_interface_bindings.is_empty()
@@ -292,10 +290,7 @@ pub fn validate_generated_transition(
                 .as_ref()
                 .and_then(|m| m.invocation())
                 .and_then(|m| m.runtime.as_ref())
-                .is_none_or(|runtime| {
-                    runtime.run != after.id
-                        || runtime.worker != after.worker
-                })
+                .is_none_or(|runtime| runtime.run != after.id)
         {
             return Err("generated read binding changed its admitted result owner".into());
         }

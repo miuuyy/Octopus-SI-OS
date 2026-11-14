@@ -163,7 +163,6 @@ pub fn plan_maintenance_observer(
     )
     .map_err(|e| e.to_string())?;
     if source_topology.run != source_run.id
-        || source_topology.worker != source_run.worker
         || source_topology.provider_interface != source_descriptor.id
         || !source_topology.checkpoints.iter().any(|cp| {
             cp.outbound_interface_bindings
@@ -172,7 +171,7 @@ pub fn plan_maintenance_observer(
         })
     {
         return Err(
-            "maintenance source does not match its exact run/worker/provider/client topology"
+            "maintenance source does not match its exact run/provider/client topology"
                 .into(),
         );
     }
@@ -1577,9 +1576,9 @@ pub fn wire_source_terminal_declaration(
         );
     }
     let parsed = RunRecord::from_bytes(source_content.as_bytes()).map_err(|e| e.to_string())?;
-    if parsed.id.as_str() != source_run || parsed.worker.as_str() != source_worker {
+    if parsed.id.as_str() != source_run {
         return Err(
-            "maintenance declaration cannot attach to a different source run/worker".into(),
+            "maintenance declaration cannot attach to a different source run".into(),
         );
     }
     let topology: BoundRunAuthoringTopology = serde_json::from_value(
@@ -1592,7 +1591,6 @@ pub fn wire_source_terminal_declaration(
     )
     .map_err(|e| e.to_string())?;
     if topology.run != parsed.id
-        || topology.worker != parsed.worker
         || topology.provider_interface.as_str() != source_provider
     {
         return Err(

@@ -26,7 +26,7 @@ fn failed_run_write_evidence(
     let envelope: FileWriteCallEnvelope = serde_json::from_slice(&payload).map_err(|error| error.to_string())?;
     if call.kind != MovementKind::InterfaceOutbound || call.from != Endpoint::Interface(writer.source.clone())
         || call.to != Endpoint::Interface(writer.door.clone()) || runtime.interface != writer.door
-        || runtime.run != intended.id || runtime.worker != intended.worker
+        || runtime.run != intended.id
         || manifest.label != writer.call_label || envelope.tool != writer.tool || envelope.correlation_id != edit.correlation_id
         || envelope.arguments.path != edit.path || envelope.arguments.patch != edit.patch
         || envelope.arguments.json_format != edit.json_format
@@ -52,7 +52,6 @@ fn failed_run_write_evidence(
             }.into());
         }
         let runtime = movement.runtime().ok_or("failed write result has no run coordinate")?;
-        if runtime.worker != intended.worker { return Err("failed write result changed its run worker".into()); }
         let hash = runtime.run_record_hash.as_deref().and_then(ContentHash::from_hex).ok_or("failed write result has no pinned snapshot")?;
         let snapshot = if movement.kind == MovementKind::DeliveryRefused {
             let admitted = call.runtime().and_then(|runtime| runtime.run_record_hash.as_deref())
@@ -72,14 +71,14 @@ fn failed_run_write_evidence(
         if ContentHash::of_bytes(&snapshot) != hash { return Err("failed write result snapshot integrity mismatch".into()); }
         let record = RunRecord::from_bytes(&snapshot).map_err(|error| error.to_string())?;
         let checkpoint = record.checkpoint(&runtime.checkpoint).ok_or("failed write result checkpoint absent")?;
-        if record.id != intended.id || record.ee != runtime.ee || record.worker != intended.worker
+        if record.id != intended.id || record.ee != runtime.ee || record.worker != runtime.worker
             || !record.active_checkpoints.contains(&checkpoint.id) || checkpoint.epoch.0 != runtime.epoch
             || checkpoint.inbound_interface() != Some(&writer.door)
             || checkpoint.outbound_interfaces().collect::<Vec<_>>() != [&writer.owner] {
             return Err("failed write result has no exact declared return edge".into());
         }
         if movement.kind == MovementKind::DeliveryRefused {
-            if movement.to != Endpoint::Interface(intended.worker.clone()) || runtime.interface != writer.door
+            if movement.to != Endpoint::Interface(record.worker.clone()) || runtime.interface != writer.door
                 || !matches!(movement.invocation_metadata.as_ref().and_then(|value| value.delivery_verdict()),
                     Some(DeliveryVerdict::Refused { reason: octopus_ledger::RefusedReason::CheckpointSpent, .. })) {
                 return Err("failed write refusal is not its exact spent return edge".into());
@@ -274,7 +273,7 @@ fn rejected_write_through(
         if runtime.run != config.run {
             continue;
         }
-        if runtime.worker != config.worker || metadata.verification_failure.is_some() {
+        if metadata.verification_failure.is_some() {
             return Err("authoring rejection changed the admitted run scope".into());
         }
         let reference = movement
@@ -452,7 +451,7 @@ fn checked_edit_verification_failure_with_reader(
         if movement.seq.0 <= after_seq
             || movement.from != Endpoint::Interface(writer.source.clone())
             || movement.run() != Some(&original.id)
-            || movement.to != Endpoint::Interface(original.worker.clone())
+            || movement.runtime().is_none_or(|runtime| movement.to != Endpoint::Interface(runtime.worker.clone()))
             || !matches!(
                 movement.kind,
                 MovementKind::InterfaceArrival | MovementKind::VerificationFailed
@@ -525,8 +524,6 @@ fn checked_edit_verification_failure_with_reader(
             return Err("checked failure has no unique declared requirement".into());
         };
         if record.id != original.id
-            || record.worker != original.worker
-            || record.trace != original.trace
             || runtime.run != record.id
             || runtime.ee != record.ee
             || runtime.worker != record.worker
@@ -691,9 +688,12 @@ fn merge_object_changes(
             continue;
         }
         if current.get(key) != before.get(key) {
-            return Err(format!(
-                "concurrent authoring changed the same field '{key}'"
-            ));
+            if let (Some(serde_json::Value::Object(before)), Some(serde_json::Value::Object(planned)), Some(serde_json::Value::Object(current)))
+                = (before.get(key), planned.get(key), current.get_mut(key)) {
+                merge_object_changes(before, planned, current)?;
+                continue;
+            }
+            return Err(format!("concurrent authoring changed the same field '{key}'"));
         }
         match planned.get(key) {
             Some(value) => {
@@ -754,18 +754,18 @@ pub(super) fn rebase_authored_run(
     }
     let original = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
     let observed = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
-    let extension = if original.interface_state.get(&config.provider_interface)
+    let configuration_edit = preserves_provider_evidence(before, current, &config.provider_interface)?;
+    let extension = if !configuration_edit && original.interface_state.get(&config.provider_interface)
         != observed.interface_state.get(&config.provider_interface) {
         output_connections::extension(before, current, config)?
     } else { None };
-    let revision = input_revision::revision_delta(before, current, config)?;
+    let revision = if configuration_edit { None } else { input_revision::revision_delta(before, current, config)? };
     if extension.is_some() && revision.is_some() { return Err("authoring retry has competing definition changes".into()); }
     let protected = revision.as_ref().map_or_else(|| extension.as_ref().map_or(current, |extension| extension.protected.as_slice()), |revision| revision.protected.as_slice());
     let actual = RunRecord::from_bytes(protected).map_err(|error| error.to_string())?;
     if original.id != actual.id
-        || original.trace != actual.trace
-        || original.interface_state.get(&config.provider_interface)
-            != actual.interface_state.get(&config.provider_interface)
+        || (!configuration_edit && original.interface_state.get(&config.provider_interface)
+            != actual.interface_state.get(&config.provider_interface))
     {
         return Err("authoring retry changed run identity or provider-owned state".into());
     }
@@ -843,7 +843,7 @@ pub(super) fn rebase_authored_run(
         planned.as_object().unwrap(),
         merged.as_object_mut().unwrap(),
     )?;
-    let mut declared_config = if extension.is_some() {
+    let mut declared_config = if configuration_edit || extension.is_some() {
         attempt_config(&observed, config)?
     } else {
         config.clone()

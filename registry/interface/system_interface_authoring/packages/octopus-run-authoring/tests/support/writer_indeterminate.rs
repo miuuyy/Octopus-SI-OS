@@ -9,7 +9,10 @@ fn indeterminate_writer_requires_exact_failure_and_unadvanced_readback() {
     };
     let record = |id: &str| JsonFormat::Compact.encode(&json!({
         "id":"writer", "ee":"ee_test", "worker":"system_worker_test", "status":"idle", "trace":"trace:writer",
-        "interface_state":{}, "active_checkpoints":[id], "checkpoints":[{
+        "interface_state":{writer.owner.as_str():{"file_writer_target":{
+            "run":"target", "provider":writer.owner, "source":writer.source, "door":writer.door,
+            "generation": if id == "result_0" { 0 } else { 1 }
+        }}}, "active_checkpoints":[id], "checkpoints":[{
             "id":id, "run":"writer", "epoch":0, "trace":"trace:result", "artifact_bindings":[],
             "required_verified_artifacts":[], "interface_binding":{"interface":writer.door,"config":{"artifact_policy":{"mode":"all"}}},
             "outbound_interface_bindings":[{"interface":writer.owner,"config":{"artifact_policy":{"mode":"all"}}}]
@@ -38,6 +41,16 @@ fn indeterminate_writer_requires_exact_failure_and_unadvanced_readback() {
     assert_eq!(args.checked_result(&writer, &metadata, &before, &result, 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
     assert!(args.checked_result(&writer, &metadata, &before, &result, 1048576, 11).is_err());
     assert!(args.checked_result(&writer, &metadata, &after, &result, 1048576, 10).is_err());
+    let mut changed: Value = serde_json::from_slice(&before).unwrap();
+    changed["worker"] = json!("system_worker_changed");
+    changed["ee"] = json!("ee_changed");
+    let changed_bytes = JsonFormat::Compact.encode(&changed).unwrap();
+    assert_eq!(args.checked_result(&writer, &pinned_metadata(&changed_bytes), &changed_bytes,
+        &result, 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);
+    changed["checkpoints"][0]["trace"] = json!("changed-receiving-contract");
+    let changed_bytes = JsonFormat::Compact.encode(&changed).unwrap();
+    assert!(args.checked_result(&writer, &pinned_metadata(&changed_bytes), &changed_bytes,
+        &result, 1048576, 10).is_err());
     let refused: ToolResultArtifact = serde_json::from_value(json!({"tool":writer.tool,"label":writer.result_label,"ok":false,
         "error":{"code":"file_write_evidence_failed","message":"configured root cannot be canonicalized"}})).unwrap();
     assert_eq!(args.checked_result(&writer, &metadata, &before, &refused, 1048576, 10).unwrap(), OrderedTargetEffect::UncertainWriter);

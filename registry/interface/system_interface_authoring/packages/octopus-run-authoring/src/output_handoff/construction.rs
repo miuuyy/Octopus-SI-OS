@@ -45,8 +45,8 @@ impl ProviderOutputHandoff {
         let metadata = input.metadata().map_err(|error| error.to_string())?;
         if metadata != &self.invocation_metadata { return Err("callable tool projection requires its exact accepted invocation metadata".into()); }
         let runtime = input.runtime().map_err(|error| error.to_string())?;
-        if runtime.run != self.config.run || runtime.worker != self.config.worker || runtime.interface != self.config.provider_interface {
-            return Err("callable tool projection differs from its accepted run, worker or provider".into());
+        if runtime.run != self.config.run || runtime.interface != self.config.provider_interface {
+            return Err("callable tool projection differs from its accepted run or provider".into());
         }
         self.config.callable_tool_names(metadata)
     }
@@ -230,13 +230,11 @@ impl ProviderOutputHandoff {
                 run.as_str()
             )
         })?;
-        if current_record.id != config.run || current_record.worker != config.worker {
+        if current_record.id != config.run {
             return Err(format!(
-                "provider current run topology has run='{}' worker='{}', config requires run='{}' worker='{}'",
+                "provider current record names run '{}', expected '{}'",
                 current_record.id.as_str(),
-                current_record.worker.as_str(),
-                config.run.as_str(),
-                config.worker.as_str()
+                config.run.as_str()
             ).into());
         }
         let (current_config, current_topology) = resolve_profile_invocation(
@@ -299,6 +297,15 @@ impl ProviderOutputHandoff {
                 }
             },
         )?;
+        let mut observed = pinned_run_record;
+        let mut authored_edit = false;
+        for transition in &coauthor_chain {
+            authored_edit |= transition.foreign || (observed != transition.before.as_slice()
+                && preserves_provider_evidence(observed, &transition.before, &config.provider_interface)?);
+            observed = &transition.after;
+        }
+        authored_edit |= observed != current_run_record.as_slice()
+            && preserves_provider_evidence(observed, &current_run_record, &config.provider_interface)?;
         let changed_outputs = output_connections::is_extension(&bound_topology, &current_topology)
             || output_connections::is_withdrawal(&bound_topology, &current_topology);
         let revised_inputs = input_revision::is_revision(&bound_topology, &current_topology);
@@ -306,15 +313,17 @@ impl ProviderOutputHandoff {
             !transition.foreign && transition.writer.owner == config.provider_interface
                 && input_revision::validate_payload_revision(&transition.before, &transition.after, &transition.writer).is_ok()
         });
-        let amended_capabilities = capability_amendment::checked_topology_advance(
+        let amended_capabilities = !authored_edit && capability_amendment::checked_topology_advance(
             &config.provider_interface, &bound_topology, &current_topology, &coauthor_chain,
         )?;
-        let advanced_result_inputs = result_inputs::checked_topology_advance(
+        let advanced_result_inputs = !authored_edit && result_inputs::checked_topology_advance(
             &initial_record, &current_record, &bound_topology, &current_topology,
             &consumed_templates[0], &runtime.checkpoint, source_movement_seq, &coauthor_chain,
         )?;
-        let retired_verified_input = !independent_input_unchanged && !changed_outputs && !revised_inputs && !revised_payloads && !amended_capabilities && !advanced_result_inputs
-            && (current_config != config || current_topology != bound_topology);
+        let mut admitted_config = config.clone();
+        admitted_config.worker = current_config.worker.clone();
+        let retired_verified_input = !authored_edit && !independent_input_unchanged && !changed_outputs && !revised_inputs && !revised_payloads && !amended_capabilities && !advanced_result_inputs
+            && (current_config != admitted_config || current_topology != bound_topology);
         if retired_verified_input {
             validate_retired_verified_input(
                 ctx,

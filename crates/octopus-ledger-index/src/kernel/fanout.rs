@@ -68,7 +68,7 @@ impl FanoutIndex {
         if scope_seq >= movement.seq.0 || movement.from != scope.movement.from
             || movement.to != Endpoint::Interface(runtime.worker.clone())
             || movement.artifact != scope.movement.artifact
-            || !original.same_checkpoint_coordinates(runtime)
+            || original.interface != runtime.interface
             || runtime.run_record_hash.as_deref().and_then(ContentHash::from_hex).is_none()
         {
             self.invalid.insert(scope_seq);

@@ -65,8 +65,8 @@ pub(super) fn checked_source(reader: &mut impl CheckedRunEvidenceReader, after: 
     let emitted = movement.kind == MovementKind::InterfaceOutbound && metadata.checkpoint_admission.is_none();
     let edge = match movement.kind {
         MovementKind::InterfaceArrival => movement.from == Endpoint::Interface(owner.clone())
-            && movement.to == Endpoint::Interface(after.worker.clone()) && inbound.interface == *owner
-            && runtime.interface == *owner && pinned.id == after.id && pinned.worker == after.worker,
+            && movement.to == Endpoint::Interface(pinned.worker.clone()) && inbound.interface == *owner
+            && runtime.interface == *owner && pinned.id == after.id,
         MovementKind::InterfaceOutbound if emitted => {
             let active = pinned.active_checkpoints.iter().map(|id| pinned.checkpoint(id)
                 .ok_or("input artifact binding source has an absent active checkpoint")).collect::<Result<Vec<_>, _>>()?;
@@ -99,7 +99,7 @@ pub(super) fn checked_source(reader: &mut impl CheckedRunEvidenceReader, after: 
         && inbound.admits(&manifest.label)
         && (movement.kind != MovementKind::InterfaceOutbound || checkpoint.outbound_interface_bindings.iter().any(|bound| bound.interface == *owner && bound.admits(&manifest.label))));
     if !edge || movement.seq.0 != source.source_movement_seq || movement.artifact.as_ref() != Some(&source.artifact) || movement.trace != checkpoint.trace
-        || runtime.run != pinned.id || runtime.ee != pinned.ee || runtime.worker != pinned.worker || checkpoint.run != pinned.id
+        || pinned.id != after.id || runtime.run != pinned.id || runtime.ee != pinned.ee || runtime.worker != pinned.worker || checkpoint.run != pinned.id
         || !pinned.active_checkpoints.contains(&checkpoint.id) || checkpoint.epoch.0 != runtime.epoch
         || metadata.verification_failure.is_some() || !forwarded {
         return Err("input artifact binding differs from its exact admitted source edge".into());

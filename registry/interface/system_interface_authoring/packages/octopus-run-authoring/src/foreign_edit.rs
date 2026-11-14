@@ -8,6 +8,7 @@ pub struct ProvenWrite {
     pub(super) before_hash: String,
     pub(super) after_hash: String,
     pub(super) by: RunId,
+    bytes: u64,
 }
 
 struct AdmittedCall {
@@ -53,7 +54,6 @@ pub(super) fn proven_writes(
         if value.get("arguments").is_some() {
             let Ok(call) = serde_json::from_value::<octopus_tool_handlers::ToolCallArtifact>(value) else { continue; };
             let Some(correlation) = call.correlation_id.clone() else { continue; };
-            if call.arguments.get("ordered").is_some() { continue; }
             let Some(by) = admitted_under_grant(movement, &call.tool, to) else { continue; };
             let admitted = AdmittedCall { movement: movement.clone(), label: manifest.label, call, by };
             if calls.insert((to.clone(), correlation), admitted).is_some() {
@@ -64,18 +64,18 @@ pub(super) fn proven_writes(
         let Ok(result) = serde_json::from_value::<ToolResultArtifact>(value) else { continue; };
         let Some(correlation) = result.correlation_id.clone() else { continue; };
         let Some(admitted) = calls.remove(&(from.clone(), correlation)) else { continue; };
-        if result.tool != admitted.call.tool || !result.ok || result.error.is_some()
+        if result.tool != admitted.call.tool || result.label != manifest.label
             || admitted.movement.seq >= movement.seq || !returned_to(movement, to) {
             continue;
         }
-        let Some(Ok(body)) = result.body.clone().map(serde_json::from_value::<FileWriteResultBody>) else { continue; };
-        if body.result != "files_written" { continue; }
-        let indexed = body.writes.iter().enumerate().filter(|(_, evidence)| evidence.path == path).collect::<Vec<_>>();
+        let Some(receipts) = applied_file_write_receipts(&result)? else { continue; };
+        let indexed = receipts.iter().enumerate().filter_map(|(index, evidence)| evidence.as_ref()
+            .filter(|evidence| evidence.path == path).map(|evidence| (index, evidence))).collect::<Vec<_>>();
         let [(index, evidence)] = indexed.as_slice() else { continue; };
         let write = match admitted.call.arguments.get("writes") {
-            Some(serde_json::Value::Array(entries)) if entries.len() == body.writes.len() => entries[*index].clone(),
+            Some(serde_json::Value::Array(entries)) if entries.len() == receipts.len() => entries[*index].clone(),
             Some(_) => continue,
-            None if body.writes.len() == 1 => admitted.call.arguments.clone(),
+            None if receipts.len() == 1 => admitted.call.arguments.clone(),
             None => continue,
         };
         let Some(before_hash) = evidence.before_hash.clone() else { continue; };
@@ -95,6 +95,7 @@ pub(super) fn proven_writes(
             before_hash,
             after_hash: evidence.after_hash.clone(),
             by: admitted.by,
+            bytes: evidence.bytes,
         });
     }
     Ok(writes)
@@ -126,26 +127,23 @@ pub fn validate(before: &[u8], after: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// The providers a record binds and the doors its declared writers write it through, read
-/// from the record itself. A run's own edit is the ordinary tool call its model made through
-/// any other door; a declared writer's write keeps its own proof and is never taken for one.
-fn own_edit_scope(record: &RunRecord) -> Option<(BTreeSet<InterfaceId>, BTreeSet<InterfaceId>)> {
-    let mut providers = BTreeSet::new();
-    let mut doors = BTreeSet::new();
-    for (owner, state) in &record.interface_state {
+fn declared_write_edges(record: &RunRecord) -> Result<BTreeSet<(InterfaceId, InterfaceId)>, String> {
+    let mut edges = BTreeSet::new();
+    for state in record.interface_state.values() {
         let Some(value) = state.get(RUN_AUTHORING_BINDING) else { continue; };
-        let topology: BoundRunAuthoringTopology = serde_json::from_value(value.clone()).ok()?;
-        providers.insert(owner.clone());
+        let topology: BoundRunAuthoringTopology = serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
         for template in &topology.checkpoints {
-            if template.role == RunAuthoringCheckpointRole::AuthoringResult {
-                doors.insert(template.interface().clone());
+            if template.role == RunAuthoringCheckpointRole::AuthoringCall {
+                for door in template.outbound_interfaces() {
+                    edges.insert((template.interface().clone(), door.clone()));
+                }
             }
             if let Some(writer) = &template.owner_authoring {
-                doors.insert(writer.door.clone());
+                edges.insert((writer.source.clone(), writer.door.clone()));
             }
         }
     }
-    Some((providers, doors))
+    Ok(edges)
 }
 
 pub(super) fn transition_from(
@@ -156,20 +154,18 @@ pub(super) fn transition_from(
 ) -> Result<Option<CheckedRunTransition>, String> {
     let hash = ContentHash::of_bytes(current).to_hex();
     let record = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
-    let own = own_edit_scope(&record);
+    let mut reserved = declared_write_edges(&record)?;
+    reserved.extend(declared.iter().map(|writer| (writer.source.clone(), writer.door.clone())));
     let matches = writes.iter().filter(|write| write.before_hash == hash && write.call.seq.0 > previous_call
-        && (write.by != record.id || own.as_ref().is_some_and(|(providers, doors)| {
-            providers.contains(&write.writer.source)
-                && !doors.contains(&write.writer.door)
-                && !declared.iter().any(|writer| writer.door == write.writer.door)
-        }))).collect::<Vec<_>>();
+        && !reserved.contains(&(write.writer.source.clone(), write.writer.door.clone())))
+        .collect::<Vec<_>>();
     let write = match matches.as_slice() {
         [] => return Ok(None),
         [write] => *write,
         _ => return Err("proven run-record writes branch from one run snapshot".into()),
     };
     let after = reconstructed_after(&write.write, current)?;
-    if ContentHash::of_bytes(&after).to_hex() != write.after_hash {
+    if ContentHash::of_bytes(&after).to_hex() != write.after_hash || after.len() as u64 != write.bytes {
         return Err("a proven run-record write does not reconstruct its admitted file effect".into());
     }
     validate(current, &after)?;
@@ -205,6 +201,7 @@ mod tests {
             provider_interface: InterfaceId::new("world_provider_a"), authoring_source_interface: InterfaceId::new("system_interface_authoring_a"),
             payload_artifact_bindings: Vec::new(), writer_run: None,
             checkpoints: vec![
+                template("authoring-call", RunAuthoringCheckpointRole::AuthoringCall, "system_interface_authoring_a", "system_room_authoring_a", None),
                 template("authoring-result", RunAuthoringCheckpointRole::AuthoringResult, "system_room_authoring_a", "world_provider_a", None),
                 template("owner-output", RunAuthoringCheckpointRole::OwnerInput, "system_code_mode_a", "world_provider_a", Some(writer("system_room_owner_a"))),
             ],
@@ -224,7 +221,7 @@ mod tests {
             writer: CheckedRunWriter { owner: InterfaceId::new(source), source: InterfaceId::new(source), door: InterfaceId::new(door),
                 tool: "file.write".into(), call_label: "tool.call".into(), result_label: "file.write.result".into() },
             call: row(5), result: row(6), write: serde_json::json!({"content": String::from_utf8(after.to_vec()).unwrap()}),
-            before_hash: ContentHash::of_bytes(before).to_hex(), after_hash: ContentHash::of_bytes(after).to_hex(), by: RunId::new(by),
+            before_hash: ContentHash::of_bytes(before).to_hex(), after_hash: ContentHash::of_bytes(after).to_hex(), by: RunId::new(by), bytes: after.len() as u64,
         }
     }
 
@@ -236,9 +233,9 @@ mod tests {
         let take = |write: ProvenWrite| transition_from(&[write], &before, 0, &[]);
         let own = take(proven("run_a", "world_provider_a", "system_room_a", &before, &edited)).unwrap().unwrap();
         assert!(own.foreign && own.after == edited);
-        assert!(take(proven("run_a", "world_provider_a", "system_room_authoring_a", &before, &edited)).unwrap().is_none());
-        assert!(take(proven("run_a", "world_provider_a", "system_room_owner_a", &before, &edited)).unwrap().is_none());
-        assert!(take(proven("run_a", "system_code_mode_a", "system_room_a", &before, &edited)).unwrap().is_none());
+        assert!(take(proven("run_a", "system_interface_authoring_a", "system_room_authoring_a", &before, &edited)).unwrap().is_none());
+        assert!(take(proven("run_a", "system_code_mode_a", "system_room_owner_a", &before, &edited)).unwrap().is_none());
+        assert!(take(proven("run_a", "system_code_mode_a", "system_room_a", &before, &edited)).unwrap().is_some());
         assert!(take(proven("run_a", "world_provider_a", "system_room_a", &before, &moved)).unwrap_err().contains("its own place"));
         assert!(take(proven("run_b", "world_provider_b", "system_room_b", &before, &moved)).unwrap().is_some());
         let listed = [CheckedRunWriter { owner: InterfaceId::new("world_provider_a"), source: InterfaceId::new("world_provider_a"),

@@ -1954,14 +1954,14 @@ impl Runtime {
             .ok_or_else(|| changed("retained arrival run was removed".into()))?;
         let previous = RunRecord::from_bytes(&original.run_record.bytes)
             .map_err(|error| changed(error.to_string()))?;
-        if record.worker != original.worker
-            || record.trace != previous.trace
-            || !record.active_checkpoints.contains(&original.checkpoint)
+        if !record.active_checkpoints.contains(&original.checkpoint)
             || record.checkpoint(&original.checkpoint) != previous.checkpoint(&original.checkpoint) {
             return Err(changed("the original receiving checkpoint was removed or its contract changed".into()));
         }
         let mut current = original.clone();
         current.ee = record.ee.clone();
+        current.worker = record.worker.clone();
+        current.run_trace = record.trace.clone();
         current.run_record = snapshot;
         Ok(current)
     }
@@ -3639,6 +3639,16 @@ mod tests {
         assert_reason(runtime.refresh_retained_interface_arrival_target(&retained).unwrap_err(), RefusedReason::StaleEpoch);
         std::fs::write(&path, &original_bytes).unwrap();
         let mut record: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        record["worker"] = serde_json::json!("system_worker_changed");
+        record["ee"] = serde_json::json!("ee_changed");
+        record["trace"] = serde_json::json!("trace:changed");
+        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let rebound = runtime.refresh_retained_interface_arrival_target(&retained).unwrap();
+        assert_eq!(rebound.worker.as_str(), "system_worker_changed");
+        assert_eq!(rebound.ee.as_str(), "ee_changed");
+        assert_eq!(rebound.checkpoint, retained.checkpoint);
+        assert_eq!(rebound.epoch, retained.epoch);
+        record = serde_json::from_slice(&original_bytes).unwrap();
         record["checkpoints"][0]["epoch"] = serde_json::json!(1);
         std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
         assert_reason(runtime.refresh_retained_interface_arrival_target(&retained).unwrap_err(), RefusedReason::StaleEpoch);

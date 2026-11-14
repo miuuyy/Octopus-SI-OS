@@ -324,6 +324,7 @@ pub fn project_context(
     project_window(
         config,
         source_ee,
+        &config.source_worker_interface,
         carrier,
         source_movement_seq,
         &payload,
@@ -344,6 +345,7 @@ pub fn project_context(
 fn project_window(
     config: &ContextProjectionConfig,
     source_ee: &str,
+    source_worker: &str,
     carrier: &ArtifactRef,
     source_movement_seq: u64,
     payload: &Value,
@@ -414,7 +416,7 @@ fn project_window(
     let trimmed_entries = evidence.len().saturating_sub(config.bounds.max_projected_entries);
     let mut output = json!({
             "schema_version":1,"label":OUTPUT_LABEL,
-            "source":{"run":config.source_run,"ee":source_ee,"worker_interface":config.source_worker_interface,
+            "source":{"run":config.source_run,"ee":source_ee,"worker_interface":source_worker,
                 "provider_interface":config.source_provider_interface,"client_interface":config.source_client_interface,
                 "terminal_artifact":carrier,"projection_source_movement_seq":source_movement_seq,
                 "snapshot_parent":parent},
@@ -696,12 +698,11 @@ fn project_outcome(
     let limits = ctx.required_host_io_limits()?;
     let scope = SnapshotSourceScope {
         run: config.observer_run.clone(),
-        worker: outcome.worker_interface.clone(),
         provider: outcome.provider_interface.clone(),
         client: outcome.experience_interface.clone(),
         relay: outcome.relay_interface.clone(),
     };
-    let (source_seq, _) = verify_terminal_source(
+    let (source_seq, _, _) = verify_terminal_source(
         ctx,
         movement,
         artifact,
@@ -939,12 +940,11 @@ fn project_source(
         }
         let scope = SnapshotSourceScope {
             run: config.source_run.clone(),
-            worker: config.source_worker_interface.clone(),
             provider: config.source_provider_interface.clone(),
             client: config.source_client_interface.clone(),
             relay: config.source_relay_interface.clone(),
         };
-        let (source_seq, source_ee) = verify_terminal_source(
+        let (source_seq, source_ee, source_worker) = verify_terminal_source(
             ctx,
             movement,
             &envelope.artifact,
@@ -1002,6 +1002,7 @@ fn project_source(
         let mut output = project_window(
             &config,
             &source_ee,
+            &source_worker,
             &envelope.artifact,
             movement.seq.0,
             &payload,

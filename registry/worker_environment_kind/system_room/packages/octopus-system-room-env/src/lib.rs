@@ -79,7 +79,7 @@ impl ToolProcessHandler for FileWriteProcess {
                     &self.effect_root,
                     self.max_payload_bytes,
                 ),
-                Some("delete") => file_delete::execute_file_delete(&invocation.envelope, &call.arguments, &room_kinds, &roots)
+                Some("delete") => file_delete::execute_file_delete(&invocation.envelope, &call.arguments, &room_kinds, &roots, &self.effect_root, self.max_payload_bytes)
                     .map_err(|error| octopus_tool_handlers::ToolResultError::new("tool_execution_failed", error)),
                 Some(other) => return Err(capability(format!("file tool descriptor names unknown operation '{other}'"))),
             };

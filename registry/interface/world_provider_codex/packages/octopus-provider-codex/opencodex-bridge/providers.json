@@ -1,6 +1,29 @@
 {
   "schema_version": 1,
   "template_interface": "world_provider_codex",
+  "policy_allowances": {
+    "workers": [
+      "system_worker_coder",
+      "system_worker_coder_max",
+      "system_worker_computer_use",
+      "system_worker_flash",
+      "system_worker_memory",
+      "system_worker_memory_consolidation",
+      "system_worker_memory_observer",
+      "system_worker_operator_home",
+      "system_worker_operator_task",
+      "system_worker_planner",
+      "system_worker_reviewer",
+      "system_worker_sovereign",
+      "system_worker_startup_manager",
+      "system_worker_web"
+    ],
+    "ee_templates": [
+      "memory_maintenance",
+      "self_improvement",
+      "startup_management"
+    ]
+  },
   "providers": [
     {
       "interface": "world_provider_openai",
