@@ -7,7 +7,7 @@ type ErrorEvent = { type: "error"; message: string; code?: string };
 const MAX_ENTRIES = 48;
 const MAX_LINE_BYTES = 64 * 1024;
 const TRACED_CODES = new Set(["protocol_error", "tool_bridge_init_missing"]);
-const REFUSAL_BOUNDARY = "The model's response ended with stop_reason refusal; the CLI's continuation is discarded.";
+const REFUSAL_BOUNDARY = "Claude Code's final response ended with stop_reason refusal.";
 
 export class FrameTrace {
   private entries: Array<{ text: string; count: number }> = [];
@@ -22,20 +22,31 @@ export class FrameTrace {
     } catch {
       return undefined;
     }
+    if (field(frame, "type") === "result") return this.ending();
     if (field(frame, "type") !== "stream_event") return undefined;
     const event = field(frame, "event");
     const kind = field(event, "type");
     if (kind === "message_start") {
       const cut = this.openMessage;
       this.openMessage = true;
+      this.refused = false;
       return cut ? "Claude Code started another assistant message before the previous one finished; the cut message and the CLI's own continuation are discarded." : undefined;
     }
     if (kind === "message_stop") this.openMessage = false;
-    if (kind === "message_delta" && field(field(event, "delta"), "stop_reason") === "refusal") {
-      this.refused = true;
-      return REFUSAL_BOUNDARY;
+    if (kind === "message_delta") {
+      const reason = field(field(event, "delta"), "stop_reason");
+      if (reason === "refusal") {
+        this.refused = true;
+        this.openMessage = false;
+      } else if (typeof reason === "string") {
+        this.refused = false;
+      }
     }
     return undefined;
+  }
+
+  ending(): string | undefined {
+    return this.refused ? REFUSAL_BOUNDARY : undefined;
   }
 
   record(text: string): void {
@@ -127,6 +138,12 @@ function observeLines(trace: FrameTrace): Transform {
         skipping = true;
       }
       callback(null, chunk);
+    },
+    flush(callback) {
+      const last = skipping ? "" : (pending + decoder.decode()).trim();
+      if (last) trace.record(summarizeFrame(last));
+      const boundary = (last ? trace.boundary(last) : undefined) ?? trace.ending();
+      callback(boundary ? new Error(boundary) : null);
     },
   });
 }

@@ -515,40 +515,48 @@ test("a claude-cli continuation after a cut assistant message is discarded with 
   expect(text).not.toContain("The previous step was stopped");
 });
 
-test("a claude-cli refusal ends the turn as a terminal refusal without its continuation", async () => {
+test("a claude-cli turn follows the CLI past a refusal frame and ends as refused only when its final response is one", async () => {
   const home = mkdtempSync(join(tmpdir(), "octopus-claude-cli-refusal-"));
   directories.push(home);
   const bin = join(home, "bin");
   mkdirSync(bin);
-  const frames = [
-    { type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] },
+  const init = { type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] };
+  const refused = [
     { type: "stream_event", event: { type: "message_start" } },
     { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "refusal" } } },
-    { type: "stream_event", event: { type: "message_stop" } },
+  ];
+  const answer = [
     { type: "stream_event", event: { type: "message_start" } },
     { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
     { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "CLI continuation" } } },
     { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+    { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" } } },
     { type: "stream_event", event: { type: "message_stop" } },
-    { type: "result", subtype: "success", is_error: false, result: "CLI continuation", usage: { input_tokens: 3, output_tokens: 4 } },
   ];
-  writeFileSync(join(home, "frames"), frames.map(frame => JSON.stringify(frame)).join("\n") + "\n");
+  const result = { type: "result", subtype: "success", is_error: false, result: "CLI continuation", usage: { input_tokens: 3, output_tokens: 4 } };
   writeFileSync(join(bin, "claude"), ["#!/bin/sh", 'cat > /dev/null', 'cat "$HOME/frames"'].join("\n"), { mode: 0o755 });
   const bridge = await spawnBridge(config("https://api.anthropic.com", {
     id: "world_provider_claude_cli", adapter: "claude-cli", registry_entry: "claude-cli",
     models: ["claude-sonnet-5"], default_model: "claude-sonnet-5", api_key: undefined, auth_header: undefined,
     auth_value_prefix: undefined, headers: {}, allow_private_network: false,
   }), { HOME: home, USER: "octopus-test", PATH: `${bin}:/usr/bin:/bin`, TMPDIR: home });
-  const response = await fetch(`${bridge.origin}/v1/responses`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-5", stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }),
-  });
-  const text = await response.text();
-  expect(text).toContain("response.failed");
-  expect(text).toContain("invalid_prompt");
-  expect(text).not.toContain("protocol_error");
-  expect(text).not.toContain("CLI continuation");
+  const turn = async (frames: unknown[]) => {
+    writeFileSync(join(home, "frames"), frames.map(frame => JSON.stringify(frame)).join("\n") + "\n");
+    const response = await fetch(`${bridge.origin}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-5", stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }),
+    });
+    return response.text();
+  };
+  const retried = await turn([init, ...refused, ...answer, result]);
+  expect(retried).toContain("CLI continuation");
+  expect(retried).toContain("response.completed");
+  expect(retried).not.toContain("response.failed");
+  const final = await turn([init, ...answer, ...refused, result]);
+  expect(final).toContain("response.failed");
+  expect(final).toContain("invalid_prompt");
+  expect(final).not.toContain("protocol_error");
 });
 
 test("grok-cli turns run the signed-in Grok CLI in an isolated home and hand back the catalog calls it makes", async () => {

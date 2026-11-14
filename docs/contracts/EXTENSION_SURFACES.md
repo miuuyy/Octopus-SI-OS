@@ -695,9 +695,11 @@ an upstream disconnect does not end the turn. A Claude Code leg is one
 assistant message: when the CLI starts another message before the previous one
 finished, the bridge ends the leg at that frame and names the reason, so a
 continuation the CLI produced on its own never reaches the model and Codex
-samples the step again from recorded history. A response that stops with
-`refusal` also ends at that frame, as a terminal refusal Codex does not retry:
-the model decided, and resending the same context cannot change that. A
+samples the step again from recorded history. A `refusal` stop is not a
+boundary: Claude Code may answer again after it, so the bridge follows the
+stream to its real end. Only a leg whose final response stops with `refusal`
+ends as a terminal refusal Codex does not retry: the model decided, and
+resending the same context cannot change that. A
 stream that ends while a captured tool call is still open fails closed as
 `protocol_error`. Both errors carry the content-free sequence of the CLI's last
 stream frames (frame, block and stop types, never text or arguments). A request that fails before its
