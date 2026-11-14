@@ -185,6 +185,7 @@ async fn exercise_interrupted_source_order(
                 let template = if role == RunAuthoringCheckpointRole::OwnerInput { &owner_input } else { h.config.checkpoint_for_role(role).unwrap() };
                 let cp = record.checkpoints.iter().find(|cp| record.active_checkpoints.contains(&cp.id)
                     && checkpoint_record_matches_template(cp, template, &run)).unwrap().id.clone();
+                assert_eq!(independent_provider_input(&record, &h.config.provider_interface, &cp).unwrap(), Some(false));
                 edge(&h, &mut rows, published.content.as_bytes(), &cp, if seq == 1477 { &queued } else { &owner_result }, ctx.interface.clone(), MovementKind::InterfaceOutbound);
             }
         }

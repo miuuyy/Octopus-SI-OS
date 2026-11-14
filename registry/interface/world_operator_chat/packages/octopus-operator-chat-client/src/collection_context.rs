@@ -174,18 +174,9 @@ pub fn capture(
         remaining = remaining
             .checked_sub(bytes)
             .ok_or("catalogue aggregate scan budget exceeded")?;
-        let source = ArtifactRef {
-            id: ArtifactId::new(id),
-            content: ContentHash::of_canonical_json(&value),
-        };
-        if admitted.is_some_and(|reference| reference != &source) {
-            return Err(format!(
-                "catalogue source '{id}' changed from its admitted ref"
-            ));
-        }
-        if value.get("label").and_then(Value::as_str) != Some("context.collection") {
+        let Some(source) = catalogue_source(id, &value, admitted)? else {
             continue;
-        }
+        };
         if value.get("id").and_then(Value::as_str) != Some(id) {
             return Err(format!("catalogue binding '{id}' has a different identity"));
         }
@@ -531,4 +522,29 @@ fn regular_path(path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn catalogue_source(id: &str, value: &Value, admitted: Option<&ArtifactRef>) -> Result<Option<ArtifactRef>, String> {
+    if value.get("label").and_then(Value::as_str) != Some("context.collection") {
+        return Ok(None);
+    }
+    let source = ArtifactRef {
+        id: ArtifactId::new(id),
+        content: ContentHash::of_canonical_json(value),
+    };
+    if admitted.is_some_and(|reference| reference != &source) {
+        return Err(format!("catalogue source '{id}' changed from its admitted ref"));
+    }
+    Ok(Some(source))
+}
+
+#[test]
+fn catalogue_ref_verification_applies_only_to_collections() {
+    let admitted = ArtifactRef { id: "source".into(), content: ContentHash::of_canonical_json(&json!({})) };
+    assert!(catalogue_source("source", &json!({"label":"context.reference"}), Some(&admitted)).unwrap().is_none());
+    assert!(catalogue_source("source", &json!({"label":"context.collection"}), Some(&admitted)).is_err());
+    assert_eq!(catalogue_source("source", &json!({}), None).unwrap(), None);
+    let collection = json!({"label":"context.collection"});
+    let exact = catalogue_source("source", &collection, None).unwrap().unwrap();
+    assert_eq!(catalogue_source("source", &collection, Some(&exact)).unwrap(), Some(exact));
 }

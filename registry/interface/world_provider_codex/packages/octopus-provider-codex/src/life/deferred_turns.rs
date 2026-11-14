@@ -524,12 +524,14 @@ pub(crate) async fn prepare_deferred_provider_turn(
     if active_control(active_controls, run).await.is_some_and(|broker| !broker.is_finished()) {
         return Ok(DeferredTurnReadiness::AwaitingSessionSettlement);
     }
-    if deferred.release.is_none() && matches!(independent_provider_input(ctx, &deferred.turn), Ok(Some(true))) {
-        return Ok(if input_awaits_open_handoff(ctx, run, &deferred.turn)? {
-            DeferredTurnReadiness::AwaitingSessionSettlement
-        } else {
-            DeferredTurnReadiness::Ready(deferred.turn.clone())
-        });
+    if deferred.release.is_none() {
+        let independent = independent_provider_input(ctx, &deferred.turn);
+        if matches!(independent, Ok(Some(_))) && input_awaits_open_handoff(ctx, run, &deferred.turn)? {
+            return Ok(DeferredTurnReadiness::AwaitingSessionSettlement);
+        }
+        if matches!(independent, Ok(Some(true))) {
+            return Ok(DeferredTurnReadiness::Ready(deferred.turn.clone()));
+        }
     }
     let source_snapshot = bound_operator_session_snapshot(ctx, descriptor, &deferred.turn)?;
     let source_session_carrier = source_snapshot.as_ref().map(|(carrier, _)| carrier.clone());

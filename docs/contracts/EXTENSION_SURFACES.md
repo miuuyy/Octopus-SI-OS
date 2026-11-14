@@ -941,7 +941,9 @@ still owed is never settled this way. A turn input that reaches a run whose
 native turn still has a call open is deferred, never started into that turn:
 the provider asks the transport itself whether it holds an open request for the
 run, the same state the handler refuses a new turn on, so the input waits even
-in the interval before the call is handed and admitted. A deferred input is
+in the interval before the call is handed and admitted. Owner-authored inputs wait behind earlier open handoffs, including standing
+deliveries, just like stable and independent inputs. Deferred release checks
+the same boundary before preparing a context-bearing input. A deferred input is
 released when the turn has ended: rebased onto a later session snapshot when one
 exists, otherwise as its original envelope once the session shows no call
 pending. A terminal error

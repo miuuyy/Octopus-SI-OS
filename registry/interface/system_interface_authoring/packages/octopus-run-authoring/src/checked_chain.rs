@@ -1056,7 +1056,7 @@ pub fn independent_provider_input(record: &RunRecord, provider: &InterfaceId, ch
         return Err("provider input checkpoint matches no unique authored template".into());
     };
     Ok(match template.role {
-        RunAuthoringCheckpointRole::IndependentInput => Some(!template.include_context),
+        RunAuthoringCheckpointRole::IndependentInput | RunAuthoringCheckpointRole::OwnerInput => Some(!template.include_context),
         RunAuthoringCheckpointRole::Stable => Some(false),
         _ => None,
     })
