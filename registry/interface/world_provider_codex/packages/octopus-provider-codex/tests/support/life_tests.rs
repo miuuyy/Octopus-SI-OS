@@ -1594,7 +1594,9 @@
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path();
             let descriptor = descriptor();
-            let ctx = context(root, &descriptor);
+            let mut ctx = context(root, &descriptor);
+            ctx.root_slots.insert("run_records_root".into(), root.join("runs"));
+            std::fs::create_dir(root.join("runs")).unwrap();
             let run = RunId::new("run-a");
             let file_bytes = [0xff, 0, 0x81, b'A'].repeat(32 * 1024);
             let file = InterfaceArtifactFile::write(root.join("binary"), "operator.file.binary", &file_bytes).unwrap();
@@ -1635,6 +1637,7 @@
                 "checkpoints":[{"name":"input","role":"stable","include_context":true,"interface_binding":input_binding,
                     "outbound_interface_bindings":outputs,"required_verified_artifacts":[]}]}}});
             let pinned = serde_json::to_vec(&pinned).unwrap();
+            std::fs::write(root.join("runs/run-a.json"), &pinned).unwrap();
             octopus_run_record::RunRecord::from_bytes(&pinned).unwrap();
             let pin = ContentHash::of_bytes(&pinned);
             std::fs::write(ctx.blobs_dir.join(pin.to_hex()), &pinned).unwrap();
