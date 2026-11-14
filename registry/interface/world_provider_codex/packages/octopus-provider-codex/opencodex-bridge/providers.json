@@ -147,7 +147,7 @@
       "source_name": "vertex",
       "adapter": "google",
       "endpoint": "https://aiplatform.googleapis.com",
-      "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheaper capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own. Every call is billed to the Google Cloud project this provider is configured with.",
+      "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheaper capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5. Every call is billed to the Google Cloud project this provider is configured with.",
       "name": "Google Vertex AI",
       "developer": "Google",
       "description": "Gemini models billed to your Google Cloud project through Vertex AI.",
