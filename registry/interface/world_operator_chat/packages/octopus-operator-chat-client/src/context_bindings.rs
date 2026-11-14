@@ -477,11 +477,23 @@ pub fn declared_context_bindings(
                 path.display()
             ));
         }
-        let Some(value) = descriptor
-            .interface_driver_config
-            .as_ref()
-            .and_then(|config| config.private_config.get("context_artifact_bindings"))
-        else {
+        let Some(config) = descriptor.interface_driver_config.as_ref() else {
+            continue;
+        };
+        let mut private = config.private_config.clone();
+        crate::collection_context::configure_inline_selection(&mut private, &[])?;
+        if let Some(value) = private.get("instruction_artifacts") {
+            let instructions: Vec<String> = serde_json::from_value(value.clone())
+                .map_err(|error| format!("interface '{interface}' instruction_artifacts: {error}"))?;
+            let mut declared = BTreeSet::new();
+            for id in instructions {
+                if !declared.insert(id.clone()) {
+                    return Err(format!("interface '{interface}' repeats instruction artifact '{id}'"));
+                }
+                append_binding(&mut result, &mut seen, &id)?;
+            }
+        }
+        let Some(value) = config.private_config.get("context_artifact_bindings") else {
             continue;
         };
         let bindings: Vec<ArtifactBindingSeed> =

@@ -7,6 +7,37 @@ mod support;
 use support::{fixture, write};
 
 #[test]
+fn provider_instruction_artifacts_are_bound_with_sources_on_created_runs() {
+    for owns_client in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let request = if owns_client { support::client_fixture(root) } else { fixture(root) };
+        let path = "registry/interface/world_provider_fixture/interface.json";
+        let mut provider: Value = serde_json::from_slice(&std::fs::read(root.join(path)).unwrap()).unwrap();
+        provider["interface_driver_config"]["private_config"]["instruction_artifacts"] = json!(["provider-instruction"]);
+        write(root, path, provider);
+        let source = b"Provider grounding";
+        let content = octopus_ledger::ContentHash::of_bytes(source);
+        let source_ref = octopus_ledger::ArtifactRef {
+            id: format!("instruction.text:{}", content.to_hex()).into(),
+            content,
+        };
+        write(root, "registry/artifact/provider-instruction/artifact.json",
+            json!({"id":"provider-instruction","label":"context.reference","text":"Provider instructions","sources":[source_ref]}));
+        let plan = plan_run_composition(&request).unwrap();
+        let record = RunRecord::from_bytes(plan.run_write.content.as_bytes()).unwrap();
+        let context = octopus_run_authoring::provider_context_bindings(&record, &plan.provider_interface_id.clone().into()).unwrap();
+        for id in ["provider-instruction", source_ref.id.as_str()] {
+            assert_eq!(context.iter().filter(|binding| binding.id.as_str() == id && binding.access.read).count(), 1, "{id}, client={owns_client}");
+        }
+        assert!(octopus_run_authoring::payload_artifact_bindings(&record, &plan.provider_interface_id.clone().into()).unwrap().is_empty());
+        let cloned: Value = serde_json::from_str(&plan.descriptor_writes.iter()
+            .find(|write| write.tag == format!("interface:{}", plan.provider_interface_id)).unwrap().content).unwrap();
+        assert!(cloned["interface_driver_config"]["private_config"]["instruction_artifacts"].as_array().unwrap().contains(&json!("provider-instruction")));
+    }
+}
+
+#[test]
 fn authored_run_checks_provider_frontiers_without_treating_other_writers_as_providers() {
     let temp = tempfile::tempdir().unwrap();
     let request = fixture(temp.path());
