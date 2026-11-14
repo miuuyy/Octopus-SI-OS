@@ -391,6 +391,12 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
                         }
                         if phase == "retired" {
                             assert_eq!(emissions.len(), 2);
+                            let retired_turn = serde_json::to_value(marker.context_refresh.as_ref().unwrap()).unwrap()["terminal"].clone();
+                            assert_eq!(
+                                retired_turn.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(),
+                                ["status", "thread_id", "turn_id"],
+                                "a retired turn is remembered by its identity, never by its native items",
+                            );
                             let previous = prepared.as_ref().unwrap();
                             let stream_manifest_path = emissions[0].artifact.manifest_path();
                             let original_manifest = std::fs::read(stream_manifest_path).unwrap();

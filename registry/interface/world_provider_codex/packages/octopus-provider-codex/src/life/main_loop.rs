@@ -4,6 +4,7 @@ pub(crate) async fn codex_life(
     ctx: InterfaceLiftContext,
     expectation: ProviderLifeExpectation,
 ) -> Result<(), String> {
+    crate::handler::bind_emitted_payload_limit(ctx.required_host_io_limits()?.max_payload_bytes)?;
     let descriptor = load_own_descriptor(&ctx)?;
     let connection_mode = validate_provider_descriptor_contract(&descriptor, expectation)?;
     let provider_home = ctx.interface_var_dir().join("codex-home");

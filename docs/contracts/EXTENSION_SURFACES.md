@@ -921,7 +921,12 @@ outstanding call closes with its own interrupted result and only the last
 observes the native terminal; a request issued before the interrupt was
 acknowledged stays buffered and is quarantined by that last drain. Changed tools
 or instructions refresh a native turn only once a single call remains
-outstanding.
+outstanding. The refresh remembers the retired source turn by its thread, turn
+and closed status; its items stay in the native history, so the continuity
+every later output carries does not grow with the length of that turn. A
+provider output larger than the host's `max_payload_bytes` is not written: the
+provider fails closed with the label and both sizes instead of emitting an
+artifact nothing could deliver.
 
 The provider's explicit `reseed_from_session_context` cold-start policy rebuilds
 its private transport from the admitted session snapshot. It requires that

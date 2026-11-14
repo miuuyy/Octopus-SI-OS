@@ -13,10 +13,45 @@ pub(crate) struct ContextRefresh {
     completed_output: serde_json::Value,
     target_shape: String,
     target_static: String,
-    terminal: Option<NativeTerminalEvidence>,
+    terminal: Option<RetiredTurnProof>,
     retired: bool,
     replacement_thread: Option<String>,
     started_turn: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetiredTurnProof {
+    thread_id: String,
+    turn_id: String,
+    status: String,
+}
+
+impl RetiredTurnProof {
+    fn from_terminal(
+        terminal: &NativeTerminalEvidence,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<Self, InterfaceDriverError> {
+        let turn = terminal.exact_turn(thread_id, Some(turn_id))?;
+        let status = serde_json::to_value(&turn.status)
+            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?
+            .as_str()
+            .ok_or_else(|| InterfaceDriverError::Protocol("native turn status is not a string".into()))?
+            .to_string();
+        Ok(Self { thread_id: thread_id.into(), turn_id: turn.id, status })
+    }
+
+    fn validate(&self, thread_id: &str, turn_id: &str) -> Result<(), InterfaceDriverError> {
+        let status = serde_json::from_value::<TurnStatus>(serde_json::Value::String(self.status.clone()))
+            .map_err(|error| InterfaceDriverError::FailedClosed(format!("retired turn proof has an unknown status: {error}")))?;
+        if self.thread_id != thread_id || self.turn_id != turn_id || status == TurnStatus::InProgress {
+            return Err(InterfaceDriverError::FailedClosed(
+                "retired turn proof does not name the exact closed source turn".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl ContextRefresh {
@@ -49,7 +84,7 @@ impl ContextRefresh {
             ));
         }
         if let Some(terminal) = &self.terminal {
-            terminal.exact_turn(&self.source_thread, Some(pending_turn_id(&self.pending)))?;
+            terminal.validate(&self.source_thread, pending_turn_id(&self.pending))?;
         }
         if (self.retired && self.terminal.is_none())
             || (self.replacement_thread.is_some() && !self.retired)
@@ -1164,14 +1199,19 @@ impl CodexAppServerInterfaceDriver {
                 .await
                 .map_err(InterfaceDriverError::FailedClosed)?;
             }
-            refresh.terminal = Some(terminal.ok_or_else(|| {
+            let terminal = terminal.ok_or_else(|| {
                 InterfaceDriverError::FailedClosed(
                     "context refresh did not retire its original native turn".into(),
                 )
-            })?);
+            })?;
+            refresh.terminal = Some(RetiredTurnProof::from_terminal(
+                &terminal,
+                &refresh.source_thread,
+                turn_id,
+            )?);
             events.extend(take_native_terminal_events(
                 &mut *self.client.lock().await,
-                refresh.terminal.as_ref().unwrap(),
+                &terminal,
                 &refresh.source_thread,
                 turn_id,
             )?);

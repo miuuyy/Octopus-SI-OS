@@ -1,10 +1,27 @@
 use super::*;
 
+static EMITTED_PAYLOAD_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn bind_emitted_payload_limit(max_payload_bytes: u64) -> Result<(), String> {
+    if max_payload_bytes == 0 {
+        return Err("host io limits declare no payload capacity for provider outputs".into());
+    }
+    EMITTED_PAYLOAD_LIMIT.store(max_payload_bytes, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
 pub(crate) fn materialize_codex_emitted_artifact(
     output_root: &Path,
     label: &str,
     payload_bytes: &[u8],
 ) -> Result<InterfaceArtifactFile, InterfaceDriverError> {
+    let limit = EMITTED_PAYLOAD_LIMIT.load(std::sync::atomic::Ordering::SeqCst);
+    if limit > 0 && payload_bytes.len() as u64 > limit {
+        return Err(InterfaceDriverError::FailedClosed(format!(
+            "provider output '{label}' is {} bytes, above the host payload limit {limit}; it was not emitted",
+            payload_bytes.len()
+        )));
+    }
     InterfaceArtifactFile::write(output_root, label, payload_bytes)
         .map_err(|e| InterfaceDriverError::Protocol(e.to_string()))
 }
