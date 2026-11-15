@@ -4,7 +4,10 @@ use super::*;
 fn read_evidence_and_paged_listing_respect_exact_room_roots() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
-    let roots = BTreeMap::from([("documents".into(), root.path().to_path_buf())]);
+    let roots = BTreeMap::from([
+        ("absent".into(), outside.path().join("absent")),
+        ("documents".into(), root.path().to_path_buf()),
+    ]);
     let body = b"{\"checkpoint\":\"projected\"}\n";
     let file = root.path().join("a.json");
     std::fs::write(&file, body).unwrap();
