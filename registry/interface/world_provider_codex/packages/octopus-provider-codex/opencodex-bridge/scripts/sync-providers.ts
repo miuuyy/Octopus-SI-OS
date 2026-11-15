@@ -28,7 +28,7 @@ type ProviderSpec = {
   cli?: { commands: string[]; env: string[]; home_read: string[]; home_write: string[] };
   account?: { provider: string; client_module: string; disclosure: string[] };
   endpoint?: string;
-  models?: Array<{ slug: string; display_name: string; context_window?: number; efforts: Effort[]; default_effort?: Effort }>;
+  models?: Array<{ slug: string; display_name: string; context_window?: number; input_modalities?: string[]; efforts: Effort[]; default_effort?: Effort }>;
   model_guide?: string;
   web_search?: { backend: "gemini"; model: string };
   vertex?: { location: string; project: { env: string; label: string }; credentials: { env: string; label: string } };
@@ -159,7 +159,7 @@ function declaredModels(spec: ProviderSpec): ModelRow[] {
     slug: row.slug,
     display_name: row.display_name,
     ...(row.context_window ? { context_window: row.context_window } : {}),
-    input_modalities: spec.input_modalities ?? ["text"],
+    input_modalities: row.input_modalities ?? spec.input_modalities ?? ["text"],
     efforts: EFFORT_ORDER.filter((effort) => row.efforts.includes(effort)),
     ...(row.default_effort ? { default_effort: row.default_effort } : {}),
   }));

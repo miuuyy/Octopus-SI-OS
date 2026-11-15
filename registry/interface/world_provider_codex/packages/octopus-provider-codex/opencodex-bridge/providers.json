@@ -147,7 +147,18 @@
       "key": {
         "env": "OCTOPUS_PROVIDER_GEMINI_API_KEY",
         "label": "Gemini API key"
-      }
+      },
+      "models": [
+        {"slug": "gemini-4-argon", "display_name": "Gemini 4 Argon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-4-carbon", "display_name": "Gemini 4 Carbon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-4-hydrogen", "display_name": "Gemini 4 Hydrogen", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "high"},
+        {"slug": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-3.6-flash", "display_name": "Gemini 3.6 Flash", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["minimal", "low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-3.5-flash", "display_name": "Gemini 3.5 Flash", "context_window": 1000000, "input_modalities": ["text"], "efforts": ["minimal", "low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-3.5-flash-lite", "display_name": "Gemini 3.5 Flash Lite", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": []},
+        {"slug": "gemini-3.1-pro-preview", "display_name": "Gemini 3.1 Pro Preview", "input_modalities": ["text"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-3.7-flash", "display_name": "Gemini 3.7 Flash", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"}
+      ]
     },
     {
       "interface": "world_provider_antigravity",
