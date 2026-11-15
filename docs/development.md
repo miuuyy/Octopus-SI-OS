@@ -116,9 +116,11 @@ do not turn a user's Home into a source fixture. See
 - **Fail closed.** A clear error beats a fallback that almost works. No silent
   semantic fallback, no placeholder success.
 - **Leave evidence.** A new side effect produces an artifact and a movement.
-- **Tests follow the framework.** Add a contract test when a primitive is
-  stable. Keep test code well under half of a change, and do not pin
-  implementation details.
+- **Tests follow the framework.** Do not steer the work by tests: correct
+  code is the goal, and a test never replaces checking the real behavior.
+  Write one where it is smart, such as a stable primitive's contract or a
+  boundary that breaks silently. Keep test code well under half of a change,
+  and do not pin implementation details.
 - **Comments describe documented architecture or nothing.** No promises, no
   migration notes, no explanations of why a change is correct.
 
