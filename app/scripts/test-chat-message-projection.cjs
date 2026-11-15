@@ -541,3 +541,65 @@ test('sensor watch state projects conditions and receipts without caching a spen
   fs.writeFileSync(path.join(directory, 'watch.json'), '{');
   assert.equal((await read()).status, 'invalid');
 });
+
+test('email triggers project recorded mailbox observations, not account data or inferred health', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oct-email-watch-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const id = 'mail_connector_copy';
+  const directory = path.join(root, 'registry/interface', id);
+  const privateDirectory = path.join(root, 'interfaces', id);
+  fs.mkdirSync(directory, { recursive: true }); fs.mkdirSync(privateDirectory, { recursive: true });
+  const write = value => fs.writeFileSync(path.join(privateDirectory, 'mailbox-state.json'), JSON.stringify(value));
+  fs.writeFileSync(path.join(directory, 'config.json'), JSON.stringify({ intake: { mailboxes: ['INBOX', 'Requests'] } }));
+  const projection = projectionFixture({ octopusHome: root, descriptors: { interface: [{
+    id, role: 'service', interface_type: 'world', direction: 'bidirectional', interface_driver_ref: 'email_life',
+    descriptor_path: path.join(directory, 'interface.json'),
+    interface_driver_config: { private_config: { task_input_labels: ['email.event'] } },
+  }], ee_template: [] }, runRecords: [{ run_id: 'task', checkpoints: [{ status: 'projected', interface: id }] }] });
+  const store = projectionStore({ operatorOsScope: () => ({ client_runs: [] }), operatorChatRunIndex: async () => [],
+    readIndexedInterfaceArtifactRows: async () => [] });
+  t.after(() => store.close());
+  const read = async () => (await store.scheduledInterfaceRows(projection))[0];
+  let row = await read();
+  assert.equal(row.valid, true);
+  assert.equal(row.event_source.condition, 'New email in INBOX, Requests (subject to admission filters)');
+  assert.deepEqual(row.event_source.mailbox_watch, { admitted_count: null, mailboxes: [
+    { mailbox: 'INBOX', last_uid: null, uid_next: null, checked_at: null },
+    { mailbox: 'Requests', last_uid: null, uid_next: null, checked_at: null },
+  ] });
+  const state = { schema_version: 1, account: { address: 'private@example.test', imap: 'private-host' },
+    admitted: ['private-message-key'], mailboxes: {
+      INBOX: { uidvalidity: 1, last_uid: 1605, uid_next: 1606, checked_at: '2026-11-15T08:14:04Z' },
+      Archive: { uidvalidity: 1, last_uid: 99, checked_at: '2000-01-01T00:00:00Z' },
+    } };
+  write(state);
+  row = await read();
+  assert.equal(row.status, 'enabled');
+  assert.equal(row.event_source.mailbox_watch.admitted_count, 1);
+  assert.deepEqual(row.event_source.mailbox_watch.mailboxes[0], { mailbox: 'INBOX', last_uid: 1605, uid_next: 1606, checked_at: '2026-11-15T08:14:04Z' });
+  assert.equal(row.event_source.mailbox_watch.mailboxes.length, 2);
+  assert.doesNotMatch(JSON.stringify(row), /private@example|private-host|private-message-key|Archive/);
+  assert.equal(row.last_run_at_ms, null); // a check is not an event delivered to a task
+  state.mailboxes.INBOX.checked_at = '2026-11-15T08:15:04Z';
+  delete state.mailboxes.INBOX.uid_next;
+  write(state);
+  row = await read();
+  assert.equal(row.event_source.mailbox_watch.mailboxes[0].checked_at, '2026-11-15T08:15:04Z');
+  assert.equal(row.event_source.mailbox_watch.mailboxes[0].uid_next, null);
+  assert.equal(require('../electron/projection/registryRows.cjs').projectionTruthChange('interfaces/mail_connector_copy/mailbox-state.json'), 'state');
+  for (const invalid of [
+    { ...state, schema_version: 2 },
+    { ...state, admitted: 'invalid' },
+    { ...state, mailboxes: { INBOX: { ...state.mailboxes.INBOX, last_uid: -1 } } },
+    { ...state, mailboxes: { INBOX: { ...state.mailboxes.INBOX, uid_next: 0 } } },
+    { ...state, mailboxes: { INBOX: { ...state.mailboxes.INBOX, checked_at: 'not a date' } } },
+  ]) {
+    write(invalid);
+    row = await read();
+    assert.equal(row.status, 'invalid');
+    assert.equal(row.valid, false);
+    assert.match(row.error, /Email mailbox/);
+  }
+  fs.writeFileSync(path.join(privateDirectory, 'mailbox-state.json'), '{');
+  assert.equal((await read()).valid, false);
+});

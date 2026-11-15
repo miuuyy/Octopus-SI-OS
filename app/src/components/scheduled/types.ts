@@ -55,6 +55,10 @@ export type ScheduledInterfaceProjection = {
   descriptorPath: string;
   eventSource?: {
     condition?: string;
+    mailboxWatch?: {
+      admittedCount: number | null;
+      mailboxes: Array<{ mailbox: string; lastUid: number | null; uidNext: number | null; checkedAt: string }>;
+    };
     sources: string[];
     targets: Array<{ runId: string; chatInterfaceId: string; title: string }>;
   } | null;

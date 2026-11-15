@@ -23,6 +23,7 @@ export function ScheduledDetail({ task, pending, canEdit, scopeOptions, onDelete
         <h2 className="m-0 text-xl font-semibold">{task.displayName}</h2>
         <p className="m-0 text-secondary">{task.status === "fired" ? "Fired — this trigger is spent." : task.status === "disarmed" ? "Disarmed — not watching for new events." : task.status === "prepared" ? "Event prepared — awaiting admission." : task.status === "invalid" ? task.error : task.status === "armed" ? "Armed — waiting for the condition." : "Runs when this source delivers an event."}</p>
         {task.eventSource.condition ? <p className="m-0 text-secondary select-text">{task.eventSource.condition}</p> : null}
+        {task.eventSource.mailboxWatch ? <MailboxObservations watch={task.eventSource.mailboxWatch} /> : null}
         {task.eventSource.sources.length ? <p className="m-0 break-words text-sm text-secondary select-text">{task.eventSource.sources.join(", ")}</p> : null}
         <div className="flex flex-col gap-3 rounded-2xl border border-default p-4">
           {task.eventSource.targets.map((target) => (
@@ -59,6 +60,26 @@ export function ScheduledDetail({ task, pending, canEdit, scopeOptions, onDelete
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+function MailboxObservations({ watch }: { watch: NonNullable<NonNullable<ScheduledInterfaceProjection["eventSource"]>["mailboxWatch"]> }) {
+  return (
+    <section aria-label="Mailbox polling observations" className="flex flex-col gap-3 rounded-2xl border border-default p-4">
+      <h3 className="m-0 text-sm font-semibold">Mailbox polling</h3>
+      <p className="m-0 text-sm text-secondary">Recorded observations, not a connection-health check.</p>
+      {watch.mailboxes.map(observation => (
+        <div className="flex flex-col gap-1 text-sm select-text" key={observation.mailbox}>
+          <strong className="break-words">{observation.mailbox}</strong>
+          <p className="m-0 text-secondary">Last successful check: {observation.checkedAt
+            ? <time dateTime={observation.checkedAt} title={observation.checkedAt}>{formatEvidenceTime(Date.parse(observation.checkedAt))}</time>
+            : "No successful check recorded"}</p>
+          <p className="m-0 text-secondary">Last processed UID: {observation.lastUid ?? "Not recorded"}</p>
+          <p className="m-0 text-secondary">Server UIDNEXT: {observation.uidNext ?? "Not reported"}</p>
+        </div>
+      ))}
+      <p className="m-0 text-sm text-secondary">Retained admitted messages: {watch.admittedCount ?? "Not recorded"}</p>
     </section>
   );
 }

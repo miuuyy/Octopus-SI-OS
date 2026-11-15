@@ -18,7 +18,7 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
           ? { type: "inactivity" as const, seconds: rawSchedule.seconds, interfaceMatch: rawSchedule.interface_match as Record<string, string>, excludeInterfaceMatch: objectValue(rawSchedule.exclude_interface_match) as Record<string, string> | null, withinEe: stringValue(rawSchedule.within_ee) }
           : null;
   const rawEvent = objectValue(row.event_source);
-  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets), condition: stringValue(rawEvent.condition) } : null;
+  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets), condition: stringValue(rawEvent.condition), mailboxWatch: normalizeMailboxWatch(rawEvent.mailbox_watch) } : null;
   const targets = normalizeTargets(row.targets);
   const template = row.template === true;
   const valid = row.valid === true
@@ -50,6 +50,22 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
     nextRunAtMs: nullableTimestamp(row.next_run_at_ms),
     nextRunSource: row.next_run_source === "driver_state" || row.next_run_source === "schedule" ? row.next_run_source : "",
     error: stringValue(row.error) || (valid ? "" : eventSource ? "The event source has no active receiving task." : "The trigger sends to no task, or its activation does not satisfy the cron_life contract."),
+  };
+}
+
+function normalizeMailboxWatch(value: unknown): NonNullable<ScheduledInterfaceProjection["eventSource"]>["mailboxWatch"] {
+  const row = objectValue(value);
+  if (!row || !Array.isArray(row.mailboxes)) return undefined;
+  return {
+    admittedCount: nullableInteger(row.admitted_count),
+    mailboxes: row.mailboxes.flatMap(entry => {
+      const observation = objectValue(entry);
+      const mailbox = stringValue(observation?.mailbox);
+      if (!mailbox) return [];
+      const checkedAt = stringValue(observation?.checked_at);
+      return [{ mailbox, lastUid: nullableInteger(observation?.last_uid), uidNext: nullableInteger(observation?.uid_next),
+        checkedAt: Number.isFinite(Date.parse(checkedAt)) ? checkedAt : "" }];
+    }),
   };
 }
 

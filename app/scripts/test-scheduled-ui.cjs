@@ -118,6 +118,41 @@ test("event triggers show their receiving task without offering cron mutations",
   assert.deepEqual(f.writes, []);
 });
 
+test("email triggers render mailbox polling evidence without inventing connection health", async () => {
+  fixture([{
+    interface_id: "world_email", display_name: "Email", status: "enabled", valid: true,
+    event_source: { condition: "New email in INBOX (subject to admission filters)", sources: ["email"], targets: [{ run_id: "task", title: "Read mail" }],
+      mailbox_watch: { admitted_count: 0, mailboxes: [{ mailbox: "INBOX", last_uid: 1605, uid_next: 1606, checked_at: "2026-11-15T08:14:04Z" }] } },
+  }]);
+  const { host } = await mount();
+  assert.match(secondary(rows(host)[0]), /New email in INBOX/);
+  await click(rows(host)[0]);
+  const panel = detail(host).querySelector('[aria-label="Mailbox polling observations"]');
+  assert.ok(panel);
+  assert.match(panel.textContent, /Last processed UID: 1605/);
+  assert.match(panel.textContent, /Server UIDNEXT: 1606/);
+  assert.match(panel.textContent, /Retained admitted messages: 0/);
+  assert.match(panel.textContent, /not a connection-health check/);
+  assert.equal(panel.querySelector("time").getAttribute("datetime"), "2026-11-15T08:14:04Z");
+  assert.equal(button(detail(host), "Edit"), undefined);
+});
+
+test("email triggers distinguish unobserved mailboxes from zero cursor or admission counts", async () => {
+  fixture([{
+    interface_id: "world_email", display_name: "Email", status: "enabled", valid: true,
+    event_source: { sources: ["email"], targets: [{ run_id: "task" }],
+      mailbox_watch: { admitted_count: null, mailboxes: [{ mailbox: "INBOX", last_uid: null, uid_next: null, checked_at: null }] } },
+  }]);
+  const { host } = await mount();
+  await click(rows(host)[0]);
+  const panel = detail(host).querySelector('[aria-label="Mailbox polling observations"]');
+  assert.match(panel.textContent, /No successful check recorded/);
+  assert.match(panel.textContent, /Last processed UID: Not recorded/);
+  assert.match(panel.textContent, /Server UIDNEXT: Not reported/);
+  assert.match(panel.textContent, /Retained admitted messages: Not recorded/);
+  assert.equal(panel.querySelector("time"), null);
+});
+
 test("spent event watches retain their condition and do not appear active", async () => {
   fixture([{
     interface_id: "world_watch", display_name: "Star watch", status: "fired", valid: true,
