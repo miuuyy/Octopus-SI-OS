@@ -270,13 +270,13 @@ node app/scripts/safe-self-update.cjs restart --swap --caller-run=<run id> --det
 
 | Command | What it does |
 | --- | --- |
-| `status` | The runtime's control-socket status, the revisions of the live, staged and previous bundles, and the turns in flight. |
+| `status` | The runtime's control-socket status, the revisions of the live, staged and previous bundles, and the turns in flight of every run. |
 | `build` | Runs `package-macos.cjs` with `OCTOPUS_PACKAGE_BUNDLE` set to `Octopus.staging.app` and checks that `Octopus.app` did not change. |
 | `verify` | Code signature; `build-info.json` equals `HEAD` with unmodified source (`--allow-modified-source` relaxes this); `octopus doctor` from the staged bundle against the Home; then a smoke test in a disposable Home under `/private/tmp`: install the chat and Codex packages with their dependencies, `doctor`, `up`, `restart`, `down`. `--no-smoke` skips the last part. |
 | `packages status` | Installed packages compared with the live bundle's package library, and baseline registry files that differ from the bundle. Read-only. |
 | `packages sync` | Repairs every installed package whose source changed and that has no local changes, through the client's own `repairLocalPackages`. Packages with local changes or errors are listed, never forced. `world_operator_chat` is repaired only with `--with-chat-client`; relaunch the client afterwards. `--only=a,b` narrows the set. |
 | `swap` | `Octopus.app` → `Octopus.prev.app`, `Octopus.staging.app` → `Octopus.app`: two renames, the first undone if the second fails. |
-| `restart` | Refuses while a client chat run other than `--caller-run` has a turn in flight (`--force` overrides). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` with no more interface failures than before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
+| `restart` | Refuses while any run has a turn in flight, except `--caller-run` and each run named by a repeatable `--allow-in-flight-run <run id>` (`--force` overrides the whole guard). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` in which no interface fails that was not already failing before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1, naming the regressed interfaces in `new_interface_failures`; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
 | `rollback` | `Octopus.app` → `Octopus.failed.app`, `Octopus.prev.app` → `Octopus.app`. Restart afterwards. |
 
 `build`, `swap`, `rollback`, `restart` and `packages sync` accept `--dry-run`,
@@ -294,9 +294,17 @@ What the tool relies on, and its limits:
   with `KeepAlive` on unsuccessful exit does not start it again.
 - A restart stops the tool room that started it. From a run, pass `--detach
   --log=<file>` and read the log in the next turn.
-- The turn guard reads the client projection (`projection.operator.chats.status`),
-  because a run record's `status` field is not maintained. It covers client
-  chat runs; background runs without a chat surface are not checked.
+- The turn guard does not use a run record's `status` field, which is not
+  maintained. Client chat runs are read from the client projection
+  (`projection.operator.chats.status`). Every other run (a service, memory or
+  sensor-triggered run without a chat surface) is folded from the movement
+  ledger: a provider `turn/start` dispatch recorded since the running runtime
+  started opens a turn, and `turn.completed`, `turn.error`,
+  `turn.interrupted.result` or the run's output artifact closes it. A dispatch
+  whose payload cannot be read counts as an open turn.
+- Interface health is compared by identity. An interface that fails after the
+  restart and did not fail before is a regression even when another interface
+  recovered and the number of failures is unchanged.
 - A rebuilt bundle does not update `<home>/registry`. Packages change through
   `packages sync`; baseline files such as EE templates are copied once at first
   boot, and `packages status` only reports their drift.
@@ -307,7 +315,8 @@ What the tool relies on, and its limits:
   persisted format still needs a fresh Home.
 
 `node app/scripts/test-safe-self-update.cjs` covers swap, rollback, the guard
-and the rollback path on temporary bundles and a fake control socket.
+for client and background runs, the failure-identity check and the rollback
+path on temporary bundles, a temporary ledger and a fake control socket.
 
 ## Client iteration and acceptance
 

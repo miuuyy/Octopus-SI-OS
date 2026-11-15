@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const readline = require("node:readline");
 const { spawn, spawnSync } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
 
@@ -100,7 +101,7 @@ function octopus(bundle, home, args, options = {}) {
   return spawnSync(runtimeBinary(bundle), args, { env: runtimeEnv(bundle, home), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
 }
 
-async function readChatTurns(bundle, home) {
+async function readClientTurns(bundle, home) {
   const root = installation(bundle);
   const { createProjectionStore } = require(path.join(root, "electron", "projection.cjs"));
   const { projectionReadRequest } = require(path.join(root, "electron", "projectionReadContract.cjs"));
@@ -116,11 +117,78 @@ async function readChatTurns(bundle, home) {
     const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
     const runIds = (scope.client_runs ?? []).map((row) => row.run_id);
     const status = await store.read(projectionReadRequest("projection.operator.chats.status", { run_ids: runIds }));
-    return status.chats.filter((chat) => runIds.includes(chat.run_id)).map((chat) => ({ run_id: chat.run_id, turn_open: chat.turn_open === true, turn_state: chat.turn_state }));
+    const chats = status.chats.filter((chat) => runIds.includes(chat.run_id))
+      .map((chat) => ({ run_id: chat.run_id, turn_open: chat.turn_open === true, turn_state: chat.turn_state }));
+    return { chats, clientRunIds: runIds };
   } finally { await store.close?.(); }
 }
 
-const blockingTurns = (chats, callerRun) => chats.filter((chat) => chat.turn_open && chat.run_id !== callerRun);
+const readChatTurns = async (bundle, home) => (await readClientTurns(bundle, home)).chats;
+
+// A run without a client chat surface (a service, memory or sensor-triggered
+// run) has no projected turn status, so its turn frontier is folded from the
+// movement ledger: the provider's turn/start dispatch opens a turn and the
+// provider's terminal artifacts close it. A dispatch whose method cannot be
+// read counts as an open turn. Rows recorded before the running runtime
+// started belong to an instance whose turns the restart already stopped.
+const TURN_DISPATCH_LABEL = "provider.transport.dispatch";
+const TURN_CLOSING_LABELS = ["turn.completed", "turn.interrupted.result", "turn.error", "interface.artifact.output"];
+const TURN_FRONTIER_NEEDLES = [TURN_DISPATCH_LABEL, ...TURN_CLOSING_LABELS].map((label) => `"${label}:`);
+
+function dispatchMethod(blobs, content) {
+  const read = (name) => JSON.parse(fs.readFileSync(path.join(blobs, name), "utf8"));
+  try {
+    if (!Array.isArray(content) || content.length !== 32) return null;
+    let payload = read(Buffer.from(content).toString("hex"));
+    if (typeof payload?.method !== "string" && /^[0-9a-f]{64}$/.test(payload?.payload_content_hash ?? "")) payload = read(payload.payload_content_hash);
+    return typeof payload?.method === "string" ? payload.method : null;
+  } catch { return null; }
+}
+
+async function readLedgerTurns(home, { sinceUnixMs = 0, skipRuns = [] } = {}) {
+  const ledger = path.join(home, "ledger", "movements.jsonl"), blobs = path.join(home, "ledger", "blobs");
+  if (!fs.statSync(ledger, { throwIfNoEntry: false })?.isFile()) return [];
+  const skipped = new Set(skipRuns), open = new Map();
+  const lines = readline.createInterface({ input: fs.createReadStream(ledger), crlfDelay: Infinity });
+  for await (const line of lines) {
+    if (!TURN_FRONTIER_NEEDLES.some((needle) => line.includes(needle))) continue;
+    let movement;
+    try { movement = JSON.parse(line); } catch { continue; }
+    const run = movement?.invocation_metadata?.runtime?.run, id = movement?.artifact?.id;
+    if (movement?.kind !== "InterfaceArrival" || typeof run !== "string" || !run || skipped.has(run) || typeof id !== "string") continue;
+    if (Number.isFinite(movement.recorded_at_unix_ms) && movement.recorded_at_unix_ms < sinceUnixMs) continue;
+    const label = id.slice(0, id.lastIndexOf(":"));
+    if (TURN_CLOSING_LABELS.includes(label)) { open.delete(run); continue; }
+    if (label !== TURN_DISPATCH_LABEL) continue;
+    const method = dispatchMethod(blobs, movement.artifact.content);
+    if (method !== null && method !== "turn/start") continue;
+    open.set(run, { run_id: run, turn_open: true, turn_state: "working", source: "ledger",
+      opened_movement_seq: Number.isSafeInteger(movement.seq) ? movement.seq : null });
+  }
+  return [...open.values()];
+}
+
+// Every turn a restart would stop: client chat runs from the client projection
+// and every other run from the ledger.
+async function readTurnsInFlight(bundle, home, { sinceUnixMs = 0 } = {}) {
+  const { chats, clientRunIds } = await readClientTurns(bundle, home);
+  const background = await readLedgerTurns(home, { sinceUnixMs, skipRuns: clientRunIds });
+  return [...chats.map((chat) => ({ ...chat, source: "client" })), ...background];
+}
+
+function blockingTurns(turns, allowed) {
+  const exempt = new Set((Array.isArray(allowed) ? allowed : [allowed]).filter((run) => typeof run === "string" && run));
+  return turns.filter((turn) => turn.turn_open && !exempt.has(turn.run_id));
+}
+
+// A failure is identified by the interface that failed, never by how many
+// interfaces fail: an interface that was healthy before a restart and fails
+// after it is a regression even when another one recovered meanwhile.
+const failureIdentity = (failure) => (typeof failure?.interface === "string" && failure.interface ? failure.interface : JSON.stringify(failure ?? null));
+function newInterfaceFailures(before, after) {
+  const known = new Set((Array.isArray(before?.interface_failures) ? before.interface_failures : []).map(failureIdentity));
+  return (Array.isArray(after?.interface_failures) ? after.interface_failures : []).map(failureIdentity).filter((identity) => !known.has(identity));
+}
 
 const lastLines = (result) => `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ");
 
@@ -260,60 +328,76 @@ async function verifyStaging(layout, home, { smoke = true, allowModifiedSource =
 }
 
 async function restartRuntime(layout, home, options = {}) {
-  const { callerRun = null, dryRun = false, force = false, swap = false, rollback = true,
-    timeoutMs = 300_000, readTurns = readChatTurns } = options;
+  const { callerRun = null, allowInFlightRuns = [], dryRun = false, force = false, swap = false, rollback = true,
+    timeoutMs = 300_000, readTurns = readTurnsInFlight } = options;
   const before = await control(home, "status");
   if (before.outcome !== "status") throw new Error(`no runtime answers for Home ${home} (${before.error}); only a running runtime is restarted`);
   if (swap) requireBundle(layout.staging);
-  const blocking = blockingTurns(await readTurns(layout.live, home), callerRun);
+  const blocking = blockingTurns(await readTurns(layout.live, home, { sinceUnixMs: before.started_at_unix_ms }), [callerRun, ...allowInFlightRuns]);
   const plan = [...(swap ? swapBundles(layout, { dryRun: true }).plan : []), "restart through the control socket", "wait for a ready successor",
     rollback ? `on failure: restore ${layout.prev} and restart again` : "on failure: report only"];
   if (blocking.length && !force) return { ok: false, applied: false, refused: "turns_in_flight", blocking, plan };
   if (dryRun) return { ok: true, applied: false, blocking, plan, runtime: before };
   if (swap) swapBundles(layout);
   const healthy = (status) => status.outcome === "status" && status.phase === "ready" && status.stopping === null
-    && status.interface_failures.length <= before.interface_failures.length;
+    && Array.isArray(status.interface_failures) && newInterfaceFailures(before, status).length === 0;
   await control(home, "restart");
   const first = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms, timeoutMs);
   if (first.ok) return { ok: true, applied: true, swapped: swap, previous: before, runtime: first.status, revision: buildInfo(layout.live)?.revision ?? null };
-  if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, runtime: first.status };
+  const regressed = newInterfaceFailures(before, first.status);
+  if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, new_interface_failures: regressed, runtime: first.status };
   rollbackBundles(layout);
   const current = await control(home, "status");
   if (current.outcome !== "status") {
-    return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: false, failed: first.status,
+    return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: false, new_interface_failures: regressed, failed: first.status,
       error: `no runtime answers for Home ${home} after the rollback; start it from ${layout.live}` };
   }
   await control(home, "restart");
   const second = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms
     && status.started_at_unix_ms !== current.started_at_unix_ms, timeoutMs);
-  return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: second.ok, failed: first.status, runtime: second.status };
+  return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: second.ok, new_interface_failures: regressed, failed: first.status, runtime: second.status };
 }
 
 async function status(layout, home) {
   const describe = (bundle) => (fs.existsSync(bundle) ? buildInfo(bundle) : null);
   const runtime = await control(home, "status");
   let turns = null;
-  try { turns = (await readChatTurns(layout.live, home)).filter((chat) => chat.turn_open); } catch (error) { turns = { error: error.message }; }
+  try {
+    turns = (await readTurnsInFlight(layout.live, home, { sinceUnixMs: runtime.outcome === "status" ? runtime.started_at_unix_ms : 0 }))
+      .filter((turn) => turn.turn_open);
+  } catch (error) { turns = { error: error.message }; }
   return { home, head: spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim(), runtime,
     bundles: { live: describe(layout.live), staging: describe(layout.staging), prev: describe(layout.prev) }, turns_in_flight: turns };
 }
 
 const USAGE = `Usage: node app/scripts/safe-self-update.cjs <command> [options]
-  status                          live runtime, bundle revisions, turns in flight
+  status                          live runtime, bundle revisions, turns in flight (every run)
   build [--dry-run]               package into app/build/Octopus.staging.app
   verify [--no-smoke] [--allow-modified-source]
   packages status | packages sync [--dry-run] [--with-chat-client] [--only=a,b]
   swap [--dry-run]                Octopus.app -> Octopus.prev.app, staging -> Octopus.app
-  restart [--swap] [--caller-run=<run id>] [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
+  restart [--swap] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
+                                  refuses while any run other than the caller and the allowed ones has a turn in flight
   rollback [--dry-run]            Octopus.prev.app -> Octopus.app
 Common: --home=<Octopus Home, default $OCTOPUS_HOME or ~/.octopus> --build-root=<dir>`;
 
+// Options that take a value, either as --name=value or as the next argument, and may repeat.
+const REPEATABLE_VALUE_OPTIONS = new Set(["allow-in-flight-run"]);
+
 function parseArgs(argv) {
   const positional = [], options = {};
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (!arg.startsWith("--")) { positional.push(arg); continue; }
-    const [key, ...rest] = arg.slice(2).split("=");
-    options[key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = rest.length ? rest.join("=") : true;
+    const [name, ...rest] = arg.slice(2).split("=");
+    const key = name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    if (REPEATABLE_VALUE_OPTIONS.has(name)) {
+      const value = rest.length ? rest.join("=") : argv[++index];
+      if (typeof value !== "string" || !value || value.startsWith("--")) throw Object.assign(new Error(`--${name} requires a run id`), { usage: true });
+      (options[key] ??= []).push(value);
+      continue;
+    }
+    options[key] = rest.length ? rest.join("=") : true;
   }
   return { positional, options };
 }
@@ -341,12 +425,14 @@ async function main(argv) {
       return { detached: true, pid: child.pid, log: path.resolve(options.log) };
     }
     return restartRuntime(layout, home, { callerRun: typeof options.callerRun === "string" ? options.callerRun : null, dryRun,
+      allowInFlightRuns: Array.isArray(options.allowInFlightRun) ? options.allowInFlightRun : [],
       force: options.force === true, swap: options.swap === true, rollback: options.noRollback !== true });
   }
   throw Object.assign(new Error(USAGE), { usage: true });
 }
 
-module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, blockingTurns, packageAction, restartRuntime, parseArgs, main };
+module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
+  newInterfaceFailures, packageAction, restartRuntime, parseArgs, main };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {

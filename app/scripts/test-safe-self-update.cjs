@@ -1,9 +1,11 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { bundles, buildInfo, swapBundles, rollbackBundles, control, blockingTurns, packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
+const { bundles, buildInfo, swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
+  packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
 
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const roots = [];
@@ -27,7 +29,7 @@ function fakeLayout({ live = "live", staging = "staging", prev = null } = {}) {
   return layout;
 }
 
-function fakeRuntime(successorPhases) {
+function fakeRuntime(successorPhases, failuresByInstance = []) {
   const home = tempRoot(), directory = path.join(home, "state", "runtime-instance");
   fs.mkdirSync(directory, { recursive: true });
   const state = { started: 1, phase: "ready", requests: [] };
@@ -35,11 +37,49 @@ function fakeRuntime(successorPhases) {
     socket.once("data", (chunk) => {
       const { request } = JSON.parse(String(chunk));
       state.requests.push(request);
-      socket.end(`${JSON.stringify({ outcome: "status", pid: 42, phase: state.phase, started_at_unix_ms: state.started, stopping: null, interface_failures: [] })}\n`);
+      socket.end(`${JSON.stringify({ outcome: "status", pid: 42, phase: state.phase, started_at_unix_ms: state.started, stopping: null,
+        interface_failures: failuresByInstance[state.started - 1] ?? [] })}\n`);
       if (request === "restart") { state.phase = successorPhases[state.started - 1] ?? "ready"; state.started += 1; }
     });
   });
   return new Promise((resolve) => server.listen(path.join(directory, "control.sock"), () => resolve({ home, state, close: () => new Promise((done) => server.close(done)) })));
+}
+
+function fakeLedger(home) {
+  const directory = path.join(home, "ledger"), blobs = path.join(directory, "blobs");
+  fs.mkdirSync(blobs, { recursive: true });
+  let seq = 0;
+  const blob = (value) => {
+    const name = crypto.createHash("sha256").update(`${seq}:${JSON.stringify(value)}`).digest("hex");
+    fs.writeFileSync(path.join(blobs, name), JSON.stringify(value));
+    return name;
+  };
+  const row = (run, label, content, at, kind = "InterfaceArrival") => {
+    fs.appendFileSync(path.join(directory, "movements.jsonl"), `${JSON.stringify({ seq, kind, recorded_at_unix_ms: at,
+      from: { Interface: "provider" }, to: { Interface: "worker" }, artifact: { id: `${label}:${"0".repeat(64)}`, content },
+      invocation_metadata: { runtime: { run } } })}\n`);
+    return seq++;
+  };
+  return {
+    dispatch: (run, method, at = 100, options = {}) => {
+      const payload = { label: "provider.transport.dispatch", method };
+      const name = options.manifest ? blob({ label: "provider.transport.dispatch", payload_content_hash: blob(payload) }) : blob(payload);
+      return row(run, "provider.transport.dispatch", [...Buffer.from(name, "hex")], at, options.kind);
+    },
+    unreadableDispatch: (run, at = 100) => row(run, "provider.transport.dispatch", Array(32).fill(7), at),
+    close: (run, label, at = 100) => row(run, label, Array(32).fill(1), at),
+    raw: (text) => fs.appendFileSync(path.join(directory, "movements.jsonl"), `${text}\n`),
+  };
+}
+
+function fakeProjectionBundle(layout, clientRuns, chats) {
+  const electron = path.join(layout.live, "Contents", "Resources", "app", "electron");
+  fs.mkdirSync(electron, { recursive: true });
+  fs.writeFileSync(path.join(electron, "projectionReadContract.cjs"), "exports.projectionReadRequest = (method, params) => ({ method, params });");
+  fs.writeFileSync(path.join(electron, "projection.cjs"), `exports.createProjectionStore = () => ({
+    read: async ({ method }) => (method === "projection.operator.os.scope" ? { client_runs: ${JSON.stringify(clientRuns)} } : { chats: ${JSON.stringify(chats)} }),
+    close: async () => {},
+  });`);
 }
 
 const idle = async () => [];
@@ -66,6 +106,56 @@ async function main() {
   const chats = [{ run_id: "a", turn_open: true }, { run_id: "b", turn_open: false }, { run_id: "c", turn_open: true }];
   assert.deepEqual(blockingTurns(chats, "a").map((chat) => chat.run_id), ["c"]);
   assert.deepEqual(blockingTurns(chats, null).map((chat) => chat.run_id), ["a", "c"]);
+  assert.deepEqual(blockingTurns(chats, ["a", null, "c"]), []);
+  assert.deepEqual(blockingTurns(chats, ["a", "unrelated"]).map((chat) => chat.run_id), ["c"]);
+
+  let home = tempRoot();
+  assert.deepEqual(await readLedgerTurns(home), []);
+  let ledger = fakeLedger(home);
+  const openedAt = ledger.dispatch("service_open", "turn/start", 100, { manifest: true });
+  ledger.dispatch("service_done", "turn/start");
+  ledger.close("service_done", "turn.completed");
+  ledger.dispatch("service_failed", "turn/start");
+  ledger.close("service_failed", "turn.error");
+  ledger.dispatch("service_interrupted", "turn/start");
+  ledger.dispatch("service_interrupted", "turn/interrupt");
+  ledger.close("service_interrupted", "turn.interrupted.result");
+  ledger.dispatch("service_answered", "turn/start");
+  ledger.close("service_answered", "interface.artifact.output");
+  ledger.dispatch("only_interrupt", "turn/interrupt");
+  ledger.dispatch("outbound_only", "turn/start", 100, { kind: "InterfaceOutbound" });
+  ledger.dispatch("before_this_runtime", "turn/start", 10);
+  ledger.dispatch("client_chat", "turn/start");
+  ledger.raw('{"truncated "provider.transport.dispatch:');
+  const unreadableAt = ledger.unreadableDispatch("sensor_unreadable");
+  ledger.dispatch("service_reopened", "turn/start");
+  ledger.close("service_reopened", "turn.completed");
+  const reopenedAt = ledger.dispatch("service_reopened", "turn/start");
+  assert.deepEqual(await readLedgerTurns(home, { sinceUnixMs: 50, skipRuns: ["client_chat"] }), [
+    { run_id: "service_open", turn_open: true, turn_state: "working", source: "ledger", opened_movement_seq: openedAt },
+    { run_id: "sensor_unreadable", turn_open: true, turn_state: "working", source: "ledger", opened_movement_seq: unreadableAt },
+    { run_id: "service_reopened", turn_open: true, turn_state: "working", source: "ledger", opened_movement_seq: reopenedAt },
+  ]);
+  assert.deepEqual((await readLedgerTurns(home)).map((turn) => turn.run_id).sort(),
+    ["before_this_runtime", "client_chat", "sensor_unreadable", "service_open", "service_reopened"]);
+
+  layout = fakeLayout();
+  fakeProjectionBundle(layout, [{ run_id: "client_chat" }, { run_id: "client_idle" }],
+    [{ run_id: "client_chat", turn_open: true, turn_state: "working" }, { run_id: "client_idle", turn_open: false, turn_state: "idle" },
+      { run_id: "outside_scope", turn_open: true, turn_state: "working" }]);
+  const inFlight = await readTurnsInFlight(layout.live, home, { sinceUnixMs: 50 });
+  assert.deepEqual(inFlight.map((turn) => [turn.run_id, turn.source, turn.turn_open]), [
+    ["client_chat", "client", true], ["client_idle", "client", false],
+    ["service_open", "ledger", true], ["sensor_unreadable", "ledger", true], ["service_reopened", "ledger", true]]);
+  assert.deepEqual(blockingTurns(inFlight, "client_chat").map((turn) => turn.run_id), ["service_open", "sensor_unreadable", "service_reopened"]);
+
+  const failure = (name, error = "life exited") => ({ interface: name, error });
+  assert.deepEqual(newInterfaceFailures({ interface_failures: [] }, { interface_failures: [] }), []);
+  assert.deepEqual(newInterfaceFailures({ interface_failures: [failure("a")] }, { interface_failures: [failure("a", "another error")] }), []);
+  assert.deepEqual(newInterfaceFailures({ interface_failures: [failure("a")] }, { interface_failures: [failure("b")] }), ["b"]);
+  assert.deepEqual(newInterfaceFailures({ interface_failures: [failure("a"), failure("b")] }, { interface_failures: [failure("c")] }), ["c"]);
+  assert.deepEqual(newInterfaceFailures({ interface_failures: [failure("a"), failure("b")] }, { interface_failures: [failure("b")] }), []);
+  assert.deepEqual(newInterfaceFailures({}, { interface_failures: [failure("a")] }), ["a"]);
 
   assert.equal(packageAction({ id: "x", update_available: false }), "current");
   assert.equal(packageAction({ id: "x", update_available: true, local_changes: [] }), "repair");
@@ -74,6 +164,10 @@ async function main() {
   assert.equal(packageAction({ id: "x", update_available: true, error: "stale" }), "blocked");
 
   assert.deepEqual(parseArgs(["restart", "--swap", "--caller-run=run_1"]), { positional: ["restart"], options: { swap: true, callerRun: "run_1" } });
+  assert.deepEqual(parseArgs(["restart", "--allow-in-flight-run", "run_1", "--allow-in-flight-run=run_2", "--dry-run"]),
+    { positional: ["restart"], options: { allowInFlightRun: ["run_1", "run_2"], dryRun: true } });
+  assert.throws(() => parseArgs(["restart", "--allow-in-flight-run"]), /requires a run id/);
+  assert.throws(() => parseArgs(["restart", "--allow-in-flight-run", "--swap"]), /requires a run id/);
   assert.equal((await control(tempRoot(), "status", 500)).outcome, "unreachable");
 
   layout = fakeLayout();
@@ -84,6 +178,29 @@ async function main() {
   assert.deepEqual(result.blocking.map((chat) => chat.run_id), ["other"]);
   assert.deepEqual(runtime.state.requests, ["status"]);
   assert.equal(buildInfo(layout.live).revision, "live");
+
+  // The default reader guards runs without a client chat surface through the ledger.
+  fakeProjectionBundle(layout, [{ run_id: "me" }], [{ run_id: "me", turn_open: true, turn_state: "working" }]);
+  ledger = fakeLedger(runtime.home);
+  ledger.dispatch("sensor_triggered", "turn/start", 5);
+  ledger.dispatch("memory_service", "turn/start", 5);
+  ledger.dispatch("stopped_by_an_earlier_restart", "turn/start", 0);
+  runtime.state.requests.length = 0;
+  result = await restartRuntime(layout, runtime.home, { ...options, swap: true, callerRun: "me" });
+  assert.equal(result.refused, "turns_in_flight");
+  assert.deepEqual(result.blocking.map((turn) => [turn.run_id, turn.source]), [["sensor_triggered", "ledger"], ["memory_service", "ledger"]]);
+  result = await restartRuntime(layout, runtime.home, { ...options, swap: true, callerRun: "me", allowInFlightRuns: ["sensor_triggered"] });
+  assert.equal(result.refused, "turns_in_flight");
+  assert.deepEqual(result.blocking.map((turn) => turn.run_id), ["memory_service"]);
+  assert.deepEqual(runtime.state.requests, ["status", "status"]);
+  assert.equal(buildInfo(layout.live).revision, "live");
+  result = await restartRuntime(layout, runtime.home, { ...options, swap: true, dryRun: true, callerRun: "me",
+    allowInFlightRuns: ["sensor_triggered", "memory_service"] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.blocking, []);
+  result = await restartRuntime(layout, runtime.home, { ...options, swap: true, dryRun: true, allowInFlightRuns: ["sensor_triggered", "memory_service"] });
+  assert.deepEqual(result.blocking.map((turn) => turn.run_id), ["me"]);
+  assert.equal(runtime.state.requests.includes("restart"), false);
 
   result = await restartRuntime(layout, runtime.home, { ...options, swap: true, dryRun: true, readTurns: idle });
   assert.equal(result.ok, true);
@@ -107,6 +224,34 @@ async function main() {
   assert.equal(runtime.state.requests.filter((request) => request === "restart").length, 2);
   assert.equal(buildInfo(layout.live).revision, "live");
   assert.equal(buildInfo(layout.failed).revision, "staging");
+  await runtime.close();
+
+  // One failure before, one failure after, but another interface: a regression, not an equal count.
+  layout = fakeLayout();
+  runtime = await fakeRuntime([], [[failure("world_a")], [failure("world_b")], [failure("world_a")]]);
+  result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.new_interface_failures, ["world_b"]);
+  assert.equal(result.rolled_back, true);
+  assert.equal(result.recovered, true);
+  assert.equal(buildInfo(layout.live).revision, "live");
+  assert.equal(buildInfo(layout.failed).revision, "staging");
+  await runtime.close();
+
+  layout = fakeLayout();
+  runtime = await fakeRuntime([], [[failure("world_a")], [failure("world_b")]]);
+  result = await restartRuntime(layout, runtime.home, { ...options, rollback: false, readTurns: idle });
+  assert.equal(result.ok, false);
+  assert.equal(result.rolled_back, false);
+  assert.deepEqual(result.new_interface_failures, ["world_b"]);
+  await runtime.close();
+
+  // A failure that was already there, or one that recovered, does not fail the restart.
+  layout = fakeLayout();
+  runtime = await fakeRuntime([], [[failure("world_a"), failure("world_b")], [failure("world_a", "still failing")]]);
+  result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle });
+  assert.equal(result.ok, true);
+  assert.equal(result.revision, "staging");
   await runtime.close();
 
   layout = fakeLayout();
