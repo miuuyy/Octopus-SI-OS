@@ -891,6 +891,61 @@
         );
     }
 
+    #[test]
+    fn real_registry_self_improvement_ee_admits_the_default_task() {
+        let repository = repository_registry_root();
+        let registry_root = repository.join("registry");
+        let ee_dir = tempfile::tempdir().expect("temp EE instances");
+        boot_operator_space_ee_instances(ee_dir.path());
+        let framework = octopus_ee::EeInstance {
+            name: None,
+            ee_id: EeId::new("ee_framework"),
+            template: octopus_descriptors::EeTemplateId::new("self_improvement"),
+            parent_ee: Some(EeId::new("ee_existence")),
+            goal: "Improve the framework".into(),
+            config: Default::default(),
+            policy_narrowing: Default::default(),
+        };
+        std::fs::write(
+            ee_dir.path().join("ee_framework.json"),
+            serde_json::to_vec_pretty(&framework).unwrap(),
+        )
+        .unwrap();
+        let pack: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(repository.join("app/distribution/local-packages/packs/codex.json")).unwrap(),
+        )
+        .unwrap();
+        let setup = &pack["workspace_setup"];
+        let mut kinds = setup["task"]["selected_worker_environment_kinds"].as_array().unwrap().clone();
+        for default in setup["project_defaults"].as_array().unwrap() {
+            let Some(kind) = default["package_id"].as_str().and_then(|id| id.strip_prefix("driver.")) else { continue };
+            if default["default_for_new_tasks"] == true && !kinds.iter().any(|selected| selected == kind) {
+                kinds.push(kind.into());
+            }
+        }
+        for (provider, chat) in [
+            (setup["home"]["provider_interface_id"].as_str().unwrap(), "frameworkdefaulttask00001"),
+            ("world_provider_claude_cli", "frameworkdefaulttask00002"),
+        ] {
+            let request: OperatorChatPlanRequest = serde_json::from_value(serde_json::json!({
+                "registry_root": registry_root, "ee_instances_root": ee_dir.path(),
+                "run_records_root": ee_dir.path().join("runs"), "interface_private_state_root": ee_dir.path().join("private"),
+                "write_hash_algorithm": "sha256", "chat_id": chat, "provider_interface_id": provider,
+                "ee_id": "ee_framework", "worker_interface_id": setup["task"]["worker_interface_id"],
+                "client_surface_role": "task", "cycle": format!("{chat}cycle"),
+                "door_host_slots": setup["home"]["door_host_slots"],
+                "context_artifact_bindings": setup["task"]["context_artifact_bindings"],
+                "selected_worker_environment_kinds": kinds,
+                "conversation": {"ledger_offset": 0}
+            }))
+            .unwrap();
+            let plan = plan_operator_chat_topology(&request)
+                .unwrap_or_else(|error| panic!("the default {provider} task is refused in a self_improvement EE: {error}"));
+            assert_eq!(plan.ee_template_chain, vec!["existence".to_string(), "self_improvement".to_string()]);
+            assert!(plan.run_writes.iter().any(|write| write.tag.starts_with("run:run_memory_observer_")));
+        }
+    }
+
     fn assert_computer_use_planned_identities(registry_root: &Path, ee_root: &Path) {
         let request: OperatorChatPlanRequest = serde_json::from_value(serde_json::json!({
             "registry_root":registry_root,"ee_instances_root":ee_root,"run_records_root":ee_root.join("runs"),"interface_private_state_root":ee_root.join("private"),
