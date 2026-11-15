@@ -1,6 +1,6 @@
 import type { OctopusScheduledDraft } from "../../electron";
 
-export type ScheduledInterfaceStatus = "enabled" | "disabled" | "invalid" | "template";
+export type ScheduledInterfaceStatus = "enabled" | "disabled" | "invalid" | "template" | "armed" | "fired" | "disarmed" | "prepared";
 
 export type ChangeJournalEntry = {
   kind: "file";
@@ -54,6 +54,7 @@ export type ScheduledInterfaceProjection = {
   activationPath: string;
   descriptorPath: string;
   eventSource?: {
+    condition?: string;
     sources: string[];
     targets: Array<{ runId: string; chatInterfaceId: string; title: string }>;
   } | null;

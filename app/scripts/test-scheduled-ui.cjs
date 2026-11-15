@@ -118,6 +118,20 @@ test("event triggers show their receiving task without offering cron mutations",
   assert.deepEqual(f.writes, []);
 });
 
+test("spent event watches retain their condition and do not appear active", async () => {
+  fixture([{
+    interface_id: "world_watch", display_name: "Star watch", status: "fired", valid: true,
+    event_source: { condition: "stars >= 763 on owner/repo", sources: ["stars"], targets: [{ run_id: "task", title: "Continue work" }] },
+  }]);
+  const { host } = await mount();
+  assert.equal(rows(host).length, 1);
+  assert.match(rows(host)[0].textContent, /Completed/);
+  await click(rows(host)[0]);
+  assert.match(detail(host).textContent, /Fired — this trigger is spent/);
+  assert.match(detail(host).textContent, /stars >= 763 on owner\/repo/);
+  assert.equal(button(detail(host), "Edit"), undefined);
+});
+
 test("Triggers keeps navigation, selection, search and authoring in one workspace", async () => {
   const f = fixture([...Array.from({ length: 8 }, (_, index) => schedule(index)), schedule(8, "disabled"), schedule(9, "invalid")]);
   const { host, drafts } = await mount();

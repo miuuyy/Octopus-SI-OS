@@ -1,5 +1,7 @@
 module.exports = { scheduledInterfacesProjection };
 
+const { sensorWatchProjection } = require("./sensorWatch.cjs");
+
 const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -113,11 +115,15 @@ function scheduledInterfacesProjection(store) {
       const evidence = await scheduledInterfaceEvidence(projection, interfaceId, { schedule: {} },
         (indexed ?? projection.ledgerRows).filter((movement) => isAdmittedInterfaceArtifactMovement(movement)
           && (labels.size === 0 || labels.has(ledgerArtifactLabel(movement)))));
+      let watch = {}, error = "";
+      try { watch = await sensorWatchProjection(projection, descriptor, interfaceId); }
+      catch (failure) { error = String(failure?.message ?? failure); }
       rows.push({
         interface_id: interfaceId, display_name: scheduledInterfaceDisplayName(interfaceId),
-        status: "enabled", valid: true, template: false,
+        status: error ? "invalid" : watch.status ?? "enabled", valid: !error, template: false,
+        ...(error ? { error } : {}),
         descriptor_path: stringValue(descriptor.descriptor_path),
-        event_source: { sources: arrayValue(descriptor.source_names), targets: eventTargets },
+        event_source: { sources: arrayValue(descriptor.source_names), targets: eventTargets, ...(watch.condition ? { condition: watch.condition } : {}) },
         last_run_at_ms: evidence.lastRunAtMs, last_movement_seq: evidence.lastMovementSeq,
         deliveries: evidence.deliveries,
       });

@@ -21,7 +21,8 @@ export function ScheduledDetail({ task, pending, canEdit, scopeOptions, onDelete
     <section aria-label={task.displayName} className="flex h-full min-h-0 flex-col overflow-y-auto" data-scheduled-detail="">
       <div className="mx-auto flex w-full max-w-(--thread-content-max-width) flex-col gap-4 px-toolbar pt-panel pb-8">
         <h2 className="m-0 text-xl font-semibold">{task.displayName}</h2>
-        <p className="m-0 text-secondary">Runs when this source delivers an event.</p>
+        <p className="m-0 text-secondary">{task.status === "fired" ? "Fired — this trigger is spent." : task.status === "disarmed" ? "Disarmed — not watching for new events." : task.status === "prepared" ? "Event prepared — awaiting admission." : task.status === "invalid" ? task.error : task.status === "armed" ? "Armed — waiting for the condition." : "Runs when this source delivers an event."}</p>
+        {task.eventSource.condition ? <p className="m-0 text-secondary select-text">{task.eventSource.condition}</p> : null}
         {task.eventSource.sources.length ? <p className="m-0 break-words text-sm text-secondary select-text">{task.eventSource.sources.join(", ")}</p> : null}
         <div className="flex flex-col gap-3 rounded-2xl border border-default p-4">
           {task.eventSource.targets.map((target) => (

@@ -15,6 +15,8 @@ const ROW_SURFACE = "octopus-nav-row octopus-task-row group relative cursor-inte
 
 export function scheduledRowStatus(task: ScheduledInterfaceProjection): ScheduledRowStatus {
   if (task.status === "invalid") return "invalid";
+  if (task.status === "fired") return "completed";
+  if (task.status === "disarmed") return "paused";
   if (task.status === "disabled") return "paused";
   return task.schedule?.type === "once" && task.lastRunAtMs !== null && task.nextRunAtMs === null ? "completed" : "active";
 }

@@ -5,7 +5,7 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
   const row = objectValue(value);
   if (!row) return null;
   const interfaceId = stringValue(row.interface_id);
-  const status = row.status === "enabled" || row.status === "disabled" || row.status === "invalid" || row.status === "template" ? row.status : "invalid";
+  const status = row.status === "armed" || row.status === "fired" || row.status === "disarmed" || row.status === "prepared" || row.status === "enabled" || row.status === "disabled" || row.status === "invalid" || row.status === "template" ? row.status : "invalid";
   if (!interfaceId) return null;
   const rawSchedule = objectValue(row.schedule);
   const schedule = rawSchedule?.type === "interval" && positiveNumber(rawSchedule.interval_seconds)
@@ -18,12 +18,12 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
           ? { type: "inactivity" as const, seconds: rawSchedule.seconds, interfaceMatch: rawSchedule.interface_match as Record<string, string>, excludeInterfaceMatch: objectValue(rawSchedule.exclude_interface_match) as Record<string, string> | null, withinEe: stringValue(rawSchedule.within_ee) }
           : null;
   const rawEvent = objectValue(row.event_source);
-  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets) } : null;
+  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets), condition: stringValue(rawEvent.condition) } : null;
   const targets = normalizeTargets(row.targets);
   const template = row.template === true;
   const valid = row.valid === true
     && status !== "invalid"
-    && (eventSource ? eventSource.targets.length > 0 && status === "enabled"
+    && (eventSource ? eventSource.targets.length > 0 && ["enabled", "armed", "fired", "disarmed", "prepared"].includes(status)
       : Boolean(schedule) && (template || targets.length > 0)
         && /^[0-9a-f]{64}$/.test(stringValue(row.activation_digest)));
   return {
@@ -312,7 +312,7 @@ export function timezoneName(timezone: string, at: number = Date.now()): string 
 }
 
 export function shortScheduleLabel(task: Pick<ScheduledInterfaceProjection, "schedule" | "eventSource">): string {
-  if (task.eventSource) return "On event";
+  if (task.eventSource) return task.eventSource.condition || "On event";
   const schedule = task.schedule;
   if (!schedule || schedule.type === "once") return "";
   if (schedule.type === "interval") return formatInterval(schedule.intervalSeconds);
@@ -328,7 +328,7 @@ export function formatSchedule(task: Pick<ScheduledInterfaceProjection, "schedul
 }
 
 export function describeSchedule(task: Pick<ScheduledInterfaceProjection, "schedule" | "eventSource">): string {
-  if (task.eventSource) return "On event";
+  if (task.eventSource) return task.eventSource.condition || "On event";
   if (!task.schedule) return "Invalid schedule";
   if (task.schedule.type === "interval") return formatInterval(task.schedule.intervalSeconds);
   if (task.schedule.type === "inactivity") return `After ${formatInterval(task.schedule.seconds).replace(/^Every /, "")} without activity`;
