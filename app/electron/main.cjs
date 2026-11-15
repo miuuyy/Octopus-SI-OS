@@ -7,6 +7,7 @@ const { spawn } = require("node:child_process");
 const { createHash, randomBytes, randomUUID } = require("node:crypto");
 const { nativeTrafficLightPosition, nativeControlInset } = require("./windowChrome.cjs");
 const { resolveClientLaunchSelection, saveClientLaunchSelection } = require("./clientLaunchSelection.cjs");
+const { writeJsonFileAtomicallySync } = require("./atomicJsonFile.cjs");
 
 const clientLaunchSelectionPath = path.join(app.getPath("appData"), "Octopus", "launch.json");
 const clientLaunchSelection = resolveClientLaunchSelection({ selectionPath: clientLaunchSelectionPath, userRoot: os.homedir(), env: process.env });
@@ -2358,6 +2359,16 @@ function windowAppearancePath() {
   return path.join(app.getPath("userData"), "window-appearance.json");
 }
 
+// Window documents are read at the next launch. A failed save keeps the
+// previous complete document and is recorded, never left half written.
+function saveWindowDocument(file, value, event) {
+  try {
+    writeJsonFileAtomicallySync(file, value);
+  } catch (error) {
+    void appendClientLog("warn", event, { message: formatError(error) }).catch(() => {});
+  }
+}
+
 function applyThemePreference(preference) {
   nativeTheme.themeSource = preference === "light" || preference === "dark" ? preference : "system";
 }
@@ -2426,7 +2437,7 @@ function trackWindowState(win) {
       maximized: win.isMaximized(),
       fullscreen: win.isFullScreen(),
     };
-    require("node:fs").writeFile(windowStatePath(), JSON.stringify(state, null, 2), () => {});
+    saveWindowDocument(windowStatePath(), state, "client.window_state.save_failed");
   };
   const schedule = () => {
     if (timer) clearTimeout(timer);
@@ -3742,7 +3753,7 @@ ipcMain.on("octopus:window-appearance", (event, appearance) => {
     ? appearance.preference
     : "system";
   applyThemePreference(preference);
-  require("node:fs").writeFile(windowAppearancePath(), JSON.stringify({ preference }, null, 2), () => {});
+  saveWindowDocument(windowAppearancePath(), { preference }, "client.window_appearance.save_failed");
   applyWindowBackdrop(win, true);
 });
 

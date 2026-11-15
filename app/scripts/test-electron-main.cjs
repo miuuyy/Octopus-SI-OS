@@ -548,6 +548,7 @@ test("the primary window restores its saved bounds and persists them on close, w
   primary.close();
   await until(() => { try { return savedBounds().x === 60; } catch { return false; } }, "the primary window saves its bounds on close");
   assert.deepEqual(savedBounds(), { x: 60, y: 70, width: 900, height: 700 });
+  assert.deepEqual(fs.readdirSync(main.world.userData).filter((name) => name.endsWith(".tmp")), [], "a saved window document leaves no temporary file");
 
   const linux = await launchMain({ platform: "linux" });
   const [plain] = linux.windows();
@@ -570,6 +571,20 @@ test("window appearance switches the macOS backdrop between translucent vibrancy
   main.sendSync("octopus:window-appearance", win, { theme: "dark", translucent: true, preference: "dark" });
   assert.deepEqual(backdrop(), [[["setBackgroundColor", "#00000000"], ["setVibrancy", "under-window"]], false]);
   assert.equal(main.electron.module.nativeTheme.themeSource, "dark");
+  const appearanceFile = path.join(main.world.userData, "window-appearance.json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(appearanceFile, "utf8")), { preference: "dark" });
+  // A save that cannot complete keeps the previous complete document and is logged.
+  fs.chmodSync(main.world.userData, 0o500);
+  try {
+    main.sendSync("octopus:window-appearance", win, { theme: "light", translucent: true, preference: "light" });
+  } finally { fs.chmodSync(main.world.userData, 0o700); }
+  assert.equal(main.electron.module.nativeTheme.themeSource, "light");
+  if (process.getuid?.() !== 0) {
+    assert.deepEqual(JSON.parse(fs.readFileSync(appearanceFile, "utf8")), { preference: "dark" });
+    await until(() => main.log().some((row) => row.event === "client.window_appearance.save_failed"), "a failed window appearance save is logged");
+  }
+  assert.deepEqual(fs.readdirSync(main.world.userData).filter((name) => name.endsWith(".tmp")), []);
+  backdrop();
   main.sendSync("octopus:window-appearance", win, { theme: "dark", translucent: false });
   assert.deepEqual(backdrop(), [[["setBackgroundColor", "#000000"], ["setVibrancy", null]], true]);
   assert.equal(main.electron.module.nativeTheme.themeSource, "system");
