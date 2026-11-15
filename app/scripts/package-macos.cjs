@@ -17,7 +17,7 @@ const registryRoot = path.join(repoRoot, "registry");
 const distributionRoot = path.join(appRoot, "distribution");
 const baselineManifestPath = path.join(distributionRoot, "system-baseline.json");
 const buildRoot = path.join(appRoot, "build");
-const bundleRoot = path.join(buildRoot, "Octopus.app");
+const bundleRoot = packageBundleRoot(process.env.OCTOPUS_PACKAGE_BUNDLE);
 const minimumSystemVersion = "14.0";
 const nativeRuntime = require("../native/runtime.cjs");
 const clientRuntime = nativeRuntime.clientRuntime();
@@ -175,7 +175,7 @@ if (!ownedEngine) {
 }
 signClientResources(resourcesRoot);
 managedCodexDistribution.sealSigning(managedCodexSigningInputs);
-sealProviderSigningInputs(providerSigningInputs, { relativeRoot: bundleRoot, receiptPath: path.join(buildRoot, "provider-signing.json") });
+sealProviderSigningInputs(providerSigningInputs, { relativeRoot: bundleRoot, receiptPath: path.join(buildRoot, providerSigningReceiptName()) });
 sealClientPresentation(path.join(resourcesRoot, "native-presentation"));
 if (ownedEngineCopy) ownedEngineVerifier.sealPackagedEngine(ownedEngineCopy);
 browserEnginePackage.sealBrowserEngine({ mode: browserEngineMode, bundleRoot, architecture: process.arch, electronVersion: browserElectronVersion });
@@ -184,6 +184,23 @@ if (ownedEngineCopy) ownedEngineVerifier.verifyPackagedEngineAfterSigning(ownedE
 run("codesign", ["--verify", "--deep", "--strict", bundleRoot], appRoot);
 
 console.log(`Packaged ${bundleRoot}`);
+
+// OCTOPUS_PACKAGE_BUNDLE packages into another bundle beside the default one, so an
+// installation running from app/build/Octopus.app keeps its bundle during the build.
+function packageBundleRoot(requested) {
+  const standard = path.join(buildRoot, "Octopus.app");
+  if (requested === undefined || requested === "") return standard;
+  const resolved = path.resolve(requested);
+  if (!path.isAbsolute(requested) || path.dirname(resolved) !== buildRoot || !/^Octopus(\.[A-Za-z0-9_-]+)?\.app$/.test(path.basename(resolved))) {
+    throw new Error(`OCTOPUS_PACKAGE_BUNDLE must be an absolute path to Octopus.app or Octopus.<name>.app directly inside ${buildRoot}`);
+  }
+  return resolved;
+}
+
+function providerSigningReceiptName() {
+  const name = path.basename(bundleRoot, ".app");
+  return name === "Octopus" ? "provider-signing.json" : `provider-signing.${name.slice("Octopus.".length)}.json`;
+}
 
 function requireRebuiltTerminal() {
   const release = path.join(appRoot, "node_modules", "node-pty", "build", "Release");

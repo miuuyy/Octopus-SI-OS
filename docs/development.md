@@ -252,6 +252,63 @@ Quit the client and runtime before replacing the release. If the release changes
 persisted contracts, initialize a fresh Home and retain only sign-in credentials.
 Existing runs and ledgers are not upgraded.
 
+## Updating an installation that runs from the checkout
+
+An installation whose launch agents start `app/build/Octopus.app` runs from the
+bundle `package:mac` rebuilds. Packaging deletes that bundle first and rebuilds
+it in place for several minutes, so a failed build, a crash or a reboot in the
+middle leaves nothing to start. `app/scripts/safe-self-update.cjs` separates
+the steps and never removes the live bundle:
+
+```sh
+node app/scripts/safe-self-update.cjs status
+node app/scripts/safe-self-update.cjs build      # into app/build/Octopus.staging.app
+node app/scripts/safe-self-update.cjs verify
+node app/scripts/safe-self-update.cjs packages status
+node app/scripts/safe-self-update.cjs restart --swap --caller-run=<run id> --detach --log=/private/tmp/self-update.log
+```
+
+| Command | What it does |
+| --- | --- |
+| `status` | The runtime's control-socket status, the revisions of the live, staged and previous bundles, and the turns in flight. |
+| `build` | Runs `package-macos.cjs` with `OCTOPUS_PACKAGE_BUNDLE` set to `Octopus.staging.app` and checks that `Octopus.app` did not change. |
+| `verify` | Code signature; `build-info.json` equals `HEAD` with unmodified source (`--allow-modified-source` relaxes this); `octopus doctor` from the staged bundle against the Home; then a smoke test in a disposable Home under `/private/tmp`: install the chat and Codex packages with their dependencies, `doctor`, `up`, `restart`, `down`. `--no-smoke` skips the last part. |
+| `packages status` | Installed packages compared with the live bundle's package library, and baseline registry files that differ from the bundle. Read-only. |
+| `packages sync` | Repairs every installed package whose source changed and that has no local changes, through the client's own `repairLocalPackages`. Packages with local changes or errors are listed, never forced. `world_operator_chat` is repaired only with `--with-chat-client`; relaunch the client afterwards. `--only=a,b` narrows the set. |
+| `swap` | `Octopus.app` → `Octopus.prev.app`, `Octopus.staging.app` → `Octopus.app`: two renames, the first undone if the second fails. |
+| `restart` | Refuses while a client chat run other than `--caller-run` has a turn in flight (`--force` overrides). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` with no more interface failures than before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1. |
+| `rollback` | `Octopus.app` → `Octopus.failed.app`, `Octopus.prev.app` → `Octopus.app`. Restart afterwards. |
+
+`build`, `swap`, `rollback`, `restart` and `packages sync` accept `--dry-run`,
+which prints the plan and changes nothing. Every command prints JSON and exits
+1 when its result is not `ok`. `--home` selects another Home (default
+`$OCTOPUS_HOME` or `~/.octopus`).
+
+What the tool relies on, and its limits:
+
+- The runtime restarts by executing its own path again, and the launch agents
+  name `app/build/Octopus.app` by absolute path, so a renamed-in bundle is
+  picked up by `restart` and by launchd alike. The Electron client keeps
+  running the old code until it is relaunched.
+- Use `restart`, never `octopus down`: a clean stop exits 0 and a launch agent
+  with `KeepAlive` on unsuccessful exit does not start it again.
+- A restart stops the tool room that started it. From a run, pass `--detach
+  --log=<file>` and read the log in the next turn.
+- The turn guard reads the client projection (`projection.operator.chats.status`),
+  because a run record's `status` field is not maintained. It covers client
+  chat runs; background runs without a chat surface are not checked.
+- A rebuilt bundle does not update `<home>/registry`. Packages change through
+  `packages sync`; baseline files such as EE templates are copied once at first
+  boot, and `packages status` only reports their drift.
+- `doctor` resolves provider executables on `PATH`; the tool keeps
+  `/usr/local/bin` on it. Without it, a Home with CLI providers reports them
+  absent.
+- Rollback restores the bundle, not Home state. A new kernel that changes a
+  persisted format still needs a fresh Home.
+
+`node app/scripts/test-safe-self-update.cjs` covers swap, rollback, the guard
+and the rollback path on temporary bundles and a fake control socket.
+
 ## Client iteration and acceptance
 
 For a browser renderer preview, from the repository root:
