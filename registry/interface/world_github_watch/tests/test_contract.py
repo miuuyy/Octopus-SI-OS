@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 from github_api import API, PollError, inventory, resource, validate_config
 from github_watch import Watcher
-from github_watch_life import load_boundary
+from github_watch_life import load_boundary, load_config
 
 CONFIG = validate_config(dict(schema_version=1, repository="owner/repo", branch="main",
                               poll_seconds=300, ignore_comment_authors=["maintainer"]))
@@ -156,6 +156,32 @@ class Contract(unittest.TestCase):
             self.w.deliver()
         with self.assertRaises(ValueError):
             Watcher(dict(CONFIG, branch="other"), self.b)
+
+    def test_private_state_config_overrides_the_registry_template_and_fails_closed(self):
+        # Without a private file the registry folder's template is read.
+        config, source = load_config(self.b)
+        self.assertEqual((config["repository"], source), ("OWNER/REPOSITORY", "registry"))
+        private = self.root / "github-watch.json"
+        private.write_text(json.dumps(dict(schema_version=1, repository="owner/private", branch="release",
+                                           poll_seconds=600, ignore_comment_authors=["maintainer"])))
+        config, source = load_config(self.b)
+        self.assertEqual((config["repository"], config["branch"], config["poll_seconds"], source),
+                         ("owner/private", "release", 600, "private_state"))
+        self.assertEqual(config["max_requests"], 500)
+        # An unusable private file is an error, never a fallback to the template.
+        private.write_text('{"schema_version": 1,')
+        with self.assertRaises(ValueError):
+            load_config(self.b)
+        private.write_text(json.dumps(dict(schema_version=1, repository="not a repository", branch="main",
+                                           poll_seconds=300, ignore_comment_authors=[])))
+        with self.assertRaisesRegex(ValueError, "invalid repository"):
+            load_config(self.b)
+        private.unlink()
+        private.symlink_to(HERE / "github-watch.json")
+        with self.assertRaises(PermissionError):
+            load_config(self.b)
+        private.unlink()
+        self.assertEqual(load_config(self.b)[1], "registry")
 
 
 class APIContract(unittest.TestCase):

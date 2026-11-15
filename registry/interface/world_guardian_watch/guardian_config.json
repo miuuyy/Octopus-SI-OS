@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "watched_run": "RUN_ID",
+  "provider_interface": "PROVIDER_INTERFACE_ID",
+  "quiet_seconds": 3600,
+  "repeat_cooldown_seconds": 3600,
+  "max_repeat_cooldown_seconds": 21600,
+  "refused_retry_seconds": 600,
+  "poll_seconds": 15,
+  "own_action_labels": [
+    "tool.call",
+    "turn.agent_message",
+    "interface.artifact.output",
+    "provider.peer.message"
+  ],
+  "error_labels": [
+    "turn.error",
+    "turn.retrying",
+    "turn.warning",
+    "turn.interrupted.result",
+    "provider.operation.error"
+  ],
+  "heartbeat_labels": [
+    "cron.current_time"
+  ],
+  "notice_label": "guardian.quiet_alert",
+  "instructions": "You are the guardian of the run named in trigger.watched_run. This alert means that run has emitted no tool call, message or result of its own through its provider interface for longer than the threshold; deliveries to it do not count. The facts in this artifact were read from the movement ledger by the sensor, so check them again before acting. Establish which case this is: the run is idle and healthy, a turn is in flight but silent, its provider is failing, or the runtime itself is unhealthy. Take the smallest step that can work, and treat a new movement from the run's provider interface as the only proof that it lives again. Answer briefly with what you observed, what you did and whether the run emitted something of its own afterwards. Replace this text with the installation's own procedure."
+}

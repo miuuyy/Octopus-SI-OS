@@ -1,0 +1,10 @@
+{
+  "id": "world_guardian_watch",
+  "interface_type": "world",
+  "role": "sensor",
+  "direction": "inbound",
+  "source_names": [
+    "guardian_watch"
+  ],
+  "interface_driver_ref": "guardian_watch_life"
+}
