@@ -42,7 +42,7 @@ function operatorChatLiveActivityPayload(label, config, value) {
 
 function operatorChatLiveEventKind(label, config, payload) {
   if (label === config.artifact_labels.terminal_output) return "message";
-  if (label === config.artifact_labels.error_output) return "error";
+  if (label === config.artifact_labels.error_output || label === config.artifact_labels.retry_output) return "error";
   if (label === config.artifact_labels.tool_call) return "dynamic_tool";
   const phase = stringValue(payload?.phase);
   if (label === "agent.message.delta") {
@@ -163,9 +163,9 @@ function operatorChatLiveEventText(payload, eventKind) {
   );
 }
 
-function operatorChatLiveEventEndsTurn({ config, eventKind, label, payload, willRetry }) {
+function operatorChatLiveEventEndsTurn({ config, eventKind, label, payload }) {
   if (label === config.artifact_labels.terminal_output) return true;
-  if (label === config.artifact_labels.error_output) return !willRetry;
+  if (label === config.artifact_labels.error_output) return true;
   if (eventKind === "interrupted_result") return true;
   return eventKind === "turn_control"
     && label === "turn.control.acknowledged"

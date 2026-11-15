@@ -457,16 +457,16 @@ impl CodexAppServerInterfaceDriver {
             ServerNotification::Error(error) if error.thread_id == thread_id => {
                 flush_pending_delta(sink, pending_delta, delta_seq)?;
                 *flush_deadline = None;
-                let output = turn_error_output(&error);
-                if provider_error_is_terminal(&error) {
-                    if terminal_error.replace(output).is_some() {
-                        return Err(InterfaceDriverError::FailedClosed(
-                            "Codex emitted more than one terminal error for one native turn"
-                                .to_string(),
-                        ));
+                match provider_error_output(&error) {
+                    ProviderErrorOutput::Terminal(output) => {
+                        if terminal_error.replace(output).is_some() {
+                            return Err(InterfaceDriverError::FailedClosed(
+                                "Codex emitted more than one terminal error for one native turn"
+                                    .to_string(),
+                            ));
+                        }
                     }
-                } else {
-                    sink.send_progress(output)?;
+                    ProviderErrorOutput::Retrying(output) => sink.send_progress(output)?,
                 }
             }
             ServerNotification::TurnCompleted(turn)

@@ -19,6 +19,7 @@ async function readConfig() {
   requiredString(value.artifact_labels.message, "client.artifact_labels.message");
   requiredString(value.artifact_labels.terminal_output, "client.artifact_labels.terminal_output");
   requiredString(value.artifact_labels.error_output, "client.artifact_labels.error_output");
+  requiredString(value.artifact_labels.retry_output, "client.artifact_labels.retry_output");
   requiredArray(value.artifact_labels.stream_outputs, "client.artifact_labels.stream_outputs")
     .forEach((label, index) => requiredString(label, `client.artifact_labels.stream_outputs[${index}]`));
   requiredString(value.artifact_labels.tool_call, "client.artifact_labels.tool_call");

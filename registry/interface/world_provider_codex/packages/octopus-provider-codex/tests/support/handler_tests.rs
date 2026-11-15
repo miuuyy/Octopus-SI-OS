@@ -6189,13 +6189,15 @@ while IFS= read -r _; do :; done
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
         };
-        let output = turn_error_output(&unauthorized);
+        let ProviderErrorOutput::Terminal(output) = provider_error_output(&unauthorized) else {
+            panic!("an authentication failure ends the turn");
+        };
+        assert_eq!(output.label, TURN_ERROR_LABEL);
         assert_eq!(output.value["will_retry"], false);
         assert_eq!(
             output.value["failure_code"],
             PROVIDER_AUTHENTICATION_FAILURE_CODE
         );
-        assert!(provider_error_is_terminal(&unauthorized));
 
         let transient = octopus_appserver_proto::ErrorNotification {
             error: octopus_appserver_proto::TurnError {
@@ -6207,8 +6209,19 @@ while IFS= read -r _; do :; done
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
         };
-        assert!(!provider_error_is_terminal(&transient));
-        assert_eq!(turn_error_output(&transient).value["will_retry"], true);
+        let ProviderErrorOutput::Retrying(retry) = provider_error_output(&transient) else {
+            panic!("a retry Codex owns is not a terminal error");
+        };
+        assert_eq!(retry.label, TURN_RETRYING_LABEL);
+        assert!(matches!(retry.route, ProviderEmissionRoute::ClientProjection));
+        let descriptor: serde_json::Value = serde_json::from_str(include_str!("../../../../interface.json")).unwrap();
+        let config = &descriptor["interface_driver_config"]["private_config"];
+        let listed = |pointer: &str| config.pointer(pointer).and_then(serde_json::Value::as_array).unwrap()
+            .iter().any(|label| label == TURN_RETRYING_LABEL);
+        assert!(listed("/client_projection_output_labels") && listed("/run_affordance_profile/output_selection/record_labels"));
+        assert!(!listed("/context_output_labels") && !listed("/session_snapshot_labels")
+            && !listed("/run_affordance_profile/output_selection/return_labels"),
+            "a retry neither enters the run's context nor returns to its creator");
     }
 
     #[test]

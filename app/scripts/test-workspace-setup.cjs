@@ -1189,7 +1189,7 @@ async function verifyOperatorChatStatusProjection(temporary) {
       ["provider.transport.dispatch", provider, { provider_interface: provider, method: "turn/start" }, "working"],
       ["turn.reasoning", provider, { lifecycle: "completed" }, "working"],
       ["interface.artifact.output", "other-provider", {}, "working"],
-      ["turn.error", provider, { will_retry: true }, "working"],
+      ["turn.retrying", provider, { message: "Reconnecting... 1/5" }, "working"],
       [`${provider}.failure`, provider, { failure_class: "dispatch_failed", source_movement_seq: 6 }, "failed"],
       ["turn.started", provider, {}, "working"],
       ["turn.completed", provider, {}, "idle"],

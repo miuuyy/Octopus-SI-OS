@@ -151,6 +151,7 @@ async function readOperatorChatProtocol(registryRoot) {
       elicitationResponseLabel: stringValue(labels.elicitation_response),
       userInputResponseLabel: stringValue(labels.user_input_response),
       toolCallLabel: stringValue(labels.tool_call),
+      retryOutputLabel: stringValue(labels.retry_output),
       hiddenActivityLabels: normalizeLabelList(labels.hidden_activity, []),
       authoringRoomInterfaceId: stringValue(authoring.room_interface),
       artifactReadProjection: client.artifact_read_projection,

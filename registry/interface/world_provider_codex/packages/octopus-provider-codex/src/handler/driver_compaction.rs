@@ -330,16 +330,16 @@ impl CodexAppServerInterfaceDriver {
                             )?)?;
                         }
                         ServerNotification::Error(error) if error.thread_id == thread_id => {
-                            let output = turn_error_output(&error);
-                            if provider_error_is_terminal(&error) {
-                                if terminal_error.replace(output).is_some() {
-                                    return Err(InterfaceDriverError::FailedClosed(
-                                        "manual compact emitted more than one terminal error"
-                                            .to_string(),
-                                    ));
+                            match provider_error_output(&error) {
+                                ProviderErrorOutput::Terminal(output) => {
+                                    if terminal_error.replace(output).is_some() {
+                                        return Err(InterfaceDriverError::FailedClosed(
+                                            "manual compact emitted more than one terminal error"
+                                                .to_string(),
+                                        ));
+                                    }
                                 }
-                            } else {
-                                context.sink.send(output)?;
+                                ProviderErrorOutput::Retrying(output) => context.sink.send_progress(output)?,
                             }
                         }
                         ServerNotification::TurnCompleted(turn)

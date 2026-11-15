@@ -429,7 +429,7 @@ function providerAccountTurnError(value) {
     authenticationFailure
       ? "The provider rejected the current account authentication."
       : "The provider emitted a turn error while reading the account.",
-    authenticationFailure || payload.will_retry === true,
+    authenticationFailure,
     authenticationFailure,
   );
 }

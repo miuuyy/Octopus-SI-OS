@@ -541,7 +541,7 @@ function operatorChatActivityPayload(value, label, protocol) {
 
 function operatorChatEventKind(label, protocol, payload) {
   if (label === protocol.terminalOutputLabel) return "message";
-  if (label === protocol.errorOutputLabel) return "error";
+  if (label === protocol.errorOutputLabel || label === protocol.retryOutputLabel) return "error";
   if (label === protocol.toolCallLabel) return "dynamic_tool";
   const phase = stringValue(payload?.phase);
   if (label === "agent.message.delta") {

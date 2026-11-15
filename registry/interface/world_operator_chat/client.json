@@ -43,6 +43,7 @@
       "turn.auth_recovery.started",
       "turn.auth_recovery.completed",
       "turn.warning",
+      "turn.retrying",
       "turn.auto_review.started",
       "turn.auto_review.completed",
       "turn.operator_request.resolved",
@@ -73,6 +74,7 @@
     "turn_control": "operator.turn.control",
     "terminal_output": "interface.artifact.output",
     "error_output": "turn.error",
+    "retry_output": "turn.retrying",
     "stream_outputs": [
       "agent.message.delta",
       "turn.agent_message",
@@ -109,6 +111,7 @@
       "turn.auth_recovery.started",
       "turn.auth_recovery.completed",
       "turn.warning",
+      "turn.retrying",
       "turn.auto_review.started",
       "turn.auto_review.completed",
       "turn.operator_request.resolved",

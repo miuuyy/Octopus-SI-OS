@@ -177,12 +177,7 @@ function operatorChatTurnsProjection(store) {
         continue;
       }
       if (providerMovement && label === protocol.errorOutputLabel) {
-        const payload = await readPayload(row);
-        if (payload?.will_retry === true) {
-          state = "working";
-          continue;
-        }
-        settle(payload, row, "failed");
+        settle(await readPayload(row), row, "failed");
         continue;
       }
       if (isOperatorChatProviderFailureRow(entry, row)) {

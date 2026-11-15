@@ -161,7 +161,7 @@ pub(crate) fn parallel_drain_admits(
     match event {
         AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(_)) => false,
         AppServerEvent::ServerNotification(ServerNotification::Error(error)) => {
-            !provider_error_is_terminal(error)
+            matches!(provider_error_output(error), ProviderErrorOutput::Retrying(_))
         }
         AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(completed)) => !matches!(
             &completed.item,

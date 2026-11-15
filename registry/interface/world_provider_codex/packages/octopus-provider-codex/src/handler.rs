@@ -149,6 +149,7 @@ const TURN_MODEL_VERIFICATION_LABEL: &str = "turn.model.verification";
 const TURN_AUTH_RECOVERY_STARTED_LABEL: &str = "turn.auth_recovery.started";
 const TURN_AUTH_RECOVERY_COMPLETED_LABEL: &str = "turn.auth_recovery.completed";
 const TURN_WARNING_LABEL: &str = "turn.warning";
+pub(crate) const TURN_RETRYING_LABEL: &str = "turn.retrying";
 const TURN_STARTED_LABEL: &str = "turn.started";
 const TURN_COMPLETED_LABEL: &str = "turn.completed";
 const TURN_TERMINAL_INTERACTION_LABEL: &str = "turn.exec.terminal_interaction";
@@ -227,6 +228,7 @@ const CLIENT_ACTIVITY_OUTPUT_LABELS: &[&str] = &[
     TURN_AUTH_RECOVERY_STARTED_LABEL,
     TURN_AUTH_RECOVERY_COMPLETED_LABEL,
     TURN_WARNING_LABEL,
+    TURN_RETRYING_LABEL,
     TURN_AUTO_REVIEW_STARTED_LABEL,
     TURN_AUTO_REVIEW_COMPLETED_LABEL,
     TURN_OPERATOR_REQUEST_RESOLVED_LABEL,

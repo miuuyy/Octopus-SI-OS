@@ -335,7 +335,7 @@ function operatorChatMovementArtifact({ config, contentHash, interfaceId, label,
   const activity = providerFailure ?? operatorChatLiveActivityPayload(label, config, payload);
   const eventKind = activity.eventKind;
   const terminalError = label === config.artifact_labels.error_output;
-  const willRetry = terminalError && payload?.will_retry === true;
+  const willRetry = label === config.artifact_labels.retry_output;
   const eventData = compactOperatorChatLiveEventData(activity.payload);
   delete eventData.continuation;
   if (eventKind === "compaction") delete eventData.text;
@@ -357,13 +357,12 @@ function operatorChatMovementArtifact({ config, contentHash, interfaceId, label,
     event_kind: eventKind,
     event_data: eventData,
     text: activity.text,
-    error: Boolean(providerFailure) || terminalError || activity.error || label === "turn.control.failed",
+    error: Boolean(providerFailure) || terminalError || willRetry || activity.error || label === "turn.control.failed",
     terminal: Boolean(providerFailure) || operatorChatLiveEventEndsTurn({
       config,
       eventKind,
       label,
       payload,
-      willRetry,
     }),
     will_retry: willRetry,
   };

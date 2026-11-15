@@ -1,26 +1,29 @@
 use super::*;
 
-pub(crate) fn turn_error_output(error: &octopus_appserver_proto::ErrorNotification) -> CodexTurnOutput {
+pub(crate) enum ProviderErrorOutput {
+    Terminal(CodexTurnOutput),
+    Retrying(CodexTurnOutput),
+}
+
+pub(crate) fn provider_error_output(error: &octopus_appserver_proto::ErrorNotification) -> ProviderErrorOutput {
     let authentication_failed =
         provider_authentication_failed(&error.error.message, error.error.codex_error_info.as_ref());
+    if error.will_retry && !authentication_failed {
+        return ProviderErrorOutput::Retrying(CodexTurnOutput::client(TURN_RETRYING_LABEL, serde_json::json!({
+            "message": error.error.message,
+            "additional_details": error.error.additional_details,
+        })));
+    }
     let mut value = serde_json::json!({
         "message": error.error.message,
-        "will_retry": error.will_retry && !authentication_failed,
+        "will_retry": false,
         "additional_details": error.error.additional_details,
     });
     if authentication_failed {
         value["failure_code"] =
             serde_json::Value::String(PROVIDER_AUTHENTICATION_FAILURE_CODE.to_string());
     }
-    CodexTurnOutput::client(TURN_ERROR_LABEL, value)
-}
-
-pub(crate) fn provider_error_is_terminal(error: &octopus_appserver_proto::ErrorNotification) -> bool {
-    !error.will_retry
-        || provider_authentication_failed(
-            &error.error.message,
-            error.error.codex_error_info.as_ref(),
-        )
+    ProviderErrorOutput::Terminal(CodexTurnOutput::client(TURN_ERROR_LABEL, value))
 }
 
 pub(crate) fn provider_authentication_failed(

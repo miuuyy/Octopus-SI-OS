@@ -271,9 +271,9 @@ function operatorChatMessagesProjection(store) {
       }
       const terminalError = Boolean(providerFailure) || label === protocol.errorOutputLabel;
       const controlOutcome = eventKind === "turn_control" ? operatorTurnControlOutcome(activityPayload, row) : null;
-      const isError = terminalError || controlOutcome?.status === "failed";
+      const isError = terminalError || label === protocol.retryOutputLabel || controlOutcome?.status === "failed";
       const terminal = label === protocol.terminalOutputLabel
-        || (terminalError && activityPayload?.will_retry !== true)
+        || terminalError
         || eventKind === "interrupted_result"
         || operatorTurnControlEndsTurn(controlOutcome);
       appendOperatorChatAssistantMessage(messages, assistantMessages, {
@@ -287,6 +287,7 @@ function operatorChatMessagesProjection(store) {
         text,
         error: isError,
         terminal,
+        will_retry: label === protocol.retryOutputLabel,
         created_at_ms: createdAtMs,
         movement_seq: numberValue(row.seq, 0),
         artifact_id: ledgerArtifactId(row),
@@ -397,7 +398,7 @@ function operatorChatMessagesProjection(store) {
         ? operatorTurnControlOutcome(payload, row)
         : null;
       const terminal = label === protocol.terminalOutputLabel
-        || (terminalError && payload?.will_retry !== true)
+        || terminalError
         || projected.eventKind === "interrupted_result"
         || operatorTurnControlEndsTurn(controlOutcome);
       const eventData = {
@@ -495,8 +496,9 @@ function operatorChatMessagesProjection(store) {
         event_data: eventData,
         text: label === protocol.terminalOutputLabel && projectedText === label ? "" : projectedText,
         attachments: [],
-        error: projected.error || terminalError,
+        error: projected.error || terminalError || label === protocol.retryOutputLabel,
         terminal,
+        will_retry: label === protocol.retryOutputLabel,
         created_at_ms: createdAtMs,
         movement_seq: numberValue(row.seq, 0),
         artifact_id: artifactId,
