@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "repository": "OWNER/REPOSITORY",
+  "branch": "main",
+  "poll_seconds": 300,
+  "ignore_comment_authors": [],
+  "max_pages": 100,
+  "max_requests": 500,
+  "max_resources": 20000,
+  "timeout_seconds": 30
+}

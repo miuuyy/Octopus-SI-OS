@@ -1,0 +1,10 @@
+{
+  "id": "world_github_watch",
+  "interface_type": "world",
+  "role": "sensor",
+  "direction": "inbound",
+  "source_names": [
+    "github.activity.notice"
+  ],
+  "interface_driver_ref": "github_watch_life"
+}
