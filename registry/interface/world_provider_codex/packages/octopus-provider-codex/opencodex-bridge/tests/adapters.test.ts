@@ -11,6 +11,7 @@ test("shared factory preserves OpenCode Go mixed wires, caller prompts and conve
   const provider = { ...providerConfigSeed(entry), apiKey: "fixture-only" };
   const prompt = "You are Codex, an agent based on GPT-6.\nYou are a coding agent. Do not claim to be GPT-5 or to be made by OpenAI.";
   const cases = [
+    ["gemini-4-argon", "google", "https://opencode.ai/inference/go/google/v1beta/models/gemini-4-argon:generateContent"],
     ["gemini-4-argon-contributor", "google", "https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor:generateContent"],
     ["claude-haiku-5-5", "anthropic", `${provider.baseUrl}/messages`],
     [entry.defaultModel!, "openai-chat", `${provider.baseUrl}/chat/completions`],

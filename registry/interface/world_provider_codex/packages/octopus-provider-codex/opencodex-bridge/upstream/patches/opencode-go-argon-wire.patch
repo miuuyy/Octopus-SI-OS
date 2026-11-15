@@ -1,0 +1,18 @@
+diff --git a/src/types/opencode-go.ts b/src/types/opencode-go.ts
+--- a/src/types/opencode-go.ts
++++ b/src/types/opencode-go.ts
+@@ -7,4 +7,5 @@
+ export const OPENCODE_GO_MODEL_WIRES: Readonly<Record<string, "google" | "anthropic" | "openai-responses">> = Object.freeze({
++  "gemini-4-argon": "google",
+   "gemini-4-argon-contributor": "google",
+   "claude-haiku-5-5": "anthropic",
+   "minimax-m2.7": "anthropic",
+@@ -56,5 +57,8 @@
+ /** Return the fixed Gemini endpoint only for the exact model and an eligible Go destination. */
+ export function openCodeGoGeminiEndpoint(provider: OpenCodeGoDestination, modelId: string): string | undefined {
++  if (modelId === "gemini-4-argon" && isOpenCodeGoGeminiDestination(provider)) {
++    return "https://opencode.ai/inference/go/google/v1beta/models/gemini-4-argon";
++  }
+   return Object.hasOwn(OPENCODE_GO_MODEL_WIRES, modelId) && OPENCODE_GO_MODEL_WIRES[modelId] === "google" && isOpenCodeGoGeminiDestination(provider)
+     ? `https://opencode.ai/inference/go/v1/models/${encodeURIComponent(modelId)}`
+     : undefined;

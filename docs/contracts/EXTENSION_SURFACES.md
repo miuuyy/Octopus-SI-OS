@@ -633,6 +633,13 @@ A setup model offers the reasoning efforts its `providers.json` entry declares,
 with `none` as the default; Custom offers `none` through `xhigh`, and `none`
 sends no reasoning effort upstream.
 
+OpenCode Go's `gemini-4-argon` uses its published Google endpoint,
+`/inference/go/google/v1beta/models/gemini-4-argon`, selected by the pinned
+upstream model table. The Google adapter preserves model output already received
+before a stream disconnect and represents the continuation in Google's wire
+format. Codex retains ownership of stream retries. Endpoint declarations follow
+[OpenCode Go's endpoint reference](https://opencode.ai/docs/console/go/#endpoints).
+
 The bridge serves OpenCodex's registered adapters through one request factory,
 taking each model's wire from the pinned registry; `src/adapters.ts` holds the
 one list of adapters it serves, and Rust carries the declared adapter name
@@ -886,6 +893,12 @@ checkpoint generation, and retains the rejection proof. Replaying its write uses
 the same saved successor; unchanged output bytes do not create another delivery.
 Old artifacts, movements and grants remain unchanged. Model providers do not
 select this projection-repair operation.
+
+Input intake proves its own run edit through the admitted writer call and
+result before handing the input to the provider. Its checked transition remains
+visible when the edit changes only the input owner and leaves provider state
+unchanged. Adopting current configuration and proving a completed writer effect
+are separate checks; the latter always reads the writer evidence.
 
 A retained result-invocation write is validated against its exact authored
 preimage, patch and postimage. If another interface has advanced the record,

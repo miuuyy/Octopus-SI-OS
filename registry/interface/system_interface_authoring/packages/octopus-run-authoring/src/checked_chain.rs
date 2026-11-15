@@ -1012,7 +1012,7 @@ pub fn checked_provider_run_advance(
 ) -> Result<Vec<CheckedRunTransition>, String> {
     let record = RunRecord::from_bytes(before).map_err(|error| error.to_string())?;
     let config = config_from_persisted_profile(&record, provider, profile)?;
-    checked_selected_run_advance(ctx, path, before, after, after_seq, &config)
+    checked_provider_run_advance_state(ctx, path, before, after, after_seq, &config).map_err(Into::into)
 }
 
 pub(crate) fn adopt_amendment_context_bindings(
