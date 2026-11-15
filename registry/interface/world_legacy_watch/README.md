@@ -19,6 +19,8 @@ the package library as the optional **Legacy watch** application.
     `body`), the owner's prompt (`instructions`) and the notice label.
     An optional `event` replaces the notice's `trigger.event` sentence, for
     a trigger armed again whose firing is no longer the first letter.
+    A `github_stars` object instead of the terms watches a repository's star
+    count (see [Watching a repository's stars instead](#watching-a-repositorys-stars-instead)).
   - `legacy_watch_life.py` reads only the `InterfaceOutbound` ledger rows
     addressed to itself and checks every blob against its BLAKE3 hash.
 - `../system_worker_legacy_relay/` — the relay worker pin. Its ceiling is
@@ -193,6 +195,51 @@ One `legacy_watch.notice` with a payload of exactly this shape:
 The notice carries no sender, recipients, headers, ids, `received_at` or
 attachments. The body is passed as it is, so an address quoted in the text or
 a signature can still reach the notice.
+
+## Watching a repository's stars instead
+
+The same sensor can fire on a GitHub star count instead of a letter. Replace
+the terms in the Home's `registry/interface/world_legacy_watch/watch.json` with
+a `github_stars` object:
+
+```json
+{
+  "github_stars": {"repository": "OWNER/NAME", "at_least": 1000, "poll_seconds": 120},
+  "instructions": "<the owner's prompt>",
+  "notice_label": "legacy_watch.notice"
+}
+```
+
+- `terms` and `match_fields` are not allowed in this mode. `poll_seconds` is
+  optional (120 by default, 30 at least); an optional `event` replaces the
+  default sentence.
+- The life script reads `https://api.github.com/repos/OWNER/NAME` without
+  credentials, with `If-None-Match`, and waits out a rate limit GitHub reports.
+  It starts polling at `armed_at` and fires once, when `stargazers_count` is at
+  least `at_least`. Letters are not read in this mode.
+- The script needs the network. The package ships `life.json` with
+  `sandbox.allow_network: false`, which is enough for letters; set it to `true`
+  in the Home's `registry/interface/world_legacy_watch/life.json` for this mode.
+  With it off, every poll fails, is logged, and the trigger never fires.
+- `author.py` authors the receiving task, the arming time and the email relay
+  as before; it does not write `github_stars`. Edit `watch.json` and `life.json`
+  in the Home after it, then restart Octopus. The relay keeps passing letters
+  to the sensor, which ignores them.
+
+The notice then has this payload:
+
+```json
+{
+  "trigger": {
+    "event": "The repository OWNER/NAME reached 1000 stars. The trigger fires once.",
+    "repository": "OWNER/NAME",
+    "stars": 1003,
+    "at_least": 1000,
+    "observed_at": "2026-01-01T00:00:00Z"
+  },
+  "from_owner": "<the prompt from instructions>"
+}
+```
 
 ## Watch it
 

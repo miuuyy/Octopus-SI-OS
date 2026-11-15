@@ -520,7 +520,7 @@ test('sensor watch state projects conditions and receipts without caching a spen
   const stateDirectory = path.join(root, 'interfaces/sensor');
   fs.mkdirSync(directory, { recursive: true }); fs.mkdirSync(stateDirectory, { recursive: true });
   const write = (name, value, dir = directory) => fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
-  write('watch.json', { terms: ['legacy', 'handover'], match_fields: ['subject', 'body'] });
+  write('watch.json', { github_stars: { repository: 'owner/repo', at_least: 763 } });
   write('armed.json', { armed_at: '2026-11-15T00:00:00Z' });
   const projection = projectionFixture({ octopusHome: root, descriptors: { interface: [{
     id: 'sensor', role: 'sensor', interface_type: 'world', direction: 'inbound', descriptor_path: path.join(directory, 'interface.json'),
@@ -530,7 +530,7 @@ test('sensor watch state projects conditions and receipts without caching a spen
   t.after(() => store.close());
   const read = async () => (await store.scheduledInterfaceRows(projection))[0];
   assert.equal((await read()).status, 'armed');
-  assert.equal((await read()).event_source.condition, 'Email subject / body contains any of: legacy, handover');
+  assert.equal((await read()).event_source.condition, 'stars >= 763 on owner/repo');
   for (const [receipt, status] of [['prepared', 'prepared'], ['admitted', 'fired'], ['refused', 'disarmed']]) {
     write('fired.json', { schema_version: 1, status: receipt }, stateDirectory);
     assert.equal((await read()).status, status);
@@ -540,9 +540,8 @@ test('sensor watch state projects conditions and receipts without caching a spen
   assert.equal((await read()).status, 'disarmed');
   fs.unlinkSync(path.join(directory, 'armed.json'));
   assert.equal((await read()).status, 'disarmed');
-  write('watch.json', { github_stars: { repository: 'owner/repo', at_least: 1 } });
-  assert.equal((await read()).status, 'invalid');
   write('watch.json', { terms: ['legacy', 'handover'], match_fields: ['subject', 'body'] });
+  assert.equal((await read()).event_source.condition, 'Email subject / body contains any of: legacy, handover');
   write('armed.json', { armed_at: 'not a date' });
   assert.equal((await read()).valid, false);
   fs.writeFileSync(path.join(directory, 'watch.json'), '{');

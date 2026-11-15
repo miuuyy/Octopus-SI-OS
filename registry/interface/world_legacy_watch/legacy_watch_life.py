@@ -6,6 +6,8 @@ import re
 import stat
 import sys
 import time
+import urllib.error
+import urllib.request
 
 from octopus_content_hash import octopus_content_hash
 
@@ -17,6 +19,9 @@ MOVEMENTS_JSONL = os.path.abspath(os.environ["OCTOPUS_MOVEMENTS_JSONL"])
 BLOBS_DIR = os.path.abspath(os.environ["OCTOPUS_BLOBS_DIR"])
 WATCH_PATH = os.path.join(INTERFACE_DIR, "watch.json")
 TRIGGER_EVENT = "A new letter arrived in the owner's mailbox, and it contains words this trigger watches for. The trigger fires once."
+STARS_EVENT = "The repository {repository} reached {at_least} stars. The trigger fires once."
+STARS_POLL_SECONDS = 120
+GITHUB_API = "https://api.github.com/repos/"
 ARMED_PATH = os.path.join(INTERFACE_DIR, "armed.json")
 CURSOR_PATH = os.path.join(VAR_DIR, "ledger-cursor.json")
 STATE_PATH = os.path.join(VAR_DIR, "fired.json")
@@ -214,8 +219,11 @@ def read_private_json(path, name):
 
 
 def load_watch():
+    raw = json.loads(stable_read(WATCH_PATH, MAX_WATCH_BYTES, "watch.json"))
+    if isinstance(raw, dict) and "github_stars" in raw:
+        return load_stars_watch(raw)
     watch = require_keys(
-        json.loads(stable_read(WATCH_PATH, MAX_WATCH_BYTES, "watch.json")),
+        raw,
         {"terms", "match_fields", "instructions", "notice_label"},
         {"event"},
         "watch.json",
@@ -240,6 +248,21 @@ def load_watch():
         raise ValueError("watch.json instructions must be a string")
     require_string(watch["notice_label"], "watch.json notice_label", 256)
     return {**watch, "normalized_terms": normalized}
+
+
+def load_stars_watch(raw):
+    watch = require_keys(raw, {"github_stars", "instructions", "notice_label"}, {"event"}, "watch.json")
+    stars = require_keys(watch["github_stars"], {"repository", "at_least"}, {"poll_seconds"}, "watch.json github_stars")
+    repository = require_string(stars["repository"], "watch.json github_stars.repository", 200)
+    if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", repository):
+        raise ValueError("watch.json github_stars.repository must be OWNER/NAME")
+    require_int(stars["at_least"], "watch.json github_stars.at_least", 1)
+    require_int(stars.setdefault("poll_seconds", STARS_POLL_SECONDS), "watch.json github_stars.poll_seconds", 30)
+    require_string(watch.setdefault("event", STARS_EVENT.format(repository=repository, at_least=stars["at_least"])), "watch.json event")
+    if not isinstance(watch["instructions"], str):
+        raise ValueError("watch.json instructions must be a string")
+    require_string(watch["notice_label"], "watch.json notice_label", 256)
+    return watch
 
 
 def normalized_text(value):
@@ -636,6 +659,71 @@ def process_outbound(movement, watch, armed_at):
     return deliver(state)
 
 
+def read_stars(repository, etag):
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "octopus-legacy-watch"}
+    if etag:
+        headers["If-None-Match"] = etag
+    request = urllib.request.Request(GITHUB_API + repository, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = json.loads(response.read(1048576))
+            return require_int(body["stargazers_count"], "stargazers_count"), response.headers.get("ETag"), None, None
+    except urllib.error.HTTPError as error:
+        if error.code == 304:
+            return None, etag, None, None
+        reset = error.headers.get("X-RateLimit-Reset") if error.code in (403, 429) else None
+        wait = max(int(reset) - int(time.time()), 0) + 5 if reset and reset.isdigit() else None
+        return None, etag, f"GitHub answered {error.code}" + (f"; waiting {wait}s for the rate limit" if wait else ""), wait
+
+
+def watch_stars(watch, armed_at, state):
+    stars = watch["github_stars"]
+    repository, at_least, every = stars["repository"], stars["at_least"], stars["poll_seconds"]
+    count, etag = None, None
+    while state is None:
+        if datetime.datetime.now(datetime.timezone.utc) >= armed_at:
+            try:
+                result = read_stars(repository, etag)
+            except (OSError, ValueError, KeyError) as error:
+                result = (None, etag, f"reading {repository} failed: {error}", None)
+            observed, etag, problem, wait = result
+            if problem:
+                log(problem)
+            if observed is not None and observed != count:
+                count = observed
+                log(f"{repository} has {count} stars; the trigger fires at {at_least}")
+            if count is not None and count >= at_least:
+                observation = {"repository": repository, "stars": count, "at_least": at_least,
+                               "observed_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                manifest_path, manifest_hash = prepare_stars_notice(watch, observation)
+                state = {
+                    "schema_version": 1, "status": "prepared", "label": watch["notice_label"],
+                    "manifest_path": manifest_path, "manifest_hash": manifest_hash,
+                    "source_movement_seq": 0, "admitted_seq": None, "refusal": None,
+                }
+                atomic_json(STATE_PATH, state)
+                log(f"{repository} reached {count} stars; handing {watch['notice_label']}")
+                return deliver(state)
+            time.sleep(wait or every)
+        else:
+            time.sleep(min(every, max((armed_at - datetime.datetime.now(datetime.timezone.utc)).total_seconds(), 1)))
+    return state
+
+
+def prepare_stars_notice(watch, observation):
+    payload = canonical_json({"trigger": {"event": watch["event"], **observation}, "from_owner": watch["instructions"]})
+    if len(payload) > IO_LIMITS["max_payload_bytes"]:
+        raise ValueError("the notice payload exceeds max_payload_bytes")
+    payload_hash = octopus_content_hash(payload)
+    payload_path = os.path.join(PAYLOADS_DIR, f"notice-{payload_hash}.payload")
+    private_file(payload_path, payload, IO_LIMITS["max_payload_bytes"], "notice payload")
+    manifest = canonical_json({"label": watch["notice_label"], "payload_path": payload_path, "payload_content_hash": payload_hash})
+    manifest_hash = octopus_content_hash(manifest)
+    manifest_path = os.path.join(PAYLOADS_DIR, f"notice-{manifest_hash}.artifact.json")
+    private_file(manifest_path, manifest, IO_LIMITS["max_manifest_bytes"], "notice manifest")
+    return manifest_path, manifest_hash
+
+
 def follow(cursor, watch, armed_at, state):
     passed = {"early": 0, "undated": 0}
     for movement, candidate in movements_after(cursor):
@@ -671,15 +759,22 @@ def main():
                 "but the movement ledger holds no such arrival from this sensor"
             )
     status = state["status"] if state else "armed"
-    log(
-        f"up: {status}, letters received from {armed_at.isoformat()} on, cursor at seq {cursor['next_seq']}, "
-        f"{len(watch['terms'])} terms in {', '.join(watch['match_fields'])}"
-    )
+    if "github_stars" in watch:
+        log(f"up: {status}, watching {watch['github_stars']['repository']} for {watch['github_stars']['at_least']} stars from {armed_at.isoformat()} on")
+    else:
+        log(
+            f"up: {status}, letters received from {armed_at.isoformat()} on, cursor at seq {cursor['next_seq']}, "
+            f"{len(watch['terms'])} terms in {', '.join(watch['match_fields'])}"
+        )
     signal_ready()
     if state is not None and state["status"] == "prepared":
         verify_prepared(state)
         log(f"handing the prepared notice from ledger seq {state['source_movement_seq']} again")
         state = deliver(state)
+    if "github_stars" in watch:
+        state = watch_stars(watch, armed_at, state)
+        while True:
+            time.sleep(3600)
     while True:
         cursor, state = follow(cursor, watch, armed_at, state)
         time.sleep(POLL_SECONDS)
