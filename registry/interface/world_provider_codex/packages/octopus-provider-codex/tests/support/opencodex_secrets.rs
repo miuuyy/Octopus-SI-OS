@@ -338,7 +338,7 @@ fn opencodex_vertex_authenticates_only_with_its_declared_credentials_file() {
     let vertex = descriptor_config(&descriptor).unwrap().unwrap().vertex.unwrap();
     assert_eq!(
         (vertex.location.as_str(), vertex.project_env.as_str(), vertex.credentials_file_env.as_str()),
-        ("global", "OCTOPUS_PROVIDER_VERTEX_PROJECT", "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE")
+        ("us", "OCTOPUS_PROVIDER_VERTEX_PROJECT", "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE")
     );
     let transport = descriptor
         .interface_driver_config
