@@ -527,8 +527,9 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 for bytes in by_before.values().filter(|next| next.call.seq.0 > previous_call).map(|next| next.before.as_slice())
                     .chain(calls.values().filter(|next| next.call.seq.0 > previous_call).map(|next| next.before.as_slice()))
                     .chain(after.into_iter()) {
-                    if preserves_provider_evidence(&current, bytes, &config.provider_interface)? {
-                        successors.insert(ContentHash::of_bytes(bytes).to_hex(), bytes);
+                    let successor = ContentHash::of_bytes(bytes).to_hex();
+                    if successor != hash && preserves_provider_evidence(&current, bytes, &config.provider_interface)? {
+                        successors.insert(successor, bytes);
                     }
                 }
                 if successors.len() > 1 {

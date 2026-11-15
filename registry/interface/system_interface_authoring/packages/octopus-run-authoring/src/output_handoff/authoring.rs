@@ -365,7 +365,13 @@ impl ProviderOutputHandoff {
                     self.config.provider_interface.as_str()
                 )
             })?;
-        let context_generation = if (refresh_context || continuation.is_some()) && !self.failed_source {
+        let settles_carried_result = self.failed_source && consumed_result_input.as_ref()
+            .and_then(|id| record.checkpoint(id))
+            .is_some_and(|checkpoint| self.config.checkpoints.iter().any(|template| {
+                template.role == RunAuthoringCheckpointRole::ResultInput && template.include_context
+                    && checkpoint_record_matches_template(checkpoint, template, &record.id)
+            }));
+        let context_generation = if (refresh_context || continuation.is_some()) && (!self.failed_source || settles_carried_result) {
             previous_context_generation.checked_add(context_generations).ok_or_else(|| {
                 format!(
                     "provider run '{}' context generation overflowed",
