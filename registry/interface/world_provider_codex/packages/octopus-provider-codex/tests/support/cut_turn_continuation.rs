@@ -1,10 +1,10 @@
 #[tokio::test]
 async fn a_turn_cut_by_process_death_continues_from_its_late_result() {
-    continue_cut_turn(0, true, None).await;
-    continue_cut_turn(1, false, Some(TURN_TOKEN_USAGE_LABEL)).await;
+    continue_cut_turn(false, true, None).await;
+    continue_cut_turn(true, false, Some(TURN_TOKEN_USAGE_LABEL)).await;
 }
 
-async fn continue_cut_turn(deferred_context_generations: u64, input_changes_context: bool, interrupted_after_artifact: Option<&str>) {
+async fn continue_cut_turn(own_boundary: bool, input_changes_context: bool, interrupted_after_artifact: Option<&str>) {
     use octopus_appserver_proto::{ApprovalsReviewer, AskForApproval, SandboxPolicy, SessionSource, Thread, ThreadStatus};
     let temp = tempfile::tempdir().unwrap();
     let cwd = octopus_util_abspath::AbsolutePathBuf::from_absolute_path(temp.path()).unwrap();
@@ -105,7 +105,7 @@ done
         interface_state: BTreeMap::new(), checkpoints: Vec::new(), active_checkpoints: Vec::new(),
     }).unwrap();
     admitted["interface_state"]["world_provider_codex"] = serde_json::json!({
-        "context_generation": 6,
+        "context_generation": if own_boundary { 7 } else { 6 },
         "run_authoring_binding": {
             "schema_version":2,"run":"run-a","worker":"system_worker_test","provider_interface":"world_provider_codex",
             "authoring_source_interface":"world_provider_codex","payload_artifact_bindings":[],"checkpoints":[],
@@ -121,7 +121,12 @@ done
     let admitted_record = serde_json::to_vec(&admitted).unwrap();
     octopus_run_record::RunRecord::from_bytes(&admitted_record).unwrap();
     let mut current = admitted;
-    current["interface_state"]["world_provider_codex"]["context_generation"] = serde_json::json!(7);
+    current["interface_state"]["world_provider_codex"]["context_generation"] = serde_json::json!(if own_boundary { 8 } else { 7 });
+    if own_boundary {
+        current["interface_state"]["world_provider_codex"]["pending_handoff"] = serde_json::json!({
+            "source_movement_seq": 1, "terminal": false, "items": [],
+        });
+    }
     current["checkpoints"] = serde_json::json!([]);
     current["active_checkpoints"] = serde_json::json!([]);
     let current_record = serde_json::to_vec(&current).unwrap();
@@ -157,7 +162,7 @@ done
         current_session_context: Arc::new(Vec::new()),
         output_root: &output_root, live_stream_root: &live_stream_root,
         source_movement_seq: 1, attempt: 1, admitted_run_record: &admitted_record, current_run_record: &current_record,
-        deferred_context_generations, input_changes_context, interrupted_after_artifact: interrupted_after_artifact.map(str::to_owned),
+        deferred_context_generations: 0, input_changes_context, interrupted_after_artifact: interrupted_after_artifact.map(str::to_owned),
         recovered_handoff_artifacts: Arc::new(Vec::new()), durable_interrupted_continuity: None,
         reconciled_result_continuity: None, control: &control, handoff_barrier: ProviderHandoffBarrier::new(),
     });

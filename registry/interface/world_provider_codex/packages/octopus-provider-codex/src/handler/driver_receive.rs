@@ -365,7 +365,7 @@ impl CodexAppServerInterfaceDriver {
                 if peer.action == PeerAction::Interrupt {
                     return Err(InterfaceDriverError::FailedClosed("peer interrupt must enter the admitted turn-control reader".into()));
                 }
-                ProviderInput::Turn(vec![UserInput::Text { text: peer_input_text(peer, &input.artifact)?, text_elements: Vec::new() }])
+                ProviderInput::Turn(vec![UserInput::Text { text: peer_input_text(peer, &input.artifact, peer_input_source(&input)?)?, text_elements: Vec::new() }])
             }
             None => decode_provider_input(
                 &effective_request_bytes,
@@ -427,6 +427,14 @@ impl CodexAppServerInterfaceDriver {
             assembled_context.session_context_available = true;
         }
         let authored_source_generation = read_codex_context_generation(&run_record, &runtime.interface)?;
+        let source_base_generation = own_boundary_base_generation(
+            &parse_run_record_json(admitted_run_record, runtime.run.as_str())?,
+            &run_record,
+            &runtime.interface,
+            source_movement_seq,
+            recovered.as_ref(),
+            authored_source_generation,
+        )?;
         let authored_context_generation = authored_source_generation
             .checked_add(deferred_context_generations)
             .ok_or_else(|| InterfaceDriverError::FailedClosed("Codex authored context generation overflowed".to_string()))?;
@@ -437,7 +445,7 @@ impl CodexAppServerInterfaceDriver {
                 .unwrap_or(authored_context_generation);
             (generation, generation)
         } else {
-            (authored_source_generation, authored_context_generation)
+            (source_base_generation, authored_context_generation)
         };
         let invocation_context_generation = if input_changes_context {
             context_generation.checked_add(1).ok_or_else(|| {
@@ -568,6 +576,7 @@ impl CodexAppServerInterfaceDriver {
                 control.finish();
                 let mut authored = recovered.clone();
                 authored.context_generation = context_generation;
+                authored.turn_input = Some(effective_source_artifact.clone());
                 sink.set_continuity(authored);
                 return sink.send(interrupted_transport_output(
                     last_artifact_label,
@@ -729,7 +738,7 @@ impl CodexAppServerInterfaceDriver {
         if let Some(peer) = peer_message.as_ref().filter(|peer| peer.action == PeerAction::Queue) {
             let mut items = Vec::new();
             if cold_thread && let Some(context) = conversation_block.as_ref() { items.push(queued_peer_item(context.clone())); }
-            items.push(queued_peer_item(peer_input_text(peer, &input.artifact)?));
+            items.push(queued_peer_item(peer_input_text(peer, &input.artifact, peer_input_source(&input)?)?));
             let request = ClientRequest::ThreadInjectItems {
                 request_id: self.mint_request_id(), params: ThreadInjectItemsParams { thread_id: thread_id.clone(), items },
             };
@@ -897,4 +906,28 @@ impl CodexAppServerInterfaceDriver {
             TurnDrainOutcome::Suspended(_) | TurnDrainOutcome::AwaitingResults | TurnDrainOutcome::Complete => Ok(()),
         }
     }
+}
+
+fn own_boundary_base_generation(
+    admitted: &serde_json::Value,
+    current: &serde_json::Value,
+    provider: &InterfaceId,
+    source_movement_seq: u64,
+    recovered: Option<&CodexContinuityState>,
+    current_generation: u64,
+) -> Result<u64, InterfaceDriverError> {
+    let pending = &current["interface_state"][provider.as_str()]["pending_handoff"];
+    let absent = |field: &str| pending.get(field).is_none_or(serde_json::Value::is_null);
+    let own_boundary = pending["source_movement_seq"].as_u64() == Some(source_movement_seq)
+        && pending["terminal"] != true
+        && absent("withdrawal")
+        && (absent("context_publication") || pending["deferred_publication"] == true);
+    if !own_boundary {
+        return Ok(current_generation);
+    }
+    let pinned = read_codex_context_generation(admitted, provider)?;
+    Ok(match recovered {
+        Some(state) if state.context_generation == pinned && pinned <= current_generation => pinned,
+        _ => current_generation,
+    })
 }
