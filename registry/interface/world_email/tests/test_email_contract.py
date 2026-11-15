@@ -415,6 +415,46 @@ class EmailLifeTests(unittest.TestCase):
             outbound.process(*row)
         return self.runtime.handed[-1]
 
+    def test_empty_poll_refreshes_observation_without_advancing_cursor(self):
+        self.imap.add(message("alice@example.org", "Existing", "old", "<existing@example.org>"))
+        with mock.patch.object(self.life, "now_iso", return_value="2026-11-15T05:00:00+00:00"):
+            self.catch_up()
+        self.life.update_state(self.mailbox.account, lambda state: state["admitted"].append("already-admitted"))
+        before = self.life.load_state(self.mailbox.account)
+        with mock.patch.object(self.life, "now_iso", return_value="2026-11-15T08:00:00+00:00"):
+            self.assertFalse(self.catch_up())
+        after = self.life.load_state(self.mailbox.account)
+        entry = after["mailboxes"]["INBOX"]
+        self.assertEqual(entry["checked_at"], "2026-11-15T08:00:00+00:00")
+        self.assertEqual(entry["uid_next"], 2)
+        self.assertEqual(entry["last_uid"], 1)
+        self.assertEqual(entry["last_uid"], before["mailboxes"]["INBOX"]["last_uid"])
+        self.assertEqual(after["admitted"], before["admitted"])
+        self.assertEqual(len(after["admitted"]), 1)
+        self.assertEqual(self.runtime.handed, [])
+
+    def test_empty_poll_without_uidnext_omits_unknown_value(self):
+        self.catch_up()
+        session = mock.Mock()
+        session.uids_after.return_value = []
+        with mock.patch.object(self.life, "now_iso", return_value="2026-11-15T08:00:00+00:00"):
+            self.assertFalse(self.life.Watcher(self.mailbox, "INBOX").catch_up(
+                session, {"uidvalidity": 7, "uidnext": None, "exists": 0}))
+        entry = self.life.load_state(self.mailbox.account)["mailboxes"]["INBOX"]
+        self.assertEqual(entry["checked_at"], "2026-11-15T08:00:00+00:00")
+        self.assertNotIn("uid_next", entry)
+
+    def test_failed_poll_does_not_report_a_fresh_check(self):
+        with mock.patch.object(self.life, "now_iso", return_value="2026-11-15T05:00:00+00:00"):
+            self.catch_up()
+        before = self.life.load_state(self.mailbox.account)
+        session = mock.Mock()
+        session.uids_after.side_effect = email_wire.MailError("transport", "connection lost")
+        with mock.patch.object(self.life, "now_iso", return_value="2026-11-15T08:00:00+00:00"):
+            with self.assertRaises(email_wire.MailError):
+                self.life.Watcher(self.mailbox, "INBOX").catch_up(session, {"uidvalidity": 7, "uidnext": 1, "exists": 0})
+        self.assertEqual(self.life.load_state(self.mailbox.account), before)
+
     def test_intake_cursor_never_replays_loses_or_duplicates(self):
         self.imap.add(message("mallory@evil.test", "Old", "old", "<old1@evil.test>"))
         self.imap.add(message("alice@example.org", "Old", "old", "<old2@example.org>"))

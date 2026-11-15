@@ -510,10 +510,12 @@ def load_state(account):
     if value["account"] != account_identity(account):
         return fresh
     for mailbox, entry in contract.require_object(value["mailboxes"], "email mailbox state.mailboxes").items():
-        entry = contract.require_keys(entry, {"uidvalidity", "last_uid", "checked_at"}, set(), f"email mailbox state {mailbox}")
+        entry = contract.require_keys(entry, {"uidvalidity", "last_uid", "checked_at"}, {"uid_next"}, f"email mailbox state {mailbox}")
         contract.require_int(entry["uidvalidity"], f"email mailbox state {mailbox}.uidvalidity", 1)
         contract.require_int(entry["last_uid"], f"email mailbox state {mailbox}.last_uid", 0)
         contract.require_string(entry["checked_at"], f"email mailbox state {mailbox}.checked_at")
+        if "uid_next" in entry:
+            contract.require_int(entry["uid_next"], f"email mailbox state {mailbox}.uid_next", 1)
     contract.require_string_list(value["admitted"], "email mailbox state.admitted")
     return value
 
@@ -1064,6 +1066,19 @@ class Watcher:
                 current["mailboxes"][self.name] = {"uidvalidity": status["uidvalidity"], "last_uid": uid, "checked_at": now_iso()}
 
             update_state(account, advance)
+
+        def checked(current):
+            # A successful search is an observation even when no mail arrived.
+            # Update only polling metadata; never move the delivery cursor or
+            # replace the admission history with this cycle's earlier snapshot.
+            current_entry = current["mailboxes"][self.name]
+            current_entry["checked_at"] = now_iso()
+            if status["uidnext"] is not None:
+                current_entry["uid_next"] = status["uidnext"]
+            else:
+                current_entry.pop("uid_next", None)
+
+        update_state(account, checked)
         if uids:
             detail = ", ".join(f"{reason}: {count}" for reason, count in sorted(ignored.items()))
             log(f"{self.name}: {min(len(uids), limit)} new, {handed} handed to tasks" + (f"; not handed ({detail})" if detail else ""))
