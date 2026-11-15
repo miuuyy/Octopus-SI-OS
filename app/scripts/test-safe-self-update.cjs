@@ -3,9 +3,8 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { bundles, buildInfo, swapBundles, rollbackBundles, control, readChatTurns, blockingTurns, packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
+const { bundles, buildInfo, swapBundles, rollbackBundles, control, blockingTurns, packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
 
-// Unix socket paths are short; macOS os.tmpdir() is too long for them.
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const roots = [];
 function tempRoot() {
@@ -28,8 +27,6 @@ function fakeLayout({ live = "live", staging = "staging", prev = null } = {}) {
   return layout;
 }
 
-// A control socket that answers like the runtime. `successorPhases[n]` is the phase the
-// n-th restarted instance reports.
 function fakeRuntime(successorPhases) {
   const home = tempRoot(), directory = path.join(home, "state", "runtime-instance");
   fs.mkdirSync(directory, { recursive: true });
@@ -46,10 +43,9 @@ function fakeRuntime(successorPhases) {
 }
 
 const idle = async () => [];
-const options = { launchdLabel: "test.invalid.octopus", timeoutMs: 1500 };
+const options = { timeoutMs: 1500 };
 
 async function main() {
-  // Swap: a dry run changes nothing; a real swap keeps the previous bundle.
   let layout = fakeLayout();
   assert.equal(swapBundles(layout, { dryRun: true }).applied, false);
   assert.equal(buildInfo(layout.live).revision, "live");
@@ -58,47 +54,19 @@ async function main() {
   assert.equal(buildInfo(layout.prev).revision, "live");
   assert.equal(fs.existsSync(layout.staging), false);
 
-  // Swap refuses without a staged bundle and leaves the live bundle in place.
   assert.throws(() => swapBundles(layout), /not a packaged Octopus bundle/);
   assert.equal(buildInfo(layout.live).revision, "staging");
 
-  // Rollback restores the previous bundle and keeps the failed one for inspection.
   assert.equal(rollbackBundles(layout, { dryRun: true }).applied, false);
   assert.equal(rollbackBundles(layout).revision, "live");
   assert.equal(buildInfo(layout.failed).revision, "staging");
   assert.throws(() => rollbackBundles(layout), /not a packaged Octopus bundle/);
   assert.equal(buildInfo(layout.live).revision, "live");
 
-  // The guard counts open turns of other runs only.
   const chats = [{ run_id: "a", turn_open: true }, { run_id: "b", turn_open: false }, { run_id: "c", turn_open: true }];
   assert.deepEqual(blockingTurns(chats, "a").map((chat) => chat.run_id), ["c"]);
   assert.deepEqual(blockingTurns(chats, null).map((chat) => chat.run_id), ["a", "c"]);
 
-  // Older bundles can project stale open turns for archived tasks. Do not even
-  // request them, and defensively discard an archived status response as well.
-  const old = fakeLayout();
-  const electron = path.join(old.live, "Contents/Resources/app/electron");
-  fs.mkdirSync(electron, { recursive: true });
-  fs.writeFileSync(path.join(electron, "projectionReadContract.cjs"),
-    'exports.projectionReadRequest = (method, params) => ({method, params});');
-  fs.writeFileSync(path.join(electron, "projection.cjs"), `
-    exports.createProjectionStore = () => ({
-      read: async ({method, params}) => {
-        if (method === "projection.operator.os.scope") return {client_runs: [
-          {run_id:"archived", archived:true}, {run_id:"active"}, {run_id:"idle"}]};
-        require("node:assert/strict").deepEqual(params.run_ids, ["active", "idle"]);
-        return {chats:[{run_id:"archived", turn_open:true, turn_state:"waiting"},
-          {run_id:"active", turn_open:true, turn_state:"working"},
-          {run_id:"idle", turn_open:false, turn_state:"idle"},
-          {run_id:"unexpected", archived:true, turn_open:true}]};
-      }, close: async () => {}
-    });`);
-  const projected = await readChatTurns(old.live, tempRoot());
-  assert.deepEqual(projected.map(chat => chat.run_id), ["active", "idle"]);
-  assert.deepEqual(blockingTurns(projected, null).map(chat => chat.run_id), ["active"]);
-  assert.deepEqual(blockingTurns([{run_id:"archived", archived:true, turn_open:true}], null), []);
-
-  // Package actions never force local changes and single out the chat client.
   assert.equal(packageAction({ id: "x", update_available: false }), "current");
   assert.equal(packageAction({ id: "x", update_available: true, local_changes: [] }), "repair");
   assert.equal(packageAction({ id: "x", update_available: true, local_changes: [{}] }), "review_local_changes");
@@ -108,7 +76,6 @@ async function main() {
   assert.deepEqual(parseArgs(["restart", "--swap", "--caller-run=run_1"]), { positional: ["restart"], options: { swap: true, callerRun: "run_1" } });
   assert.equal((await control(tempRoot(), "status", 500)).outcome, "unreachable");
 
-  // Restart refuses while another run has a turn in flight, and sends nothing.
   layout = fakeLayout();
   let runtime = await fakeRuntime([]);
   let result = await restartRuntime(layout, runtime.home, { ...options, swap: true, callerRun: "me",
@@ -118,14 +85,12 @@ async function main() {
   assert.deepEqual(runtime.state.requests, ["status"]);
   assert.equal(buildInfo(layout.live).revision, "live");
 
-  // A dry run passes the guard and still changes nothing.
   result = await restartRuntime(layout, runtime.home, { ...options, swap: true, dryRun: true, readTurns: idle });
   assert.equal(result.ok, true);
   assert.equal(result.applied, false);
   assert.equal(runtime.state.requests.includes("restart"), false);
   assert.equal(buildInfo(layout.live).revision, "live");
 
-  // A healthy successor: swapped, restarted once, previous bundle kept.
   result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle });
   assert.equal(result.ok, true);
   assert.equal(result.revision, "staging");
@@ -133,7 +98,6 @@ async function main() {
   assert.equal(buildInfo(layout.prev).revision, "live");
   await runtime.close();
 
-  // A successor that never becomes ready: rolled back and restarted again.
   layout = fakeLayout();
   runtime = await fakeRuntime(["starting", "ready"]);
   result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle });
@@ -145,7 +109,6 @@ async function main() {
   assert.equal(buildInfo(layout.failed).revision, "staging");
   await runtime.close();
 
-  // No runtime: nothing is swapped.
   layout = fakeLayout();
   await assert.rejects(restartRuntime(layout, tempRoot(), { ...options, swap: true, readTurns: idle }), /no runtime answers/);
   assert.equal(buildInfo(layout.live).revision, "live");

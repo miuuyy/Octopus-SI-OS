@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// Safe self-update of an installation that runs from app/build/Octopus.app:
-// build -> verify -> swap -> packages sync -> restart. Each step is separate and the
-// live bundle is never absent during a build. See docs/development.md.
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -30,8 +27,6 @@ function requireBundle(bundle) {
   return bundle;
 }
 
-// Octopus.app -> Octopus.prev.app, Octopus.staging.app -> Octopus.app. Two renames on one
-// volume; a failed second rename puts the previous bundle back.
 function swapBundles(layout, { dryRun = false } = {}) {
   requireBundle(layout.staging);
   const hadLive = fs.existsSync(layout.live);
@@ -47,7 +42,6 @@ function swapBundles(layout, { dryRun = false } = {}) {
   return { applied: true, plan, revision: buildInfo(layout.live).revision };
 }
 
-// Octopus.app -> Octopus.failed.app, Octopus.prev.app -> Octopus.app.
 function rollbackBundles(layout, { dryRun = false } = {}) {
   requireBundle(layout.prev);
   const hadLive = fs.existsSync(layout.live);
@@ -60,8 +54,6 @@ function rollbackBundles(layout, { dryRun = false } = {}) {
   return { applied: true, plan, revision: buildInfo(layout.live).revision };
 }
 
-// One request to <home>/state/runtime-instance/control.sock. Never rejects: an absent or
-// silent runtime is { outcome: "unreachable" }.
 function control(home, request, timeoutMs = 5000) {
   return new Promise((resolve) => {
     const socket = net.createConnection(path.join(home, "state", "runtime-instance", "control.sock"));
@@ -93,8 +85,6 @@ async function waitForStatus(home, accept, timeoutMs) {
   }
 }
 
-// A minimal, complete environment for a bundle's runtime. /usr/local/bin stays on PATH:
-// doctor resolves provider executables such as `claude` there.
 function runtimeEnv(bundle, home) {
   const root = installation(bundle), user = os.userInfo().username;
   return {
@@ -110,8 +100,6 @@ function octopus(bundle, home, args, options = {}) {
   return spawnSync(runtimeBinary(bundle), args, { env: runtimeEnv(bundle, home), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
 }
 
-// Turns in flight, read from the client projection of the bundle. The run record's own
-// `status` field is not maintained; the projection is. Covers client chat runs only.
 async function readChatTurns(bundle, home) {
   const root = installation(bundle);
   const { createProjectionStore } = require(path.join(root, "electron", "projection.cjs"));
@@ -126,19 +114,16 @@ async function readChatTurns(bundle, home) {
   });
   try {
     const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
-    // Archived tasks retain ledger history but have no live admission frontier.
-    // Filter here as the live bundle may predate archive-aware status projection.
-    const runIds = (scope.client_runs ?? []).filter((row) => row.archived !== true).map((row) => row.run_id);
+    const runIds = (scope.client_runs ?? []).map((row) => row.run_id);
     const status = await store.read(projectionReadRequest("projection.operator.chats.status", { run_ids: runIds }));
-    return status.chats.filter((chat) => runIds.includes(chat.run_id) && chat.archived !== true).map((chat) => ({ run_id: chat.run_id, turn_open: chat.turn_open === true, turn_state: chat.turn_state }));
+    return status.chats.filter((chat) => runIds.includes(chat.run_id)).map((chat) => ({ run_id: chat.run_id, turn_open: chat.turn_open === true, turn_state: chat.turn_state }));
   } finally { await store.close?.(); }
 }
 
-const blockingTurns = (chats, callerRun) => chats.filter((chat) => chat.archived !== true && chat.turn_open && chat.run_id !== callerRun);
+const blockingTurns = (chats, callerRun) => chats.filter((chat) => chat.turn_open && chat.run_id !== callerRun);
 
 const lastLines = (result) => `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ");
 
-// Packages into Octopus.staging.app. The packaging log goes to stderr.
 function buildStaging(layout, { dryRun = false } = {}) {
   const { node } = JSON.parse(fs.readFileSync(path.join(appRoot, "native", "runtime.json"), "utf8"));
   const env = { ...process.env, OCTOPUS_PACKAGE_BUNDLE: layout.staging,
@@ -172,7 +157,6 @@ function packageAction(entry) {
   return entry.id === CHAT_CLIENT_PACKAGE ? "repair_with_client_restart" : "repair";
 }
 
-// Installed packages of a Home compared with the package library of a bundle. Read-only.
 async function packageStatus(bundle, home) {
   const catalog = await localPackages(bundle).inspectLocalPackageCatalog(packageRoots(bundle, home));
   return catalog.packages.filter((entry) => entry.available === false || entry.materialized || entry.partially_materialized || entry.installed).map((entry) => ({
@@ -182,7 +166,6 @@ async function packageStatus(bundle, home) {
   }));
 }
 
-// Baseline registry files (copied once, at first boot) that differ from the bundle. Read-only.
 function baselineDrift(bundle, home) {
   const source = path.join(installation(bundle), "registry"), rows = [];
   const digest = (file) => require("node:crypto").createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -200,9 +183,6 @@ function baselineDrift(bundle, home) {
   return rows;
 }
 
-// Repairs every installed package whose source changed and that has no local changes.
-// Packages with local changes or errors are reported, never forced. The chat client
-// package is repaired only on request, because a running client must be relaunched after.
 async function syncPackages(bundle, home, { dryRun = false, withChatClient = false, only = null } = {}) {
   const status = await packageStatus(bundle, home);
   const selected = status.filter((row) => (row.action === "repair" || (withChatClient && row.action === "repair_with_client_restart"))
@@ -220,7 +200,6 @@ async function syncPackages(bundle, home, { dryRun = false, withChatClient = fal
   return { applied: true, results, skipped };
 }
 
-// Boots a disposable Home from the bundle: install packages, doctor, up, restart, down.
 async function smokeTest(bundle, packageIds) {
   const base = process.platform === "darwin" ? "/private/tmp" : fs.realpathSync(os.tmpdir());
   const home = fs.mkdtempSync(path.join(base, "octo-su-")), rows = [];
@@ -262,7 +241,6 @@ async function smokeTest(bundle, packageIds) {
   return rows;
 }
 
-// Checks a staged bundle before it may replace the live one.
 async function verifyStaging(layout, home, { smoke = true, allowModifiedSource = false, smokePackages = [CHAT_CLIENT_PACKAGE, "world_provider_codex"] } = {}) {
   const bundle = requireBundle(layout.staging), checks = [];
   const check = (name, ok, detail = "") => checks.push({ name, ok, detail });
@@ -281,13 +259,9 @@ async function verifyStaging(layout, home, { smoke = true, allowModifiedSource =
   return { ok: checks.every((row) => row.ok), bundle, build: info, checks };
 }
 
-// Guarded restart of the running runtime through its control socket (what `octopus restart`
-// sends). Refuses while another run has a turn in flight. With swap, the staged bundle
-// replaces the live one after the guard passes. A successor that is not ready in time is
-// rolled back to Octopus.prev.app and restarted again.
 async function restartRuntime(layout, home, options = {}) {
   const { callerRun = null, dryRun = false, force = false, swap = false, rollback = true,
-    launchdLabel = "app.octopus.runtime", timeoutMs = 300_000, readTurns = readChatTurns } = options;
+    timeoutMs = 300_000, readTurns = readChatTurns } = options;
   const before = await control(home, "status");
   if (before.outcome !== "status") throw new Error(`no runtime answers for Home ${home} (${before.error}); only a running runtime is restarted`);
   if (swap) requireBundle(layout.staging);
@@ -305,8 +279,11 @@ async function restartRuntime(layout, home, options = {}) {
   if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, runtime: first.status };
   rollbackBundles(layout);
   const current = await control(home, "status");
-  if (current.outcome === "status") await control(home, "restart");
-  else spawnSync("launchctl", ["kickstart", `gui/${process.getuid()}/${launchdLabel}`], { encoding: "utf8" });
+  if (current.outcome !== "status") {
+    return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: false, failed: first.status,
+      error: `no runtime answers for Home ${home} after the rollback; start it from ${layout.live}` };
+  }
+  await control(home, "restart");
   const second = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms
     && status.started_at_unix_ms !== current.started_at_unix_ms, timeoutMs);
   return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: second.ok, failed: first.status, runtime: second.status };
@@ -357,7 +334,6 @@ async function main(argv) {
   if (command === "rollback") return rollbackBundles(layout, { dryRun });
   if (command === "restart") {
     if (options.detach === true && !dryRun) {
-      // A restart stops the tool room that started this process; run it in its own session.
       if (typeof options.log !== "string") throw new Error("--detach requires --log=<file>");
       const log = fs.openSync(path.resolve(options.log), "a");
       const child = spawn(process.execPath, [__filename, ...argv.filter((arg) => arg !== "--detach")], { detached: true, stdio: ["ignore", log, log] });
