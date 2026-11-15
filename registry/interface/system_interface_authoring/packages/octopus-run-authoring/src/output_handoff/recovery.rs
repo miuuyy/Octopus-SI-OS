@@ -214,7 +214,6 @@ impl ProviderOutputHandoff {
             if let Some(pending) = persisted_pending_handoff(&record, &self.config.provider_interface)?
                 .filter(|pending| owner > self.source_movement_seq && !pending.publication_unfinished()) {
                 let completed = if pending.source_movement_seq == self.source_movement_seq && pending.terminal {
-                    validate_pending_items_are_active(&record, &self.config.provider_interface, &pending)?;
                     Some((ProviderSourceRecovery::Completed, self.admitted_replay_handoff(&pending)?))
                 } else if pending.source_movement_seq > self.source_movement_seq {
                     let recovered = self.recover_overtaken_source(&state.run_record_bytes, &pending)?;
@@ -371,7 +370,16 @@ impl ProviderOutputHandoff {
             }
             return Ok((recovered.0, recovered.1));
         }
-        if self.pending_handoff_evidence(&pending)?.iter().any(Option::is_none) {
+        let evidence = self.pending_handoff_evidence(&pending)?;
+        if pending.terminal && !pending.publication_unfinished() && evidence.iter().all(Option::is_some) {
+            let outcomes = self.admitted_replay_handoff(&pending)?;
+            self.restore_pending_context(state, &record, &pending)?;
+            state.consumed_input = false;
+            state.consumed_context_free_independent_input = None;
+            state.consumed_verified_input = false;
+            return Ok((ProviderSourceRecovery::Completed, outcomes));
+        }
+        if evidence.iter().any(Option::is_none) {
             source_withdrawal::require_validated_output(&state, &pending)?;
         }
         validate_pending_items_are_active(&record, &self.config.provider_interface, &pending)?;

@@ -21,8 +21,9 @@ impl ProviderOutputHandoff {
     pub(super) async fn publish_admitted_context(&self, state: &mut HandoffState) -> Result<(), String> {
         self.reconcile_checked_run_state(state).await?;
         let record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
-        let Some(pending) = pending_handoff(&record, &self.config.provider_interface)? else { return Ok(()); };
-        if pending.context_publication.is_none() || pending.deferred_publication { return Ok(()); }
+        let Some(persisted) = persisted_pending_handoff(&record, &self.config.provider_interface)? else { return Ok(()); };
+        if persisted.context_publication.is_none() || persisted.deferred_publication { return Ok(()); }
+        let pending = pending_handoff(&record, &self.config.provider_interface)?.ok_or("provider context publication lost its pending outputs")?;
         if self.pending_handoff_evidence(&pending)?.iter().any(Option::is_none) {
             return Err("provider context publication precedes its admitted output artifacts".into());
         }

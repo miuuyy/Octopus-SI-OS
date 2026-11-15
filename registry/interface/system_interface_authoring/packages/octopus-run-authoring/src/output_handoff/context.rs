@@ -236,17 +236,18 @@ impl ProviderOutputHandoff {
         for transition in chain {
             let authored = RunRecord::from_bytes(&transition.after)
                 .map_err(|error| error.to_string())?;
-            let Some(mut pending) =
-                persisted_pending_handoff(&authored, &self.config.provider_interface)?
-                    .map(|pending| pending.with_standing_items())
-            else {
+            let Some(persisted) = persisted_pending_handoff(&authored, &self.config.provider_interface)? else {
                 continue;
             };
             let authored_config = config_from_persisted_profile(&authored, &self.config.provider_interface, &profile)?;
             let visible = self.published_context_artifacts(&authored, &authored_config)?
                 .into_iter().collect::<BTreeSet<_>>();
-            pending.items.retain(|item| visible.contains(&item.artifact_id)
-                && self.context_output_labels.contains(&item.artifact_label));
+            let snapshot_published = persisted.items.iter().any(|item| visible.contains(&item.artifact_id)
+                && self.session_snapshot_labels.contains(&item.artifact_label));
+            let standing = persisted.standing.iter().map(|item| item.artifact_id.clone()).collect::<BTreeSet<_>>();
+            let mut pending = persisted.with_standing_items();
+            pending.items.retain(|item| self.context_output_labels.contains(&item.artifact_label)
+                && (visible.contains(&item.artifact_id) || (snapshot_published && standing.contains(&item.artifact_id))));
             self.extend_admitted_context_publications(
                 &authored, &authored_config, &pending, &mut sources, &mut publications,
             )?;
