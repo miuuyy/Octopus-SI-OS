@@ -185,7 +185,14 @@ class RuntimeHost extends EventEmitter {
 
     const instance = await readRuntimeInstance(home);
     if (instance && processIsAlive(instance.pid)) {
-      const status = await readRuntimeControlStatus(home);
+      let status;
+      try {
+        status = await readRuntimeControlStatus(home);
+      } catch (error) {
+        if (!controlSocketNotBoundYet(instance, error)) throw error;
+        this.transition("starting_runtime", { ...base, ready: false, ownership: "external", pid: instance.pid, error: null, interfaceFailures: [] });
+        return this.snapshot();
+      }
       if (status.pid !== instance.pid || status.started_at_unix_ms !== instance.started_at_unix_ms) {
         throw new Error("runtime control status does not match the live runtime instance");
       }
@@ -327,6 +334,15 @@ async function readRuntimeInstance(home) {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
+}
+
+// The runtime writes its instance record in phase "starting" and binds the control socket
+// next. A probe between the two sees a starting runtime, not a broken one. A record that
+// stays in that state longer than a control answer may take is reported as before.
+function controlSocketNotBoundYet(instance, error) {
+  return instance.phase === "starting"
+    && (error?.code === "ENOENT" || error?.code === "ECONNREFUSED")
+    && Date.now() - instance.started_at_unix_ms < RUNTIME_CONTROL_STATUS_TIMEOUT_MS;
 }
 
 function processIsAlive(pid) {

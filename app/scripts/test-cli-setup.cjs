@@ -72,6 +72,8 @@ async function resolution(root) {
   environment.close();
 }
 
+// The fixture runtime writes its instance record first and binds its control socket 300 ms
+// later, as the real runtime does in that order, so every start probes the gap between them.
 async function fixtureRuntime(root) {
   const installationRoot = path.join(root, "distribution"), home = path.join(root, "fixture");
   for (const directory of ["bin", "registry/interface", "local-packages/registry/interface", "local-packages/packages", "local-packages/packs"]) {
@@ -89,7 +91,7 @@ const folder=path.join(home,'app-server-control');fs.mkdirSync(folder,{recursive
 const endpoint=path.join(folder,crypto.createHash('sha256').update('fixture_home').digest('hex').slice(0,24)+'.sock');
 const server=net.createServer(socket=>socket.end());
 const control=net.createServer(socket=>{let input='';socket.on('data',bytes=>{input+=bytes;if(!input.includes('\\n'))return;let response;try{const request=JSON.parse(input);if(Object.keys(request).join(',')!=='request'||request.request!=='status')throw new Error('Fixture accepts only a strict status request');response={outcome:'status',pid:process.pid,phase,started_at_unix_ms:now,stopping:null,interface_failures:[]}}catch(error){response={outcome:'refused',error:error.message}}socket.end(JSON.stringify(response)+'\\n')})});
-control.listen(path.join(state,'control.sock'),()=>server.listen(endpoint,()=>setTimeout(()=>{phase='ready';writeState()},100)));
+setTimeout(()=>control.listen(path.join(state,'control.sock'),()=>server.listen(endpoint,()=>setTimeout(()=>{phase='ready';writeState()},100))),300);
 process.on('SIGTERM',()=>{let closed=0;const finish=()=>{if(++closed===2){fs.rmSync(state,{recursive:true,force:true});process.exit(0)}};server.close(finish);control.close(finish)});
 `, { mode: 0o700 });
   const options = { home, installationRoot, env: { PATH: process.env.PATH } };
