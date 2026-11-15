@@ -530,7 +530,7 @@ test('sensor watch state projects conditions and receipts without caching a spen
     assert.equal((await read()).status, status);
   }
   fs.unlinkSync(path.join(stateDirectory, 'fired.json'));
-  write('armed.json', { armed: false, armed_at: '2026-11-15T00:00:00Z' });
+  write('armed.json', { armed: false });
   assert.equal((await read()).status, 'disarmed');
   fs.unlinkSync(path.join(directory, 'armed.json'));
   assert.equal((await read()).status, 'disarmed');

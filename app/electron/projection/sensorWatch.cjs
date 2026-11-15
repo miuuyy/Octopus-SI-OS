@@ -23,7 +23,7 @@ async function sensorWatchProjection(projection, descriptor, interfaceId) {
   const armed = await read(path.join(directory, "armed.json"));
   const fired = await read(path.join(projection.octopusHome, "interfaces", interfaceId, "fired.json"));
   if (armed && (armed.armed !== undefined && typeof armed.armed !== "boolean"
-    || !Number.isFinite(Date.parse(armed.armed_at)))) throw new Error("Invalid sensor arming state");
+    || armed.armed !== false && !Number.isFinite(Date.parse(armed.armed_at)))) throw new Error("Invalid sensor arming state");
   if (fired && (fired.schema_version !== 1 || !["prepared", "admitted", "refused"].includes(fired.status))) throw new Error("Invalid sensor firing state");
   const status = fired?.status === "admitted" ? "fired" : fired?.status === "refused" ? "disarmed"
     : !armed || armed.armed === false ? "disarmed" : fired?.status === "prepared" ? "prepared" : "armed";
