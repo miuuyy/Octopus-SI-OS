@@ -15,7 +15,13 @@ async function emailWatchProjection(projection, descriptor, interfaceId) {
   if (!Array.isArray(mailboxes) || !mailboxes.length || !mailboxes.every(name => typeof name === "string" && name.trim())
     || new Set(mailboxes).size !== mailboxes.length) throw new Error("Email watch mailboxes are invalid");
   const file = path.join(projection.octopusHome, "interfaces", interfaceId, "mailbox-state.json");
-  const saved = await readOptionalRegularJsonDocument(file, "email mailbox state");
+  let saved;
+  try {
+    saved = await readOptionalRegularJsonDocument(file, "email mailbox state");
+  } catch (error) {
+    // JSON parser diagnostics can quote private account data or message keys.
+    throw new Error("Email mailbox state is unreadable, unstable or malformed", { cause: error });
+  }
   const state = saved?.document;
   if (saved && (!object(state) || state.schema_version !== 1 || !object(state.mailboxes)
     || !Array.isArray(state.admitted) || !state.admitted.every(key => typeof key === "string"))) {

@@ -600,6 +600,8 @@ test('email triggers project recorded mailbox observations, not account data or 
     assert.equal(row.valid, false);
     assert.match(row.error, /Email mailbox/);
   }
-  fs.writeFileSync(path.join(privateDirectory, 'mailbox-state.json'), '{');
-  assert.equal((await read()).valid, false);
+  fs.writeFileSync(path.join(privateDirectory, 'mailbox-state.json'), 'private-message-key');
+  row = await read();
+  assert.equal(row.valid, false);
+  assert.doesNotMatch(JSON.stringify(row), /private-message-key/);
 });
