@@ -56,23 +56,14 @@ Then package the app, open it, and sign in with ChatGPT. Press Enter in the embe
 
 <br>
 
-The native build needs headers for Node 24.15.0, whatever Node runs npm:
+The native build needs the headers of the Node version inside the pinned
+Electron, independently of the Node version running npm. The runtime helper
+downloads and verifies the headers pinned in `app/native/runtime.json`, then
+prints their path. Package and open the app:
 
 ```sh
-mkdir -p app/build
-curl -fL https://nodejs.org/download/release/v24.15.0/node-v24.15.0-headers.tar.gz \
-  -o app/build/node-v24.15.0-headers.tar.gz
-printf '%s  %s\n' \
-  9a9250039fef572d0bcc110ac5e78055faf5604421211d2d5f578ebc5a34e703 \
-  app/build/node-v24.15.0-headers.tar.gz | shasum -a 256 -c -
-tar -xzf app/build/node-v24.15.0-headers.tar.gz -C app/build
-```
-
-Package and open:
-
-```sh
-OCTOPUS_NATIVE_NODE_HEADERS="$PWD/app/build/node-v24.15.0/include/node" \
-  npm --prefix app run package:mac
+headers="$(node app/native/runtime.cjs headers)" &&
+OCTOPUS_NATIVE_NODE_HEADERS="$headers" npm --prefix app run package:mac &&
 open -n ./app/build/Octopus.app
 ```
 
