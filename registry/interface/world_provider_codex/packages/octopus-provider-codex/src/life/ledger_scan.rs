@@ -81,7 +81,26 @@ pub(crate) fn authoritative_source_scan_start(
                 .filter(|movement| movement.seq.0 == source_movement_seq)
                 .map(|_| (range.start_offset, source_movement_seq))
         })
+        .or_else(|| row_start_before(file, snapshot_len, max_row_bytes, source_movement_seq))
         .unwrap_or((0, 0))
+}
+
+fn row_start_before(
+    file: &mut std::fs::File,
+    snapshot_len: u64,
+    max_row_bytes: u64,
+    source_movement_seq: u64,
+) -> Option<(u64, u64)> {
+    std::io::Seek::seek(file, std::io::SeekFrom::Start(0)).ok()?;
+    let mut reader = std::io::BufReader::new(std::io::Read::take(&mut *file, snapshot_len));
+    let mut offset = 0u64;
+    for _ in 0..source_movement_seq {
+        match read_bounded_arbitration_row(&mut reader, max_row_bytes).ok()? {
+            ArbitrationLedgerRow::Complete(row) => offset = offset.checked_add(row.len() as u64)?,
+            _ => return None,
+        }
+    }
+    Some((offset, source_movement_seq))
 }
 
 pub(crate) struct AuthoritativeSnapshotScan<T> {

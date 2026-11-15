@@ -155,7 +155,10 @@ bridge does, sees the input end and exits.
 
 That is sleep, not coma: no failure is recorded and no backoff applies. When
 the runtime records a movement for that folder at or past `through_seq`, it
-lifts the life again, and the life catches up from its cursor. A frame after
+lifts the life again, and the life catches up from its cursor. A woken life reads
+the ledger from its own boundary: rows before the source it still owes are
+skipped without being decoded, so a wake costs what arrived since, not the
+length of the history. A frame after
 `asleep`, or `asleep` before readiness, fails the life closed. A life that
 watches the world by itself (a clock, a mailbox) never prints it. A socket
 intake — authoring, the operator chat, client maintenance — sleeps when no

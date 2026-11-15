@@ -590,7 +590,11 @@ This checks declarations and formation; it does not establish that a trigger
 has fired or a result reached its consumer.
 
 Intermediate provider observations are handed to their client route as soon as
-they are complete. Their delivery does not close the source. The provider keeps
+they are complete. Their delivery does not close the source. A retry that Codex
+owns inside the turn is such an observation: it is handed as `turn.retrying`, a
+declared client projection and record label, never as `turn.error`. It enters no
+context, carries no session snapshot, is not returned to the run's creator and
+steers no turn; `turn.error` is always the terminal failure of its source. The provider keeps
 source completion on its final output or suspended external call, so reporting
 progress neither waits for another model item nor releases a pending effect.
 The client projects admitted message items immediately, including final-answer
@@ -837,7 +841,14 @@ text only.
 
 A replayed intermediate output does not establish that earlier context has been
 restored. Snapshot recovery proves inserted history entries through the checked
-source and output publications, preserving their content and order.
+source and output publications, preserving their content and order. An output a
+batch handed as a standing delivery is published by that batch's session snapshot:
+once the snapshot's publication is complete, the admitted output it carries is
+proven history, as the snapshot itself is. A terminal handoff of the source being
+recovered whose every item is admitted and whose publication is finished is
+history too: its admissions prove its items at the checkpoints they were admitted
+on, so a later proven edit of the run's output frontier does not refuse it, and
+recovery replays the admitted outcomes without delivering or publishing again.
 
 A retained output whose original edges are still pending remains the same
 hand-in. The provider captures its artifact once and waits until the runtime
@@ -894,6 +905,11 @@ the same saved successor; unchanged output bytes do not create another delivery.
 Old artifacts, movements and grants remain unchanged. Model providers do not
 select this projection-repair operation.
 
+A delivered input names its source: the intake takes the sending interface and,
+when the movement carries one, the sending run from the admitted movement it
+read, never from the payload, and the provider shows both to the model beside the
+text. `list_runs` names, for each declared input service, the run it serves.
+
 Input intake proves its own run edit through the admitted writer call and
 result before handing the input to the provider. Its checked transition remains
 visible when the edit changes only the input owner and leaves provider state
@@ -914,6 +930,9 @@ advance through the checked writer chain and observes again for as long as the
 record keeps advancing; a waiting result's rebase grows by the context that
 advance added. An advance without checked writer evidence, or an observation
 that fails against an unchanged record, fails closed with the original error.
+An observed configuration succeeds a snapshot only as a different snapshot: a
+declared writer's call still in flight from the current snapshot is the link to
+the record the handoff observes, never a rival successor of it.
 
 A provider's saved attempt is read the way a checked reader reads the step it
 carries. Its own step may add outgoing connections and replace its verified
@@ -998,7 +1017,10 @@ recorded and explicitly rejected without dispatching an effect; it cannot be
 executed under the replacement context. Requests without that exact proof still
 fail closed. Terminal error and control receipts, and the error that closes a
 turn a restart cut off, count ledger-admitted standing context generations as
-well as the last authored record. A protocol failure
+well as the last authored record. A result re-driven after the provider
+lost its transport is compared with the generation of the record pinned on its
+source when the only advance since is the source's own persisted boundary; the
+error that closes a turn input cut after its dispatch names that input. A protocol failure
 closes its private transport before returning control, so an abandoned model
 turn cannot keep issuing requests after its task has failed. A source that fails closed for any
 other reason retires its native turn the same way before its `turn.error` is
@@ -1021,7 +1043,11 @@ pending. A terminal error
 that cannot be handed closes its source through the declared failure route
 instead of ending the provider life. That route writes the context the run has
 published, a deferred publication whose evidence is admitted included, so a
-failed result does not drop what its call's wait already joined. A pending
+failed result does not drop what its call's wait already joined. When the failed
+source is a context-carrying result whose row the failure retires, the failure
+write counts the generation that result joins, as the consuming write would, so
+the next turn that restores the failed result finds its continuity at the
+authored generation. A pending
 artifact whose verifier rejected it at its own checkpoint is refused as surely as
 one whose delivery was refused, so the failure closes that handoff. A later turn
 proves the failed source's context through the provider's own checked writes,
