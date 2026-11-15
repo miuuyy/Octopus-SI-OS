@@ -276,8 +276,8 @@ jobs:
           cargo test --locked -p octopus-system-coder-env -p octopus-system-workspace-env --lib keep_kind_owned_command_routing
           cargo test --locked -p octopus-system-workspace-env --test persistent_process_keeper a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_exact_outcome -- --exact
 
-      - name: File tools write and read under their declared roots beside a root that does not resolve
-        run: cargo test --locked -p octopus-system-room-env --lib --test tool_process_lifecycle -- file_write_process read_evidence_and_paged_listing_respect_exact_room_roots
+      - name: File tools write and read only under their declared roots, beside a root that does not resolve
+        run: cargo test --locked -p octopus-system-room-env --lib --test tool_process_lifecycle -- file_write_process read_evidence_and_paged_listing_respect_exact_room_roots file_tools_refuse_a_path_under_an_exposed_root_their_descriptor_does_not_declare
 
       - name: Registry and context artifact freshness
         run: cargo nextest run --locked -p octopus-app-server --lib -E 'test(context_artifact_cache::) | test(registry_fingerprint_tracks_same_size_) | test(registry_observation_)'

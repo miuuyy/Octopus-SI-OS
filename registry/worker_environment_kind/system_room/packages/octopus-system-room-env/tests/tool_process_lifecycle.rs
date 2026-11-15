@@ -611,3 +611,106 @@ async fn client_mcp_process_preserves_bound_scope_emission_verdict_and_lifecycle
     drop(stdin);
     assert!(tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await.unwrap().unwrap().success());
 }
+
+#[tokio::test]
+async fn file_tools_refuse_a_path_under_an_exposed_root_their_descriptor_does_not_declare() {
+    let repository_root = repository_root();
+    let interface_dir = repository_root.join("registry/interface/system_room");
+    let interface: InterfaceDescriptor = octopus_descriptors::parse_strict(
+        &std::fs::read(interface_dir.join("interface.json")).unwrap(),
+    )
+    .unwrap();
+    let life: Value =
+        serde_json::from_slice(&std::fs::read(interface_dir.join("life.json")).unwrap()).unwrap();
+    let registry = WorkerEnvKindRegistry::load_from_dir(&repository_root.join("registry/worker_environment_kind")).unwrap();
+    let kind_id = WorkerEnvironmentKindId::new("system_room");
+    let (kind, _) = registry.get(&kind_id).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let [declared, undeclared, process_var_dir, durable_var_dir] =
+        ["runs", "coordinate", "process-var", "durable-var"].map(|name| root.join(name));
+    for directory in [&declared, &undeclared, &process_var_dir, &durable_var_dir] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&durable_var_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let existing = undeclared.join("existing.json");
+    std::fs::write(&existing, "{}\n").unwrap();
+    let created = undeclared.join("created.json");
+    let slot = "interface_life_install_root".to_string();
+    let root_slots = BTreeMap::from([("run_records_root".to_string(), declared)]);
+    let mut exposed_root_slots = root_slots.clone();
+    exposed_root_slots.insert(slot.clone(), undeclared);
+    let allowance = root_slots.keys().cloned().collect::<BTreeSet<_>>();
+    let granted_kinds = vec![kind_id.clone()];
+    let door = InterfaceId::new("system_room");
+    let worker = InterfaceId::new("system_worker_flash");
+    let calls = [
+        ("file.write", env!("CARGO_BIN_EXE_octopus-file-write-tool"), json!({"path":created,"content":"{}\n","expected_before_hash":null})),
+        ("file.read", env!("CARGO_BIN_EXE_octopus-file-read-tool"), json!({"path":existing})),
+    ];
+    for (request_id, (tool, bin, arguments)) in (1u64..).zip(calls) {
+        let descriptor: ToolDescriptor = load_tool_descriptor_from_dir(&repository_root.join("registry/tool"), tool).unwrap().unwrap();
+        let authority = &descriptor.process.authority;
+        assert!(!authority.declared_read_root_slots().contains(&&slot) && !authority.declared_write_root_slots().contains(&&slot));
+        let tool_hashes = BTreeMap::from([(tool.to_string(), canonical_hash(&descriptor))]);
+        let tool_process_bins = BTreeMap::from([(tool.to_string(), descriptor.process.bin.clone())]);
+        let granted_tools = vec![tool.to_string()];
+        let formation = registry.form(&WorkerEnvironmentFormationRequest {
+            door_additional_root_bindings: &Default::default(),
+            door_interface: &door, door_descriptor_hash: &canonical_hash(&interface),
+            door_driver_ref: &interface.interface_driver_ref, tool,
+            tool_descriptor_hashes: &tool_hashes, tool_process_bins: &tool_process_bins,
+            tool_worker_environment_kinds: &descriptor.supported_worker_environment_kinds,
+            worker: &worker, ee: "ee_test", run: "run_test",
+            granted_worker_environment_kinds: &granted_kinds, granted_tools: &granted_tools,
+            door_root_bindings: &root_slots, door_instance_dir: &interface_dir,
+            ee_root_slot_allowance: Some(&allowance),
+        }).unwrap();
+        let payload = serde_json::to_vec(&json!({"tool":tool,"arguments":arguments,"correlation_id":"undeclared-root"})).unwrap();
+        let content = ContentHash::of_bytes(&payload);
+        let artifact = ArtifactRef { id: ArtifactId::new(format!("tool.call:{}", content.to_hex())), content };
+        let input_artifact = InterfaceArtifactFile::write(
+            process_var_dir.join(format!("invocations/{request_id}/artifact")), "tool.call", &payload,
+        ).unwrap();
+        let metadata = InvocationMetadata::new(GrantProjection {
+            tools: granted_tools,
+            worker_environment_kinds: vec![kind_id.as_str().to_string()],
+            ee_root_slot_allowance: Some(allowance.iter().cloned().collect()),
+            ..GrantProjection::default()
+        }).with_runtime(RuntimeInvocationMetadata {
+            run: RunId::new("run_test"), ee: EeId::new("ee_test"), worker: worker.clone(),
+            checkpoint: CheckpointId::new("checkpoint_test"), interface: door.clone(), epoch: 0, run_record_hash: None,
+        });
+        let mut child = tokio::process::Command::new(bin)
+            .env("OCTOPUS_INTERFACE_ID", door.as_str()).env("OCTOPUS_INTERFACE_DIR", &interface_dir)
+            .env("OCTOPUS_INTERFACE_DESCRIPTOR_JSON", serde_json::to_string(&interface).unwrap())
+            .env("OCTOPUS_INTERFACE_HOST_IO_LIMITS", serde_json::to_string(&life["processes"][0]["io_limits"]).unwrap())
+            .env("OCTOPUS_VAR_DIR", &process_var_dir).env("OCTOPUS_TOOL_PROCESS_DURABLE_VAR_DIR", &durable_var_dir)
+            .env("OCTOPUS_PRIVATE_READS_JSON", "{}")
+            .env("OCTOPUS_ROOT_SLOTS_JSON", serde_json::to_string(&exposed_root_slots).unwrap())
+            .env("TMPDIR", &process_var_dir)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+            .kill_on_drop(true).spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        write_message(&mut stdin, &json!({"kind":"invoke","request_id":request_id,"descriptor":descriptor,"envelope":{
+            "artifact":artifact,"label":"tool.call","manifest_path":input_artifact.manifest_path(),
+            "context":context_carrier(&process_var_dir, request_id, &json!([]), &metadata),
+            "source_movement_seq":41,"worker_environment":formation,"worker_environment_kind":&*kind}})).await;
+        let lifecycle = read_message(&mut stdout).await;
+        assert_eq!(lifecycle["lifecycle"], "failed", "{tool}: {lifecycle}");
+        write_message(&mut stdin, &json!({"kind":"worker_environment_lifecycle_recorded","request_id":request_id,"event_id":lifecycle["event_id"],"error":null})).await;
+        let completed = read_message(&mut stdout).await;
+        assert_eq!(completed["kind"], "complete", "{tool}: {completed}");
+        let returned = InterfaceArtifactFile::new(completed["artifact_manifest_paths"][0].as_str().unwrap()).unwrap()
+            .read_bounded(1024 * 1024, 8 * 1024 * 1024).unwrap();
+        let result: Value = serde_json::from_slice(&returned.payload_bytes).unwrap();
+        assert_eq!(result["ok"], false, "{tool}: {result}");
+        assert!(result["error"]["message"].as_str().unwrap().contains("outside"), "{tool}: {result}");
+    }
+    assert!(!created.exists());
+}
