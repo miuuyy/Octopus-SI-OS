@@ -874,7 +874,43 @@ async function webSearchTurn(
   return new Response(disposingStream(response.body, budget, abort, cleanup), { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
+const RATE_LIMIT_WAITS_MS = [10_000, 20_000, 30_000, 60_000, 60_000, 60_000, 60_000];
+
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
+}
+
+function abortableSleep(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve(false);
+    const timer = setTimeout(() => { signal.removeEventListener("abort", stop); resolve(true); }, ms);
+    const stop = () => { clearTimeout(timer); resolve(false); };
+    signal.addEventListener("abort", stop, { once: true });
+  });
+}
+
 async function upstreamAttempt(
+  config: BridgeConfig,
+  request: Request,
+  adapter: ProviderAdapter,
+  parsed: OcxParsedRequest,
+  budget: TranslatorBudget,
+  abort: AbortController,
+): Promise<Response | AsyncIterable<AdapterEvent>> {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await upstreamAttemptOnce(config, request, adapter, parsed, budget, abort);
+    if (!(result instanceof Response) || result.status !== 429 || attempt >= RATE_LIMIT_WAITS_MS.length) return result;
+    const wait = Math.min(retryAfterMs(result.headers.get("retry-after")) ?? RATE_LIMIT_WAITS_MS[attempt], 60_000);
+    console.error(`provider rate limit (429); waiting ${Math.round(wait / 1000)}s before attempt ${attempt + 2}`);
+    if (!(await abortableSleep(wait, abort.signal))) return result;
+  }
+}
+
+async function upstreamAttemptOnce(
   config: BridgeConfig,
   request: Request,
   adapter: ProviderAdapter,
