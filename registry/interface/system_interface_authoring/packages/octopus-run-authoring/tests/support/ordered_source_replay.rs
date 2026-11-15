@@ -496,7 +496,10 @@ async fn exercise_interrupted_source_order(
         &handoff.run_path, &state.run_record_bytes, limit, || Ok(state.run_record_bytes.clone())).map_err(String::from);
     assert_eq!(stale.observe_live_record(observe).await.unwrap(), next.content.as_bytes());
     assert_eq!(stale.state.lock().await.static_context_artifacts, hot_state.static_context_artifacts);
-    std::fs::write(&payload.run_path, [next.content.as_bytes(), b" "].concat()).unwrap();
+    let mut unproven: serde_json::Value = serde_json::from_str(&next.content).unwrap();
+    let generation = &mut unproven["interface_state"][payload.ctx.interface.as_str()]["context_generation"];
+    *generation = serde_json::json!(generation.as_u64().unwrap() + 1);
+    std::fs::write(&payload.run_path, serde_json::to_vec(&unproven).unwrap()).unwrap();
     stale.state = Arc::new(tokio::sync::Mutex::new(stale_state));
     assert!(stale.observe_live_record(observe).await.unwrap_err().contains("run changed during evidence collection"));
     assert_eq!(stale.state.lock().await.run_record_bytes, authored.content.as_bytes());
