@@ -126,13 +126,15 @@ async function readChatTurns(bundle, home) {
   });
   try {
     const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
-    const runIds = (scope.client_runs ?? []).map((row) => row.run_id);
+    // Archived tasks retain ledger history but have no live admission frontier.
+    // Filter here as the live bundle may predate archive-aware status projection.
+    const runIds = (scope.client_runs ?? []).filter((row) => row.archived !== true).map((row) => row.run_id);
     const status = await store.read(projectionReadRequest("projection.operator.chats.status", { run_ids: runIds }));
-    return status.chats.map((chat) => ({ run_id: chat.run_id, turn_open: chat.turn_open === true, turn_state: chat.turn_state }));
+    return status.chats.filter((chat) => runIds.includes(chat.run_id) && chat.archived !== true).map((chat) => ({ run_id: chat.run_id, turn_open: chat.turn_open === true, turn_state: chat.turn_state }));
   } finally { await store.close?.(); }
 }
 
-const blockingTurns = (chats, callerRun) => chats.filter((chat) => chat.turn_open && chat.run_id !== callerRun);
+const blockingTurns = (chats, callerRun) => chats.filter((chat) => chat.archived !== true && chat.turn_open && chat.run_id !== callerRun);
 
 const lastLines = (result) => `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ");
 
@@ -368,7 +370,7 @@ async function main(argv) {
   throw Object.assign(new Error(USAGE), { usage: true });
 }
 
-module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, blockingTurns, packageAction, restartRuntime, parseArgs, main };
+module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, blockingTurns, packageAction, restartRuntime, parseArgs, main };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {

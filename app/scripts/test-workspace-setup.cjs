@@ -1473,6 +1473,7 @@ async function verifyTaskArchive(temporary) {
     const archivedChat = (await read("projection.operator.chats.list")).chats.find((chat) => chat.run_id === plan.runId);
     assert.equal(archivedChat.archived, true); assert.equal(archivedChat.writable, false); assert.equal(archivedChat.message_count, 2);
     assert.equal(archivedChat.provider_bound_interface_id, plan.modelInterfaceId);
+    assert.deepEqual([archivedChat.turn_open, archivedChat.turn_state], [false, "idle"]);
     assert.equal((await read("projection.operator.chats.status", { run_ids: [plan.runId] })).chats[0].archived, true);
     assert.deepEqual(await read("projection.operator.chat.messages", { run_id: plan.runId }), messagesBefore);
     assert.equal((await mutate(true)).changed, false); assert.equal(operations, 1);

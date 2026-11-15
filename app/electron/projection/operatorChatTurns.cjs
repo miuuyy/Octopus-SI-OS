@@ -224,8 +224,9 @@ function operatorChatTurnsProjection(store) {
         return state ? [{
           run_id: runId,
           archived: scopeRuns.get(runId).archived === true,
-          turn_open: state.open,
-          turn_state: state.state,
+          // Archival suspends the frontier, not the historical ledger state.
+          turn_open: scopeRuns.get(runId).archived === true ? false : state.open,
+          turn_state: scopeRuns.get(runId).archived === true ? "idle" : state.state,
           turn_opened_movement_seq: state.openedMovementSeq,
           updated_at_ms: state.updatedAtMs,
           last_movement_seq: Math.max(0, state.lastMovementSeq),

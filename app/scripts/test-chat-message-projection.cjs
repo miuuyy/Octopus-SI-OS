@@ -232,6 +232,12 @@ test('Stop aliases match actual tasks titles without reading terminal history', 
     const listed = await projectionReads.buildOperatorChatsList(projection);
     assert.deepEqual(listed.map(chat => [chat.run_id, chat.last_terminal_message.text, chat.last_terminal_message.movement_seq]).sort(),
       [['run_home', 'Answer for home', 20], ['run_named', 'Answer for named', 22], ['run_task', 'Answer for task', 21]]);
+    entries[1].record.archived_client_interface_ids = ['chat_task'];
+    projectionReads.operatorChatTurnState = async () => ({open:true, state:'waiting'});
+    const stale = await projectionReads.buildOperatorChatsList(projection);
+    const archived = stale.find(chat => chat.run_id === 'run_task');
+    assert.deepEqual([archived.turn_open, archived.turn_state], [false, 'idle']);
+    assert.equal(stale.find(chat => chat.run_id === 'run_named').turn_open, true);
   } finally { await client.close(); }
 });
 
@@ -604,4 +610,22 @@ test('email triggers project recorded mailbox observations, not account data or 
   row = await read();
   assert.equal(row.valid, false);
   assert.doesNotMatch(JSON.stringify(row), /private-message-key/);
+});
+
+
+test('archived status suppresses stale waiting turns without erasing replay state', async () => {
+  const raw = { open: true, state: 'waiting', openedMovementSeq: 45440, updatedAtMs: 10, lastMovementSeq: 45440 };
+  let archived = true;
+  const projection = projectionFixture({
+    operatorChatStatusInitialized: true, operatorChatStatusRefreshTail: Promise.resolve(),
+    operatorChatStatusCursor: 45440, operatorChatTurnStateCache: new Map([['run', raw]]) });
+  const store = projectionStore({
+    operatorOsScope: () => ({client_runs:[{run_id:'run', interface_id:'chat', archived}]}),
+    operatorChatLedgerDelta: async () => ({rowsByRun:new Map(), nextMovementSeq:45440}),
+  });
+  const status = async () => (await store.operatorChatStatuses(projection, {run_ids:['run']})).chats[0];
+  assert.deepEqual([(await status()).turn_open, (await status()).turn_state], [false, 'idle']);
+  assert.equal(raw.open, true, 'archive must not overwrite historical replay state');
+  archived = false;
+  assert.deepEqual([(await status()).turn_open, (await status()).turn_state], [true, 'waiting']);
 });

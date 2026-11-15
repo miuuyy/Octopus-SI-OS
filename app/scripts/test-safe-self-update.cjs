@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { bundles, buildInfo, swapBundles, rollbackBundles, control, blockingTurns, packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
+const { bundles, buildInfo, swapBundles, rollbackBundles, control, readChatTurns, blockingTurns, packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
 
 // Unix socket paths are short; macOS os.tmpdir() is too long for them.
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
@@ -73,6 +73,30 @@ async function main() {
   const chats = [{ run_id: "a", turn_open: true }, { run_id: "b", turn_open: false }, { run_id: "c", turn_open: true }];
   assert.deepEqual(blockingTurns(chats, "a").map((chat) => chat.run_id), ["c"]);
   assert.deepEqual(blockingTurns(chats, null).map((chat) => chat.run_id), ["a", "c"]);
+
+  // Older bundles can project stale open turns for archived tasks. Do not even
+  // request them, and defensively discard an archived status response as well.
+  const old = fakeLayout();
+  const electron = path.join(old.live, "Contents/Resources/app/electron");
+  fs.mkdirSync(electron, { recursive: true });
+  fs.writeFileSync(path.join(electron, "projectionReadContract.cjs"),
+    'exports.projectionReadRequest = (method, params) => ({method, params});');
+  fs.writeFileSync(path.join(electron, "projection.cjs"), `
+    exports.createProjectionStore = () => ({
+      read: async ({method, params}) => {
+        if (method === "projection.operator.os.scope") return {client_runs: [
+          {run_id:"archived", archived:true}, {run_id:"active"}, {run_id:"idle"}]};
+        require("node:assert/strict").deepEqual(params.run_ids, ["active", "idle"]);
+        return {chats:[{run_id:"archived", turn_open:true, turn_state:"waiting"},
+          {run_id:"active", turn_open:true, turn_state:"working"},
+          {run_id:"idle", turn_open:false, turn_state:"idle"},
+          {run_id:"unexpected", archived:true, turn_open:true}]};
+      }, close: async () => {}
+    });`);
+  const projected = await readChatTurns(old.live, tempRoot());
+  assert.deepEqual(projected.map(chat => chat.run_id), ["active", "idle"]);
+  assert.deepEqual(blockingTurns(projected, null).map(chat => chat.run_id), ["active"]);
+  assert.deepEqual(blockingTurns([{run_id:"archived", archived:true, turn_open:true}], null), []);
 
   // Package actions never force local changes and single out the chat client.
   assert.equal(packageAction({ id: "x", update_available: false }), "current");
