@@ -479,6 +479,99 @@ PROFILE = {
 }
 
 
+FAKE_GITHUB = """import json, os, urllib.request
+def urlopen(request, timeout=None):
+    with open(os.environ["LEGACY_WATCH_TEST_STARS"]) as handle:
+        observed = json.load(handle)
+    with open(os.environ["LEGACY_WATCH_TEST_STARS"] + ".requests", "a") as handle:
+        handle.write(request.full_url + "\\n")
+    class Response:
+        headers = {"ETag": "fixture"}
+        def read(self, limit): return json.dumps(observed).encode("utf-8")
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+    return Response()
+urllib.request.urlopen = urlopen
+"""
+
+
+class StarsWatchLifeTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="legacy-watch-stars-")
+        self.runtime = FakeRuntime(self.directory)
+        fixture = os.path.join(self.directory, "fixture")
+        os.makedirs(fixture)
+        with open(os.path.join(fixture, "sitecustomize.py"), "w") as handle:
+            handle.write(FAKE_GITHUB)
+        self.stars = os.path.join(self.directory, "stars.json")
+        self.environment = {"PYTHONPATH": fixture, "LEGACY_WATCH_TEST_STARS": self.stars}
+        self.watch(repository="octo/widget", at_least=3)
+
+    def tearDown(self):
+        self.runtime.stop()
+        shutil.rmtree(self.directory)
+
+    def watch(self, **stars):
+        with open(os.path.join(self.runtime.interface, "watch.json"), "w", encoding="utf-8") as handle:
+            json.dump({"github_stars": stars, "instructions": "The repository is yours.", "notice_label": "legacy_watch.notice"}, handle)
+
+    def start(self, count, ready=True):
+        with open(self.stars, "w") as handle:
+            json.dump({"stargazers_count": count}, handle)
+        previous = dict(os.environ)
+        os.environ.update(self.environment)
+        try:
+            original = subprocess.Popen
+            subprocess.Popen = lambda command, **options: original(command, **{**options, "env": {**options["env"], **self.environment}})
+            try:
+                self.runtime.start(ready=ready)
+            finally:
+                subprocess.Popen = original
+        finally:
+            os.environ.clear()
+            os.environ.update(previous)
+
+    def test_a_repository_below_its_star_count_emits_nothing_and_reads_only_that_repository(self):
+        self.start(2)
+        self.runtime.expect_no_frame(1.5)
+        self.assertIsNone(self.runtime.process.poll())
+        self.assertIsNone(self.runtime.fired())
+        with open(self.stars + ".requests") as handle:
+            self.assertEqual(set(handle.read().split()), {"https://api.github.com/repos/octo/widget"})
+
+    def test_reaching_the_star_count_fires_once_with_the_observation_and_the_owner_prompt(self):
+        self.start(3)
+        frame = self.runtime.expect_frame("arrival")
+        _, manifest, payload, _, seq = self.runtime.admit(frame)
+        notice = json.loads(payload)
+        self.assertEqual(manifest["label"], "legacy_watch.notice")
+        self.assertEqual(set(notice), {"trigger", "from_owner"})
+        self.assertEqual(notice["from_owner"], "The repository is yours.")
+        observed_at = notice["trigger"].pop("observed_at")
+        self.assertRegex(observed_at, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(notice["trigger"], {
+            "event": "The repository octo/widget reached 3 stars. The trigger fires once.",
+            "repository": "octo/widget", "stars": 3, "at_least": 3,
+        })
+        deadline = time.monotonic() + 10
+        while (self.runtime.fired() or {}).get("status") != "admitted" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(self.runtime.fired()["admitted_seq"], seq)
+        self.runtime.stop()
+        self.start(50)
+        self.runtime.expect_no_frame(1.5)
+        self.assertIsNone(self.runtime.process.poll())
+
+    def test_a_malformed_star_watch_stops_the_life(self):
+        for stars, message in (({"repository": "not a repository", "at_least": 3}, "OWNER/NAME"), ({"repository": "octo/widget", "at_least": 0}, "at_least"), ({"repository": "octo/widget", "at_least": 3, "poll_seconds": 5}, "poll_seconds")):
+            self.watch(**stars)
+            self.start(3, ready=False)
+            self.assertEqual(self.runtime.process.wait(timeout=10), 1)
+            time.sleep(0.1)
+            self.assertIn(message, "".join(self.runtime.stderr))
+            self.runtime.stop()
+
+
 class AuthorTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.mkdtemp(prefix="legacy-watch-author-")
