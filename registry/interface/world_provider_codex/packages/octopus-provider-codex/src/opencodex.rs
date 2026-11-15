@@ -793,10 +793,10 @@ fn validate_vertex_descriptor(
             descriptor.id
         ));
     }
-    let origin = if vertex.location == "global" {
-        "https://aiplatform.googleapis.com".to_string()
-    } else {
-        format!("https://{}-aiplatform.googleapis.com", vertex.location)
+    let origin = match vertex.location.as_str() {
+        "global" => "https://aiplatform.googleapis.com".to_string(),
+        "us" | "eu" => format!("https://aiplatform.{}.rep.googleapis.com", vertex.location),
+        location => format!("https://{location}-aiplatform.googleapis.com"),
     };
     if transport.is_none_or(|transport| transport.base_url.trim_end_matches('/') != origin) {
         return Err(format!(

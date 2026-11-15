@@ -3977,7 +3977,7 @@
         "credential_owner_interface": "world_provider_vertex",
         "allow_private_network": false,
         "vertex": {
-          "location": "global",
+          "location": "us",
           "project_env": "OCTOPUS_PROVIDER_VERTEX_PROJECT",
           "credentials_file_env": "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE"
         },
@@ -4259,7 +4259,7 @@
       ]
     },
     "transport": {
-      "base_url": "https://aiplatform.googleapis.com",
+      "base_url": "https://aiplatform.us.rep.googleapis.com",
       "headers": {},
       "request_timeout_ms": 600000,
       "max_response_bytes": 67108864

@@ -58,6 +58,7 @@
     "upstream/patches/antigravity-models.patch",
     "upstream/patches/gemini-search-credential.patch",
     "upstream/patches/dropped-output.patch",
-    "upstream/patches/opencode-go-argon-wire.patch"
+    "upstream/patches/opencode-go-argon-wire.patch",
+    "upstream/patches/vertex-multi-region.patch"
   ]
 }

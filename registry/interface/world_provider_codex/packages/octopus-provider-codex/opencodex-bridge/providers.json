@@ -180,7 +180,7 @@
       "interface": "world_provider_vertex",
       "source_name": "vertex",
       "adapter": "google",
-      "endpoint": "https://aiplatform.googleapis.com",
+      "endpoint": "https://aiplatform.us.rep.googleapis.com",
       "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheaper capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5. Every call is billed to the Google Cloud project this provider is configured with.",
       "name": "Google Vertex AI",
       "developer": "Google",
@@ -188,7 +188,7 @@
       "icon": "gemini-color.svg",
       "input_modalities": ["text", "image"],
       "vertex": {
-        "location": "global",
+        "location": "us",
         "project": { "env": "OCTOPUS_PROVIDER_VERTEX_PROJECT", "label": "Google Cloud project ID" },
         "credentials": { "env": "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE", "label": "Credentials file: path to a service account key or application default credentials JSON" }
       },

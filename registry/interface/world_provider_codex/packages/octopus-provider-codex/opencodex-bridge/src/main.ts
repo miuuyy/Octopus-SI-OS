@@ -171,7 +171,9 @@ function vertexValue(value: unknown): Vertex {
 }
 
 function vertexOrigin(location: string): string {
-  return location === "global" ? "https://aiplatform.googleapis.com" : `https://${location}-aiplatform.googleapis.com`;
+  if (location === "global") return "https://aiplatform.googleapis.com";
+  if (location === "us" || location === "eu") return `https://aiplatform.${location}.rep.googleapis.com`;
+  return `https://${location}-aiplatform.googleapis.com`;
 }
 
 function bindVertexCredentials(vertex: Vertex): void {

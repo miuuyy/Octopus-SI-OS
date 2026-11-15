@@ -421,7 +421,7 @@ for (const provider of spec.providers) {
       throw new Error(`${provider.interface}: a Vertex provider is a google adapter with only its project and credentials file`);
     }
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(location)) throw new Error(`${provider.interface}: Vertex location must be one lowercase label`);
-    const origin = location === "global" ? "https://aiplatform.googleapis.com" : `https://${location}-aiplatform.googleapis.com`;
+    const origin = location === "global" ? "https://aiplatform.googleapis.com" : location === "us" || location === "eu" ? `https://aiplatform.${location}.rep.googleapis.com` : `https://${location}-aiplatform.googleapis.com`;
     if (provider.endpoint !== origin) throw new Error(`${provider.interface}: a Vertex provider in ${location} serves from ${origin}`);
     if (project.env === credentials.env) throw new Error(`${provider.interface}: Vertex project and credentials need their own env names`);
   }
