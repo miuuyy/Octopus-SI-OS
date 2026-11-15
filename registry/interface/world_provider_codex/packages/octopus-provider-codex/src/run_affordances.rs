@@ -1144,6 +1144,7 @@ impl RunAffordances {
                 })
             }
             RunOperation::ListRuns => {
+                let peers = declared_peers(metadata, parent_record, self.config.roots.as_ref().map(|roots| roots.registry_root.as_path()));
                 if arguments
                     .as_object()
                     .is_none_or(|object| !object.is_empty())
@@ -1155,7 +1156,8 @@ impl RunAffordances {
                         "source_run": {"run_id": runtime.run, "ee_id": runtime.ee,
                             "worker_interface_id": runtime.worker, "recorded_status": parent_record.status,
                             "run_record_hash": runtime.run_record_hash, "provider_activity": "not_observed"},
-                    "declared_peer_interfaces": declared_peers(metadata, parent_record, self.config.roots.as_ref().map(|roots| roots.registry_root.as_path())),
+                    "declared_peer_interfaces": peers.keys().collect::<Vec<_>>(),
+                    "declared_peer_runs": peers.iter().filter_map(|(interface, run)| run.as_ref().map(|run| json!({"interface_id": interface, "run_id": run}))).collect::<Vec<_>>(),
                     "receive_interface_id": declared_receive_interface(parent_record, &metadata.runtime.as_ref().ok_or("list requires runtime metadata")?.interface)?,
                         "source_movement_seq": metadata.source_movement_seq,
                     }),
@@ -1669,17 +1671,14 @@ fn declared_receive_interface(record: &RunRecord, provider: &InterfaceId) -> Res
     }
 }
 
-fn declared_peers(metadata: &InvocationMetadata, record: &RunRecord, registry: Option<&Path>) -> Vec<String> {
+fn declared_peers(metadata: &InvocationMetadata, record: &RunRecord, registry: Option<&Path>) -> BTreeMap<String, Option<String>> {
     metadata
         .grant
         .attached_interface_bindings
         .iter()
         .filter(|binding| binding.interface_type == "system")
         .map(|binding| binding.interface.as_str())
-        .filter(|interface| require_peer_target(metadata, record, interface, registry).is_ok())
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+        .filter_map(|interface| require_peer_target(metadata, record, interface, registry).ok().map(|run| (interface.to_string(), run)))
         .collect()
 }
 
@@ -1688,9 +1687,10 @@ fn require_peer_target(
     record: &RunRecord,
     interface: &str,
     registry: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     exact_string(interface, "peer interface")?;
     let service = metadata.grant.attached_interface_bindings.iter().any(|bound| bound.interface.as_str() == interface && bound.interface_type == "system" && bound.role == "service");
+    let mut served_run = None;
     if service {
         let root = registry.ok_or("exact intake descriptor validation requires declared registry roots")?;
         if interface.contains('/') || interface == "." || interface == ".." { return Err("invalid exact intake interface".into()); }
@@ -1699,6 +1699,7 @@ fn require_peer_target(
         if descriptor.id.as_str() != interface || descriptor.interface_type != octopus_interfaces::InterfaceType::System || descriptor.role.0 != "service" || descriptor.interface_driver_ref != octopus_operator_chat_client::input_intake::INPUT_INTAKE_DRIVER { return Err("peer target is not the declared exact input service".into()); }
         let config: octopus_operator_chat_client::input_intake::InputIntakeConfig = serde_json::from_value(descriptor.interface_driver_config.as_ref().and_then(|c| c.private_config.get("input_intake")).cloned().ok_or("input service has no concrete declaration")?).map_err(|e| e.to_string())?;
         config.validate(&descriptor.id)?;
+        served_run = Some(config.run.clone());
     }
     if !metadata.grant.interfaces.iter().any(|id| id == interface)
         || !metadata
@@ -1727,7 +1728,7 @@ fn require_peer_target(
     {
         return Err("peer message label is not admitted by the exact outgoing binding".into());
     }
-    Ok(())
+    Ok(served_run)
 }
 
 fn require_readable_refs(

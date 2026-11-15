@@ -164,6 +164,25 @@ impl EvidenceTail {
         }
         self.rows
             .retain(|row| completed.is_none_or(|seq| row.seq.0 > seq));
+        while self.next_seq < pending_seq {
+            let start = self.reader.stream_position().map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            self.reader
+                .by_ref()
+                .take(maximum + 1)
+                .read_until(b'\n', &mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > maximum {
+                return Err("intake ledger row exceeds declared frame bound".into());
+            }
+            if bytes.is_empty() || bytes.last() != Some(&b'\n') {
+                self.reader
+                    .seek(std::io::SeekFrom::Start(start))
+                    .map_err(|e| e.to_string())?;
+                return Err("intake pending source is beyond the complete ledger".into());
+            }
+            self.next_seq += 1;
+        }
         loop {
             let start = self.reader.stream_position().map_err(|e| e.to_string())?;
             let mut bytes = Vec::new();
@@ -318,9 +337,10 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
                 state.pending = Some(PendingInput {
                     source: own.movement.clone(),
                     delivery: InputDelivery {
-                        schema_version: 1,
+                        schema_version: 2,
                         source_movement_seq: own.movement.seq.0,
                         source_artifact: input.artifact,
+                        source: crate::intake_state::DeliverySource::of_movement(&own.movement)?,
                         message,
                     },
                     edit: None,
@@ -335,6 +355,7 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
         if pending.source.to != Endpoint::Interface(ctx.interface.clone())
             || pending.source.seq.0 != pending.delivery.source_movement_seq
             || pending.source.artifact.as_ref() != Some(&pending.delivery.source_artifact)
+            || pending.delivery.source != crate::intake_state::DeliverySource::of_movement(&pending.source)?
             || evidence.rows.binary_search_by_key(&pending.source.seq, |row| row.seq)
                 .ok().is_none_or(|index| evidence.rows[index] != pending.source)
         {

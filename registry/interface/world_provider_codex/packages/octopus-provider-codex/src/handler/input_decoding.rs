@@ -546,10 +546,25 @@ pub(crate) fn peer_notification_text(label: &str, bytes: &[u8]) -> Result<String
     Ok(text)
 }
 
-pub(crate) fn peer_input_text(message: &PeerMessage, artifact: &ArtifactRef) -> Result<String, InterfaceDriverError> {
-    serde_json::to_string(&serde_json::json!({
+pub(crate) fn peer_input_source(input: &InterfaceInvocationEnvelope) -> Result<Option<crate::intake_state::DeliverySource>, InterfaceDriverError> {
+    if input.read_artifact_manifest()?.label != octopus_operator_chat_client::input_intake::INPUT_INTAKE_LABEL {
+        return Ok(None);
+    }
+    let delivery: crate::intake_state::InputDelivery = serde_json::from_slice(&input.read_artifact_payload()?)
+        .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+    delivery.validate().map_err(InterfaceDriverError::Protocol)?;
+    Ok(Some(delivery.source))
+}
+
+pub(crate) fn peer_input_text(message: &PeerMessage, artifact: &ArtifactRef, source: Option<crate::intake_state::DeliverySource>) -> Result<String, InterfaceDriverError> {
+    let mut text = serde_json::json!({
         "received_system_artifact": artifact, "text": message.text, "artifact_references": message.artifacts,
-    })).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))
+    });
+    if let Some(source) = source {
+        text["from_interface"] = serde_json::Value::String(source.interface);
+        text["from_run"] = source.run.map_or(serde_json::Value::Null, serde_json::Value::String);
+    }
+    serde_json::to_string(&text).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))
 }
 
 pub(crate) fn queued_peer_item(text: String) -> serde_json::Value {
@@ -575,10 +590,10 @@ pub(crate) fn decode_inflight_turn_control(
     if !input_message && let Some(peer) = admitted_peer_message(input, descriptor.interface_driver_config.as_ref().and_then(|c| c.private_config.get("input_intake")))? {
         return Ok(Some(match peer.action {
             PeerAction::Queue => CodexTurnControl::Inject {
-                control_id: peer.control_id.clone(), items: vec![queued_peer_item(peer_input_text(&peer, &input.artifact)?)],
+                control_id: peer.control_id.clone(), items: vec![queued_peer_item(peer_input_text(&peer, &input.artifact, peer_input_source(input)?)?)],
             },
             PeerAction::Followup => CodexTurnControl::Steer {
-                control_id: peer.control_id.clone(), input: vec![UserInput::Text { text: peer_input_text(&peer, &input.artifact)?, text_elements: Vec::new() }],
+                control_id: peer.control_id.clone(), input: vec![UserInput::Text { text: peer_input_text(&peer, &input.artifact, peer_input_source(input)?)?, text_elements: Vec::new() }],
                 source_artifact: None,
             },
             PeerAction::Interrupt => CodexTurnControl::Interrupt { control_id: peer.control_id, action: "interrupt".into() },

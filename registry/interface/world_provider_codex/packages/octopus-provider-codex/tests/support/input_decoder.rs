@@ -92,7 +92,7 @@ fn input_template_does_not_claim_operator_messages_but_input_delivery_needs_exac
             .is_none()
         );
     }
-    let body = serde_json::json!({"schema_version":1,"source_movement_seq":1,"source_artifact":{"id":"source","content":ContentHash::of_bytes(b"source")},"message":{"action":"interrupt","control_id":"exact"}});
+    let body = serde_json::json!({"schema_version":2,"source_movement_seq":1,"source_artifact":{"id":"source","content":ContentHash::of_bytes(b"source")},"source":{"interface":"world_provider_child","run":"run-child"},"message":{"action":"interrupt","control_id":"exact"}});
     let input = make(
         octopus_operator_chat_client::input_intake::INPUT_INTAKE_LABEL,
         "intake",

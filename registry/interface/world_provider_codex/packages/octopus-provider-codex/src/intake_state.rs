@@ -26,13 +26,37 @@ pub struct InputDelivery {
     pub schema_version: u32,
     pub source_movement_seq: u64,
     pub source_artifact: ArtifactRef,
+    pub source: DeliverySource,
     pub message: PeerMessage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliverySource {
+    pub interface: String,
+    pub run: Option<String>,
+}
+
+impl DeliverySource {
+    pub fn of_movement(movement: &Movement) -> Result<Self, String> {
+        let octopus_ledger::Endpoint::Interface(interface) = &movement.from else {
+            return Err("intake input did not come from an interface".into());
+        };
+        let run = movement.invocation_metadata.as_ref()
+            .and_then(|metadata| metadata.invocation())
+            .and_then(|metadata| metadata.runtime.as_ref())
+            .map(|runtime| runtime.run.as_str().to_string());
+        Ok(Self { interface: interface.as_str().to_string(), run })
+    }
 }
 
 impl InputDelivery {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err("unsupported input delivery schema".into());
+        }
+        if self.source.interface.trim().is_empty() || self.source.run.as_deref().is_some_and(|run| run.trim().is_empty()) {
+            return Err("input delivery names no exact source".into());
         }
         self.message.validate()
     }

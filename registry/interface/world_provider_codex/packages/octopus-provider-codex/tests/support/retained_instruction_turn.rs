@@ -23,7 +23,7 @@ async fn a_declared_instruction_arrival_opens_its_turn_as_one_retained_tool_outp
         id: octopus_descriptors::ArtifactId::new("peer-instruction"),
         content: octopus_ledger::ContentHash::of_bytes(&message_bytes),
     };
-    let instruction = peer_input_text(&serde_json::from_value(message.clone()).unwrap(), &message_ref).unwrap();
+    let instruction = peer_input_text(&serde_json::from_value(message.clone()).unwrap(), &message_ref, None).unwrap();
     let item = serde_json::json!({
         "type":"functionCallOutput","id":"instruction-1","name":"octopus_instruction",
         "namespace":"formed_interfaces","output":instruction,

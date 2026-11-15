@@ -256,7 +256,7 @@ async fn exact_intake_composition_rearms_only_owned_edges_and_retains_crash_inte
         )
         .is_err()
     );
-    let delivery: InputDelivery = serde_json::from_value(json!({"schema_version":1,"source_movement_seq":12,"source_artifact":delivered.artifact,"message":{"action":"followup","control_id":"retained","text":"resume from evidence"}})).unwrap();
+    let delivery: InputDelivery = serde_json::from_value(json!({"schema_version":2,"source_movement_seq":12,"source_artifact":delivered.artifact,"source":{"interface":"world_provider_child","run":"run-child"},"message":{"action":"followup","control_id":"retained","text":"resume from evidence"}})).unwrap();
     let source_ref = delivered.artifact.clone().unwrap();
     let pending = octopus_provider_codex::intake_state::PendingInput {
         source: delivered.clone(),
@@ -362,7 +362,8 @@ async fn admitted_publication_seed(
     let edit = prepare_input(config,plan.run_write.path.clone(),&current,seed_seq,&seed_input.artifact,seed_seq,1<<26).unwrap();
     let call = edit.materialize(&root.join("write"),config).unwrap();
     write(&runtime,&mut log,&mut handle,&ctx,&call,&config.writer).await;
-    let delivery = InputDelivery {schema_version:1,source_movement_seq:seed_seq,source_artifact:seed_input.artifact.clone(),
+    let delivery = InputDelivery {schema_version:2,source_movement_seq:seed_seq,source_artifact:seed_input.artifact.clone(),
+        source:octopus_provider_codex::intake_state::DeliverySource {interface:parent.checkpoints[0].inbound_interface().unwrap().to_string(),run:Some(parent.id.to_string())},
         message:serde_json::from_value(json!({"action":"queue","control_id":"publication-seed","text":"Use the selected procedure","artifacts":[seed_input.artifact]})).unwrap()};
     let delivered = file(&config.input_label,json!(delivery));
     admit_interface_artifact_arrival(&runtime,&mut log,&mut handle,&delivered.clone().capture_bounded(1<<20,1<<26).unwrap(),&config.writer.owner).await.unwrap();
@@ -449,7 +450,7 @@ async fn admitted_publication_seed(
 fn input_delivery_identity_preserves_distinct_equal_messages_and_actions() {
     let reference =
         json!({"id":"source", "content":octopus_ledger::ContentHash::of_bytes(b"source")});
-    let body = json!({"schema_version":1,"source_movement_seq":10,"source_artifact":reference,"message":{"action":"queue","control_id":"same","text":"same"}});
+    let body = json!({"schema_version":2,"source_movement_seq":10,"source_artifact":reference,"source":{"interface":"world_provider_child","run":"run-child"},"message":{"action":"queue","control_id":"same","text":"same"}});
     let first: InputDelivery = serde_json::from_value(body.clone()).unwrap();
     first.validate().unwrap();
     let mut second = body.clone();

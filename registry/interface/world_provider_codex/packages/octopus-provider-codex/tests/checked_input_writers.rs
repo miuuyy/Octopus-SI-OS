@@ -589,8 +589,9 @@ fn later_result_snapshot_must_preserve_the_exact_admitted_result_checkpoint() {
 fn retained_input(f: &Fixture) -> octopus_provider_codex::intake_state::PendingInput {
     let source = f.log.read_from(Seq(0))[0].clone();
     octopus_provider_codex::intake_state::PendingInput {
-        delivery: serde_json::from_value(json!({"schema_version":1,"source_movement_seq":source.seq.0,
-            "source_artifact":source.artifact,"message":{"action":"followup","control_id":"retained-intent","text":"same original input"}})).unwrap(),
+        delivery: serde_json::from_value(json!({"schema_version":2,"source_movement_seq":source.seq.0,
+            "source_artifact":source.artifact,"source":octopus_provider_codex::intake_state::DeliverySource::of_movement(&source).unwrap(),
+            "message":{"action":"followup","control_id":"retained-intent","text":"same original input"}})).unwrap(),
         source,
         edit: Some(prepare_input(&f.config, f.path.clone(), &f.before, 0, f.log.read_from(Seq(0))[0].artifact.as_ref().unwrap(), 0, 8 * 1024 * 1024).unwrap()),
     }
