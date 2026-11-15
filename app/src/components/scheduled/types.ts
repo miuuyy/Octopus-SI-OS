@@ -59,6 +59,14 @@ export type ScheduledInterfaceProjection = {
       admittedCount: number | null;
       mailboxes: Array<{ mailbox: string; lastUid: number | null; uidNext: number | null; checkedAt: string }>;
     };
+    sensorHealth?: {
+      configured: boolean;
+      configurationSource: "private_state" | "registry" | "";
+      state: string;
+      attention: boolean;
+      summary: string;
+      facts: Array<{ label: string; value: string; at: string }>;
+    };
     sources: string[];
     targets: Array<{ runId: string; chatInterfaceId: string; title: string }>;
   } | null;

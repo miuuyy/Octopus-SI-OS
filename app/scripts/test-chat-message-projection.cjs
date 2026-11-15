@@ -629,3 +629,140 @@ test('archived status suppresses stale waiting turns without erasing replay stat
   archived = false;
   assert.deepEqual([(await status()).turn_open, (await status()).turn_state], [true, 'waiting']);
 });
+
+test('owned sensors project their configuration and recorded health, preferring the private state override', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oct-owned-sensor-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sensor = (id, driver) => {
+    const directory = path.join(root, 'registry/interface', id), stateDirectory = path.join(root, 'interfaces', id);
+    fs.mkdirSync(directory, { recursive: true }); fs.mkdirSync(stateDirectory, { recursive: true });
+    return { directory, stateDirectory, descriptor: { id, role: 'sensor', interface_type: 'world', direction: 'inbound', interface_driver_ref: driver,
+      source_names: [id], descriptor_path: path.join(directory, 'interface.json') } };
+  };
+  const github = sensor('github_copy', 'github_watch_life'), guardian = sensor('guardian_copy', 'guardian_watch_life');
+  const write = (directory, name, value) => fs.writeFileSync(path.join(directory, name), typeof value === 'string' ? value : JSON.stringify(value));
+  const projection = projectionFixture({ octopusHome: root, descriptors: { interface: [github.descriptor, guardian.descriptor], ee_template: [] },
+    runRecords: [{ run_id: 'task', checkpoints: [{ status: 'projected', interface: 'github_copy' }, { status: 'projected', interface: 'guardian_copy' }] }] });
+  const store = projectionStore({ operatorOsScope: () => ({ client_runs: [] }), operatorChatRunIndex: async () => [],
+    readIndexedInterfaceArtifactRows: async () => [] });
+  t.after(() => store.close());
+  const read = async (id) => (await store.scheduledInterfaceRows(projection)).find((row) => row.interface_id === id);
+
+  const githubConfig = { schema_version: 1, repository: 'OWNER/REPOSITORY', branch: 'main', poll_seconds: 300, ignore_comment_authors: [] };
+  write(github.directory, 'github-watch.json', githubConfig);
+  // A watch.json beside an owned sensor belongs to another owner's contract and is not read.
+  write(github.directory, 'watch.json', { github_stars: { repository: 'owner/repo', at_least: 1 } });
+  let row = await read('github_copy');
+  assert.deepEqual([row.status, row.valid], ['enabled', true]);
+  assert.equal(row.event_source.condition, 'GitHub activity sensor without a repository');
+  assert.deepEqual(row.event_source.sensor_health, { configured: false, configuration_source: 'registry', state: 'unconfigured', attention: true,
+    summary: 'Not configured: github-watch.json still names the OWNER/REPOSITORY template.', facts: [] });
+
+  write(github.stateDirectory, 'github-watch.json', { ...githubConfig, repository: 'owner/repo', branch: 'release', poll_seconds: 900 });
+  row = await read('github_copy');
+  assert.equal(row.event_source.condition, 'GitHub activity on owner/repo (branch release), polled every 15 min');
+  assert.deepEqual(row.event_source.sensor_health, { configured: true, configuration_source: 'private_state', state: 'not_started', attention: false,
+    summary: 'No poll recorded yet.', facts: [] });
+
+  write(github.stateDirectory, 'health.json', { state: 'watching', error: null, failures: 0, last_success_at: '2026-11-15T22:34:21Z',
+    updated_at: '2026-11-15T22:34:36Z', resources: 148, pending: false, api_requests: 26, next_poll_at: 1794782376.02 });
+  row = await read('github_copy');
+  assert.deepEqual([row.event_source.sensor_health.state, row.event_source.sensor_health.attention], ['watching', false]);
+  assert.deepEqual(row.event_source.sensor_health.facts, [
+    { label: 'Last successful poll', at: '2026-11-15T22:34:21Z' }, { label: 'Health recorded', at: '2026-11-15T22:34:36Z' },
+    { label: 'Consecutive poll failures', value: '0' }, { label: 'Resources tracked', value: '148' },
+    { label: 'Notices awaiting admission', value: 'No' }]);
+  assert.equal(row.last_run_at_ms, null); // a recorded poll is not an event delivered to a task
+
+  write(github.stateDirectory, 'health.json', { state: 'poll_failed', error: 'github_rate_limited', failures: 3, last_success_at: null,
+    updated_at: '2026-11-15T22:40:00Z', pending: false });
+  row = await read('github_copy');
+  assert.deepEqual([row.status, row.valid, row.event_source.sensor_health.state, row.event_source.sensor_health.attention], ['enabled', true, 'poll_failed', true]);
+  assert.deepEqual(row.event_source.sensor_health.facts.slice(0, 3), [{ label: 'Last successful poll', at: null },
+    { label: 'Health recorded', at: '2026-11-15T22:40:00Z' }, { label: 'Consecutive poll failures', value: '3' }]);
+  assert.deepEqual(row.event_source.sensor_health.facts.at(-1), { label: 'Reported reason', value: 'github_rate_limited' });
+  write(github.stateDirectory, 'health.json', { state: 'delivery_refused', error: 'runtime_refused', refusal_reason: 'no_binding', pending: true });
+  row = await read('github_copy');
+  assert.deepEqual(row.event_source.sensor_health.facts.slice(-2), [{ label: 'Notices awaiting admission', value: 'Yes' }, { label: 'Reported reason', value: 'no_binding' }]);
+
+  write(github.stateDirectory, 'health.json', { state: 'asleep' });
+  assert.deepEqual([(await read('github_copy')).status, (await read('github_copy')).error], ['invalid', 'Invalid GitHub watch health']);
+  write(github.stateDirectory, 'health.json', '{"state":"watching","secret-looking-content');
+  row = await read('github_copy');
+  assert.deepEqual([row.status, row.error], ['invalid', 'GitHub watch health is unreadable, unstable or malformed']);
+  assert.doesNotMatch(JSON.stringify(row), /secret-looking-content/);
+  fs.unlinkSync(path.join(github.stateDirectory, 'health.json'));
+  write(github.stateDirectory, 'github-watch.json', { ...githubConfig, repository: 'owner/repo', poll_seconds: 30 });
+  assert.equal((await read('github_copy')).error, 'Invalid GitHub watch configuration');
+  fs.unlinkSync(path.join(github.stateDirectory, 'github-watch.json'));
+  fs.unlinkSync(path.join(github.directory, 'github-watch.json'));
+  assert.equal((await read('github_copy')).error, 'GitHub watch configuration is missing');
+
+  const guardianConfig = { schema_version: 1, watched_run: 'RUN_ID', provider_interface: 'PROVIDER_INTERFACE_ID', quiet_seconds: 3600,
+    instructions: 'private guardian instructions' };
+  write(guardian.directory, 'guardian_config.json', guardianConfig);
+  row = await read('guardian_copy');
+  assert.equal(row.event_source.condition, 'Quiet-period guardian without a watched run');
+  assert.deepEqual([row.event_source.sensor_health.configured, row.event_source.sensor_health.state, row.event_source.sensor_health.attention], [false, 'unconfigured', true]);
+  write(guardian.stateDirectory, 'guardian_config.json', { ...guardianConfig, watched_run: 'run_centre', provider_interface: 'provider_centre', quiet_seconds: 5400 });
+  row = await read('guardian_copy');
+  assert.equal(row.event_source.condition, 'Run run_centre emits nothing of its own through provider_centre for 90 min');
+  assert.deepEqual([row.event_source.sensor_health.configuration_source, row.event_source.sensor_health.state], ['private_state', 'not_started']);
+  assert.doesNotMatch(JSON.stringify(row), /private guardian instructions/);
+
+  const own = { kind: 'InterfaceOutbound', label: 'tool.call', recorded_at_unix_ms: Date.parse('2026-11-15T22:00:00Z'), seq: 40 };
+  const guardianState = { schema_version: 1, watch: { run: 'run_centre', provider: 'provider_centre' }, alert: null, alerts_sent: 0,
+    started_at_unix_ms: Date.parse('2026-11-15T21:00:00Z'), skipped_rows: 0, last_own_action: own, last_provider_error: null };
+  write(guardian.stateDirectory, 'guardian-state.json', guardianState);
+  row = await read('guardian_copy');
+  assert.deepEqual([row.event_source.sensor_health.state, row.event_source.sensor_health.attention], ['watching', false]);
+  assert.deepEqual(row.event_source.sensor_health.facts, [
+    { label: 'Last own action of the watched run', at: '2026-11-15T22:00:00.000Z', value: 'tool.call' },
+    { label: 'Observing since', at: '2026-11-15T21:00:00.000Z' }, { label: 'Alerts admitted', value: '0' }]);
+  const alert = { status: 'admitted', for_seq: 40, repeat_index: 1, at_unix_ms: 1 };
+  write(guardian.stateDirectory, 'guardian-state.json', { ...guardianState, alert, alerts_sent: 2, skipped_rows: 3,
+    last_provider_error: { ...own, label: 'turn.error', seq: 39 } });
+  row = await read('guardian_copy');
+  assert.deepEqual([row.event_source.sensor_health.state, row.event_source.sensor_health.attention, row.event_source.sensor_health.summary],
+    ['alerting', true, 'The watched run is silent; 2 alerts of this silence admitted.']);
+  assert.deepEqual(row.event_source.sensor_health.facts.slice(2), [{ label: 'Alerts admitted', value: '2' },
+    { label: 'Last provider error', at: '2026-11-15T22:00:00.000Z', value: 'turn.error' }, { label: 'Unreadable ledger rows passed over', value: '3' }]);
+  write(guardian.stateDirectory, 'guardian-state.json', { ...guardianState, alert: { ...alert, status: 'refused', refusal: { reason: 'no_binding', detail: '{}' } } });
+  row = await read('guardian_copy');
+  assert.equal(row.event_source.sensor_health.state, 'alert_refused');
+  assert.deepEqual(row.event_source.sensor_health.facts.at(-1), { label: 'Refusal reason', value: 'no_binding' });
+  // An alert of an earlier silence is over once the watched run acted again.
+  write(guardian.stateDirectory, 'guardian-state.json', { ...guardianState, alert: { ...alert, for_seq: 12 } });
+  assert.equal((await read('guardian_copy')).event_source.sensor_health.state, 'watching');
+  write(guardian.stateDirectory, 'guardian-state.json', { ...guardianState, watch: { run: 'another_run', provider: 'provider_centre' }, alert });
+  row = await read('guardian_copy');
+  assert.deepEqual([row.event_source.sensor_health.state, row.event_source.sensor_health.attention, row.event_source.sensor_health.facts], ['not_started', false, []]);
+  write(guardian.stateDirectory, 'guardian-state.json', { ...guardianState, alert: { status: 'lost' } });
+  assert.equal((await read('guardian_copy')).error, 'Invalid guardian watch state');
+  fs.unlinkSync(path.join(guardian.stateDirectory, 'guardian-state.json'));
+  write(guardian.stateDirectory, 'guardian_config.json', { ...guardianConfig, watched_run: 'run_centre', quiet_seconds: 0 });
+  assert.equal((await read('guardian_copy')).error, 'Invalid guardian watch configuration');
+  assert.equal(require('../electron/projection/registryRows.cjs').projectionTruthChange('interfaces/guardian_copy/guardian-state.json'), 'state');
+  assert.equal(require('../electron/projection/registryRows.cjs').projectionTruthChange('interfaces/github_copy/health.json'), 'state');
+});
+
+test('goals are the recorded EE instances, not runs that only reference an EE', async () => {
+  const { goalRows } = require('../electron/projection/registryRows.cjs');
+  assert.deepEqual(goalRows(projectionFixture()), []);
+  const projection = projectionFixture({
+    eeInstances: [
+      { ee_id: 'ee_root', template_name: 'existence', parent_ee_id: '', goal: 'Keep the system alive', name: 'Existence', record_path: '/home/state/ee_instances/ee_root.json', record_digest: 'a'.repeat(64) },
+      { ee_id: 'ee_project', template_name: 'project', parent_ee_id: 'ee_root', goal: 'Steward the repository', record_path: '/home/state/ee_instances/ee_project.json', record_digest: 'b'.repeat(64) },
+    ],
+    runRecords: [{ run_id: 'run_a', ee_id: 'ee_project' }, { run_id: 'run_b', ee_id: 'ee_project' }, { run_id: 'run_c', ee_id: 'ee_unrecorded' }],
+  });
+  assert.deepEqual(goalRows(projection), [
+    { goal_id: 'ee_root', status: 'active', kind: 'existence', title: 'Keep the system alive', name: 'Existence', ee_id: 'ee_root', parent_ee_id: '',
+      run_count: 0, created_at: '', source: 'ee_instance', record_path: '/home/state/ee_instances/ee_root.json', record_digest: 'a'.repeat(64) },
+    { goal_id: 'ee_project', status: 'active', kind: 'project', title: 'Steward the repository', name: '', ee_id: 'ee_project', parent_ee_id: 'ee_root',
+      run_count: 2, created_at: '', source: 'ee_instance', record_path: '/home/state/ee_instances/ee_project.json', record_digest: 'b'.repeat(64) },
+  ]);
+  const store = projectionStore({ ensureProjection: async () => projection });
+  assert.equal(typeof store.close, 'function');
+  await store.close();
+});

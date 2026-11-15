@@ -24,6 +24,7 @@ export function ScheduledDetail({ task, pending, canEdit, scopeOptions, onDelete
         <p className="m-0 text-secondary">{task.status === "fired" ? "Fired — this trigger is spent." : task.status === "disarmed" ? "Disarmed — not watching for new events." : task.status === "prepared" ? "Event prepared — awaiting admission." : task.status === "invalid" ? task.error : task.status === "armed" ? "Armed — waiting for the condition." : "Runs when this source delivers an event."}</p>
         {task.eventSource.condition ? <p className="m-0 text-secondary select-text">{task.eventSource.condition}</p> : null}
         {task.eventSource.mailboxWatch ? <MailboxObservations watch={task.eventSource.mailboxWatch} /> : null}
+        {task.eventSource.sensorHealth ? <SensorHealth health={task.eventSource.sensorHealth} /> : null}
         {task.eventSource.sources.length ? <p className="m-0 break-words text-sm text-secondary select-text">{task.eventSource.sources.join(", ")}</p> : null}
         <div className="flex flex-col gap-3 rounded-2xl border border-default p-4">
           {task.eventSource.targets.map((target) => (
@@ -80,6 +81,22 @@ function MailboxObservations({ watch }: { watch: NonNullable<NonNullable<Schedul
         </div>
       ))}
       <p className="m-0 text-sm text-secondary">Retained admitted messages: {watch.admittedCount ?? "Not recorded"}</p>
+    </section>
+  );
+}
+
+function SensorHealth({ health }: { health: NonNullable<NonNullable<ScheduledInterfaceProjection["eventSource"]>["sensorHealth"]> }) {
+  return (
+    <section aria-label="Sensor health" className="flex flex-col gap-3 rounded-2xl border border-default p-4" data-sensor-attention={health.attention ? "true" : "false"}>
+      <h3 className="m-0 text-sm font-semibold">{health.attention ? "Sensor needs attention" : "Sensor health"}</h3>
+      <p className="m-0 text-sm text-secondary select-text">{health.summary}</p>
+      <p className="m-0 text-sm text-secondary">Recorded by the sensor in its own state, not a live probe.{health.configurationSource === "private_state"
+        ? " Configured in the sensor's private state." : health.configurationSource === "registry" ? " Configured in the sensor's registry folder." : ""}</p>
+      {health.facts.map(fact => (
+        <p className="m-0 text-sm text-secondary select-text" key={fact.label}>{fact.label}: {fact.at
+          ? <><time dateTime={fact.at} title={fact.at}>{formatEvidenceTime(Date.parse(fact.at))}</time>{fact.value ? ` (${fact.value})` : ""}</>
+          : fact.value || "Not recorded"}</p>
+      ))}
     </section>
   );
 }

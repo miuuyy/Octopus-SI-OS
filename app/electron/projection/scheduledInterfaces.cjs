@@ -128,7 +128,8 @@ function scheduledInterfacesProjection(store) {
         ...(error ? { error } : {}),
         descriptor_path: stringValue(descriptor.descriptor_path),
         event_source: { sources: arrayValue(descriptor.source_names), targets: eventTargets, ...(watch.condition ? { condition: watch.condition } : {}),
-          ...(watch.mailbox_watch ? { mailbox_watch: watch.mailbox_watch } : {}) },
+          ...(watch.mailbox_watch ? { mailbox_watch: watch.mailbox_watch } : {}),
+          ...(watch.sensor_health ? { sensor_health: watch.sensor_health } : {}) },
         last_run_at_ms: evidence.lastRunAtMs, last_movement_seq: evidence.lastMovementSeq,
         deliveries: evidence.deliveries,
       });

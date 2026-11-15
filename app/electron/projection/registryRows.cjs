@@ -1022,8 +1022,25 @@ function eeInstanceRows(projection, includeLedger = true) {
   );
 }
 
-function goalRows() {
-  return [];
+// An EE is a goal with a policy, so the recorded EE instances are the goals of
+// an installation. Runs that only reference an EE in the ledger declare no goal.
+function goalRows(projection) {
+  return eeInstanceRows(projection, false)
+    .filter((row) => row.source === "ee_instance" && stringValue(row.goal))
+    .map((row) => ({
+      goal_id: row.ee_id,
+      status: "active",
+      kind: row.template_name,
+      title: row.goal,
+      name: row.name,
+      ee_id: row.ee_id,
+      parent_ee_id: row.parent_ee_id,
+      run_count: row.run_count,
+      created_at: row.created_at,
+      source: "ee_instance",
+      record_path: row.record_path,
+      record_digest: row.record_digest,
+    }));
 }
 
 function workerRows(projection) {

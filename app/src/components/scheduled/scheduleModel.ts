@@ -18,7 +18,7 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
           ? { type: "inactivity" as const, seconds: rawSchedule.seconds, interfaceMatch: rawSchedule.interface_match as Record<string, string>, excludeInterfaceMatch: objectValue(rawSchedule.exclude_interface_match) as Record<string, string> | null, withinEe: stringValue(rawSchedule.within_ee) }
           : null;
   const rawEvent = objectValue(row.event_source);
-  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets), condition: stringValue(rawEvent.condition), mailboxWatch: normalizeMailboxWatch(rawEvent.mailbox_watch) } : null;
+  const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets), condition: stringValue(rawEvent.condition), mailboxWatch: normalizeMailboxWatch(rawEvent.mailbox_watch), sensorHealth: normalizeSensorHealth(rawEvent.sensor_health) } : null;
   const targets = normalizeTargets(row.targets);
   const template = row.template === true;
   const valid = row.valid === true
@@ -66,6 +66,26 @@ function normalizeMailboxWatch(value: unknown): NonNullable<ScheduledInterfacePr
       return [{ mailbox, lastUid: nullableInteger(observation?.last_uid), uidNext: nullableInteger(observation?.uid_next),
         checkedAt: Number.isFinite(Date.parse(checkedAt)) ? checkedAt : "" }];
     }),
+  };
+}
+
+function normalizeSensorHealth(value: unknown): NonNullable<ScheduledInterfaceProjection["eventSource"]>["sensorHealth"] {
+  const row = objectValue(value);
+  const state = stringValue(row?.state);
+  if (!row || !state) return undefined;
+  return {
+    configured: row.configured === true,
+    configurationSource: row.configuration_source === "private_state" || row.configuration_source === "registry" ? row.configuration_source : "",
+    state,
+    attention: row.attention === true,
+    summary: stringValue(row.summary),
+    facts: Array.isArray(row.facts) ? row.facts.flatMap(entry => {
+      const fact = objectValue(entry);
+      const label = stringValue(fact?.label);
+      if (!label) return [];
+      const at = stringValue(fact?.at);
+      return [{ label, value: stringValue(fact?.value), at: Number.isFinite(Date.parse(at)) ? at : "" }];
+    }) : [],
   };
 }
 
