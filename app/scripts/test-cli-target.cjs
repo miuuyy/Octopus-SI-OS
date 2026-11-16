@@ -79,7 +79,8 @@ test("a package tree is copied without clone support, keeping modes, times and l
     // Without verbatim links a relative link is recreated against its source.
     const resolved = path.join(root, "resolved");
     copyTree(source, resolved, { recursive: true, filter: options.filter }, "linux");
-    assert.equal(fs.readlinkSync(path.join(resolved, "relative-link")), path.join(fs.realpathSync(source), "bin", "tool"));
+    assert.equal(fs.readlinkSync(path.join(resolved, "relative-link")), path.resolve(source, "bin", "tool"));
+    assert.equal(fs.realpathSync(path.join(resolved, "relative-link")), fs.realpathSync(path.join(source, "bin", "tool")));
 
     // A second copy replaces files and links in place; a file never replaces a directory or itself.
     fs.writeFileSync(path.join(source, "data.json"), "{\"changed\":true}");
