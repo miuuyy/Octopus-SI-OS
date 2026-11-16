@@ -359,11 +359,16 @@ mod tests {
             "inbound":binding("provider"),"outbound":[binding("new_room"),binding("denied_room")],
         })).unwrap());
         let block = render_model_context_block(&metadata).unwrap();
-        for expected in ["run: task_7", "EE: project_2", "epoch: 4", "\"interface\":\"new_room\"", "\"names\":[\"assignment\"]"] {
+        for expected in ["run: task_7", "EE: project_2", "epoch: 4"] {
             assert!(block.contains(expected), "missing {expected}: {block}");
         }
-        assert!(!block.contains("denied_room"));
+        let bindings = render_checkpoint_bindings_block(&metadata).unwrap();
+        for expected in ["\"interface\":\"new_room\"", "\"names\":[\"assignment\"]"] {
+            assert!(bindings.contains(expected), "missing {expected}: {bindings}");
+        }
+        assert!(!block.contains("denied_room") && !bindings.contains("denied_room"));
         metadata.grant.interfaces.retain(|id| id != "new_room");
+        assert!(!render_checkpoint_bindings_block(&metadata).unwrap().contains("new_room"));
         assert!(!render_model_context_block(&metadata).unwrap().contains("new_room"));
     }
 
@@ -377,7 +382,7 @@ mod tests {
         assert!(block.contains("EE root-slot ceiling: []"));
         assert!(block.contains("\"path\":\"/required_field\""));
         assert!(block.contains("missing"));
-        assert!(block.contains("not resolved filesystem paths"));
+        assert!(block.contains("this EE permits no named filesystem roots"));
     }
 
     #[test]

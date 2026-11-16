@@ -3,6 +3,7 @@ use octopus_system_gui_env::{backend::DesktopExecutor, native_client::NativeExec
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
+#[cfg(target_os = "macos")]
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[test]
@@ -33,6 +34,7 @@ fn cold_application_settings_child_uses_only_the_declared_private_store() {
     assert!(root.join("app-permission-always-invalid.json").is_file());
 }
 
+#[cfg(target_os = "macos")]
 fn admitted(frame: &serde_json::Value, seq: u64) -> String {
     let verdict = json!({"admitted":{"seq":seq}});
     let reply = if frame["kind"] == "retained_arrival" {
@@ -340,6 +342,7 @@ async fn remote_desktop_tool_crosses_the_actual_door_and_broker_without_native_c
 }
 
 #[tokio::test]
+#[cfg(target_os = "macos")]
 async fn actual_gui_decoder_recovers_past_retired_host_without_reading_connection_or_publishing_decision() {
     use octopus_descriptors::{ArtifactId, CheckpointId, EeId, InterfaceId, RunId};
     use octopus_interfaces::{GrantProjection, InterfaceArtifactFile, InvocationMetadata, RuntimeInvocationMetadata};

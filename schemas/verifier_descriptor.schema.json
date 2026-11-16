@@ -25,7 +25,7 @@
       "type": "string"
     },
     "timeout_ms": {
-      "description": "VERIFIERS.md §3 — the package declares how long its own check may run, so a twenty-line shell check and an out-of-system judge live under the same contract; `params.timeout_ms` may only narrow this ceiling.",
+      "description": "VERIFIERS.md §3 — a package that reaches outside the system declares how long its check may run; `params.timeout_ms` may only narrow it.",
       "default": null,
       "type": [
         "integer",

@@ -349,7 +349,6 @@ pub struct GetAccountTokenUsageResponse {
     pub summary: AccountTokenUsageSummary,
     pub daily_usage_buckets: Option<Vec<AccountTokenUsageDailyBucket>>,
     #[serde(default)]
-    #[ts(optional, as = "Option<Option<ThreadUsage>>")]
     pub thread_usage: Option<ThreadUsage>,
 }
 

@@ -167,6 +167,7 @@ async fn computer_use_preference_denies_and_revokes_native_input() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "macos")]
 async fn saved_off_blocks_retained_source_bootstrap_and_cancels_exact_pending_stream() {
     use crate::app_authorization::{OriginalCall, OperatorRequest, ApplicationTarget, PendingRequest};
     use octopus_descriptors::{ArtifactId, InterfaceId};
@@ -266,6 +267,7 @@ async fn presentation_completion_is_private_and_requires_exact_acknowledgement()
 }
 
 
+#[cfg(target_os = "macos")]
 struct PermissionFixture {
     calls: Mutex<Vec<Value>>,
     snapshot: Mutex<Value>,
@@ -277,6 +279,7 @@ struct PermissionFixture {
     started: tokio::sync::Notify,
     cancelled: tokio::sync::Notify,
 }
+#[cfg(target_os = "macos")]
 impl DesktopExecutor for PermissionFixture {
     fn retained_process_id<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<u32, String>> + Send + 'a>> {
         Box::pin(async { Ok(42) })
@@ -322,6 +325,7 @@ impl DesktopExecutor for PermissionFixture {
 }
 
 #[tokio::test]
+#[cfg(target_os = "macos")]
 async fn private_helper_permissions_bind_native_identity_and_never_enter_model_path() {
     let executor = Arc::new(PermissionFixture {
         calls: Mutex::new(Vec::new()), fail_settings: std::sync::atomic::AtomicBool::new(false),

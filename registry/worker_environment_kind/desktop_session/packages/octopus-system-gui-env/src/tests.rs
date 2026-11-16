@@ -38,12 +38,23 @@ fn app_resume_projects_exact_native_sources_and_materializes_original_windows() 
     let descriptor: Value = serde_json::from_slice(include_bytes!("../../../../../interface/system_gui/desktop.json")).unwrap();
     let behavior: super::config::ApplicationBehavior = serde_json::from_value(descriptor["host"]["application_behavior"].clone()).unwrap();
     behavior.validate().unwrap();
-    let catalog = behavior.instruction_resource.read(&registry_root().join("worker_environment_kind")).unwrap();
+    // The resource must not be group or world writable. A checkout inherits
+    // its modes from the umask, so the test reads a protected copy.
+    let protected = tempfile::tempdir().unwrap();
+    let protected_root = protected.path().canonicalize().unwrap();
+    let resource = protected_root.join(&behavior.instruction_resource.path);
+    std::fs::create_dir_all(resource.parent().unwrap()).unwrap();
+    std::fs::copy(registry_root().join("worker_environment_kind").join(&behavior.instruction_resource.path), &resource).unwrap();
+    let mode = |mode: u32| std::fs::set_permissions(&resource, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(mode)).unwrap();
+    mode(0o664);
+    assert!(behavior.instruction_resource.read(&protected_root).unwrap_err().contains("protected regular file"));
+    mode(0o644);
+    let catalog = behavior.instruction_resource.read(&protected_root).unwrap();
     assert_eq!(catalog.aliases["com.apple.Music"], ["AppleMusic"]);
     assert!(catalog.suppressed_bundle_ids.contains("com.apple.iWork.Numbers"));
     assert!(catalog.resources["Clock"].text.contains("\"4000 seconds\" → 1 hour, 6 minutes, 40 seconds"));
     let mut changed_resource = behavior.instruction_resource.clone(); changed_resource.content_sha256 = "0".repeat(64);
-    assert!(changed_resource.read(&registry_root().join("worker_environment_kind")).is_err());
+    assert!(changed_resource.read(&protected_root).is_err());
     assert!(behavior.resolve("com.spotify.client").unwrap().full_ui.enforce_focus_before_enhanced);
     assert!(!behavior.resolve("com.spotify.client.extra").unwrap().full_ui.enforce_focus_before_enhanced);
     assert_eq!(behavior.resolve("com.apple.ScreenContinuity").unwrap().typing_interval_us,5000);

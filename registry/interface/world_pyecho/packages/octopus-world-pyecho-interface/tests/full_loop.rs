@@ -64,6 +64,19 @@ async fn a_pure_python_interface_folder_lifts_and_round_trips_an_artifact_throug
         DurableBlobs::open(durable_root.join("blobs")).expect("durable blob store opens"),
     ));
     let interface_artifact_root = durable_root.join("handler-interface-artifacts");
+    let ee_instances_root = interface_artifact_root.join("ee_instances");
+    std::fs::create_dir_all(&ee_instances_root).expect("EE instances dir creates");
+    std::fs::write(
+        ee_instances_root.join("ee_existence.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "ee_id": "ee_existence",
+            "template_name": "existence",
+            "parent_ee_id": null,
+            "goal": "Exist"
+        }))
+        .expect("bootstrap EE encodes"),
+    )
+    .expect("bootstrap EE writes");
     let embedded = build_embedded_spine(SpineRootConfig {
         registry_root: registry_root.clone(),
         run: RunId::new("run_pyecho_probe"),
@@ -128,16 +141,22 @@ async fn a_pure_python_interface_folder_lifts_and_round_trips_an_artifact_throug
         durable_root.join("movements.jsonl"),
         durable_root.join("blobs"),
         durable_root.join("ledger-index.sqlite"),
-        std::collections::BTreeMap::from([("repo_root".to_string(), repo_root())]),
+        std::collections::BTreeMap::from([
+            ("repo_root".to_string(), repo_root()),
+            ("interface_life_install_root".to_string(), repo_root()),
+        ]),
         tx,
         cancel.child_token(),
     );
     let life = tokio::spawn(spawn_process_life(ctx, config));
 
-    let reply = tokio::time::timeout(Duration::from_secs(20), rx.recv())
+    let Some(reply) = tokio::time::timeout(Duration::from_secs(20), rx.recv())
         .await
         .expect("the lifted python process must emit within the timeout")
-        .expect("the arrival intake is open");
+    else {
+        let ended = tokio::time::timeout(Duration::from_secs(10), life).await;
+        panic!("the python life closed its arrival intake before emitting: {ended:?}");
+    };
     cancel.cancel();
 
     assert_eq!(reply.interface.as_str(), "world_pyecho");

@@ -244,8 +244,8 @@ async fn invoke(
         &["--exact".into(), "maintenance_writer_process::sandboxed_writer_host".into(), "--nocapture".into()],
         interface_dir, None, profiles.path()).unwrap();
     let output = tokio::time::timeout(std::time::Duration::from_secs(30),
-        tokio::process::Command::new(prepared.program).args(prepared.args)
-            .env_clear().envs(prepared.environment).env("OCTOPUS_WRITER_TEST_INPUT", &input)
+        tokio::process::Command::from(prepared.command())
+            .env_clear().envs(&prepared.environment).env("OCTOPUS_WRITER_TEST_INPUT", &input)
             .current_dir(interface_dir).kill_on_drop(true).output()).await.unwrap().unwrap();
     assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     read(&private.path().join("result.json"))
@@ -349,12 +349,12 @@ async fn invoke_tool(
         .authority
         .prepare(bin.to_str().unwrap(), &[], interface_dir, None, root)
         .unwrap();
+    #[cfg(target_os = "macos")]
     assert_eq!(process.program, Path::new("/usr/bin/sandbox-exec"));
     let mut child =
-        tokio::process::Command::new(process.program)
-            .args(process.args)
+        tokio::process::Command::from(process.command())
             .env_clear()
-            .envs(process.environment)
+            .envs(&process.environment)
             .current_dir(interface_dir)
             .env("OCTOPUS_INTERFACE_ID", interface.id.as_str())
             .env("OCTOPUS_INTERFACE_DIR", interface_dir)
@@ -464,11 +464,12 @@ fn raw_probe(
     let process = authority
         .prepare(binary.to_str().unwrap(), &args, cwd, None, profiles.path())
         .unwrap();
+    #[cfg(target_os = "macos")]
     assert_eq!(process.program, Path::new("/usr/bin/sandbox-exec"));
-    let output = std::process::Command::new(process.program)
-        .args(process.args)
+    let output = process
+        .command()
         .env_clear()
-        .envs(process.environment)
+        .envs(&process.environment)
         .current_dir(cwd)
         .output()
         .unwrap();
