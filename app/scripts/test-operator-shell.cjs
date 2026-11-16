@@ -33,6 +33,9 @@ Object.defineProperty(w.navigator, "locks", { configurable: true, value: {
 function memoryIndexedDb() {
   const stores = new Map();
   const later = (callback) => setTimeout(callback, 0);
+  // Transactions run one after another in the order they were created, as IndexedDB orders read-write transactions
+  // over one store: a later one reads only what the earlier one committed, so two writers cannot lose an update.
+  let settled = Promise.resolve();
   const database = {
     createObjectStore: (name) => { stores.set(name, new Map()); }, close() {},
     transaction(name) {
@@ -41,11 +44,11 @@ function memoryIndexedDb() {
         objectStore: () => ({
           get(key) {
             const request = {};
-            later(() => {
+            settled = settled.then(() => new Promise((finish) => later(() => {
               request.result = store.has(key) ? structuredClone(store.get(key)) : undefined;
               request.onsuccess?.();
-              later(() => { if (transaction.aborted) return; for (const [value, writeKey] of writes) store.set(writeKey, structuredClone(value)); transaction.oncomplete?.(); });
-            });
+              later(() => { if (!transaction.aborted) { for (const [value, writeKey] of writes) store.set(writeKey, structuredClone(value)); transaction.oncomplete?.(); } finish(); });
+            })));
             return request;
           },
           put(value, key) { writes.push([value, key]); },
