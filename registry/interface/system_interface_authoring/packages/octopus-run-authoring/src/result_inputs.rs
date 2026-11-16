@@ -1592,22 +1592,60 @@ pub(super) fn checked_topology_advance(
     Ok(true)
 }
 
+/// Snapshot outputs that close a failed or interrupted source. They must reach
+/// the run even when context was bound after their source was admitted.
+const FAILURE_SNAPSHOT_LABELS: [&str; 2] = ["turn.error", "turn.interrupted.result"];
+
+fn context_outside_snapshot(
+    config: &RunAuthoringConfig,
+    future: &[ArtifactId],
+    static_context: &[ArtifactId],
+    captured: &ResolvedSessionContext,
+) -> Vec<ArtifactId> {
+    if !enabled(config) {
+        return Vec::new();
+    }
+    future
+        .iter()
+        .filter(|id| {
+            !static_context.contains(id)
+                && !captured
+                    .artifacts
+                    .iter()
+                    .any(|entry| &entry.source_artifact.id == *id)
+        })
+        .cloned()
+        .collect()
+}
+
 pub(super) fn validate_snapshot_context(
     config: &RunAuthoringConfig,
     future: &[ArtifactId],
     static_context: &[ArtifactId],
     captured: &ResolvedSessionContext,
 ) -> Result<(), String> {
-    if enabled(config)
-        && future.iter().any(|id| {
-            !static_context.contains(id)
-                && !captured
-                    .artifacts
-                    .iter()
-                    .any(|entry| &entry.source_artifact.id == id)
-        })
-    {
-        return Err("provider snapshot would discard newer explicitly bound context; revise the receiving checkpoint before a new admission".into());
+    let outside = context_outside_snapshot(config, future, static_context, captured);
+    if !outside.is_empty() {
+        return Err(format!(
+            "provider snapshot would discard newer explicitly bound context; revise the receiving checkpoint before a new admission (uncovered: {})",
+            outside.iter().map(ArtifactId::as_str).collect::<Vec<_>>().join(", ")
+        ));
     }
     Ok(())
+}
+
+/// Context a snapshot does not capture is context it would drop. An ordinary
+/// snapshot is refused; a failure snapshot keeps those bindings beside itself,
+/// so the next admission reads them after the snapshot.
+pub(super) fn snapshot_carried_context(
+    config: &RunAuthoringConfig,
+    label: &str,
+    future: &[ArtifactId],
+    static_context: &[ArtifactId],
+    captured: &ResolvedSessionContext,
+) -> Result<Vec<ArtifactId>, String> {
+    if FAILURE_SNAPSHOT_LABELS.contains(&label) {
+        return Ok(context_outside_snapshot(config, future, static_context, captured));
+    }
+    validate_snapshot_context(config, future, static_context, captured).map(|()| Vec::new())
 }

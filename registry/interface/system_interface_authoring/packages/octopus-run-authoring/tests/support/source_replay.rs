@@ -1118,7 +1118,7 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
     fixture.edge(&current, &receiving.id, &result, "provider".into(), MovementKind::InterfaceOutbound);
     fixture.handoff.source_movement_seq = source;
     fixture.handoff.invocation_metadata = fixture.rows.last().unwrap().invocation_metadata.as_ref().unwrap().invocation().unwrap().clone();
-    {
+    let carried = {
         let payloads = fixture.handoff.invocation_metadata.artifact_binding_refs.iter().map(|reference| {
             let (_, payload) = read_pinned_artifact_from_cache(&fixture.handoff.ctx.blobs_dir, fixture.handoff.ctx.required_host_io_limits().unwrap(), reference).unwrap();
             octopus_interfaces::ArtifactBindingPayload::new(reference.clone(), payload)
@@ -1146,7 +1146,16 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
         assert!(result_inputs::validate_snapshot_context(&fixture.handoff.config, &state.context_artifacts, &[], &state.session_context).is_err());
         let future = state.context_artifacts.clone();
         assert!(result_inputs::validate_snapshot_context(&fixture.handoff.config, &future, &future, &state.session_context).is_ok());
-    }
+        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &state.context_artifacts, &[], &state.session_context).is_err(),
+            "an ordinary snapshot is still refused when it would drop context bound after its source");
+        let carried = result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &state.context_artifacts, &[], &state.session_context).unwrap();
+        assert!(carried.contains(&b.id), "a terminal error keeps the context bound while its call waited");
+        assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.interrupted.result", &state.context_artifacts, &[],
+            &state.session_context).unwrap(), carried);
+        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &future, &future, &state.session_context).unwrap().is_empty(),
+            "context the snapshot already covers is not carried twice");
+        carried
+    };
     let answer = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("answer"), "reply", br#"{"text":"done"}"#).unwrap();
     let captured = fixture.handoff.state.try_lock().unwrap().session_context.clone();
     let fork = materialize_session_snapshot(&answer, &captured, None).unwrap();
@@ -1158,6 +1167,22 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
     }], true, None, false, true, &[]).unwrap();
     assert!(result_inputs::validate_saved(&fixture.handoff.ctx, &record,
         &RunRecord::from_bytes(forked.content.as_bytes()).unwrap(), &fixture.handoff.config).is_err());
+    let failure = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("failure"), "turn.error", br#"{"message":"the turn failed"}"#).unwrap();
+    let failure = materialize_session_snapshot(&failure, &captured, None).unwrap();
+    let failure_identity = artifact_identity(&failure, &fixture.handoff.var_dir).unwrap();
+    let mut failure_context = vec![failure_identity.artifact.id.clone()];
+    failure_context.extend(carried.iter().cloned());
+    let failed = fixture.handoff.author_run_with_bindings(&current, &failure_context, &[PreparedHandoff {
+        identity:failure_identity,
+        output_checkpoint:fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone(),
+        verified_inputs:Vec::new(),
+    }], true, None, false, true, &[]).unwrap();
+    let failed = RunRecord::from_bytes(failed.content.as_bytes()).unwrap();
+    let kept = provider_context_bindings(&failed, &"provider".into()).unwrap();
+    assert!(carried.iter().all(|id| kept.iter().any(|binding| &binding.id == id)),
+        "the record written for a terminal error still binds the context it carried");
+    result_inputs::validate_saved(&fixture.handoff.ctx, &record, &failed, &fixture.handoff.config)
+        .expect("a terminal error that carries newer context is a valid saved record");
     assert_eq!(fixture.handoff.recover_source().await.unwrap(), ProviderSourceRecovery::Process,
         "a result that waited across an independent input is consumed through its own admitted movement");
     assert_eq!(std::fs::read(&fixture.handoff.run_path).unwrap(), current, "recovery writes nothing");

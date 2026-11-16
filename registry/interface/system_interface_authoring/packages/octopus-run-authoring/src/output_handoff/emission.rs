@@ -357,8 +357,11 @@ impl ProviderOutputHandoff {
             } else {
                 None
             };
+            let mut carried_context = Vec::new();
             if snapshot_output {
-                result_inputs::validate_snapshot_context(&active.config, &next_context, &next_static_context, &next_session_context)?;
+                carried_context = result_inputs::snapshot_carried_context(
+                    &active.config, &manifest.label, &next_context, &next_static_context, &next_session_context,
+                )?;
                 artifact = materialize_session_snapshot(
                     &artifact,
                     &next_session_context,
@@ -379,6 +382,9 @@ impl ProviderOutputHandoff {
                     "provider output",
                 )?;
                 append_artifact(&mut next_context, identity.artifact.id.clone());
+            }
+            for id in carried_context {
+                append_artifact(&mut next_context, id);
             }
             if snapshot_output {
                 next_session_snapshot_head = Some(session_snapshot_head_after_output(
