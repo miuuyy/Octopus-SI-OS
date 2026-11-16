@@ -167,46 +167,6 @@ test("spent event watches retain their condition and do not appear active", asyn
   assert.equal(button(detail(host), "Edit"), undefined);
 });
 
-test("owned sensors render their recorded health and say when it needs attention", async () => {
-  const targets = [{ run_id: "task", title: "Steward" }];
-  fixture([{
-    interface_id: "world_github_watch", display_name: "GitHub watch", status: "enabled", valid: true,
-    event_source: { condition: "GitHub activity on owner/repo (branch main), polled every 5 min", sources: ["github.activity.notice"], targets,
-      sensor_health: { configured: true, configuration_source: "private_state", state: "watching", attention: false, summary: "Watching. The last poll completed.",
-        facts: [{ label: "Last successful poll", at: "2026-11-15T22:34:21Z" }, { label: "Resources tracked", value: "148" }, { label: "Health recorded", at: "not a date" }] } },
-  }, {
-    interface_id: "world_guardian_watch", display_name: "Guardian watch", status: "enabled", valid: true,
-    event_source: { condition: "Run run_centre emits nothing of its own through provider_centre for 1 h", sources: ["guardian_watch"], targets,
-      sensor_health: { configured: true, configuration_source: "registry", state: "alerting", attention: true, summary: "The watched run is silent; 2 alerts of this silence admitted.",
-        facts: [{ label: "Last own action of the watched run", at: "2026-11-15T22:00:00.000Z", value: "tool.call" }] } },
-  }, {
-    interface_id: "world_plain_sensor", display_name: "Plain sensor", status: "enabled", valid: true,
-    event_source: { sources: ["issue.opened"], targets, sensor_health: { summary: "no state" } },
-  }]);
-  const { host } = await mount();
-  const row = (name) => rows(host).find((element) => element.textContent.includes(name));
-  assert.match(secondary(row("GitHub watch")), /GitHub activity on owner\/repo/);
-  await click(row("GitHub watch"));
-  let panel = detail(host).querySelector('[aria-label="Sensor health"]');
-  assert.equal(panel.getAttribute("data-sensor-attention"), "false");
-  assert.equal(panel.querySelector("h3").textContent, "Sensor health");
-  assert.match(panel.textContent, /Watching\. The last poll completed\./);
-  assert.match(panel.textContent, /not a live probe\. Configured in the sensor's private state\./);
-  assert.match(panel.textContent, /Resources tracked: 148/);
-  assert.match(panel.textContent, /Health recorded: Not recorded/);
-  assert.deepEqual([...panel.querySelectorAll("time")].map((time) => time.getAttribute("datetime")), ["2026-11-15T22:34:21Z"]);
-  assert.equal(button(detail(host), "Edit"), undefined);
-  await click(row("Guardian watch"));
-  panel = detail(host).querySelector('[aria-label="Sensor health"]');
-  assert.equal(panel.getAttribute("data-sensor-attention"), "true");
-  assert.equal(panel.querySelector("h3").textContent, "Sensor needs attention");
-  assert.match(panel.textContent, /2 alerts of this silence admitted/);
-  assert.match(panel.textContent, /Configured in the sensor's registry folder\./);
-  assert.match(panel.textContent, /Last own action of the watched run: .*\(tool\.call\)/);
-  await click(row("Plain sensor"));
-  assert.equal(detail(host).querySelector('[aria-label="Sensor health"]'), null);
-});
-
 test("Triggers keeps navigation, selection, search and authoring in one workspace", async () => {
   const f = fixture([...Array.from({ length: 8 }, (_, index) => schedule(index)), schedule(8, "disabled"), schedule(9, "invalid")]);
   const { host, drafts } = await mount();

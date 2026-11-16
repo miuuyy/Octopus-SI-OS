@@ -1022,14 +1022,11 @@ function eeInstanceRows(projection, includeLedger = true) {
   );
 }
 
-// An EE is a goal with a policy, so the recorded EE instances are the goals of
-// an installation. Runs that only reference an EE in the ledger declare no goal.
 function goalRows(projection) {
   return eeInstanceRows(projection, false)
     .filter((row) => row.source === "ee_instance" && stringValue(row.goal))
     .map((row) => ({
       goal_id: row.ee_id,
-      status: "active",
       kind: row.template_name,
       title: row.goal,
       name: row.name,
