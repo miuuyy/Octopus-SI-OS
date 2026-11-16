@@ -2213,7 +2213,7 @@ function fixtureWorkerEnvironmentConnection(kind, index) {
     provider: "Remote exec room",
     address: `wss://test-worker-${suffix}.invalid/exec`,
     transport: "remote_exec_server",
-    workspace: "/home/octopus/workspace",
+    workspace: "/workspace/example",
     persistence: "Reusable connection",
     region: "eu-west · Demo",
     capabilities: [...common.capabilities, "terminal", "file sync"],
