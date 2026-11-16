@@ -63,6 +63,14 @@ launcher applies the profile before executing the declared program. Ordinary con
 processes cannot request new profiles; only a process whose declaration grants
 sandbox delegation may do so. Requests from another user namespace are refused.
 
+A process without network or local IPC authority may still create unnamed
+stream socket pairs, which language runtimes use to wake their own event loops.
+It cannot bind or connect an abstract socket. AppArmor mediates a pathname
+socket through the file rule of its path, so such a process reaches one only
+where its declared file authority already lets it write that path. The service's
+control socket is granted by path to a process with sandbox delegation and
+denied by path to every other process.
+
 ## Process lifetime and recovery
 
 A profile stays installed while its preparation connection is open or its

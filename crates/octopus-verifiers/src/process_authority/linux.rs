@@ -215,6 +215,7 @@ fn project(authority: &ProcessAuthority, executable: &Path) -> Result<LinuxProce
         "/etc/localtime",
         "/etc/passwd",
         "/etc/group",
+        "/etc/nsswitch.conf",
         "/dev/random",
         "/dev/urandom",
     ] {
@@ -235,7 +236,6 @@ fn project(authority: &ProcessAuthority, executable: &Path) -> Result<LinuxProce
             "/usr/share/ca-certificates",
             "/etc/hosts",
             "/etc/resolv.conf",
-            "/etc/nsswitch.conf",
             "/etc/gai.conf",
             "/etc/services",
             "/etc/protocols",
@@ -460,6 +460,8 @@ impl LinuxProcessPolicy {
             profile.push_str("  network,\n  unix,\n");
         } else if self.allow_local_ipc || self.allow_application_launch {
             profile.push_str("  network unix,\n  unix,\n");
+        } else {
+            profile.push_str(ANONYMOUS_STREAM_SOCKETS);
         }
         if self.allow_application_launch {
             profile.push_str("  dbus (send, receive),\n");
@@ -471,11 +473,10 @@ impl LinuxProcessPolicy {
             profile.push_str(&format!("  change_profile -> octopus-{uid}-*,\n"));
             profile.push_str("  change_profile -> unconfined,\n  /proc/[0-9]*/attr/current w,\n");
             profile.push_str(&format!("  \"{PLATFORM_EXECUTABLE}\" rmix,\n"));
-            profile.push_str(&format!("  \"{CONTROL_SOCKET}\" rw,\n  unix (create, getattr, getopt, setopt),\n  unix (connect, send, receive) peer=(addr=\"{CONTROL_SOCKET}\"),\n"));
-        } else {
             profile.push_str(&format!(
-                "  deny unix (connect, send, receive) peer=(addr=\"{CONTROL_SOCKET}\"),\n"
+                "  \"{CONTROL_SOCKET}\" rw,\n  unix (create, getattr, getopt, setopt),\n"
             ));
+        } else {
             profile.push_str(&format!("  deny \"{CONTROL_SOCKET}\" rw,\n"));
         }
         profile.push_str(
@@ -484,6 +485,14 @@ impl LinuxProcessPolicy {
         Ok(profile)
     }
 }
+
+/// A process without network or local IPC authority still owns unnamed stream
+/// socket pairs, which event loops use as their wake-up channel. AppArmor
+/// mediates a pathname socket through the file rule of its path, so the
+/// control socket is granted or denied by path; a `unix` rule only accepts
+/// abstract or unnamed addresses. Abstract sockets stay closed here.
+const ANONYMOUS_STREAM_SOCKETS: &str =
+    "  unix (create, read, write, shutdown, getattr, getopt, setopt) type=stream addr=none,\n";
 
 impl FileSelector {
     fn patterns(&self) -> Result<Vec<String>, String> {
@@ -625,4 +634,103 @@ pub(super) fn runtime_executables(
         }
     }
     Ok(visited)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(network: bool, local_ipc: bool, delegation: bool) -> String {
+        LinuxProcessPolicy {
+            files: vec![FileRule {
+                selector: FileSelector::Tree {
+                    path: PathBuf::from("/var/tmp/octopus-room"),
+                },
+                access: FileAccess::Write,
+            }],
+            read_only: Vec::new(),
+            allow_network: network,
+            allow_local_ipc: local_ipc,
+            allow_application_launch: false,
+            allow_sandbox_delegation: delegation,
+            allow_process_signals: false,
+        }
+        .apparmor_profile(&format!("octopus-1000-{}", "0".repeat(64)), 1000)
+        .unwrap()
+    }
+
+    fn shapes() -> Vec<(bool, bool, bool)> {
+        let mut shapes = Vec::new();
+        for network in [false, true] {
+            for local_ipc in [false, true] {
+                for delegation in [false, true] {
+                    shapes.push((network, local_ipc, delegation));
+                }
+            }
+        }
+        shapes
+    }
+
+    #[test]
+    fn the_control_socket_is_granted_or_denied_by_its_path() {
+        for (network, local_ipc, delegation) in shapes() {
+            let profile = profile(network, local_ipc, delegation);
+            assert!(!profile.contains("peer=(addr=\"/"), "{profile}");
+            assert!(!profile.contains("deny unix"), "{profile}");
+            assert!(!profile.contains("unix (connect"), "{profile}");
+            let allowed = profile.contains(&format!("  \"{CONTROL_SOCKET}\" rw,\n"));
+            let denied = profile.contains(&format!("  deny \"{CONTROL_SOCKET}\" rw,\n"));
+            assert_eq!((allowed, denied), (delegation, !delegation), "{profile}");
+        }
+    }
+
+    #[test]
+    fn a_process_without_ipc_owns_only_unnamed_stream_sockets() {
+        for delegation in [false, true] {
+            let closed = profile(false, false, delegation);
+            assert!(closed.contains(ANONYMOUS_STREAM_SOCKETS), "{closed}");
+            assert!(!closed.contains("  unix,\n") && !closed.contains("network"), "{closed}");
+            assert_eq!(
+                closed.contains("  unix (create, getattr, getopt, setopt),\n"),
+                delegation,
+                "only delegation creates the socket it connects to the control path: {closed}"
+            );
+        }
+        let local = profile(false, true, false);
+        assert!(local.contains("  network unix,\n  unix,\n") && !local.contains(ANONYMOUS_STREAM_SOCKETS), "{local}");
+        let network = profile(true, false, false);
+        assert!(network.contains("  network,\n  unix,\n") && !network.contains(ANONYMOUS_STREAM_SOCKETS), "{network}");
+    }
+
+    #[test]
+    fn the_installed_parser_accepts_every_profile_shape() {
+        let parser = Path::new("/usr/sbin/apparmor_parser");
+        if !parser.is_file() || !Path::new("/etc/apparmor.d/abi/4.0").is_file() {
+            return;
+        }
+        let directory = std::env::temp_dir().join(format!("octopus-apparmor-shapes-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for (index, (network, local_ipc, delegation)) in shapes().into_iter().enumerate() {
+            let path = directory.join(format!("shape-{index}"));
+            std::fs::write(&path, profile(network, local_ipc, delegation)).unwrap();
+            let output = std::process::Command::new(parser)
+                .args([
+                    "--config-file=/dev/null",
+                    "--skip-cache",
+                    "--skip-kernel-load",
+                    "--warn=all",
+                    "--Werror",
+                    "--jobs=1",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "network={network} local_ipc={local_ipc} delegation={delegation}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 }
