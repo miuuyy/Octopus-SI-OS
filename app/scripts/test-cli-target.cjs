@@ -77,10 +77,19 @@ test("a package tree is copied without clone support, keeping modes, times and l
     assert.equal(fs.existsSync(path.join(destination, "skipped")), false);
 
     // Without verbatim links a relative link is recreated against its source.
+    // A temporary directory can be reached through a link of its own, so the
+    // recreated target is compared as a file, not as a spelling of its path.
     const resolved = path.join(root, "resolved");
     copyTree(source, resolved, { recursive: true, filter: options.filter }, "linux");
-    assert.equal(fs.readlinkSync(path.join(resolved, "relative-link")), path.resolve(source, "bin", "tool"));
-    assert.equal(fs.realpathSync(path.join(resolved, "relative-link")), fs.realpathSync(path.join(source, "bin", "tool")));
+    const sameFile = (left, right) => {
+      const one = fs.statSync(left), other = fs.statSync(right);
+      return one.dev === other.dev && one.ino === other.ino;
+    };
+    const recreated = fs.readlinkSync(path.join(resolved, "relative-link"));
+    assert.equal(path.isAbsolute(recreated), true);
+    assert.equal(sameFile(recreated, path.join(source, "bin", "tool")), true);
+    assert.equal(sameFile(path.join(resolved, "relative-link"), path.join(source, "bin", "tool")), true);
+    assert.equal(sameFile(recreated, path.join(source, "data.json")), false);
 
     // A second copy replaces files and links in place; a file never replaces a directory or itself.
     fs.writeFileSync(path.join(source, "data.json"), "{\"changed\":true}");
