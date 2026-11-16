@@ -32,6 +32,10 @@ const KIND: &str = "code_mode";
 const NESTED_TOOL: &str = "process.list";
 const NESTED_INTERFACE: &str = "system_exec_env_test";
 const NESTED_CHECKPOINT: &str = "cp_code_mode_to_process";
+/// Window of a cell that may be its context's first, which also evaluates the whole prelude before it reaches its
+/// nested calls. The room observes a cell for its full window while it is blocked on those calls, so this is the time
+/// each such start takes, not a deadline the fixture races.
+const FIRST_FRONTIER_WINDOW_MS: u64 = 500;
 
 #[test]
 fn persistent_prelude_requires_the_exact_admitted_binding_and_payload() {
@@ -2308,7 +2312,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
         &root,
         300,
         "code_mode.run",
-        json!({"script":if matches!(case, FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult) { "const docs = await prelude.cua.documentation(); return docs;" } else { "let sum = prelude.seed; let both = await Promise.all([tools.process_list({}), prelude.browser.tabs.selected()]); if (both[1].id !== 't' || typeof both[1].info !== 'function') throw new Error('browser facade lost its admitted Tab closure'); sum.value += both[0].body.value + both[1].id.length; notify('two exact doors'); text(sum.value);" },"yield_time_ms":if matches!(case, FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult) { 1000 } else { 20 }}),
+        json!({"script":if matches!(case, FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult) { "const docs = await prelude.cua.documentation(); return docs;" } else { "let sum = prelude.seed; let both = await Promise.all([tools.process_list({}), prelude.browser.tabs.selected()]); if (both[1].id !== 't' || typeof both[1].info !== 'function') throw new Error('browser facade lost its admitted Tab closure'); sum.value += both[0].body.value + both[1].id.length; notify('two exact doors'); text(sum.value);" },"yield_time_ms":if matches!(case, FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult) { 1000 } else { FIRST_FRONTIER_WINDOW_MS }}),
     );
     if matches!(case, FrontierCase::DetachedResult | FrontierCase::DetachedFailure | FrontierCase::InterleavedResult | FrontierCase::UnsubmittedResult | FrontierCase::RefusedFailure | FrontierCase::RefusedFailurePretty | FrontierCase::AdvancedFailure) {
         let handoff = admission.provider_handoff().unwrap().unwrap();
@@ -2692,18 +2696,9 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
         .await
         .unwrap();
     assert_eq!(visible["body"]["state"], "yielded", "{visible}");
-    let wait = envelope(&root, 401, "code_mode.wait", json!({"cell_id":cell,"yield_time_ms":20}));
-    admission
-        .model_call(&wait.artifact_file)
-        .await
-        .unwrap();
-    let waiting = admission.next().await.unwrap();
-    let visible = admission
-        .run(&room, &handoff, &formation, &kind, waiting)
-        .await
-        .unwrap();
-    assert_eq!(visible["body"]["state"], "completed", "{visible}");
-    assert_eq!(visible["body"]["output"][0]["text"], "42");
+    let settled = Box::pin(wait_until_completed(&admission, &room, &handoff, &formation, &kind, &root, &json!(cell), 401)).await;
+    assert_eq!(settled.texts(), ["42"], "the cell's output was lost or repeated across its waits");
+    assert!(settled.emissions.is_empty(), "a settled cell emitted another nested call");
     for order in 0..2 {
     let source = envelope(
         &root,
@@ -2839,7 +2834,7 @@ fn routed_frontiers_use_actual_runtime_and_file_write(case: FrontierCase) -> Pin
 async fn actual_generated_artifact_read(admission: &std::sync::Arc<FrontierAdmission>, room:&CodeModeRoom, handoff:&std::sync::Arc<actual_owner_handoff::OwnerHandoff>, formation:&WorkerEnvironmentFormation, kind:&WorkerEnvKindSpec, root:&Path) {
     let input = InterfaceArtifactFile::write(root.join("generated-input"),"operator.message",br#"{"text":"Read the downloaded file"}"#).unwrap();
     admission.arrive("world_provider_input_test",&input).await.unwrap();
-    let original = envelope(root,901,"code_mode.run",json!({"script":"let downloadSettled=0; let downloaded=await tools.browser_download_wait({download_id:'aabbccddeeff00112233445566778899',timeout_ms:100}); downloadSettled++; let downloadedRead=await tools.artifact_read({id:downloaded.body.artifact.id}); text(downloadedRead.body.text); text(downloadSettled);","yield_time_ms":20}));
+    let original = envelope(root,901,"code_mode.run",json!({"script":"let downloadSettled=0; let downloaded=await tools.browser_download_wait({download_id:'aabbccddeeff00112233445566778899',timeout_ms:100}); downloadSettled++; let downloadedRead=await tools.artifact_read({id:downloaded.body.artifact.id}); text(downloadedRead.body.text); text(downloadSettled);","yield_time_ms":FIRST_FRONTIER_WINDOW_MS}));
     admission.model_call(&original.artifact_file).await.unwrap();
     let started = admission.run(room,handoff,formation,kind,admission.next().await.unwrap()).await.unwrap();
     assert_eq!(started["body"]["state"],"yielded","{started}");
@@ -2904,11 +2899,9 @@ async fn actual_generated_artifact_read(admission: &std::sync::Arc<FrontierAdmis
     admission.model_call(&wait.artifact_file).await.unwrap();
     let retained=admission.run(room,handoff,formation,kind,admission.next().await.unwrap()).await.unwrap();
     assert_eq!(retained["body"]["state"],"yielded","{retained}");
-    let wait=envelope(root,903,"code_mode.wait",json!({"cell_id":started["body"]["cell_id"],"yield_time_ms":20}));
-    admission.model_call(&wait.artifact_file).await.unwrap();
-    let completed=admission.run(room,handoff,formation,kind,admission.next().await.unwrap()).await.unwrap();
-    assert_eq!(completed["body"]["state"],"completed","{completed}");
-    assert_eq!(completed["body"]["output"][0]["text"],String::from_utf8(payload.to_vec()).unwrap()); assert_eq!(completed["body"]["output"][1]["text"],"1");
+    let settled=Box::pin(wait_until_completed(admission,room,handoff,formation,kind,root,&started["body"]["cell_id"],903)).await;
+    assert_eq!(settled.texts(),[String::from_utf8(payload.to_vec()).unwrap().as_str(),"1"]);
+    assert!(settled.emissions.is_empty(),"a settled cell emitted another nested call");
     assert_eq!(admission.deliveries.lock().unwrap().iter().filter(|d|d.to.as_str()=="system_browser_test").count(),1);
     assert!(admission.door.lock().await.decode_record(resume.0,&resume.2,super::decode_code_mode_door_artifact,octopus_tool_door_runtime::ToolDoorArtifactDecodePurpose::Dispatch).is_err());
     println!("generated file admitted at {admission_seq}; checked file writes {}; original download settled once",admission.file_writes.load(Ordering::SeqCst));
@@ -3068,9 +3061,10 @@ text('sdk raw '+sdkRaw.text.length);
         assert_eq!(receipt["body"]["output_retained"],true,"{receipt}");
         assert!(admission.door.lock().await.decode_record(input.0,&input.2,super::decode_code_mode_door_artifact,octopus_tool_door_runtime::ToolDoorArtifactDecodePurpose::Dispatch).is_err());
     }
-    let mut final_output=None;
+    let mut completed=false;
     let mut returned_media = Vec::new();
-    for offset in 0..frontier_count {
+    let mut sdk_output:Vec<Value> = Vec::new();
+    for offset in 0..frontier_count + 32 {
         let wait=envelope(root,1001 + offset as u64,"code_mode.wait",json!({"cell_id":cell,"yield_time_ms":20}));
         admission.model_call(&wait.artifact_file).await.unwrap();
         let input=admission.next().await.unwrap();
@@ -3078,12 +3072,19 @@ text('sdk raw '+sdkRaw.text.length);
         if let Some(media) = value["body"]["media"].as_array() {
             returned_media.extend(media.iter().cloned());
         }
+        sdk_output.extend(value["body"]["output"].as_array().unwrap().iter().cloned());
         if value["body"]["state"]=="completed" {
-            assert_eq!(offset + 1, frontier_count, "retained frontiers were skipped");
-            final_output=Some(value); break;
+            assert!(offset + 1 >= frontier_count, "retained frontiers were skipped");
+            completed=true; break;
         }
         assert_eq!(value["body"]["state"],"yielded","{value}");
         let emissions = value["body"]["emissions"].as_array().unwrap();
+        if offset + 1 >= frontier_count {
+            // Every nested result is in: only output and the completion remain, and a wait window may close between them.
+            assert!(emissions.is_empty(), "{value}");
+            assert_eq!(value["body"]["pending_tool_calls"], json!([]));
+            continue;
+        }
         assert_eq!(emissions.len(), 1);
         let expected = &nested_frontiers[offset + 1];
         for field in ["tool", "correlation_id", "delivery", "interface"] {
@@ -3091,8 +3092,8 @@ text('sdk raw '+sdkRaw.text.length);
         }
         assert_eq!(value["body"]["pending_tool_calls"], json!([emissions[0]["tool_call_id"]]));
     }
-    let final_output=final_output.expect("SDK cell did not complete through its actual Wait");
-    assert!(final_output["body"]["output"].as_array().unwrap().iter().any(|value|value["text"]=="sdk raw 18000"));
+    assert!(completed,"SDK cell did not complete through its actual Wait");
+    assert!(sdk_output.iter().any(|value|value["text"]=="sdk raw 18000"));
     assert_eq!(returned_media.len(),2);
     assert_eq!(returned_media[0]["payload_base64"],encoded);
     let returned:octopus_interfaces::InterfaceArtifactManifest=serde_json::from_value(returned_media[0]["artifact"].clone()).unwrap();
@@ -3102,7 +3103,7 @@ text('sdk raw '+sdkRaw.text.length);
         "invalid later carrier does not overwrite or recapture the retained original JPEG");
     let returned:octopus_interfaces::InterfaceArtifactManifest=serde_json::from_value(returned_media[1]["artifact"].clone()).unwrap();
     assert_eq!(std::fs::read(returned.payload_path).unwrap(),jpeg);
-    let arrays = final_output["body"]["output"].as_array().unwrap().iter().filter_map(|row|row["text"].as_str())
+    let arrays = sdk_output.iter().filter_map(|row|row["text"].as_str())
         .filter_map(|text|serde_json::from_str::<Value>(text).ok()).find(|value|value.get("sdk_png").is_some()).unwrap();
     assert_eq!(arrays["sdk_png"],json!(png)); assert_eq!(arrays["sdk_jpeg"],json!(jpeg));
     let source=envelope(root,2000,"code_mode.run",json!({"script":"try { await sdkLocator.count(); throw new Error('stale context accepted'); } catch(error) { if (!error.message.includes('retained context identity')) throw error; text('stale context refused'); }","yield_time_ms":20}));
@@ -3117,18 +3118,8 @@ text('sdk raw '+sdkRaw.text.length);
     admission.arrive("system_browser_test",&file).await.unwrap();
     let input=admission.next().await.unwrap();
     admission.run(room,handoff,formation,kind,input).await.unwrap();
-    let mut rejected=false;
-    for sequence in 2001..2004 {
-        let wait=envelope(root,sequence,"code_mode.wait",json!({"cell_id":started["body"]["cell_id"],"yield_time_ms":20}));
-        admission.model_call(&wait.artifact_file).await.unwrap();
-        let input=admission.next().await.unwrap();
-        let value=admission.run(room,handoff,formation,kind,input).await.unwrap();
-        if value["body"]["state"]=="completed" {
-            assert_eq!(value["body"]["output"][0]["text"],"stale context refused"); rejected=true; break;
-        }
-        assert_eq!(value["body"]["state"],"yielded","{value}");
-    }
-    assert!(rejected);
+    let settled=Box::pin(wait_until_completed(admission,room,handoff,formation,kind,root,&started["body"]["cell_id"],2001)).await;
+    assert_eq!(settled.texts(),["stale context refused"]);
     assert!(!admission.deliveries.lock().unwrap().iter().any(|row|row.seq>delivery.seq && row.from.as_str()==DOOR && row.to.as_str()=="system_browser_test"));
 }
 
@@ -3229,7 +3220,7 @@ async fn actual_gui_decision_preserves_the_original_promise(
         root,
         sequence,
         "code_mode.run",
-        json!({"script":"{ const approvedApp = await prelude.cua.getApp({kind:'bundle_id',value:'example.fixture'},{emit:false}); globalThis.fixtureApp = approvedApp; text(approvedApp.state.application.bundle_id); approvedApp.emitState({screenshots:false}); text(approvedApp.getNode('fixture-app-root').title); }","yield_time_ms":20}),
+        json!({"script":"{ const approvedApp = await prelude.cua.getApp({kind:'bundle_id',value:'example.fixture'},{emit:false}); globalThis.fixtureApp = approvedApp; text(approvedApp.state.application.bundle_id); approvedApp.emitState({screenshots:false}); text(approvedApp.getNode('fixture-app-root').title); }","yield_time_ms":FIRST_FRONTIER_WINDOW_MS}),
     );
     admission
         .model_call(&source.artifact_file)
@@ -3474,45 +3465,21 @@ async fn actual_gui_decision_preserves_the_original_promise(
         decision_bytes
     );
     assert!(invoke_gui(&gui_envelope, Purpose::Dispatch).is_err());
-    let mut completed = false;
-    for sequence in sequence + 1..sequence + 4 {
-        let wait = envelope(
-            root,
-            sequence,
-            "code_mode.wait",
-            json!({"cell_id":started["body"]["cell_id"],"yield_time_ms":20}),
-        );
-        admission
-            .model_call(&wait.artifact_file)
-            .await
-            .unwrap();
-        let input = admission.next().await.unwrap();
-        let result = admission
-            .run(room, handoff, formation, kind, input)
-            .await
-            .unwrap();
-        if result["body"]["state"] == "completed" {
-            assert_eq!(result["body"]["output"][0]["text"], "example.fixture");
-            let rendered = result["body"]["output"][1]["text"].as_str().unwrap();
-            let (identity, native_text) = rendered.split_once('\n').unwrap();
-            let identity:Value = serde_json::from_str(identity).unwrap();
-            assert_eq!(identity["observation_id"],"fixture-observation");
-            assert_eq!(identity["revision"],1);
-            assert_eq!(identity["context"],state["accessibility"]["context"]);
-            assert_eq!(identity["presentation"]["rendered_element_ids"],json!(["fixture-app-root"]));
-            assert!(identity.get("nodes").is_none());
-            assert_eq!(native_text,native_presentation_text);
-            assert_eq!(result["body"]["output"][2]["text"],"Fixture");
-            assert_eq!(result["body"]["output"].as_array().unwrap().len(),3);
-            assert!(result["body"].get("media").is_none());
-            completed = true;
-            break;
-        }
-    }
-    assert!(
-        completed,
-        "real Wait did not retain the admitted App result"
-    );
+    let settled = Box::pin(wait_until_completed(admission, room, handoff, formation, kind, root, &started["body"]["cell_id"], sequence * 100)).await;
+    let output = &settled.output;
+    assert_eq!(output.len(), 3, "real Wait did not retain exactly the admitted App result: {output:?}");
+    assert_eq!(output[0]["text"], "example.fixture");
+    let rendered = output[1]["text"].as_str().unwrap();
+    let (identity, native_text) = rendered.split_once('\n').unwrap();
+    let identity:Value = serde_json::from_str(identity).unwrap();
+    assert_eq!(identity["observation_id"],"fixture-observation");
+    assert_eq!(identity["revision"],1);
+    assert_eq!(identity["context"],state["accessibility"]["context"]);
+    assert_eq!(identity["presentation"]["rendered_element_ids"],json!(["fixture-app-root"]));
+    assert!(identity.get("nodes").is_none());
+    assert_eq!(native_text,native_presentation_text);
+    assert_eq!(output[2]["text"],"Fixture");
+    assert!(settled.media.is_empty());
     if result_before_decision && capture_followup {
         actual_app_capture_facade(admission,room,handoff,formation,kind,root,&state,request["request_id"].as_str().unwrap()).await;
     }
@@ -3741,7 +3708,7 @@ async fn actual_app_capture_facade(
             media.as_array_mut().unwrap().push(duplicate);
         }
         let watermark=admission.deliveries.lock().unwrap().last().unwrap().seq;
-        let source=envelope(root,500+case as u64*4,"code_mode.run",json!({"script":script,"yield_time_ms":20}));
+        let source=envelope(root,500+case as u64*40,"code_mode.run",json!({"script":script,"yield_time_ms":20}));
         admission.model_call(&source.artifact_file).await.unwrap();
         let input=admission.next().await.unwrap();
         let started=admission.run(room,handoff,formation,kind,input).await.unwrap();
@@ -3762,16 +3729,12 @@ async fn actual_app_capture_facade(
         let input=admission.next().await.unwrap();
         let resumed=admission.run(room,handoff,formation,kind,input).await.unwrap();
         assert_eq!(resumed["body"]["output_retained"],true,"{resumed}");
-        let wait=envelope(root,501+case as u64*4,"code_mode.wait",json!({"cell_id":started["body"]["cell_id"],"yield_time_ms":20}));
-        admission.model_call(&wait.artifact_file).await.unwrap();
-        let input=admission.next().await.unwrap();
-        let completed=admission.run(room,handoff,formation,kind,input).await.unwrap();
-        assert_eq!(completed["body"]["state"],"completed","{completed}");
-        let output=completed["body"]["output"].as_array().unwrap();
+        let settled=Box::pin(wait_until_completed(admission,room,handoff,formation,kind,root,&started["body"]["cell_id"],501+case as u64*40)).await;
+        let output=&settled.output;
         let images:Vec<_>=output.iter().filter(|v|v["type"]=="image").collect();
         if case==1 || case==2 {
             assert_eq!(images.len(),1,"unrelated captured windows leaked into model output");
-            let output_media=completed["body"]["media"].as_array().unwrap(); assert_eq!(output_media.len(),1);
+            let output_media=&settled.media; assert_eq!(output_media.len(),1);
             assert_eq!(output_media[0]["mime_type"],mime);
             assert_eq!(base64::engine::general_purpose::STANDARD.decode(output_media[0]["payload_base64"].as_str().unwrap()).unwrap(),bytes);
             let identities:Vec<Value>=output.iter().filter_map(|v|v["text"].as_str().and_then(|s|serde_json::from_str(s).ok())).collect();
@@ -3822,6 +3785,44 @@ fn bounded_room_media_preserves_the_actual_image_carrier(root: &Path) {
     small.max_output_bytes = bytes.len() - 1;
     assert!(super::materialize_output_media(&source, &small, &mut original.clone()).is_err());
     assert!(super::materialize_output_media(&source, &config, &mut body).is_err());
+}
+
+/// Everything a cell made visible through the waits that followed it to completion.
+struct SettledCell {
+    output: Vec<Value>,
+    media: Vec<Value>,
+    emissions: Vec<Value>,
+}
+
+impl SettledCell {
+    fn texts(&self) -> Vec<&str> {
+        self.output.iter().filter_map(|item| item["text"].as_str()).collect()
+    }
+}
+
+/// Waits on a cell until it completes. A wait window can close after the cell wrote its output and before its runtime
+/// reported completion, so the output and the completion may arrive as separate frontiers; callers assert on what all
+/// of them made visible together, which still fails when output is lost, repeated or never followed by completion.
+async fn wait_until_completed(
+    admission: &std::sync::Arc<FrontierAdmission>, room: &CodeModeRoom,
+    handoff: &std::sync::Arc<actual_owner_handoff::OwnerHandoff>, formation: &WorkerEnvironmentFormation,
+    kind: &WorkerEnvKindSpec, root: &Path, cell: &Value, first_sequence: u64,
+) -> SettledCell {
+    let mut settled = SettledCell { output: Vec::new(), media: Vec::new(), emissions: Vec::new() };
+    for sequence in first_sequence..first_sequence + 32 {
+        let wait = envelope(root, sequence, "code_mode.wait", json!({"cell_id":cell,"yield_time_ms":20}));
+        admission.model_call(&wait.artifact_file).await.unwrap();
+        let input = admission.next().await.unwrap();
+        let visible = admission.run(room, handoff, formation, kind, input).await.unwrap();
+        let body = &visible["body"];
+        settled.output.extend(body["output"].as_array().unwrap().iter().cloned());
+        for (field, collected) in [("media", &mut settled.media), ("emissions", &mut settled.emissions)] {
+            if let Some(items) = body[field].as_array() { collected.extend(items.iter().cloned()); }
+        }
+        if body["state"] == "completed" { return settled; }
+        assert_eq!(body["state"], "yielded", "{visible}");
+    }
+    panic!("the cell did not complete through its actual Wait: {:?}", settled.output);
 }
 
 struct FrontierProvider {
