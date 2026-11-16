@@ -8,8 +8,6 @@
   "npm_integrity": "sha512-FI9Y0w/6/JoWdf4KSQQh3TmXRY8uoim+fR3lzXJufMJHe3GyrlIO02Qxg6HEmzEwxM9n4kVgTa+OM5J7GB5XBA==",
   "license_file": "LICENSE.opencodex",
   "used_surfaces": [
-    "src/oauth/google-antigravity.ts#discoverAntigravityProject,loginAntigravity,refreshAntigravityToken",
-    "src/oauth/types.ts#OAuthController,OAuthCredentials",
     "src/types.ts#AdapterEvent,OcxAssistantContentPart,OcxMessage,OcxParsedRequest,OcxProviderConfig",
     "src/adapters/base.ts#AdapterRequest,IncomingMeta,ProviderAdapter",
     "src/adapters/claude-cli/adapter.ts#ClaudeCliAdapterDeps,buildArgs,buildChildEnv,findClaudeCliBinary,withClaudeLoginHint",
@@ -37,7 +35,6 @@
     "src/providers/google-vertex-location.ts#googleVertexLocationConfigError",
     "src/adapters/google-errors.ts#isQuotaExhaustedBody",
     "src/responses/parser.ts#parseRequest",
-    "src/web-search/loop.ts#runWithWebSearch",
     "src/web-search/synthetic-tool.ts#buildWebSearchTool",
     "src/lib/json-byte-size.ts#jsonUtf8Bytes",
     "src/types/tools.ts#namespacedToolName,toolChoiceToolPredicate",
@@ -55,9 +52,6 @@
   ],
   "patches": [
     "upstream/patches/caller-context.patch",
-    "upstream/patches/antigravity-models.patch",
-    "upstream/patches/gemini-search-credential.patch",
-    "upstream/patches/dropped-output.patch",
     "upstream/patches/opencode-go-argon-wire.patch",
     "upstream/patches/vertex-multi-region.patch"
   ]

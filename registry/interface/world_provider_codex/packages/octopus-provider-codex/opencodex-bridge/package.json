@@ -9,8 +9,7 @@
     "postinstall": "node ./scripts/prepare-upstream.mjs"
   },
   "dependencies": {
-    "@bitkyc08/opencodex": "2.100.1",
-    "proper-lockfile": "4.1.2"
+    "@bitkyc08/opencodex": "2.100.1"
   },
   "devDependencies": {
     "bun": "1.4.4"

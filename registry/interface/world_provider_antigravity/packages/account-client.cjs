@@ -3,7 +3,7 @@ const { constants } = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const TIMEOUTS = { status: 20_000, login: 600_000, logout: 20_000 };
+const TIMEOUTS = { status: 20_000, login: 1_800_000, logout: 20_000 };
 const ID = /^[A-Za-z0-9_-]+$/;
 
 function record(value) {
@@ -34,7 +34,7 @@ async function target(ctx) {
   const config = descriptor?.interface_driver_config?.private_config;
   const account = config?.opencodex;
   if (typeof descriptor?.id !== "string" || !ID.test(descriptor.id) || descriptor.interface_type !== "world" || descriptor.role !== "provider"
-    || account?.schema_version !== 1 || account.oauth_provider !== "google-antigravity"
+    || account?.schema_version !== 1 || account.oauth_provider !== "antigravity-acp"
     || typeof account.credential_owner_interface !== "string" || !ID.test(account.credential_owner_interface)) {
     throw new Error("Antigravity requires its declared OAuth provider and credential owner.");
   }

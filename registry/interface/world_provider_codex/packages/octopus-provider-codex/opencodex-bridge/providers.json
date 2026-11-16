@@ -163,18 +163,37 @@
     {
       "interface": "world_provider_antigravity",
       "source_name": "antigravity",
-      "registry_entry": "google-antigravity",
-      "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheap and capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5, since Claude models are not reliable through this provider.",
+      "adapter": "antigravity-acp",
+      "endpoint": "https://cloudcode-pa.googleapis.com",
+      "model_guide": "Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheap and capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5.",
       "name": "Antigravity",
       "developer": "Google",
-      "description": "Gemini and Claude through your Antigravity subscription.",
+      "description": "Gemini through your Antigravity subscription, served by Google's official Antigravity ACP server.",
       "icon": "antigravity-color.svg",
       "account": {
-        "provider": "google-antigravity",
+        "provider": "antigravity-acp",
         "client_module": "packages/account-client.cjs",
-        "disclosure": ["Connect signs in with your Google account; model calls of this provider use its Antigravity subscription."]
+        "disclosure": [
+          "Connect downloads Google's official Antigravity ACP server and signs in with your Google account in the browser; model calls of this provider use its Antigravity subscription.",
+          "Google's server keeps its own default instructions ahead of the instructions Octopus sends, and its built-in tools stay turned off."
+        ]
       },
-      "web_search": { "backend": "gemini", "model": "gemini-4-hydrogen" }
+      "acp": {
+        "residual_sources": [
+          {
+            "name": "antigravity_acp_default_system_instructions",
+            "suppressible_by_current_config": false,
+            "octopus_authority": false,
+            "execution_boundary": "Google's ACP server places its default agent instructions before the system prompt the interface appends; the appended section opens by taking precedence over them, and every built-in tool of the session is disabled, so the model can call only the client's functions"
+          }
+        ]
+      },
+      "models": [
+        {"slug": "gemini-4-hydrogen", "display_name": "Gemini 4 Hydrogen", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "high"},
+        {"slug": "gemini-4-argon", "display_name": "Gemini 4 Argon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-4-carbon", "display_name": "Gemini 4 Carbon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
+        {"slug": "gemini-3.8-flash", "display_name": "Gemini 3.8 Flash", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"}
+      ]
     },
     {
       "interface": "world_provider_vertex",

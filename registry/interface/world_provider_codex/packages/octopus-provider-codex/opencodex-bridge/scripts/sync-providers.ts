@@ -30,7 +30,7 @@ type ProviderSpec = {
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; input_modalities?: string[]; efforts: Effort[]; default_effort?: Effort }>;
   model_guide?: string;
-  web_search?: { backend: "gemini"; model: string };
+  acp?: { residual_sources: Array<Record<string, unknown>> };
   vertex?: { location: string; project: { env: string; label: string }; credentials: { env: string; label: string } };
 };
 
@@ -253,8 +253,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   const config = out.interface_driver_config;
   const privateConfig = config.private_config;
   for (const key of CODEX_ONLY_PRIVATE_CONFIG) delete privateConfig[key];
-  if (spec.web_search) privateConfig.web_search = "live";
-  else privateConfig.model_hidden_tools = privateConfig.model_hidden_tools.filter((tool: string) => !CODEX_NATIVE_SEARCH_TOOLS.includes(tool));
+  privateConfig.model_hidden_tools = privateConfig.model_hidden_tools.filter((tool: string) => !CODEX_NATIVE_SEARCH_TOOLS.includes(tool));
   const preferred = spec.model ? rows[0] : rows.find((row) => row.slug === spec.default_model) ?? rows[0];
   const description = (row: ModelRow) => `${row.display_name} through ${spec.name}.`;
   privateConfig.model = preferred.slug;
@@ -273,7 +272,6 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     ...(spec.cli ? { bridge_env_names: spec.cli.env } : {}),
     allow_private_network: spec.local === true || spec.allow_private_network === true,
     ...(adapter === "anthropic" ? { cache_retention: "short" } : {}),
-    ...(spec.web_search ? { web_search: spec.web_search } : {}),
     ...(spec.vertex ? { vertex: { location: spec.vertex.location, project_env: spec.vertex.project.env, credentials_file_env: spec.vertex.credentials.env } } : {}),
     limits: {
       max_request_bytes: 33554432,
@@ -299,11 +297,12 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   delete ambient.spawn.compatibility.required_features.retain_client_tool_outputs;
   ambient.spawn.isolation_overrides = [
     ...ambient.spawn.isolation_overrides.filter((value: string) => !CODEX_ONLY_OVERRIDES.some((pattern) => pattern.test(value))),
-    ...(spec.web_search ? [] : ["web_search=disabled"]),
+    "web_search=disabled",
   ];
+  if (spec.acp) ambient.residual_sources = [...ambient.residual_sources, ...spec.acp.residual_sources];
   const variables = out.interface_policy.variables;
   variables.models.default = rows.map((row) => row.slug);
-  if (variables.web_search_modes) variables.web_search_modes.default = spec.web_search ? ["disabled", "live"] : ["disabled"];
+  if (variables.web_search_modes) variables.web_search_modes.default = ["disabled"];
   return out;
 }
 
@@ -331,6 +330,10 @@ function life(spec: ProviderSpec, template: any) {
       ...authority.executable_root_subpaths,
       { root_slot: "registry_interface_root", relative_path: BRIDGE_SUBPATH },
     ];
+    if (spec.acp) {
+      authority.executable_root_slots = [...authority.executable_root_slots, "activation_secrets_home"];
+      authority.optional_executable_root_slots = [...(authority.optional_executable_root_slots ?? []), "provider_account_root"];
+    }
     if (spec.cli) {
       process.inherit_env = [...process.inherit_env, ...spec.cli.env.filter((name) => !process.inherit_env.includes(name))];
       authority.executable_commands = [...authority.executable_commands, ...spec.cli.commands];
@@ -417,7 +420,7 @@ for (const provider of spec.providers) {
   if (!provider.key && !provider.local && !provider.cli && !provider.account && !provider.vertex) throw new Error(`${provider.interface}: a remote provider needs a key field, an account, a signed-in CLI or Vertex credentials`);
   if (provider.vertex) {
     const { location, project, credentials } = provider.vertex;
-    if (adapter !== "google" || provider.key || provider.account || provider.cli || provider.local || provider.registry_entry || provider.base_url || provider.model || provider.web_search) {
+    if (adapter !== "google" || provider.key || provider.account || provider.cli || provider.local || provider.registry_entry || provider.base_url || provider.model) {
       throw new Error(`${provider.interface}: a Vertex provider is a google adapter with only its project and credentials file`);
     }
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(location)) throw new Error(`${provider.interface}: Vertex location must be one lowercase label`);
@@ -429,9 +432,11 @@ for (const provider of spec.providers) {
   if (provider.account && (provider.key || provider.cli || provider.local || provider.model)) throw new Error(`${provider.interface}: an account is the provider's only credential`);
   if (provider.account && !/^packages\/[A-Za-z0-9_-]+\.cjs$/.test(provider.account.client_module)) throw new Error(`${provider.interface}: the account module is a .cjs file in the interface's packages folder`);
   if (provider.models && provider.model) throw new Error(`${provider.interface}: declare a model catalog or a model setup field, not both`);
-  if (provider.web_search && (provider.web_search.backend !== "gemini" || provider.account?.provider !== "google-antigravity" || !provider.web_search.model)) {
-    throw new Error(`${provider.interface}: web_search runs only through OpenCodex's gemini backend on the provider's own Antigravity account, with a declared search model`);
+  if (provider.acp && (adapter !== "antigravity-acp" || provider.account?.provider !== "antigravity-acp" || !provider.models
+      || !Array.isArray(provider.acp.residual_sources) || provider.acp.residual_sources.some((source) => typeof source?.name !== "string"))) {
+    throw new Error(`${provider.interface}: an ACP provider is the antigravity-acp adapter on its own connected account, with an explicit model catalog and named residual sources`);
   }
+  if ((adapter === "antigravity-acp") !== Boolean(provider.acp)) throw new Error(`${provider.interface}: the antigravity-acp adapter is declared together with its acp block`);
   if (provider.endpoint && entry) throw new Error(`${provider.interface}: a registry entry already names its endpoint`);
   const baseUrl = provider.base_url ? "" : seed?.baseUrl ?? provider.endpoint;
   if (!provider.base_url && !baseUrl) throw new Error(`${provider.interface}: no base URL`);

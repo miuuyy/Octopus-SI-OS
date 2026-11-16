@@ -20,8 +20,7 @@
       "web_search_modes": {
         "reduce": "intersection",
         "default": [
-          "disabled",
-          "live"
+          "disabled"
         ]
       },
       "models": {
@@ -30,8 +29,7 @@
           "gemini-4-hydrogen",
           "gemini-4-argon",
           "gemini-4-carbon",
-          "claude-opus-5-5",
-          "claude-sonnet-5-5"
+          "gemini-3.8-flash"
         ]
       }
     }
@@ -40,7 +38,8 @@
     "supported_reasoning_efforts": [
       "low",
       "medium",
-      "high"
+      "high",
+      "xhigh"
     ],
     "private_config": {
       "instruction_artifacts": [],
@@ -52,7 +51,7 @@
       "run_affordance_profile": {
         "catalog": {
           "label": "context.reference",
-          "text": "These operations compose ordinary Octopus runs through checked file effects. create_run starts a task in one call from the installation defaults. followup_task, send_message and interrupt_run reach a connected run; list_runs shows this run and its connected runs; wait_for_runs waits for their communication. To attach tools, rooms, context or routes to this run, use preview_current_run and then amend_current_run with the same amendment_key and either a change (entries to add or remove) or an explicit complete selection; inspect_authoring shows the current one. To edit the run's future contract directly, send authored: the content_hash your file.read returned and an RFC 6902 patch of that record, never the record itself. preview_run, preview_revision and revise_run work with exact authored files. A new run forms its authority from its own worker ceiling and EE chain; a descriptor on disk alone grants nothing. Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheap and capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5, since Claude models are not reliable through this provider.",
+          "text": "These operations compose ordinary Octopus runs through checked file effects. create_run starts a task in one call from the installation defaults. followup_task, send_message and interrupt_run reach a connected run; list_runs shows this run and its connected runs; wait_for_runs waits for their communication. To attach tools, rooms, context or routes to this run, use preview_current_run and then amend_current_run with the same amendment_key and either a change (entries to add or remove) or an explicit complete selection; inspect_authoring shows the current one. To edit the run's future contract directly, send authored: the content_hash your file.read returned and an RFC 6902 patch of that record, never the record itself. preview_run, preview_revision and revise_run work with exact authored files. A new run forms its authority from its own worker ceiling and EE chain; a descriptor on disk alone grants nothing. Choosing a model for a run you create here: gemini-4-hydrogen at high reasoning effort is the cheap and capable choice for ordinary work and recurring checks; gemini-4-carbon is the stronger Gemini for carrying a goal on its own; for hard or delicate work raise the effort, or create the run on world_provider_claude_cli with claude-opus-5-5.",
           "operations": [
             {
               "name": "inspect_authoring",
@@ -3703,8 +3702,6 @@
       },
       "model_hidden_tools": [
         "file.write",
-        "web.search",
-        "web.extract",
         "gui.app_resume",
         "browser.filechooser_resume",
         "code_mode.resume"
@@ -3772,6 +3769,10 @@
             {
               "effort": "high",
               "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
             }
           ],
           "show_in_picker": true
@@ -3839,41 +3840,10 @@
           "show_in_picker": true
         },
         {
-          "model": "claude-opus-5-5",
-          "display_name": "Claude Opus 5.5",
-          "description": "Claude Opus 5.5 through Antigravity.",
-          "context_window": 1000000,
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ],
-          "supports_tools": true,
-          "supports_reasoning": true,
-          "default_reasoning_effort": "medium",
-          "supported_reasoning_efforts": [
-            {
-              "effort": "low",
-              "description": "Fast responses with lighter reasoning"
-            },
-            {
-              "effort": "medium",
-              "description": "Balances speed and reasoning depth for everyday tasks"
-            },
-            {
-              "effort": "high",
-              "description": "Greater reasoning depth for complex problems"
-            }
-          ],
-          "show_in_picker": true
-        },
-        {
-          "model": "claude-sonnet-5-5",
-          "display_name": "Claude Sonnet 5.5",
-          "description": "Claude Sonnet 5.5 through Antigravity.",
-          "context_window": 1000000,
+          "model": "gemini-3.8-flash",
+          "display_name": "Gemini 3.8 Flash",
+          "description": "Gemini 3.8 Flash through Antigravity.",
+          "context_window": 1048576,
           "input_modalities": [
             "text",
             "image"
@@ -4037,19 +4007,13 @@
         "turn.interrupted.result",
         "turn.error"
       ],
-      "web_search": "live",
       "process_env_names": [],
       "opencodex": {
         "schema_version": 1,
-        "adapter": "google",
+        "adapter": "antigravity-acp",
         "credential_owner_interface": "world_provider_antigravity",
-        "registry_entry": "google-antigravity",
-        "oauth_provider": "google-antigravity",
+        "oauth_provider": "antigravity-acp",
         "allow_private_network": false,
-        "web_search": {
-          "backend": "gemini",
-          "model": "gemini-4-hydrogen"
-        },
         "limits": {
           "max_request_bytes": 33554432,
           "max_translated_call_bytes": 2097152,
@@ -4074,6 +4038,10 @@
                 {
                   "effort": "high",
                   "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "effort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
                 }
               ],
               "shell_type": "shell_command",
@@ -4187,9 +4155,9 @@
               "use_responses_lite": false
             },
             {
-              "slug": "claude-opus-5-5",
-              "display_name": "Claude Opus 5.5",
-              "description": "Claude Opus 5.5 through Antigravity.",
+              "slug": "gemini-3.8-flash",
+              "display_name": "Gemini 3.8 Flash",
+              "description": "Gemini 3.8 Flash through Antigravity.",
               "default_reasoning_level": "medium",
               "supported_reasoning_levels": [
                 {
@@ -4219,50 +4187,7 @@
               },
               "supports_parallel_tool_calls": false,
               "context_window": 400000,
-              "max_context_window": 1000000,
-              "effective_context_window_percent": 95,
-              "experimental_supported_tools": [],
-              "input_modalities": [
-                "text",
-                "image"
-              ],
-              "supports_search_tool": false,
-              "use_responses_lite": false
-            },
-            {
-              "slug": "claude-sonnet-5-5",
-              "display_name": "Claude Sonnet 5.5",
-              "description": "Claude Sonnet 5.5 through Antigravity.",
-              "default_reasoning_level": "medium",
-              "supported_reasoning_levels": [
-                {
-                  "effort": "low",
-                  "description": "Fast responses with lighter reasoning"
-                },
-                {
-                  "effort": "medium",
-                  "description": "Balances speed and reasoning depth for everyday tasks"
-                },
-                {
-                  "effort": "high",
-                  "description": "Greater reasoning depth for complex problems"
-                }
-              ],
-              "shell_type": "shell_command",
-              "visibility": "list",
-              "supported_in_api": true,
-              "priority": 4,
-              "base_instructions": "",
-              "supports_reasoning_summaries": true,
-              "default_reasoning_summary": "auto",
-              "support_verbosity": false,
-              "truncation_policy": {
-                "mode": "tokens",
-                "limit": 10000
-              },
-              "supports_parallel_tool_calls": false,
-              "context_window": 400000,
-              "max_context_window": 1000000,
+              "max_context_window": 1048576,
               "effective_context_window_percent": 95,
               "experimental_supported_tools": [],
               "input_modalities": [
@@ -4355,7 +4280,8 @@
           "features.sleep_tool=false",
           "features.current_time_reminder=false",
           "tools.experimental_request_user_input.enabled=true",
-          "features.default_mode_request_user_input=true"
+          "features.default_mode_request_user_input=true",
+          "web_search=disabled"
         ],
         "home_env": "CODEX_HOME",
         "isolated_cwd": "codex-cwd",
@@ -4408,6 +4334,12 @@
           "suppressible_by_current_config": true,
           "octopus_authority": false,
           "execution_boundary": "the effort is the one Octopus binds for the turn; Codex records a change as a model-history item and keeps the context window's request effort"
+        },
+        {
+          "name": "antigravity_acp_default_system_instructions",
+          "suppressible_by_current_config": false,
+          "octopus_authority": false,
+          "execution_boundary": "Google's ACP server places its default agent instructions before the system prompt the interface appends; the appended section opens by taking precedence over them, and every built-in tool of the session is disabled, so the model can call only the client's functions"
         }
       ],
       "suppressed_sources": [
@@ -4418,7 +4350,7 @@
       ]
     },
     "transport": {
-      "base_url": "https://daily-cloudcode-pa.googleapis.com",
+      "base_url": "https://cloudcode-pa.googleapis.com",
       "headers": {},
       "request_timeout_ms": 600000,
       "max_response_bytes": 67108864

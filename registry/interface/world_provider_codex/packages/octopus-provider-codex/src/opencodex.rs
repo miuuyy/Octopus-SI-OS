@@ -153,16 +153,7 @@ pub(crate) struct OpenCodexDescriptorConfig {
     #[serde(default)]
     pub limits: OpenCodexLimits,
     #[serde(default)]
-    pub web_search: Option<OpenCodexWebSearch>,
-    #[serde(default)]
     pub vertex: Option<OpenCodexVertex>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct OpenCodexWebSearch {
-    pub backend: String,
-    pub model: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -204,8 +195,6 @@ struct BridgeProvider {
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_retention: Option<OpenCodexCacheRetention>,
     options: OpenCodexProviderOptions,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    web_search: Option<OpenCodexWebSearch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vertex: Option<BridgeVertex>,
 }
@@ -335,16 +324,11 @@ pub(crate) fn descriptor_config(
         .as_ref()
         .and_then(|driver| driver.private_config.get("web_search"))
         .is_some_and(|mode| mode != "disabled");
-    if native_search && parsed.web_search.is_none() {
+    if native_search {
         return Err(format!(
-            "interface '{}' enables Codex web_search but private_config.{OPENCODEX_CONFIG_KEY}.web_search names no OpenCodex search backend to run it",
+            "interface '{}' enables Codex web_search, but the OpenCodex bridge serves no hosted search backend",
             descriptor.id
         ));
-    }
-    if parsed.web_search.as_ref().is_some_and(|search| {
-        !valid_text_atom(&search.backend) || !valid_text_atom(&search.model)
-    }) {
-        return Err("opencodex web_search requires a backend and a search model".to_string());
     }
     if let Some(vertex) = &parsed.vertex {
         validate_vertex_descriptor(descriptor, &parsed, vertex)?;
@@ -464,7 +448,6 @@ pub(crate) async fn connect_interface_driver(
             allow_private_network: config.allow_private_network,
             cache_retention: config.cache_retention.clone(),
             options: config.options.clone(),
-            web_search: config.web_search.clone(),
             vertex,
         },
         limits: BridgeLimits {
@@ -754,7 +737,6 @@ fn validate_vertex_descriptor(
     if config.adapter != "google"
         || config.oauth_provider.is_some()
         || config.registry_entry.is_some()
-        || config.web_search.is_some()
         || config.model_env.is_some()
     {
         return Err(format!(

@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "Antigravity",
-    "description": "Gemini and Claude through your Antigravity subscription.",
+    "description": "Gemini through your Antigravity subscription, served by Google's official Antigravity ACP server.",
     "developer": "Google",
     "category": "provider",
     "icon": "sparkles"

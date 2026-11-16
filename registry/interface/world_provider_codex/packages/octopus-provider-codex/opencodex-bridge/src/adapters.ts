@@ -5,6 +5,7 @@ import { resolveOpenCodeGoTransport } from "../node_modules/@bitkyc08/opencodex/
 import { getOrAllocateRequestSessionLane } from "../node_modules/@bitkyc08/opencodex/src/server/request-log-conversation.ts";
 import type { OcxProviderConfig } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
+import { createAntigravityAcpAdapter, type AntigravityAccountConfig } from "./antigravity-acp.ts";
 import { createClaudeCliAdapter } from "./claude-cli.ts";
 import { createGrokCliAdapter } from "./grok-cli.ts";
 import { wrapReasoningDetailsAdapter } from "./reasoning-details.ts";
@@ -18,9 +19,10 @@ type Context = {
   request: Request;
   budget: TranslatorBudget;
   cacheRetention?: "none" | "short" | "long";
+  account?: AntigravityAccountConfig;
 };
 
-const cli: Record<string, (provider: OcxProviderConfig) => ProviderAdapter> = {
+const cli: Record<string, (provider: OcxProviderConfig, context: Context) => ProviderAdapter> = {
   "claude-cli": (provider) => {
     const directory = process.env.TMPDIR;
     if (!directory) throw new Error("CLI private temporary directory is missing");
@@ -33,6 +35,10 @@ const cli: Record<string, (provider: OcxProviderConfig) => ProviderAdapter> = {
     });
   },
   "grok-cli": createGrokCliAdapter,
+  "antigravity-acp": (provider, context) => {
+    if (!context.account) throw new Error("Antigravity requires its connected account directory");
+    return createAntigravityAcpAdapter(provider, context.account);
+  },
 };
 const registered = new Set(["anthropic", "azure", "google", "openai-chat", "openai-responses"]);
 
@@ -41,7 +47,7 @@ export function supportsAdapter(name: string): boolean {
 }
 
 export function createProviderAdapter(provider: OcxProviderConfig, context: Context): ProviderAdapter {
-  if (Object.hasOwn(cli, context.adapter)) return cli[context.adapter]!(provider);
+  if (Object.hasOwn(cli, context.adapter)) return cli[context.adapter]!(provider, context);
   const wire = resolveWireProtocolOverride(context.providerId, context.modelId, provider, "responses");
   const transport = resolveOpenCodeGoTransport(wire, getOrAllocateRequestSessionLane(context.request), provider);
   if (!registered.has(transport.adapter)) throw new Error(`Adapter '${transport.adapter}' is not served by the bridge`);

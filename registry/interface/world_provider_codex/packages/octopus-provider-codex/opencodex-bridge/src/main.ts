@@ -1,7 +1,7 @@
 import { createProviderAdapter, supportsAdapter } from "./adapters.ts";
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { accountStatus, loginOAuthAccount, logoutOAuthAccount, resolveOAuthAccount, OAuthAccountError, type OAuthAccountConfig } from "./account.ts";
+import { ANTIGRAVITY_ACCOUNT_PROVIDER, ANTIGRAVITY_CAPTURE_ENTRY, AntigravityAccountError, antigravityAccountStatus, antigravityLogin, antigravityLogout, runAntigravityCaptureMcpServer, type AntigravityAccountConfig } from "./antigravity-acp.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
 import { runGrokCaptureMcpServer } from "./grok-cli.ts";
 import { runCodeBuddyMcpServer } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/mcp-server.ts";
@@ -30,7 +30,6 @@ import { parseGcpCredentialJson } from "../node_modules/@bitkyc08/opencodex/src/
 import { googleVertexLocationConfigError } from "../node_modules/@bitkyc08/opencodex/src/providers/google-vertex-location.ts";
 import { isQuotaExhaustedBody } from "../node_modules/@bitkyc08/opencodex/src/adapters/google-errors.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
-import { runWithWebSearch } from "../node_modules/@bitkyc08/opencodex/src/web-search/loop.ts";
 import { buildWebSearchTool } from "../node_modules/@bitkyc08/opencodex/src/web-search/synthetic-tool.ts";
 import { toolChoiceToolPredicate } from "../node_modules/@bitkyc08/opencodex/src/types/tools.ts";
 import type {
@@ -58,8 +57,6 @@ type ProviderOptions = {
   upstream_http_version?: "auto" | "h1" | "h2" | "http1.1" | "http2";
 };
 
-type WebSearch = { backend: "gemini"; model: string };
-
 type Vertex = { project: string; location: string; credentials_file?: string };
 
 type RuntimeProvider = {
@@ -77,8 +74,7 @@ type RuntimeProvider = {
   models: string[];
   options: ProviderOptions;
   registry_entry?: string;
-  account?: OAuthAccountConfig;
-  web_search?: WebSearch;
+  account?: AntigravityAccountConfig;
   vertex?: Vertex;
 };
 
@@ -127,23 +123,13 @@ function stringValue(value: unknown, path: string): string {
   return value;
 }
 
-function accountValue(value: unknown): OAuthAccountConfig {
+function accountValue(value: unknown): AntigravityAccountConfig {
   if (!isObject(value)) throw new Error("provider.account must be an object");
   exactKeys(value, ["provider", "directory"], "provider.account");
-  if (value.provider !== "google-antigravity") throw new Error("provider.account.provider is unsupported");
+  if (value.provider !== ANTIGRAVITY_ACCOUNT_PROVIDER) throw new Error("provider.account.provider is unsupported");
   const directory = stringValue(value.directory, "provider.account.directory");
   if (!isAbsolute(directory) || directory.includes("\0")) throw new Error("provider.account.directory must be absolute");
   return { provider: value.provider, directory };
-}
-
-function webSearchValue(value: unknown, account: OAuthAccountConfig | undefined): WebSearch {
-  if (!isObject(value)) throw new Error("provider.web_search must be an object");
-  exactKeys(value, ["backend", "model"], "provider.web_search");
-  if (value.backend !== "gemini") throw new Error("provider.web_search.backend is unsupported");
-  if (account?.provider !== "google-antigravity") {
-    throw new Error("provider.web_search.backend 'gemini' searches through the provider's own Antigravity account");
-  }
-  return { backend: value.backend, model: stringValue(value.model, "provider.web_search.model") };
 }
 
 const VERTEX_PROJECT = /^(?:[a-z0-9][a-z0-9.-]{0,61}[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
@@ -294,7 +280,6 @@ function parseConfig(value: unknown): BridgeConfig {
     "registry_entry",
     "account",
     "model_aliases",
-    "web_search",
     "vertex",
   ], "provider");
   const adapter = stringValue(value.provider.adapter, "provider.adapter") as AdapterName;
@@ -315,8 +300,9 @@ function parseConfig(value: unknown): BridgeConfig {
   const defaultModel = stringValue(value.provider.default_model, "provider.default_model");
   const account = value.provider.account === undefined ? undefined : accountValue(value.provider.account);
   if (account && value.provider.api_key !== undefined) throw new Error("An account provider cannot also declare an API key");
+  if (account && adapter !== "antigravity-acp") throw new Error("An Antigravity account is served only by the antigravity-acp adapter");
+  if (!account && adapter === "antigravity-acp") throw new Error("The antigravity-acp adapter requires its connected account");
   if (!models.includes(defaultModel)) throw new Error("provider.default_model is outside provider.models");
-  const webSearch = value.provider.web_search === undefined ? undefined : webSearchValue(value.provider.web_search, account);
   const registryEntry = value.provider.registry_entry === undefined
     ? undefined
     : stringValue(value.provider.registry_entry, "provider.registry_entry");
@@ -328,8 +314,8 @@ function parseConfig(value: unknown): BridgeConfig {
   const vertex = value.provider.vertex === undefined ? undefined : vertexValue(value.provider.vertex);
   if (vertex) {
     if (adapter !== "google") throw new Error("provider.vertex requires the google adapter");
-    if (account || registryEntry !== undefined || webSearch) {
-      throw new Error("A Vertex provider declares no account, registry entry or web search");
+    if (account || registryEntry !== undefined) {
+      throw new Error("A Vertex provider declares no account or registry entry");
     }
     if ((vertex.credentials_file === undefined) === (apiKey === undefined)) {
       throw new Error("A Vertex provider authenticates with exactly one of an API key or a credentials file");
@@ -366,7 +352,6 @@ function parseConfig(value: unknown): BridgeConfig {
       adapter,
       ...(registryEntry === undefined ? {} : { registry_entry: registryEntry }),
       ...(account === undefined ? {} : { account }),
-      ...(webSearch === undefined ? {} : { web_search: webSearch }),
       ...(vertex === undefined ? {} : { vertex }),
       model_aliases: modelAliases,
       base_url: baseUrl,
@@ -434,13 +419,8 @@ function upstreamProvider(config: RuntimeProvider): OcxProviderConfig {
   return provider;
 }
 
-async function adapterFor(config: BridgeConfig, request: Request, modelId: string, budget: TranslatorBudget, signal = request.signal): Promise<{ adapter: ProviderAdapter; provider: OcxProviderConfig }> {
+async function adapterFor(config: BridgeConfig, request: Request, modelId: string, budget: TranslatorBudget): Promise<{ adapter: ProviderAdapter; provider: OcxProviderConfig }> {
   const provider = upstreamProvider(config.provider);
-  if (config.provider.account) {
-    const account = await resolveOAuthAccount(config.provider.account, signal);
-    provider.apiKey = account.accessToken;
-    provider.project = account.projectId;
-  }
   const adapter = createProviderAdapter(provider, {
     adapter: config.provider.adapter,
     providerId: config.provider.registry_entry ?? config.provider.id,
@@ -449,6 +429,7 @@ async function adapterFor(config: BridgeConfig, request: Request, modelId: strin
     request,
     cacheRetention: config.provider.cache_retention,
     budget,
+    ...(config.provider.account ? { account: config.provider.account } : {}),
   });
   return { adapter, provider };
 }
@@ -719,39 +700,28 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
   });
   let maps: ReturnType<typeof buildToolBridgeMaps>;
   let adapter: ProviderAdapter;
-  let provider: OcxProviderConfig;
   try {
     parsed = parseRequest(modelId === responseModel ? raw : { ...raw, model: modelId }, { preserveCallerContext: true });
     if (parsed.modelId !== modelId) throw new Error("parsed model disagrees with the exact interface model grant");
     flattenRootSchemaAlternatives(parsed);
     maps = buildToolBridgeMaps(parsed, budget);
-    ({ adapter, provider } = await adapterFor(config, request, modelId, budget, abort.signal));
+    ({ adapter } = await adapterFor(config, request, modelId, budget));
   } catch (error) {
     cleanup();
     budget.dispose();
     const message = isTranslatorBudgetExceededError(error)
       ? "request translation buffer exceeded the configured limit"
       : error instanceof Error ? error.message : "request parsing failed";
-    const unavailable = error instanceof OAuthAccountError && error.code === "refresh_unavailable";
-    return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : unavailable ? 503 : error instanceof OAuthAccountError ? 401 : 400,
-      unavailable ? "upstream_error" : error instanceof OAuthAccountError ? "authentication_error" : "invalid_request_error", message);
+    return formatErrorResponse(isTranslatorBudgetExceededError(error) ? 413 : error instanceof AntigravityAccountError ? 401 : 400,
+      error instanceof AntigravityAccountError ? "authentication_error" : "invalid_request_error", message);
   }
   const stallTimeoutSec = isLocalUpstream(config.provider.base_url)
     ? Math.ceil(config.limits.request_timeout_ms / 1000)
     : undefined;
   if (parsed._webSearch && toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) {
-    if (!config.provider.web_search) {
-      cleanup();
-      budget.dispose();
-      return formatErrorResponse(400, "invalid_request_error", "this provider interface declares no web search backend, so its hosted web_search tool cannot run");
-    }
-    if (!parsed.stream || adapter.runTurn !== undefined || adapter.localTerminal !== undefined) {
-      cleanup();
-      budget.dispose();
-      return formatErrorResponse(400, "invalid_request_error", "hosted web_search runs only in a streamed turn of a request-building adapter");
-    }
-    parsed._responseModelId = responseModel;
-    return webSearchTurn(config, parsed, adapter, provider, budget, abort, stallTimeoutSec, timer, cleanup);
+    cleanup();
+    budget.dispose();
+    return formatErrorResponse(400, "invalid_request_error", "this bridge serves no hosted web_search backend, so the hosted web_search tool cannot run");
   }
   if (adapter.localTerminal?.(parsed)) {
     return deliver(parsed, responseModel, [{ type: "done", endTurn: true, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }], maps, budget, abort, stallTimeoutSec, cleanup);
@@ -813,67 +783,6 @@ function isDroppedOutput(event: AdapterEvent): event is AdapterError {
 
 async function* endDroppedOutput(events: AsyncIterable<AdapterEvent>): AsyncGenerator<AdapterEvent> {
   for await (const event of events) yield isDroppedOutput(event) ? droppedOutput.failure(event) : event;
-}
-
-const WEB_SEARCH_REASONING = "low";
-const WEB_SEARCH_TIMEOUT_MS = 60_000;
-const WEB_SEARCH_MAX_SEARCHES = 3;
-
-async function webSearchTurn(
-  config: BridgeConfig,
-  parsed: OcxParsedRequest,
-  adapter: ProviderAdapter,
-  provider: OcxProviderConfig,
-  budget: TranslatorBudget,
-  abort: AbortController,
-  stallTimeoutSec: number | undefined,
-  timer: ReturnType<typeof setTimeout>,
-  cleanup: () => void,
-): Promise<Response> {
-  const search = config.provider.web_search!;
-  const declared = new URL(config.provider.base_url);
-  parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
-  let response: Response;
-  try {
-    response = await runWithWebSearch({
-      parsed,
-      adapter,
-      incomingMeta: {
-        headers: new Headers(),
-        providerName: config.provider.registry_entry ?? config.provider.id,
-        abortSignal: abort.signal,
-        translatorBudget: budget,
-      },
-      fetchForRequest: (built) => {
-        if (new URL(built.url).origin !== declared.origin) throw new Error("adapter target escaped the declared provider origin");
-        return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
-          boundedStream(await fetch(input, { ...init, redirect: "error" }), config.limits.max_response_bytes, abort)) as typeof fetch;
-      },
-      backend: search.backend,
-      geminiSidecar: { providerName: "google-antigravity", provider },
-      hostedTool: parsed._webSearch!,
-      selectedForwardHeaders: new Headers(),
-      settings: { model: search.model, reasoning: WEB_SEARCH_REASONING, timeoutMs: WEB_SEARCH_TIMEOUT_MS, describeImages: false },
-      maxSearches: WEB_SEARCH_MAX_SEARCHES,
-      terminalRefusalAsFailed: true,
-      abortSignal: abort.signal,
-      droppedOutput,
-      ...(stallTimeoutSec === undefined ? {} : { stallTimeoutSec }),
-    });
-  } catch (error) {
-    cleanup();
-    budget.dispose();
-    return isTranslatorBudgetExceededError(error)
-      ? formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the configured limit")
-      : formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "web search turn failed");
-  }
-  clearTimeout(timer);
-  if (response.body === null) {
-    cleanup();
-    budget.dispose();
-    return response;
-  }
-  return new Response(disposingStream(response.body, budget, abort, cleanup), { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 const RATE_LIMIT_WAITS_MS = [10_000, 20_000, 30_000, 60_000, 60_000, 60_000, 60_000];
@@ -1079,6 +988,11 @@ if (process.argv[2] === "__codebuddy-mcp") {
   await new Promise<never>(() => undefined);
 }
 
+if (process.argv[2] === ANTIGRAVITY_CAPTURE_ENTRY) {
+  await runAntigravityCaptureMcpServer(process.argv[3] ?? "", process.argv[4] ?? "", process.argv[5] ?? "");
+  process.exit(0);
+}
+
 if (process.argv[2] === "__grok-mcp") {
   await runGrokCaptureMcpServer(process.argv[3] ?? "");
   process.exit(0);
@@ -1098,13 +1012,13 @@ try {
     process.on("SIGINT", () => abort.abort());
     let result: unknown;
     switch (raw.operation) {
-      case "status": result = await accountStatus(account); break;
-      case "login": result = await loginOAuthAccount(account, {
+      case "status": result = await antigravityAccountStatus(account); break;
+      case "login": result = await antigravityLogin(account, {
         signal: abort.signal,
-        onAuth: ({ url }) => { publish({ event: "auth", url }); },
+        onAuth: (url) => { publish({ event: "auth", url }); },
         onProgress: (message) => { publish({ event: "progress", message }); },
       }); break;
-      case "logout": result = await logoutOAuthAccount(account); break;
+      case "logout": result = await antigravityLogout(account); break;
       default: throw new Error("Unsupported account operation");
     }
     publish({ event: "result", result });
@@ -1116,13 +1030,12 @@ try {
     allowPrivateNetwork: config.provider.allow_private_network,
   });
   if (destinationError) throw new Error(`provider ${config.provider.id} ${destinationError}`);
-  if (config.provider.account) process.env.OPENCODEX_HOME = config.provider.account.directory;
   if (config.provider.vertex) bindVertexCredentials(config.provider.vertex);
   await serve(config);
 } catch (error) {
   const message = redactSecretString(error instanceof Error ? error.message : "unknown error").slice(0, 600);
   if (process.argv[2] === "__account") {
-    process.stdout.write(`${JSON.stringify({ event: "error", code: error instanceof OAuthAccountError ? error.code : "account_error", message })}\n`);
+    process.stdout.write(`${JSON.stringify({ event: "error", code: error instanceof AntigravityAccountError ? error.code : "account_error", message })}\n`);
   }
   process.stderr.write(`opencodex bridge failed closed: ${message}\n`);
   process.exit(1);

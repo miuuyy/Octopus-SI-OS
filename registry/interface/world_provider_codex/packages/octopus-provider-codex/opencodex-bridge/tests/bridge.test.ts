@@ -636,88 +636,111 @@ test("provider descriptors match providers.json and the pinned OpenCodex registr
   expect(result.exitCode).toBe(0);
 });
 
-function signedInAntigravity() {
-  const home = mkdtempSync(join(tmpdir(), "octopus-account-"));
+test("a hosted web_search is refused because the bridge serves no search backend", async () => {
+  const hosted = [{ type: "web_search", external_web_access: true }];
+  const refused = await exchange({ adapter: "google", base_url: "", auth_header: "x-goog-api-key", auth_value_prefix: "" }, sse([]), "test-model", hosted);
+  expect(refused.status).toBe(400);
+  expect(refused.observed).toBeUndefined();
+  expect(refused.text).toContain("serves no hosted web_search backend");
+  const declared = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.push(declared);
+  declared.stdin.write(JSON.stringify(config("http://127.0.0.1:9/v1", { web_search: { backend: "gemini", model: "gemini-4-hydrogen" } })));
+  declared.stdin.end();
+  expect(await declared.exited).toBe(1);
+  expect(await new Response(declared.stderr).text()).toContain("web_search");
+});
+
+const FAKE_ACP_SERVER = String.raw`
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const root = require("node:path").dirname(process.env.GEMINI_HOME);
+const log = (entry) => fs.appendFileSync(root + "/acp-log.jsonl", JSON.stringify(entry) + "\n");
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
+log({ env: { GEMINI_HOME: process.env.GEMINI_HOME, HOME: process.env.HOME, BROWSER: process.env.BROWSER, FILE: process.env.AGY_ACP_FORCE_FILE_STORAGE, HARNESS: process.env.ANTIGRAVITY_HARNESS_PATH, SECRET: process.env.OCTOPUS_TEST_SECRET } });
+let servers = [];
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let newline;
+  while ((newline = buffer.indexOf("\n")) >= 0) {
+    const message = JSON.parse(buffer.slice(0, newline));
+    buffer = buffer.slice(newline + 1);
+    log({ method: message.method, params: message.params });
+    if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [] } });
+    else if (message.method === "authenticate") {
+      if (fs.existsSync(process.env.GEMINI_HOME + "/signed-out")) process.stderr.write("Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/auth?state=x\n");
+      else send({ id: message.id, result: { _meta: { antigravity: { tier: { name: "Google AI Pro" } } } } });
+    } else if (message.method === "session/new") {
+      servers = message.params.mcpServers;
+      send({ id: message.id, result: { sessionId: "session-1" } });
+    } else if (message.method === "session/set_config_option") send({ id: message.id, result: { configOptions: [] } });
+    else if (message.method === "session/prompt") {
+      if (servers.length) {
+        const capture = spawn(servers[0].command, servers[0].args, { stdio: ["pipe", "pipe", "inherit"] });
+        capture.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n");
+        capture.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } }) + "\n");
+      } else {
+        const update = (value) => send({ method: "session/update", params: { sessionId: "session-1", update: value } });
+        update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } });
+        update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "acp says hi" } });
+        update({ sessionUpdate: "usage_update", used: 42, size: 1000 });
+        send({ id: message.id, result: { stopReason: "end_turn" } });
+      }
+    }
+  }
+});
+`;
+
+test("Antigravity turns run Google's ACP server with its tools off, the run's prompt appended and the client's calls captured", async () => {
+  const pin = JSON.parse(readFileSync(resolve(import.meta.dir, "../antigravity-acp.json"), "utf8"));
+  const asset = pin.assets[`${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`];
+  const home = mkdtempSync(join(tmpdir(), "octopus-antigravity-"));
   directories.push(home);
   const directory = join(home, "opencodex-account");
-  mkdirSync(directory, { mode: 0o700 });
-  writeFileSync(join(directory, "credential.json"), `${JSON.stringify({
-    version: 1, provider: "google-antigravity", accessToken: "account-token", refreshToken: "refresh-token",
-    expiresAt: Date.now() + 3_600_000, projectId: "account-project", accountId: "subject", accountLabel: "owner@example.test",
-  })}\n`, { mode: 0o600 });
-  const account = {
-    adapter: "google", registry_entry: "google-antigravity", base_url: "", api_key: undefined, auth_header: undefined, auth_value_prefix: undefined,
-    headers: {}, models: ["gemini-4-hydrogen", "claude-opus-5-5"], default_model: "gemini-4-hydrogen", account: { provider: "google-antigravity", directory },
+  const install = join(directory, "acp", pin.version);
+  mkdirSync(install, { recursive: true, mode: 0o700 });
+  mkdirSync(join(directory, "home"), { mode: 0o700 });
+  writeFileSync(join(install, pin.executable), `#!${process.execPath}\n${FAKE_ACP_SERVER}`, { mode: 0o755 });
+  writeFileSync(join(install, pin.harness), "", { mode: 0o755 });
+  writeFileSync(join(install, "receipt.json"), JSON.stringify({ version: pin.version, sha256: asset.sha256 }));
+  const bridge = await spawnBridge(config("https://cloudcode-pa.googleapis.com", {
+    id: "world_provider_antigravity", adapter: "antigravity-acp", models: ["gemini-4-hydrogen"], default_model: "gemini-4-hydrogen",
+    api_key: undefined, auth_header: undefined, auth_value_prefix: undefined, headers: {}, allow_private_network: false,
+    account: { provider: "antigravity-acp", directory },
+  }), { PATH: "/usr/bin:/bin", OCTOPUS_TEST_SECRET: "must-not-reach-the-server" });
+  const turn = async (tools: unknown[]) => {
+    const response = await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, reasoning: { effort: "high" }, instructions: "You are the run's worker.", input: userInput, tools }) });
+    return (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   };
-  const reply = () => sse([[null, { response: { candidates: [{ content: { role: "model", parts: [{ text: "antigravity says hi" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 3, totalTokenCount: 6 } } }]]);
-  return { directory, account, reply };
-}
-
-test("a response the provider drops before any output is answered once with the model told why, then ends the turn", async () => {
-  const { account } = signedInAntigravity();
-  const drop = () => sse([[null, { response: { candidates: [{ finishReason: "MALFORMED_FUNCTION_CALL" }] } }]]);
-  const call = () => sse([[null, { response: { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: "exact_tool", args: {} } }] }, finishReason: "STOP" }] } }]]);
-  const replies = [drop, call];
-  const sent: string[] = [];
-  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    sent.push((await request.json()).request.contents.at(-1).parts[0].text);
-    return (replies.shift() ?? drop)();
-  } });
-  servers.push(upstream);
-  const origin = `http://127.0.0.1:${upstream.port}`;
-  const bridge = await spawnBridge(config(origin, { ...account, base_url: origin, web_search: { backend: "gemini", model: "gemini-4-hydrogen" } }));
-  const turn = async (tools: unknown[]) => (await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, input: userInput, tools }) })).text();
-  const hosted = [{ type: "web_search", external_web_access: true }, exactTool];
-  expect(await turn(hosted)).toContain("\"name\":\"exact_tool\"");
-  for (const failed of [await turn(hosted), await turn([exactTool])]) expect(failed).toContain("\"code\":\"invalid_prompt\"");
-  expect(sent.map(text => text.includes("No tool ran"))).toEqual([false, true, false, true, false, true]);
-});
-
-test("a hosted web_search runs only through the search backend its provider names", async () => {
-  const { account, reply } = signedInAntigravity();
-  const hosted = [{ type: "web_search", external_web_access: true }];
-  const searching = await exchange({ ...account, web_search: { backend: "gemini", model: "gemini-4-hydrogen" } }, reply(), "gemini-4-hydrogen", hosted);
-  expect(searching.status).toBe(200);
-  expect(searching.text).toContain("antigravity says hi");
-  expect(searching.text).toContain("response.completed");
-  const declarations = (searching.observed.body.request as Record<string, any>).tools[0].functionDeclarations;
-  expect(declarations.map((declaration: { name: string }) => declaration.name)).toEqual(["web_search"]);
-  const unarmed = await exchange(account, reply(), "gemini-4-hydrogen", hosted);
-  expect(unarmed.status).toBe(400);
-  expect(unarmed.observed).toBeUndefined();
-  expect(unarmed.text).toContain("declares no web search backend");
-  const keyed = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  children.push(keyed);
-  keyed.stdin.write(JSON.stringify(config("http://127.0.0.1:9/v1", { web_search: { backend: "gemini", model: "gemini-4-hydrogen" } })));
-  keyed.stdin.end();
-  expect(await keyed.exited).toBe(1);
-  expect(await new Response(keyed.stderr).text()).toContain("searches through the provider's own Antigravity account");
-});
-
-test("an account provider serves Cloud Code Assist turns with its stored sign-in and only the caller's prompt", async () => {
-  const { directory, account, reply } = signedInAntigravity();
-  const gemini = await exchange(account, reply(), "gemini-4-hydrogen", [exactTool]);
-  expect(gemini.status).toBe(200);
-  expect(gemini.text).toContain("antigravity says hi");
-  expect(gemini.text).toContain("response.completed");
-  expect(gemini.observed.path).toBe("/v1internal:streamGenerateContent");
-  expect(gemini.observed.headers.get("authorization")).toBe("Bearer account-token");
-  expect(gemini.observed.body).toMatchObject({ model: "gemini-4-hydrogen-high", project: "account-project", requestType: "agent" });
-  const request = gemini.observed.body.request as Record<string, any>;
-  expect(request.systemInstruction).toBeUndefined();
-  expect(request.contents).toEqual([{ role: "user", parts: [{ text: "hi" }] }]);
-  expect(request.tools[0].functionDeclarations[0]).toEqual({ name: "exact_tool", description: "Exact", parameters: { type: "object", properties: {} } });
-  const claude = await exchange(account, reply(), "claude-opus-5-5", [exactTool]);
-  expect(claude.observed.body.model).toBe("claude-opus-5-5-medium");
-  expect((claude.observed.body.request as Record<string, any>).toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } });
-  rmSync(join(directory, "credential.json"));
-  const child = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  children.push(child);
-  child.stdin.write(JSON.stringify(config("http://127.0.0.1:9", { ...account, base_url: "http://127.0.0.1:9" })));
-  child.stdin.end();
-  expect(await child.exited).toBe(1);
-  expect(await new Response(child.stderr).text()).toContain("Antigravity is not signed in");
+  const called = await turn([exactTool]);
+  const calls = called.find(event => event.type === "response.completed").response.output.filter((item: { type: string }) => item.type === "function_call");
+  expect(calls.map((call: { name: string; arguments: string }) => [call.name, call.arguments])).toEqual([["exact_tool", JSON.stringify({ value: "a" })]]);
+  const answered = await turn([]);
+  const completed = answered.find(event => event.type === "response.completed");
+  expect(JSON.stringify(completed)).toContain("acp says hi");
+  const log = readFileSync(join(directory, "acp-log.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const env = log.find(entry => entry.env).env;
+  expect(env).toMatchObject({ GEMINI_HOME: join(directory, "home"), BROWSER: "/usr/bin/true", FILE: "1", HARNESS: join(install, pin.harness) });
+  expect(env.SECRET).toBeUndefined();
+  expect(env.HOME.startsWith(directory)).toBe(false);
+  const session = log.find(entry => entry.method === "session/new").params;
+  expect(session._meta.antigravity.enabledTools).toEqual([]);
+  expect(session._meta.antigravity.eagerMcpServers).toEqual(["opencodex"]);
+  const appended: string = session._meta.antigravity.systemPrompt.append;
+  expect(appended.startsWith("The instructions in this section come from the system that hosts this conversation")).toBe(true);
+  expect(appended).toContain("You are the run's worker.");
+  expect(log.filter(entry => entry.method === "session/set_config_option").map(entry => [entry.params.configId, entry.params.value]))
+    .toEqual(expect.arrayContaining([["model", "gemini-4-hydrogen"], ["thinking_level", "high"]]));
+  expect(JSON.stringify(log.find(entry => entry.method === "session/prompt").params.prompt)).toContain("hi");
+  writeFileSync(join(directory, "home", "signed-out"), "");
+  const signedOut = await turn([]);
+  expect(JSON.stringify(signedOut.find(event => event.type === "response.failed"))).toContain("signed out");
+  const status = Bun.spawn([bridgeBinary, "__account"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: {} });
+  children.push(status);
+  status.stdin.write(JSON.stringify({ operation: "status", account: { provider: "antigravity-acp", directory } }));
+  status.stdin.end();
+  expect(JSON.parse((await new Response(status.stdout).text()).trim())).toEqual({ event: "result", result: { signedIn: false, accountLabel: null } });
 });
 
 test("a Vertex provider binds exactly one declared credential and a provider status no retry can change ends the turn", async () => {
