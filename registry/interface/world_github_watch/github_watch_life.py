@@ -24,10 +24,10 @@ def load_boundary(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise ValueError("expected explicit world_legacy_watch boundary import")
+    if len(sys.argv) != 1:
+        raise ValueError("github watch life takes no arguments")
     os.umask(0o077)
-    b = load_boundary(sys.argv[1])
+    b = load_boundary(Path(__file__).resolve().with_name("github_watch_boundary.py"))
     b.private_directory(b.VAR_DIR)
     lock = os.open(str(Path(b.VAR_DIR) / "watch.lock"),
                    os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)

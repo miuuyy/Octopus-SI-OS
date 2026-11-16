@@ -6,10 +6,10 @@ installing the folder starts nothing. It never posts comments or changes GitHub.
 
 ## Configuration and credentials
 
-Install the GitHub watch package from Applications; it brings its explicit
-`world_legacy_watch` code dependency. `life.json` imports only that owner's
-private-file, hash, ledger and stdin/stdout protocol helpers, not its mail-watch
-behavior. No kernel changes, webhooks, public listener, or notifications
+Install the GitHub watch package from Applications. The package is
+self-contained: `github_watch_boundary.py` holds its private-file, ledger lookup
+and stdin/stdout arrival protocol helpers, and `octopus_content_hash.py` its
+content hash; it depends on no other interface. No kernel changes, webhooks, public listener, or notifications
 permission are needed.
 
 Set `github-watch.json` in the installed interface folder. It is the sensor's

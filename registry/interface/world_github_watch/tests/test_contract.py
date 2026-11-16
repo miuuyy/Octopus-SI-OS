@@ -45,7 +45,7 @@ class Contract(unittest.TestCase):
                    OCTOPUS_BLOBS_DIR=str(self.root / "blobs"),
                    OCTOPUS_INTERFACE_HOST_IO_LIMITS=json.dumps(LIMITS))
         with patch.dict(os.environ, env):
-            self.b = load_boundary(HERE.parent / "world_legacy_watch/legacy_watch_life.py")
+            self.b = load_boundary(HERE / "github_watch_boundary.py")
         self.w = Watcher(CONFIG, self.b)
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(lambda: self.w.close())
