@@ -299,11 +299,88 @@ fn assert_declared_workspace_binary(
     );
 }
 
+/// A source checkout holds no distribution outputs, so a life that imports
+/// another owner's executable cannot resolve until that executable exists.
+/// Each absent import that names a workspace binary is built and placed where
+/// its declaration points, as packaging places it; an existing one is kept.
+fn materialize_absent_imported_executables(repo_root: &Path, metadata: &serde_json::Value) {
+    let interface_root = repo_root.join("registry").join("interface");
+    let mut owners = BTreeMap::new();
+    for package in metadata["packages"].as_array().expect("cargo metadata packages") {
+        for target in package["targets"].as_array().expect("cargo package targets") {
+            if target["kind"].as_array().is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin")) {
+                owners.insert(
+                    target["name"].as_str().expect("cargo binary target name").to_string(),
+                    package["name"].as_str().expect("cargo package name").to_string(),
+                );
+            }
+        }
+    }
+    let mut absent = BTreeMap::<String, BTreeSet<PathBuf>>::new();
+    for entry in std::fs::read_dir(&interface_root).expect("registry/interface readable") {
+        let life = entry.expect("registry/interface entry readable").path().join("life.json");
+        let Ok(bytes) = std::fs::read(&life) else {
+            continue;
+        };
+        let life: serde_json::Value = serde_json::from_slice(&bytes).expect("life sidecar is JSON");
+        for process in life["processes"].as_array().into_iter().flatten() {
+            let Some(relative) = process["bin"].as_str().and_then(|bin| bin.strip_prefix("interface://")) else {
+                continue;
+            };
+            let destination = interface_root.join(relative);
+            let Some(binary) = destination.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if owners.contains_key(binary) && !destination.exists() {
+                absent.entry(binary.to_string()).or_default().insert(destination.clone());
+            }
+        }
+    }
+    if absent.is_empty() {
+        return;
+    }
+    let mut build = Command::new("cargo");
+    build.current_dir(repo_root).args(["build", "--locked", "--message-format=json"]);
+    for package in absent.keys().map(|binary| &owners[binary]).collect::<BTreeSet<_>>() {
+        build.args(["-p", package]);
+    }
+    for binary in absent.keys() {
+        build.args(["--bin", binary]);
+    }
+    let output = build.output().unwrap_or_else(|err| panic!("failed to run cargo build: {err}"));
+    assert!(
+        output.status.success(),
+        "cargo build of imported life executables failed\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for line in output.stdout.split(|byte| *byte == b'\n') {
+        let Ok(message) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        let (Some(binary), Some(built)) = (message["target"]["name"].as_str(), message["executable"].as_str()) else {
+            continue;
+        };
+        if message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        for destination in absent.remove(binary).into_iter().flatten() {
+            let directory = destination.parent().expect("imported executable has a directory");
+            std::fs::create_dir_all(directory).expect("imported executable directory is creatable");
+            let staged = directory.join(format!(".{binary}.{}.tmp", std::process::id()));
+            std::fs::copy(built, &staged).expect("built life executable is copyable");
+            std::fs::rename(&staged, &destination).expect("built life executable is installable");
+        }
+    }
+    assert!(absent.is_empty(), "cargo build reported no executable for {:?}", absent.keys());
+}
+
 #[test]
 fn registry_process_wiring_resolves_to_executable_workspace_targets() {
     let repo_root = repo_root();
     let registry_root = repo_root.join("registry");
-    let binary_targets = cargo_binary_targets(&cargo_metadata(repo_root));
+    let metadata = cargo_metadata(repo_root);
+    materialize_absent_imported_executables(repo_root, &metadata);
+    let binary_targets = cargo_binary_targets(&metadata);
     let tools = octopus_tool_registry::load_tool_descriptors(&registry_root)
         .expect("tool descriptors must load");
     let mut tool_interfaces = BTreeSet::new();
