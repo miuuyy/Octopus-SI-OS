@@ -31,16 +31,22 @@ pub(crate) fn result_rebase(
     let call = correspondence(template)?.call_artifact;
     let context = effective_context_bindings(record, &config.checkpoints, &config.provider_interface)?;
     let instructions = instruction_ids(record, config, template, &context, &call)?;
-    let compared = |binding: &&ArtifactBinding| binding.id != call.id && !instructions.contains(&binding.id);
+    // A row that holds its call only as read-only evidence did not admit it as
+    // context. A write that publishes the call while its result waits adds it
+    // to the context like any other artifact, so the rebase names it in place.
+    let evidence_only = template.static_artifact_bindings.contains(&call.id);
     let admitted = row
         .artifact_bindings
         .iter()
-        .filter(compared)
+        .filter(|binding| binding.id != call.id && !instructions.contains(&binding.id))
         .map(|binding| &binding.id)
         .collect::<Vec<_>>();
     let mut position = 0;
     let mut rebase = Vec::new();
-    for binding in context.iter().filter(compared) {
+    for binding in context
+        .iter()
+        .filter(|binding| (evidence_only || binding.id != call.id) && !instructions.contains(&binding.id))
+    {
         if admitted.get(position) == Some(&&binding.id) {
             position += 1;
             continue;
@@ -426,6 +432,13 @@ mod tests {
         let joined = rows(&[&earlier, &call, &steer], &[&earlier, &call]);
         let row = joined.checkpoint(&CheckpointId::new("wait")).unwrap();
         assert_eq!(result_rebase(&joined, &config, template, row).unwrap(), vec![steer.clone()]);
+        let mut evidence = template.clone();
+        evidence.static_artifact_bindings.push(call.id.clone());
+        assert_eq!(result_rebase(&joined, &config, &evidence, row).unwrap(), vec![call.clone(), steer.clone()],
+            "a call held only as evidence joins the rebase at its place once a write publishes it");
+        let row = waited.checkpoint(&CheckpointId::new("wait")).unwrap();
+        assert_eq!(result_rebase(&waited, &config, &evidence, row).unwrap(), vec![steer.clone()],
+            "an evidence call that no write published stays out of the rebase");
         let first = address("operator.message", b"first");
         let lost = rows(&[&first, &steer], &[&first, &earlier, &call]);
         let row = lost.checkpoint(&CheckpointId::new("wait")).unwrap();

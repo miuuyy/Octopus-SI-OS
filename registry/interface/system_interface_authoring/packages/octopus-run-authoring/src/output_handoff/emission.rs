@@ -361,6 +361,7 @@ impl ProviderOutputHandoff {
             if snapshot_output {
                 carried_context = result_inputs::snapshot_carried_context(
                     &active.config, &manifest.label, &next_context, &next_static_context, &next_session_context,
+                    &active.session_snapshot_labels,
                 )?;
                 artifact = materialize_session_snapshot(
                     &artifact,

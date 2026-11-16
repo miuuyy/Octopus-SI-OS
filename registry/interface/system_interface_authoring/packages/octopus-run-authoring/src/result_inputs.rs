@@ -1596,7 +1596,7 @@ pub(super) fn checked_topology_advance(
 /// the run even when context was bound after their source was admitted.
 const FAILURE_SNAPSHOT_LABELS: [&str; 2] = ["turn.error", "turn.interrupted.result"];
 
-fn context_outside_snapshot(
+pub(super) fn context_outside_snapshot(
     config: &RunAuthoringConfig,
     future: &[ArtifactId],
     static_context: &[ArtifactId],
@@ -1618,34 +1618,34 @@ fn context_outside_snapshot(
         .collect()
 }
 
-pub(super) fn validate_snapshot_context(
-    config: &RunAuthoringConfig,
-    future: &[ArtifactId],
-    static_context: &[ArtifactId],
-    captured: &ResolvedSessionContext,
-) -> Result<(), String> {
-    let outside = context_outside_snapshot(config, future, static_context, captured);
-    if !outside.is_empty() {
-        return Err(format!(
-            "provider snapshot would discard newer explicitly bound context; revise the receiving checkpoint before a new admission (uncovered: {})",
-            outside.iter().map(ArtifactId::as_str).collect::<Vec<_>>().join(", ")
-        ));
-    }
-    Ok(())
-}
-
-/// Context a snapshot does not capture is context it would drop. An ordinary
-/// snapshot is refused; a failure snapshot keeps those bindings beside itself,
-/// so the next admission reads them after the snapshot.
+/// Context a snapshot does not capture is context it would drop. Those bindings
+/// stay bound beside the snapshot, so the next admission reads them after it.
+/// A refusal would not keep them in order either: the failure snapshot that
+/// closes a refused source carries the same bindings, and the answer is lost.
+/// An ordinary snapshot is refused in one case: an uncovered binding that is
+/// itself a session snapshot would bind two heads, and every later admission
+/// fails on two heads.
 pub(super) fn snapshot_carried_context(
     config: &RunAuthoringConfig,
     label: &str,
     future: &[ArtifactId],
     static_context: &[ArtifactId],
     captured: &ResolvedSessionContext,
+    session_snapshot_labels: &BTreeSet<String>,
 ) -> Result<Vec<ArtifactId>, String> {
+    let outside = context_outside_snapshot(config, future, static_context, captured);
     if FAILURE_SNAPSHOT_LABELS.contains(&label) {
-        return Ok(context_outside_snapshot(config, future, static_context, captured));
+        return Ok(outside);
     }
-    validate_snapshot_context(config, future, static_context, captured).map(|()| Vec::new())
+    if let Some(head) = outside.iter().find(|id| {
+        id.as_str()
+            .rsplit_once(':')
+            .is_some_and(|(label, _)| session_snapshot_labels.contains(label))
+    }) {
+        return Err(format!(
+            "provider snapshot would bind session snapshot '{}' beside itself; a run carries one current session snapshot",
+            head.as_str()
+        ));
+    }
+    Ok(outside)
 }

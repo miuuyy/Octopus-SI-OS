@@ -491,6 +491,24 @@ carries: the rebase then starts with that snapshot, and every reader proves that
 the snapshot carries the whole admitted context before building on it. Admitted
 context that no snapshot carries has left the run.
 
+A result row binds its own call. When the call's write has not yet published it,
+the row holds the call only as read-only evidence, and the call is not part of
+the row's admitted context. A write that publishes the call while its result
+waits adds it to the run's context like any other artifact, so the rebase names
+that call at its place. This is the earlier call of a parallel batch whose
+result arrives after its sibling's: the result's session context then holds both
+calls before their results, and the output that ends the turn covers them.
+
+A session snapshot output replaces the context it captures. A binding the
+snapshot does not capture is not dropped and does not refuse the output: it
+stays bound after the snapshot, in its bound order, and the next admission reads
+the snapshot first and that binding after it. This holds for an answer as for a
+failure or interruption closure, so context bound while a turn was in flight
+never ends the turn. One case is refused for an ordinary snapshot: an uncovered
+binding that is itself a session snapshot, because a run carries one current
+session snapshot and every later admission would fail on two. A failure or
+interruption closure is delivered even then, so that its source is closed.
+
 The provider declares conversational input formats in `private_config.input_messages`.
 Each label names the payload fields that carry its text, client observations,
 attachments and request identity. An admitted message uses the same decoder when

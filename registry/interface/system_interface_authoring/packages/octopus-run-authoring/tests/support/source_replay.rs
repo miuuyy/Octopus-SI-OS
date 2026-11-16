@@ -1143,17 +1143,25 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
         assert_eq!(state.context_artifacts, expected);
         assert_eq!(state.session_context.provider_interface, captured_provider);
         assert_eq!(serde_json::to_value(&state.session_context.artifacts).unwrap(), captured_artifacts);
-        assert!(result_inputs::validate_snapshot_context(&fixture.handoff.config, &state.context_artifacts, &[], &state.session_context).is_err());
+        let snapshots = BTreeSet::from(["reply".to_string(), "turn.error".to_string(), "turn.interrupted.result".to_string()]);
+        assert!(result_inputs::context_outside_snapshot(&fixture.handoff.config, &state.context_artifacts, &[], &state.session_context).contains(&b.id));
         let future = state.context_artifacts.clone();
-        assert!(result_inputs::validate_snapshot_context(&fixture.handoff.config, &future, &future, &state.session_context).is_ok());
-        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &state.context_artifacts, &[], &state.session_context).is_err(),
-            "an ordinary snapshot is still refused when it would drop context bound after its source");
-        let carried = result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &state.context_artifacts, &[], &state.session_context).unwrap();
+        assert!(result_inputs::context_outside_snapshot(&fixture.handoff.config, &future, &future, &state.session_context).is_empty());
+        let carried = result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &state.context_artifacts, &[], &state.session_context, &snapshots).unwrap();
         assert!(carried.contains(&b.id), "a terminal error keeps the context bound while its call waited");
         assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.interrupted.result", &state.context_artifacts, &[],
-            &state.session_context).unwrap(), carried);
-        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &future, &future, &state.session_context).unwrap().is_empty(),
+            &state.session_context, &snapshots).unwrap(), carried);
+        assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &state.context_artifacts, &[], &state.session_context, &snapshots).unwrap(),
+            carried, "an ordinary snapshot keeps the same bindings beside itself");
+        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &future, &future, &state.session_context, &snapshots).unwrap().is_empty(),
             "context the snapshot already covers is not carried twice");
+        let mut two_heads = state.context_artifacts.clone();
+        let stray = ArtifactId::new(format!("reply:{}", ContentHash::of_bytes(b"another head").to_hex()));
+        two_heads.push(stray.clone());
+        let refused = result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &two_heads, &[], &state.session_context, &snapshots).unwrap_err();
+        assert!(refused.contains(stray.as_str()), "an ordinary snapshot never binds a second session snapshot beside itself: {refused}");
+        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &two_heads, &[], &state.session_context, &snapshots).unwrap().contains(&stray),
+            "a failure snapshot still closes its source");
         carried
     };
     let answer = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("answer"), "reply", br#"{"text":"done"}"#).unwrap();
@@ -1167,6 +1175,50 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
     }], true, None, false, true, &[]).unwrap();
     assert!(result_inputs::validate_saved(&fixture.handoff.ctx, &record,
         &RunRecord::from_bytes(forked.content.as_bytes()).unwrap(), &fixture.handoff.config).is_err());
+    let mut answered_context = vec![artifact_identity(&fork, &fixture.handoff.var_dir).unwrap().artifact.id];
+    answered_context.extend(carried.iter().cloned());
+    let answered = fixture.handoff.author_run_with_bindings(&current, &answered_context, &[PreparedHandoff {
+        identity:artifact_identity(&fork, &fixture.handoff.var_dir).unwrap(),
+        output_checkpoint:fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone(),
+        verified_inputs:Vec::new(),
+    }], true, None, false, true, &[]).unwrap();
+    assert!(!answered.pending_handoff.deferred_publication);
+    let kept = answered.pending_handoff.context_publication.clone().expect("the answer publishes the context of the next admission");
+    let answered = RunRecord::from_bytes(answered.content.as_bytes()).unwrap();
+    let head = kept.iter().position(|id| id == &answered_context[0]).unwrap();
+    assert!(carried.iter().all(|id| kept.iter().position(|bound| bound == id).is_some_and(|position| position > head)),
+        "an ordinary answer keeps context bound while its call waited, after the snapshot that does not cover it");
+    result_inputs::validate_saved(&fixture.handoff.ctx, &record, &answered, &fixture.handoff.config)
+        .expect("an ordinary answer that keeps newer context beside its snapshot is a valid saved record");
+    let limits = fixture.handoff.ctx.required_host_io_limits().unwrap();
+    let answer_ref = artifact_identity(&fork, &fixture.handoff.var_dir).unwrap().artifact;
+    let snapshot_labels = BTreeSet::from(["reply".to_string()]);
+    let admit = |order: &[ArtifactId]| -> Result<Vec<ArtifactId>, String> {
+        let mut static_context = Vec::new();
+        let mut session = ResolvedSessionContext { provider_interface: "provider".into(), artifacts: Vec::new() };
+        let mut head = None;
+        for id in order {
+            let (reference, payload, provenance) = if id == &answer_ref.id {
+                (answer_ref.clone(), fork.read_payload_bytes().unwrap(),
+                    BoundArtifactProvenance { movement_seq: Some(1), provider_arrival_seq: Some(1) })
+            } else {
+                let reference = ArtifactRef { id: id.clone(),
+                    content: ContentHash::from_hex(id.as_str().rsplit(':').next().unwrap()).unwrap() };
+                let (_, payload) = read_pinned_artifact_from_cache(&fixture.handoff.ctx.blobs_dir, limits, &reference)?;
+                (reference, payload, BoundArtifactProvenance::default())
+            };
+            collect_bound_context_from_cache(&fixture.handoff.ctx.blobs_dir, limits, &mut static_context, &mut session, &mut head,
+                &reference, &payload, provenance, &snapshot_labels, &"provider".into())?;
+        }
+        Ok(session.artifacts.into_iter().map(|entry| entry.source_artifact.id).collect())
+    };
+    let read = admit(&kept[head..]).expect("the next admission reads the answer and the context kept beside it");
+    let answer_at = read.iter().position(|id| id == &answer_ref.id).unwrap();
+    assert_eq!(&read[answer_at + 1..], carried.as_slice(), "the kept context follows the answer in its bound order");
+    let mut reversed = carried.clone();
+    reversed.push(answer_ref.id.clone());
+    assert!(admit(&reversed).unwrap_err().contains("before its current session snapshot"),
+        "context bound ahead of the snapshot is still refused at admission");
     let failure = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("failure"), "turn.error", br#"{"message":"the turn failed"}"#).unwrap();
     let failure = materialize_session_snapshot(&failure, &captured, None).unwrap();
     let failure_identity = artifact_identity(&failure, &fixture.handoff.var_dir).unwrap();
@@ -2236,8 +2288,8 @@ async fn parallel_results_consume_through_recorded_rebase() {
     let (admitted, _, _) = recover_source_session_context_from_cache(&restarted.ctx.blobs_dir, limits, &restarted.session, &record,
         &restarted.config, b, &[], &restarted.context_output_labels, &restarted.session_snapshot_labels).unwrap();
     let context = restarted.published_context_artifacts(&record, &restarted.config).unwrap();
-    assert!(result_inputs::validate_snapshot_context(&restarted.config, &context, &[], &admitted).is_err(),
-        "the admitted row alone would discard newer explicitly bound context");
+    assert!(!result_inputs::context_outside_snapshot(&restarted.config, &context, &[], &admitted).is_empty(),
+        "the admitted row alone does not cover context bound after it");
     let (recovered, _, _) = recover_source_session_context_from_cache(&restarted.ctx.blobs_dir, limits, &restarted.session, &record,
         &restarted.config, b, &expected, &restarted.context_output_labels, &restarted.session_snapshot_labels).unwrap();
     assert!(expected.iter().all(|reference| recovered.artifacts.iter().any(|entry| &entry.source_artifact == reference)));
@@ -2255,8 +2307,8 @@ async fn parallel_results_consume_through_recorded_rebase() {
         let positions = expected.iter().chain([&b_result]).map(|reference| state.session_context.artifacts.iter()
             .position(|entry| &entry.source_artifact == reference).unwrap()).collect::<Vec<_>>();
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "rebase entries precede their consumed source");
-        result_inputs::validate_snapshot_context(&restarted.config, &state.context_artifacts, &state.static_context_artifacts,
-            &state.session_context).unwrap();
+        assert_eq!(result_inputs::context_outside_snapshot(&restarted.config, &state.context_artifacts, &state.static_context_artifacts,
+            &state.session_context), Vec::<ArtifactId>::new());
     }
 
     let steer_file = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("steer"), "tool.result",
@@ -2276,6 +2328,80 @@ async fn parallel_results_consume_through_recorded_rebase() {
     assert_eq!(std::fs::read(&fixture.handoff.run_path).unwrap(), written);
     assert!(fixture.handoff.state.try_lock().unwrap().result_rebase.as_ref().unwrap().contains(&steer));
     assert_eq!(carriers(&fixture), 0, "no result is delivered twice");
+}
+
+#[tokio::test]
+async fn an_earlier_parallel_call_whose_result_arrives_last_is_covered_by_the_answer_that_ends_its_turn() {
+    let mut fixture = parallel_call_fixture();
+    fixture.handoff.context_output_labels.insert("reply".into());
+    fixture.handoff.session_snapshot_labels.insert("reply".into());
+    // The first call of the pair leaves on a non-terminal write: its result row
+    // holds it as read-only evidence, and its publication adds it to the context.
+    let before = std::fs::read(&fixture.handoff.run_path).unwrap();
+    let record = RunRecord::from_bytes(&before).unwrap();
+    let mut context = effective_context_artifacts(&record, &fixture.handoff.config).unwrap();
+    append_artifact(&mut context, fixture.input.id.clone());
+    let file = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("call-read-a"), "tool.call",
+        br#"{"label":"tool.call","tool":"read","arguments":{},"correlation_id":"read-a"}"#).unwrap();
+    let identity = artifact_identity(&file, &fixture.handoff.var_dir).unwrap();
+    let first = identity.artifact.clone();
+    append_artifact(&mut context, first.id.clone());
+    let authored = fixture.handoff.author_run_with_bindings(&before, &context, &[PreparedHandoff { identity, verified_inputs: Vec::new(),
+        output_checkpoint: fixture.handoff.config.checkpoints.iter().find(|cp| cp.name == "tool").unwrap().clone() }],
+        true, None, false, false, &[]).unwrap();
+    fixture.install(&authored);
+    fixture.edge(authored.content.as_bytes(), &authored.pending_handoff.items[0].checkpoint.id, &file, "worker".into(), MovementKind::InterfaceArrival);
+    fixture.mark_item(&authored, 0);
+    if authored.pending_handoff.context_publication.is_some() && !authored.pending_handoff.deferred_publication {
+        fixture.publish(&authored);
+    }
+    let record = fixture.reload_definition();
+    let waiting = fixture.result_inputs();
+    assert_eq!(waiting.len(), 1);
+    assert!(waiting[0].static_artifact_bindings.contains(&first.id), "the earlier call is evidence of its result row, not admitted context");
+    assert!(provider_context_bindings(&record, &"provider".into()).unwrap().iter().any(|binding| binding.id == first.id),
+        "its publication adds the call to the run context");
+    let second = fixture.calls(&[("search", "search", "search-b")]).1.remove(0);
+    let (later, later_result) = fixture.admit_result(&second, "search", "search-b");
+    let (earlier, earlier_result) = fixture.admit_result(&first, "read", "read-a");
+
+    fixture.select_source(later);
+    assert_eq!(fixture.handoff.recover_source().await.unwrap(), ProviderSourceRecovery::Process);
+    let update = fixture.consume_result(&later_result, "interface.context.updated", true);
+    let update = ArtifactRef { id: update.pending_handoff.items[0].artifact_id.clone(),
+        content: ContentHash::from_hex(&update.pending_handoff.items[0].artifact_content_hash).unwrap() };
+
+    fixture.select_source(earlier);
+    assert_eq!(fixture.handoff.recover_source().await.unwrap(), ProviderSourceRecovery::Process);
+    let expected = vec![first.clone(), second.clone(), later_result.clone(), update.clone()];
+    let mut state = fixture.handoff.state.try_lock().unwrap().clone();
+    assert_eq!(state.result_rebase.as_ref(), Some(&expected), "the published call opens the rebase of its own result");
+    let payload = std::fs::read(fixture.handoff.var_dir.join("result-read-a")).ok();
+    drop(payload);
+    let (_, result_payload) = read_pinned_artifact_from_cache(&fixture.handoff.ctx.blobs_dir,
+        fixture.handoff.ctx.required_host_io_limits().unwrap(), &earlier_result).unwrap();
+    append_session_payload(&mut state.session_context, "read.result", &result_payload, &earlier_result, Some(earlier), "exact result input").unwrap();
+    append_artifact(&mut state.context_artifacts, earlier_result.id.clone());
+    let positions = [&first, &second, &later_result, &update, &earlier_result].map(|reference| state.session_context.artifacts.iter()
+        .position(|entry| &entry.source_artifact == reference).unwrap());
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "the session keeps both calls before their results");
+    assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &state.context_artifacts,
+        &state.static_context_artifacts, &state.session_context, &fixture.handoff.session_snapshot_labels).unwrap(), Vec::<ArtifactId>::new(),
+        "the answer that ends the turn covers every binding, so nothing is left beside it");
+
+    let current = std::fs::read(&fixture.handoff.run_path).unwrap();
+    let before_answer = RunRecord::from_bytes(&current).unwrap();
+    let answer = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("answer"), "reply", br#"{"label":"reply","text":"done"}"#).unwrap();
+    let snapshot = materialize_session_snapshot(&answer, &state.session_context, state.session_snapshot_head.as_ref()).unwrap();
+    let identity = artifact_identity(&snapshot, &fixture.handoff.var_dir).unwrap();
+    let carrier = identity.artifact.clone();
+    let answered = fixture.handoff.author_run_with_bindings(&current, &[carrier.id.clone()], &[PreparedHandoff { identity, verified_inputs: Vec::new(),
+        output_checkpoint: fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone() }],
+        true, None, false, true, &[]).unwrap();
+    assert_eq!(answered.pending_handoff.rebase, expected, "the answer records the rebase it consumed its result against");
+    result_inputs::validate_saved(&fixture.handoff.ctx, &before_answer, &RunRecord::from_bytes(answered.content.as_bytes()).unwrap(), &fixture.handoff.config)
+        .expect("the answer that ends a turn on the earlier call's result is a valid saved record");
+    assert!(fixture.result_inputs().len() <= 1);
 }
 
 #[tokio::test]
