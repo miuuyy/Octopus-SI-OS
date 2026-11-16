@@ -1,8 +1,3 @@
-//! Runs one property over generated cases.
-//!
-//! The cases come from a fixed seed, so a failure names the same minimal case
-//! on every machine. `PROPTEST_RNG_SEED` and `PROPTEST_CASES` widen the search.
-
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed, TestRunner};
 

@@ -21,10 +21,6 @@ struct WriterCallDirectory {
     unclassified: BTreeSet<PathBuf>,
 }
 
-/// Every entry of a hand-in directory with its size, modification time and,
-/// on Unix, its inode. The directory's own metadata is not enough: its length
-/// is constant on common filesystems and its modification time is too coarse
-/// to see a file removed and another created within one clock tick.
 type WriterCallDirectoryFingerprint = Vec<(std::ffi::OsString, u64, std::time::SystemTime, u64)>;
 
 impl WriterCallIndex {

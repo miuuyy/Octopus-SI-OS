@@ -136,8 +136,6 @@ export async function observeChatReply(input: {
           artifactId: reply.artifactId,
           eventData: reply.eventData,
         },
-        // This path reads the task history and reports no live artifacts, so the turn's own messages travel with its
-        // terminal: the caller decides from the same read that showed the turn had ended.
         messages: messages.filter((message) => message.movementSeq > input.afterSeq),
       };
     }

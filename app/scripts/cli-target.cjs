@@ -1,7 +1,3 @@
-// The targets a CLI distribution is built for, and what each one carries.
-// A distribution is built on the machine it targets: the provider bridge and
-// the native helpers are compiled for the host, so a cross build would mix
-// architectures inside one package.
 const TARGETS = Object.freeze({
   "aarch64-apple-darwin": Object.freeze({ platform: "darwin", architecture: "arm64" }),
   "x86_64-apple-darwin": Object.freeze({ platform: "darwin", architecture: "x64" }),
@@ -10,10 +6,6 @@ const TARGETS = Object.freeze({
 });
 const SUPPORTED_TARGETS = Object.freeze(Object.keys(TARGETS).sort());
 
-// macOS packages clone files, sign every executable and carry the client's
-// native file helper, the desktop helper and the pinned Codex distribution.
-// A Linux package is headless: it carries the runtime, the registry and the
-// provider executables, and none of those macOS parts.
 const COMPONENTS = Object.freeze({
   darwin: Object.freeze({ client_filesystem: true, desktop_native: true, managed_codex: true, code_signing: true }),
   linux: Object.freeze({ client_filesystem: false, desktop_native: false, managed_codex: false, code_signing: false }),
@@ -36,7 +28,6 @@ function resolveCliTarget({ platform = process.platform, architecture = process.
   return Object.freeze({ triple: host, ...TARGETS[host], components: COMPONENTS[platform] });
 }
 
-// Reads the one optional --target=<triple> argument and returns the rest.
 function takeTargetArgument(argv) {
   let target = null;
   const rest = [];

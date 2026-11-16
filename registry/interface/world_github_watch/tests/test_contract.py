@@ -80,7 +80,6 @@ class Contract(unittest.TestCase):
         self.assertEqual(self.w.read("state")["watermarks"]["issue"]["ids"], ["1", "2"])
         self.restart()
         self.assertEqual(self.w.prepare(snapshot(event(), event(2)), T1)[0], 0)
-        # Even edits retaining the same timestamp must not disappear at a watermark.
         self.assertEqual(self.w.prepare(snapshot(event(body="edited"), event(2)), T1)[0], 1)
 
     def test_refusal_then_repair_retains_manifest_and_watermark(self):

@@ -1598,7 +1598,6 @@ pub struct EmbeddedRuntime {
 }
 
 impl EmbeddedRuntime {
-    /// Ends the verifier processes this runtime's admissions still wait for.
     pub fn cancel_running_verifier_processes(&self) {
         self.verifier_cancellation.cancel_running();
     }

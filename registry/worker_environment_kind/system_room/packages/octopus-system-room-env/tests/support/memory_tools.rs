@@ -91,7 +91,6 @@ impl Fixture {
         self.artifacts.join(format!("artifact-memory-test/entries/{id}.json"))
     }
 
-    /// Stores one note as the collection holds it, under an id whose time is chosen by the test.
     fn plant(&self, id: &str, title: &str, text: &str, ee: &str) {
         let entry = json!({"schema_version":1,"id":id,"title":title,"description":headline(text, MAX_DESCRIPTION_CHARS),
             "applicability":APPLICABILITY,"state":"active","scope":{"ee_ids":[ee]},"content":{"text":text},"selection":{}});

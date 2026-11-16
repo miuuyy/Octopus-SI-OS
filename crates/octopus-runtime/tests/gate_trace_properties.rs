@@ -1,15 +1,3 @@
-//! Generated traces through the checkpoint admission gate.
-//!
-//! A checkpoint that waits for a batch of results is driven with the results
-//! in any order, with repeated and unrequired arrivals, with the runtime
-//! replaced by one rebuilt from the recorded movements, and with the run
-//! record edited between arrivals. A small model states what the gate owes on
-//! every step; the trace is then run again to show the outcome is a function
-//! of the trace alone.
-//!
-//! The cases come from a fixed seed, so a failure names the same minimal trace
-//! on every machine. `PROPTEST_RNG_SEED` and `PROPTEST_CASES` widen the search.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -147,7 +135,6 @@ fn arrival(label: &str) -> InterfaceArtifactAdmission {
     }
 }
 
-/// The two ledger rows an admitted arrival leaves: the arrival and its mark.
 fn proof_rows(observation: &Observation, label: &str, seq: u64) -> [Movement; 2] {
     let runtime = observation.invocation_metadata.runtime.as_ref().unwrap();
     let mark = &observation.admitted_mark_outcomes[0];
@@ -188,9 +175,6 @@ impl Scratch {
         Self(dir)
     }
 
-    /// Writes the run record: one checkpoint that waits for `batch` results.
-    /// `contract` is part of every requirement; `presentation` is state another
-    /// interface keeps in the record and no part of the checkpoint.
     fn write_record(&self, batch: usize, contract: bool, presentation: u32) {
         let params = if contract { json!({"expected": "changed"}) } else { json!({}) };
         let record = json!({
@@ -229,15 +213,10 @@ impl Drop for Scratch {
 
 #[derive(Clone, Debug)]
 enum Step {
-    /// A result of the batch arrives; a second arrival of one result is a replay.
     Arrive(usize),
-    /// An artifact no requirement of the checkpoint names.
     Stray,
-    /// The process dies; a new runtime is rebuilt from the recorded movements.
     Coma,
-    /// Another interface edits its own state in the run record.
     EditState,
-    /// The checkpoint's requirements are rewritten in place, or restored.
     EditContract,
 }
 
@@ -248,8 +227,6 @@ struct Trace {
     steps: Vec<Step>,
 }
 
-/// Every result of the batch arrives once in a shuffled order; the other
-/// steps, including replays of any result, fall anywhere between them.
 fn trace() -> impl Strategy<Value = Trace> {
     (1..=MAX_BATCH, any::<bool>()).prop_flat_map(|(batch, client_granted)| {
         let order = Just((0..batch).collect::<Vec<_>>()).prop_shuffle();
@@ -276,8 +253,6 @@ fn trace() -> impl Strategy<Value = Trace> {
     })
 }
 
-/// Runs one trace against the gate and the model, returning what each step
-/// observed.
 fn run(trace: &Trace) -> Result<Vec<String>, TestCaseError> {
     let scratch = Scratch::new();
     let executor = tokio::runtime::Builder::new_current_thread().build().unwrap();
@@ -285,8 +260,6 @@ fn run(trace: &Trace) -> Result<Vec<String>, TestCaseError> {
     scratch.write_record(trace.batch, contract, presentation);
     let mut runtime = gate(&scratch.0, trace.client_granted);
     let mut rows = Vec::<Movement>::new();
-    // The model: which results were admitted, each with the run-record
-    // snapshot it was admitted under, and the contract they were admitted under.
     let mut admitted = BTreeMap::<usize, String>::new();
     let mut admitted_contract = None;
     let mut completions = 0;
@@ -328,10 +301,6 @@ fn run(trace: &Trace) -> Result<Vec<String>, TestCaseError> {
                     observation.invocation_metadata.checkpoint_admission.as_ref().map(|admission| admission.complete),
                     Some(complete)
                 );
-                // Conservation: the admission that closes the checkpoint hands
-                // on every result of the batch, in the order the checkpoint
-                // names them, each under the snapshot it arrived under. Before
-                // that nothing leaves; an ungranted target is refused whole.
                 let released = observation.outbound_artifact_transfers.iter().map(|transfer| {
                     (transfer.artifact.id.as_str().to_string(), transfer.to_interface.as_str().to_string(),
                         transfer.invocation_metadata.runtime.as_ref().and_then(|runtime| runtime.run_record_hash.clone()))
@@ -362,7 +331,6 @@ fn run(trace: &Trace) -> Result<Vec<String>, TestCaseError> {
             }
             Step::Coma => {
                 runtime = gate(&scratch.0, trace.client_granted);
-                // Rebuilding from the same rows a second time changes nothing.
                 for _ in 0..2 {
                     if let Err(error) = runtime.reconstruct_spent_checkpoints_from_movements(&rows) {
                         return Err(TestCaseError::fail(format!("recorded movements did not replay: {error}")));
@@ -390,7 +358,6 @@ fn run(trace: &Trace) -> Result<Vec<String>, TestCaseError> {
 fn a_batch_of_results_is_admitted_once_in_any_order_across_replays_restarts_and_edits() {
     check(128, trace(), |trace| {
         let observed = run(&trace)?;
-        // The same trace against a fresh gate observes the same thing.
         prop_assert_eq!(&observed, &run(&trace)?);
         Ok(())
     });

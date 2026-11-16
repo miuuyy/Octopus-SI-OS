@@ -1,17 +1,3 @@
-//! Bounded descent from a remembered note to the call that saved it.
-//!
-//! A note names its evidence as artifact references. This module follows only
-//! the references the note itself records, and describes one only when it is
-//! that note's own saving call: a `tool.call` whose `arguments.note` is the
-//! note's text. Any other reference is reported as withheld, so a note whose
-//! evidence list was written to point at an unrelated artifact does not turn
-//! the memory door into a reader of that artifact. The blob store is read by
-//! content hash, each blob is checked against the hash that names it, and the
-//! preview is a bounded prefix cut on a character boundary. Host paths recorded
-//! in a manifest are never returned. What the caller's provider recorded beside
-//! the arguments, such as the run and turn that made the call, is returned as a
-//! separate bounded `origin` text, because a long note fills the preview alone.
-
 use std::io::Read;
 use std::path::Path;
 
@@ -38,8 +24,6 @@ pub(crate) fn preview_bound(requested: Option<usize>) -> Result<usize, String> {
     }
 }
 
-/// Describes the evidence one note records. `blobs` is the artifact blob store
-/// this call may read, absent when the call holds no grant on it.
 pub(crate) fn describe(blobs: Option<&Path>, note: Option<&str>, evidence: &[ArtifactRef], preview_bytes: usize) -> Value {
     let artifacts = evidence
         .iter()
@@ -126,7 +110,6 @@ fn resolve(blobs: Option<&Path>, note: Option<&str>, artifact: &ArtifactRef, pre
     }))
 }
 
-/// Reads one whole blob and proves it is the content its hash names.
 fn blob(blobs: &Path, hash: &ContentHash) -> Result<Vec<u8>, Refusal> {
     let path = blobs.join(hash.to_hex());
     let metadata = match std::fs::symlink_metadata(&path) {
@@ -152,8 +135,6 @@ fn blob(blobs: &Path, hash: &ContentHash) -> Result<Vec<u8>, Refusal> {
     Ok(bytes)
 }
 
-/// The longest prefix of at most `limit` bytes that ends on a character
-/// boundary, or nothing when the bytes are not UTF-8 text.
 fn prefix(bytes: &[u8], limit: usize) -> Option<&str> {
     let cut = &bytes[..bytes.len().min(limit)];
     match std::str::from_utf8(cut) {

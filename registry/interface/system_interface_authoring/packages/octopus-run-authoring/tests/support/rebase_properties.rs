@@ -1,9 +1,3 @@
-//! The rebase of a waiting result, over generated context.
-//!
-//! A result row admitted some context. While the call waited, more was bound
-//! around it. The rebase is exactly what was added, in order; context that
-//! left or changed order is refused.
-
 use super::*;
 use crate::property_check::check;
 use proptest::prelude::*;
@@ -47,9 +41,7 @@ fn record(config: &RunAuthoringConfig, context: &[ArtifactRef], admitted: &[Arti
 #[derive(Clone, Debug)]
 enum Change {
     None,
-    /// One admitted artifact is no longer bound.
     Lose(prop::sample::Index),
-    /// Two admitted artifacts changed places.
     Swap(prop::sample::Index, prop::sample::Index),
 }
 
@@ -69,7 +61,6 @@ fn a_result_rebase_is_exactly_what_was_bound_while_its_call_waited() {
     ));
     check(256, case, |(admitted, added, evidence, published, change)| {
         let admitted = (0..admitted).map(|index| address("operator.message", &[b'a', index as u8])).collect::<Vec<_>>();
-        // The context: the admitted artifacts in order, new ones in every gap.
         let mut context = Vec::new();
         let mut rebase = Vec::new();
         for (gap, count) in added.iter().enumerate() {
@@ -80,7 +71,6 @@ fn a_result_rebase_is_exactly_what_was_bound_while_its_call_waited() {
             }
             context.extend(admitted.get(gap).cloned());
         }
-        // A write may publish the call into the context while its result waits.
         if let Some(at) = published {
             let at = at.index(context.len() + 1);
             context.insert(at, call.clone());
@@ -102,7 +92,6 @@ fn a_result_rebase_is_exactly_what_was_bound_while_its_call_waited() {
         match change {
             Change::None => {
                 prop_assert_eq!(rebased(&context), Ok(rebase.clone()));
-                // Consuming against the same record again names the same rebase.
                 prop_assert_eq!(rebased(&context), Ok(rebase));
             }
             Change::Lose(_) if admitted.is_empty() => {}
@@ -113,7 +102,6 @@ fn a_result_rebase_is_exactly_what_was_bound_while_its_call_waited() {
                 if lost + 1 < admitted.len() {
                     prop_assert!(outcome.as_ref().is_err_and(|error| error.contains("reordered")), "{:?}", outcome);
                 } else if lost == 0 && !rebase.is_empty() {
-                    // The whole admitted context was replaced by newer context.
                     prop_assert_eq!(outcome, Ok(rebase));
                 } else {
                     prop_assert!(outcome.as_ref().is_err_and(|error| error.contains("left the run")), "{:?}", outcome);

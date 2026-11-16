@@ -19,7 +19,6 @@ test("a document is replaced by a complete new one through a renamed sibling", (
   assert.equal(first.mode & 0o777, 0o600);
   writeJsonFileAtomicallySync(file, { bounds: { x: 2 } });
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { bounds: { x: 2 } });
-  // The target is never opened for writing: the new document is another file renamed over it.
   assert.notEqual(fs.statSync(file).ino, first.ino);
   assert.deepEqual(fs.readdirSync(root), ["window-state.json"]);
   writeJsonFileAtomicallySync(path.join(root, "shared.json"), [], { mode: 0o644 });
@@ -36,14 +35,12 @@ test("a failed write keeps the previous document and leaves no temporary file", 
   assert.throws(() => writeJsonFileAtomicallySync(file, cyclic), TypeError);
   assert.throws(() => writeJsonFileAtomicallySync(file, undefined), /no JSON representation/);
 
-  // The rename fails after the temporary file was written completely.
   const occupied = path.join(root, "occupied.json");
   fs.mkdirSync(occupied);
   fs.writeFileSync(path.join(occupied, "child"), "");
   assert.throws(() => writeJsonFileAtomicallySync(occupied, { saved: false }));
   assert.deepEqual(fs.readdirSync(occupied), ["child"]);
 
-  // The write itself fails after the temporary file was created.
   const write = fs.writeFileSync;
   t.mock.method(fs, "writeFileSync", (target, ...rest) => {
     if (typeof target === "number") throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });

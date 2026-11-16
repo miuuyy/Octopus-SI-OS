@@ -2359,8 +2359,6 @@ function windowAppearancePath() {
   return path.join(app.getPath("userData"), "window-appearance.json");
 }
 
-// Window documents are read at the next launch. A failed save keeps the
-// previous complete document and is recorded, never left half written.
 function saveWindowDocument(file, value, event) {
   try {
     writeJsonFileAtomicallySync(file, value);

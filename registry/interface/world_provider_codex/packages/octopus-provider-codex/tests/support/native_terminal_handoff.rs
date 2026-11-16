@@ -437,8 +437,6 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     std::sync::Arc::try_unwrap(live).ok().expect("the woken driver is no longer shared").shutdown().await.unwrap();
     native.server.await.unwrap();
     }
-    // Admits the result of one outstanding call on its own result row and
-    // returns the source envelope, its movement sequence and the pinned record.
     fn admit_call_result(
         ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,
         tool:&str,call:&ArtifactRef,correlation:&str,
@@ -453,10 +451,6 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let envelope=source_envelope(ctx,root,&row,file);let seq=append(ctx,row);
         (envelope,seq,pinned)
     }
-    // Two calls leave in one provider batch: the first on a non-terminal write,
-    // the second on the terminal one. The second call's result is consumed
-    // first, and the turn closes on the first call's result with an answer
-    // (phase 28) or an error (phase 29).
     #[allow(clippy::too_many_arguments)]
     async fn earlier_parallel_result_case(
         ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,run:&RunId,

@@ -33,8 +33,6 @@ Object.defineProperty(w.navigator, "locks", { configurable: true, value: {
 function memoryIndexedDb() {
   const stores = new Map();
   const later = (callback) => setTimeout(callback, 0);
-  // Transactions run one after another in the order they were created, as IndexedDB orders read-write transactions
-  // over one store: a later one reads only what the earlier one committed, so two writers cannot lose an update.
   let settled = Promise.resolve();
   const database = {
     createObjectStore: (name) => { stores.set(name, new Map()); }, close() {},
@@ -402,7 +400,6 @@ test("right-pane navigation opens the current task without changing the left pan
   stubIn("secondary", "scheduled").props.onSelectChat("run-1");
   await until(() => stubIn("secondary", "chat")?.dataset.run === "run-1", "the trigger's existing task did not open on the right");
   assert.equal(stubIn("primary", "chat").dataset.run, "run-1");
-  // The replaced launcher tab stays mounted and inert while its exit animation runs, so the strip is read once it settles.
   await until(() => secondaryTabs().map((tab) => tab.textContent).join() === "Task run-1,Triggers", () => `the launcher was not replaced by the surface it opened: ${secondaryTabs().map((tab) => tab.textContent)}`);
 
   stubIn("primary", "chat").props.workspace.selectRun("run-2");

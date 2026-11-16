@@ -91,7 +91,6 @@ class API:
                 raw = response.read(8 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             retry = None
-            # Never retain response text, request headers, or exception reprs.
             try:
                 if error.headers.get("Retry-After"):
                     retry = time.time() + min(86400, max(300, int(error.headers["Retry-After"])))
@@ -119,7 +118,6 @@ class API:
             if collection:
                 if not isinstance(value, dict) or type(value.get("total_count")) is not int:
                     raise PollError("invalid_rest_collection")
-                # GitHub's filtered workflow-run listing exposes at most 1,000.
                 if value["total_count"] > 1000:
                     raise PollError("workflow_result_limit")
                 value = value.get(collection)

@@ -2,10 +2,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
-// A document rewritten in place is truncated first, so a crash, a full disk or
-// a reader in the middle sees a partial file. A complete temporary sibling
-// renamed over the target keeps the previous complete document until the new
-// one is on disk. A failure leaves the target untouched and no temporary file.
 function writeJsonFileAtomicallySync(file, value, { mode = 0o600 } = {}) {
   const text = JSON.stringify(value, null, 2);
   if (typeof text !== "string") throw new TypeError(`${path.basename(file)} has no JSON representation`);

@@ -40,7 +40,6 @@ def main():
         signal.signal(sig, lambda *_: stop.set())
     b.signal_ready()
     try:
-        # Preserve rate-limit backoff across process restarts.
         stop.wait(max(0, watcher.health.get("next_poll_at", 0) - time.time()))
         while not stop.is_set():
             try:
@@ -56,7 +55,6 @@ def main():
             delay = watcher.cycle(API(c, token))
             stop.wait(max(c["poll_seconds"], delay))
     except Exception:
-        # A malformed state or uncertain protocol is not a successful poll.
         watcher.status("failed", error="watch_boundary_failed",
                        pending=watcher.read("pending") is not None)
         raise RuntimeError("github watcher stopped; inspect private health.json; pending work retained") from None

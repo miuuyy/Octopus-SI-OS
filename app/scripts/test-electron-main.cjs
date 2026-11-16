@@ -573,7 +573,6 @@ test("window appearance switches the macOS backdrop between translucent vibrancy
   assert.equal(main.electron.module.nativeTheme.themeSource, "dark");
   const appearanceFile = path.join(main.world.userData, "window-appearance.json");
   assert.deepEqual(JSON.parse(fs.readFileSync(appearanceFile, "utf8")), { preference: "dark" });
-  // A save that cannot complete keeps the previous complete document and is logged.
   fs.chmodSync(main.world.userData, 0o500);
   try {
     main.sendSync("octopus:window-appearance", win, { theme: "light", translucent: true, preference: "light" });

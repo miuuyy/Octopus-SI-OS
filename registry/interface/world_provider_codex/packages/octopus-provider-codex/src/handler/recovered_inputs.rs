@@ -198,12 +198,9 @@ pub(crate) fn interrupted_transport_output(
     )
 }
 
-/// Where a durable pending continuity stands against the context generation
-/// its result is admitted under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingGeneration {
     Current,
-    /// Checked authoring advanced the provider context after the call left.
     Behind,
 }
 

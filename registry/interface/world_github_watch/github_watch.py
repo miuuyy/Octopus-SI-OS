@@ -73,7 +73,6 @@ class Watcher:
             candidate["resources"][key] = {"digest": event["digest"], "updated_at": stamp}
             if previous is None or (old and old["digest"] == event["digest"]):
                 continue
-            # A previously invisible old resource is baseline, not new activity.
             if old is None and stamp < candidate["seeded_at"]:
                 continue
             if event["kind"] in COMMENT_KINDS and (event["actor"] or "").casefold() in ignored:
@@ -129,7 +128,6 @@ class Watcher:
                         if admitted is None:
                             raise RuntimeError("duplicate verdict without ledger admission") from None
                     else:
-                        # Retain the same immutable manifest; repair the binding/policy, not the event.
                         self.status("delivery_refused", error="runtime_refused",
                                     refusal_reason=refusal.reason, pending=True)
                         return False
@@ -146,7 +144,6 @@ class Watcher:
         return True
 
     def cycle(self, api):
-        # Never replace an uncertain/refused batch with a fresher poll.
         if not self.deliver():
             return self.c["poll_seconds"]
         observed_at = now_iso()

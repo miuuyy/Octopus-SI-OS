@@ -2199,9 +2199,6 @@ export function useChatWorkspace(
           submittedToRuntime = true;
           onAdmitted?.();
           if (!turn.runId && queueOwner.active && queueOwner.id === owner && deliveryScopeCurrent()) {
-            // The runtime has named the new task. What was written in its composer moves to it now, before any wait:
-            // a ledger change can list the task while this delivery is still settling, and a task opened before its
-            // draft arrived would show an empty composer and then have the draft discarded.
             completeSubmissionIntent(turn.runId, messageId);
             migrateDraft("", submitted.runId);
           }
@@ -2363,8 +2360,6 @@ export function useChatWorkspace(
             await replaceQueuedTurns((items) => items.filter((item) => item.id !== turn.queueId));
           }
           const queued = nextQueuedTurn(submittedRunKey);
-          // A stop is read from the messages the observation ended on. Deciding it here, before this turn's queue
-          // entry is gone, keeps a follow-up from being left neither paused nor sendable.
           const resumeRequired = operatorTurnResumeAvailable(observedReply.messages ?? liveMessages, false);
           if (queued && resumeRequired) {
             await replacePausedQueueRunKeys((current) => current.includes(submittedRunKey)

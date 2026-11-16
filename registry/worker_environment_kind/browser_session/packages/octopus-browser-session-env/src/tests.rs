@@ -614,9 +614,6 @@ async fn spawn_context_cdp_mock(context_available: bool, target_available: bool,
     (discovery_url, ws)
 }
 
-/// Stack of the thread that runs the one-session scenario. The scenario is a single long async body, which an
-/// unoptimised build polls in one frame of about a megabyte on top of the room's own dispatch frame; with the wider
-/// types a whole-workspace build selects, that exceeds the stack a test thread gets by default and aborts the binary.
 const ONE_SESSION_SCENARIO_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 #[test]

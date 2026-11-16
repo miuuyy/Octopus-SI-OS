@@ -179,7 +179,6 @@ async function main() {
   assert.deepEqual(runtime.state.requests, ["status"]);
   assert.equal(buildInfo(layout.live).revision, "live");
 
-  // The default reader guards runs without a client chat surface through the ledger.
   fakeProjectionBundle(layout, [{ run_id: "me" }], [{ run_id: "me", turn_open: true, turn_state: "working" }]);
   ledger = fakeLedger(runtime.home);
   ledger.dispatch("sensor_triggered", "turn/start", 5);
@@ -226,7 +225,6 @@ async function main() {
   assert.equal(buildInfo(layout.failed).revision, "staging");
   await runtime.close();
 
-  // One failure before, one failure after, but another interface: a regression, not an equal count.
   layout = fakeLayout();
   runtime = await fakeRuntime([], [[failure("world_a")], [failure("world_b")], [failure("world_a")]]);
   result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle });
@@ -246,7 +244,6 @@ async function main() {
   assert.deepEqual(result.new_interface_failures, ["world_b"]);
   await runtime.close();
 
-  // A failure that was already there, or one that recovered, does not fail the restart.
   layout = fakeLayout();
   runtime = await fakeRuntime([], [[failure("world_a"), failure("world_b")], [failure("world_a", "still failing")]]);
   result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle });

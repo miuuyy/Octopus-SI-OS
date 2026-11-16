@@ -25,8 +25,6 @@ w.octopusTransport = new Proxy({}, { get: (_, name) => name === "copyText" ? asy
     : currentHost?.transport[name] });
 globalThis.indexedDB = (() => {
   const stores = new Map(), later = (callback) => setTimeout(callback, 0);
-  // Transactions run one after another in the order they were created, as IndexedDB orders read-write transactions
-  // over one store: a later one reads only what the earlier one committed, so two writers cannot lose an update.
   let settled = Promise.resolve();
   const database = { createObjectStore: (name) => { stores.set(name, new Map()); }, close() {}, transaction(name) {
     const store = stores.get(name), writes = [];

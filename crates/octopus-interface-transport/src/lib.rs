@@ -2716,8 +2716,6 @@ mod interface_life_switch_tests {
             heard = heard.display(),
         );
         let frames = [ready_frame(), serde_json::json!({"kind": "asleep", "sockets": [socket]})];
-        // The script reads the inherited connection by its descriptor number,
-        // which a POSIX sh need not duplicate beyond a single digit.
         lives.life_in("/bin/bash", name, &script, &frames, &[&marker, &heard]);
         lives.bind("run_knock", &[name]);
         let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);

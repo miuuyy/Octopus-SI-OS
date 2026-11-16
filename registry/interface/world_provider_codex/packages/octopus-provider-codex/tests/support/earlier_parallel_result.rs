@@ -1,6 +1,3 @@
-/// Hands one provider emission while the authoring gate serves its writes and
-/// arrivals. A terminal call defers its context publication, so the gate sees
-/// no closing write; the handing future alone decides completion.
 async fn hand_through_gate<T>(
     hand: impl std::future::Future<Output = T>,
     gate: impl std::future::Future<Output = Vec<(String, ArtifactRef, u64)>>,
@@ -43,8 +40,6 @@ fn result_input_templates<'a>(
         .collect()
 }
 
-/// Whether the result row template of `call` holds the call as static evidence
-/// instead of reading it from the admitted context.
 fn result_row_holds_call_as_evidence(
     record: &octopus_run_record::RunRecord,
     provider: &InterfaceId,
@@ -74,9 +69,6 @@ fn result_input_row<'a>(
         .expect("an outstanding call has one active result row")
 }
 
-/// A result row lists its call among its static bindings as read-only
-/// evidence. The call is not a role artifact of the worker, so the formed
-/// grant of the row names only the roles the stable input declares.
 fn keep_declared_role_artifacts(row: &mut Movement, record: &octopus_run_record::RunRecord, provider: &InterfaceId) {
     let declared = record.interface_state[provider]["run_authoring_binding"]["checkpoints"]
         .as_array()
@@ -92,8 +84,6 @@ fn keep_declared_role_artifacts(row: &mut Movement, record: &octopus_run_record:
     row.invocation_metadata = Some(metadata.into());
 }
 
-/// Source artifact ids, in order, of the session context the pending snapshot
-/// output carries.
 fn pending_snapshot_sources(
     ctx: &InterfaceLiftContext,
     record: &octopus_run_record::RunRecord,

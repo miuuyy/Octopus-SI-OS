@@ -39,8 +39,6 @@ fn writer_candidates_refresh_exact_generations_on_directory_changes() {
 fn writer_candidates_are_the_same_for_any_order_and_repetition_of_what_was_recorded() {
     use crate::property_check::check;
     use proptest::prelude::*;
-    // Each hand-in is unrecorded (0), recorded as no writer call (1), or
-    // recorded under one of three generations (2..=4).
     check(64, prop::collection::btree_map(0u8..12, 0u8..5, 1..10), |files| {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("calls");
@@ -52,8 +50,6 @@ fn writer_candidates_are_the_same_for_any_order_and_repetition_of_what_was_recor
         }
         let recorded = files.iter().filter(|(_, state)| **state != 0)
             .map(|(name, state)| (path(name), state.checked_sub(2).map(u64::from))).collect::<Vec<_>>();
-        // One index reads the directory and then learns each hand-in; the other
-        // learns them first, in the opposite order, each twice.
         let mut first = WriterCallIndex::default();
         prop_assert_eq!(first.candidates(&root, 0).unwrap().len(), files.len());
         for (path, generation) in &recorded {

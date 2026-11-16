@@ -1,12 +1,3 @@
-//! Ranking of remembered notes for `memory.search`.
-//!
-//! A note is read as words: maximal runs of Unicode alphanumeric characters,
-//! lowercased. A query word that equals a word of the note is an exact match
-//! and is scored with BM25 over the visible notes, a title word counting
-//! twice. A query word that is only part of a longer word of the note is a
-//! partial match. Any exact match ranks above every partial one, so "port"
-//! finds the note about a port before the notes about a report or a portal.
-
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -32,7 +23,6 @@ pub(crate) fn words(text: &str) -> Vec<String> {
     words
 }
 
-/// Weighted word counts of one note.
 pub(crate) struct Document {
     weights: BTreeMap<String, f64>,
     length: f64,
@@ -55,9 +45,7 @@ impl Document {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Rank {
-    /// BM25 over the query words the note holds as whole words.
     pub exact: f64,
-    /// Saturated weight of the query words the note holds only inside longer words.
     pub partial: f64,
 }
 
@@ -66,8 +54,6 @@ impl Rank {
         self.exact > 0.0 || self.partial > 0.0
     }
 
-    /// Best first. A whole-word match has a positive BM25 score, so it sorts
-    /// before every note that matched only partially.
     pub(crate) fn best_first(&self, other: &Self) -> Ordering {
         other
             .exact

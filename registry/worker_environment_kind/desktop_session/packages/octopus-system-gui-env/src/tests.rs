@@ -38,8 +38,6 @@ fn app_resume_projects_exact_native_sources_and_materializes_original_windows() 
     let descriptor: Value = serde_json::from_slice(include_bytes!("../../../../../interface/system_gui/desktop.json")).unwrap();
     let behavior: super::config::ApplicationBehavior = serde_json::from_value(descriptor["host"]["application_behavior"].clone()).unwrap();
     behavior.validate().unwrap();
-    // The resource must not be group or world writable. A checkout inherits
-    // its modes from the umask, so the test reads a protected copy.
     let protected = tempfile::tempdir().unwrap();
     let protected_root = protected.path().canonicalize().unwrap();
     let resource = protected_root.join(&behavior.instruction_resource.path);

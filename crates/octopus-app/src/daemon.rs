@@ -1367,8 +1367,6 @@ mod tests {
                     caught_up.expect("repairing run JSON must catch up the relay without restarting or resending");
                 }).await;
             } else {
-                // A run change the watcher reports before the closed intakes end
-                // the loop is caught up on a local task.
                 tokio::task::LocalSet::new().run_until(run_daemon_on_dirs(
                     root,
                     repository_registry_root(),

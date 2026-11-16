@@ -125,12 +125,6 @@ async function readClientTurns(bundle, home) {
 
 const readChatTurns = async (bundle, home) => (await readClientTurns(bundle, home)).chats;
 
-// A run without a client chat surface (a service, memory or sensor-triggered
-// run) has no projected turn status, so its turn frontier is folded from the
-// movement ledger: the provider's turn/start dispatch opens a turn and the
-// provider's terminal artifacts close it. A dispatch whose method cannot be
-// read counts as an open turn. Rows recorded before the running runtime
-// started belong to an instance whose turns the restart already stopped.
 const TURN_DISPATCH_LABEL = "provider.transport.dispatch";
 const TURN_CLOSING_LABELS = ["turn.completed", "turn.interrupted.result", "turn.error", "interface.artifact.output"];
 const TURN_FRONTIER_NEEDLES = [TURN_DISPATCH_LABEL, ...TURN_CLOSING_LABELS].map((label) => `"${label}:`);
@@ -168,8 +162,6 @@ async function readLedgerTurns(home, { sinceUnixMs = 0, skipRuns = [] } = {}) {
   return [...open.values()];
 }
 
-// Every turn a restart would stop: client chat runs from the client projection
-// and every other run from the ledger.
 async function readTurnsInFlight(bundle, home, { sinceUnixMs = 0 } = {}) {
   const { chats, clientRunIds } = await readClientTurns(bundle, home);
   const background = await readLedgerTurns(home, { sinceUnixMs, skipRuns: clientRunIds });
@@ -181,9 +173,6 @@ function blockingTurns(turns, allowed) {
   return turns.filter((turn) => turn.turn_open && !exempt.has(turn.run_id));
 }
 
-// A failure is identified by the interface that failed, never by how many
-// interfaces fail: an interface that was healthy before a restart and fails
-// after it is a regression even when another one recovered meanwhile.
 const failureIdentity = (failure) => (typeof failure?.interface === "string" && failure.interface ? failure.interface : JSON.stringify(failure ?? null));
 function newInterfaceFailures(before, after) {
   const known = new Set((Array.isArray(before?.interface_failures) ? before.interface_failures : []).map(failureIdentity));
@@ -381,7 +370,6 @@ const USAGE = `Usage: node app/scripts/safe-self-update.cjs <command> [options]
   rollback [--dry-run]            Octopus.prev.app -> Octopus.app
 Common: --home=<Octopus Home, default $OCTOPUS_HOME or ~/.octopus> --build-root=<dir>`;
 
-// Options that take a value, either as --name=value or as the next argument, and may repeat.
 const REPEATABLE_VALUE_OPTIONS = new Set(["allow-in-flight-run"]);
 
 function parseArgs(argv) {

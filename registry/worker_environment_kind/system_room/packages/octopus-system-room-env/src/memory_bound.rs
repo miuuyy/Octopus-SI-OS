@@ -45,7 +45,6 @@ pub struct MemoryHost<'a> {
     pub effect_root: Option<&'a Path>,
     pub maximum_bytes: u64,
     pub observed_run: Option<&'a str>,
-    /// The artifact blob store, when this call holds a read grant on it.
     pub artifact_blobs_root: Option<&'a Path>,
 }
 
@@ -310,10 +309,6 @@ impl<'a> Memory<'a> {
         }))
     }
 
-    /// Records, beside the collection's entries, that the saved note corrects
-    /// each named note. A corrected note is not changed: it may belong to a
-    /// wider scope this call cannot write, so the edge is kept apart and the
-    /// conflict is resolved when a note is read.
     fn record_corrections(&self, plan: &Value) -> Result<Value, ToolHandlerError> {
         let Some(targets) = plan
             .get("corrects")
@@ -549,8 +544,6 @@ impl<'a> Memory<'a> {
         Ok(json!({"result": "memory_read", "memory": memory}))
     }
 
-    /// Describes the evidence one visible note records, without counting as a
-    /// use of the note. The caller names a note, never an artifact.
     fn inspect_evidence(&self, arguments: EvidenceArguments) -> Result<Value, ToolHandlerError> {
         let preview_bytes =
             crate::memory_evidence::preview_bound(arguments.max_bytes).map_err(|reason| self.invalid(reason))?;
@@ -680,9 +673,6 @@ impl<'a> Memory<'a> {
         Ok(summary)
     }
 
-    /// The active notes visible to this caller that were saved as corrections
-    /// of `id`. A correcting note the caller cannot see, or one that was
-    /// withdrawn, corrects nothing here.
     fn corrected_by(
         &self,
         id: &str,
@@ -936,9 +926,6 @@ fn active_notes(records: &[CollectionRecord]) -> BTreeMap<&str, &CollectionRecor
         .collect()
 }
 
-/// The words a note is searched by. A note's description is the first line of
-/// its text and every note carries the same applicability sentence, so each is
-/// read only where it says something the title and text do not.
 fn document(entry: &CollectionEntry) -> crate::memory_rank::Document {
     let text = note_text(entry).unwrap_or_default();
     let lead = entry.description.trim_end_matches('…');

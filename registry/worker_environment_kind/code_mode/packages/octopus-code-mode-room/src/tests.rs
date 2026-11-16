@@ -32,9 +32,6 @@ const KIND: &str = "code_mode";
 const NESTED_TOOL: &str = "process.list";
 const NESTED_INTERFACE: &str = "system_exec_env_test";
 const NESTED_CHECKPOINT: &str = "cp_code_mode_to_process";
-/// Window of a cell that may be its context's first, which also evaluates the whole prelude before it reaches its
-/// nested calls. The room observes a cell for its full window while it is blocked on those calls, so this is the time
-/// each such start takes, not a deadline the fixture races.
 const FIRST_FRONTIER_WINDOW_MS: u64 = 500;
 
 #[test]
@@ -3080,7 +3077,6 @@ text('sdk raw '+sdkRaw.text.length);
         assert_eq!(value["body"]["state"],"yielded","{value}");
         let emissions = value["body"]["emissions"].as_array().unwrap();
         if offset + 1 >= frontier_count {
-            // Every nested result is in: only output and the completion remain, and a wait window may close between them.
             assert!(emissions.is_empty(), "{value}");
             assert_eq!(value["body"]["pending_tool_calls"], json!([]));
             continue;
@@ -3787,7 +3783,6 @@ fn bounded_room_media_preserves_the_actual_image_carrier(root: &Path) {
     assert!(super::materialize_output_media(&source, &config, &mut body).is_err());
 }
 
-/// Everything a cell made visible through the waits that followed it to completion.
 struct SettledCell {
     output: Vec<Value>,
     media: Vec<Value>,
@@ -3800,9 +3795,6 @@ impl SettledCell {
     }
 }
 
-/// Waits on a cell until it completes. A wait window can close after the cell wrote its output and before its runtime
-/// reported completion, so the output and the completion may arrive as separate frontiers; callers assert on what all
-/// of them made visible together, which still fails when output is lost, repeated or never followed by completion.
 async fn wait_until_completed(
     admission: &std::sync::Arc<FrontierAdmission>, room: &CodeModeRoom,
     handoff: &std::sync::Arc<actual_owner_handoff::OwnerHandoff>, formation: &WorkerEnvironmentFormation,

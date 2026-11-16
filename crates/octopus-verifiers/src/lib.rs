@@ -17,9 +17,6 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Ends the verifier processes one runtime started. Each runtime owns its
-/// scope, so a runtime that stops cannot end a verifier that another runtime
-/// in the same process still waits for.
 #[derive(Clone, Debug, Default)]
 pub struct VerifierCancellation {
     generation: std::sync::Arc<AtomicU64>,
@@ -30,7 +27,6 @@ impl VerifierCancellation {
         self.generation.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Whether a verifier started at this call has been cancelled since.
     pub fn started_now(&self) -> impl Fn() -> bool + Send + Sync + 'static {
         let generation = self.generation.clone();
         let started = generation.load(Ordering::SeqCst);

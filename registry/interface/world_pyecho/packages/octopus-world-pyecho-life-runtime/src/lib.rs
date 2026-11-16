@@ -1799,9 +1799,6 @@ impl LedgerChangeWatch {
     }
 }
 
-/// inotify reports a reader opening the ledger beside its writes. Only an
-/// event that can carry new rows wakes a ledger reader; otherwise every read
-/// of the ledger would schedule the next one.
 #[cfg(not(target_os = "macos"))]
 fn ledger_event_reports_a_change(event: &notify::Event) -> bool {
     use notify::event::{AccessKind, AccessMode};
