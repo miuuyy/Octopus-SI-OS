@@ -285,6 +285,11 @@ node app/scripts/safe-self-update.cjs restart --swap --caller-run=<run id> --det
 | `restart` | Refuses while any run has a turn in flight, except `--caller-run` and each run named by a repeatable `--allow-in-flight-run <run id>` (`--force` overrides the whole guard). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` in which no interface fails that was not already failing before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1, naming the regressed interfaces in `new_interface_failures`; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
 | `rollback` | `Octopus.app` → `Octopus.failed.app`, `Octopus.prev.app` → `Octopus.app`. Restart afterwards. |
 
+Every build ends with a notice of how much disk space the build output takes
+and how much is free on its volume. A build takes a lot of space: `target/` and
+the staged or previous bundles in `app/build/` are build output and can be
+deleted when you need the space back.
+
 `build`, `swap`, `rollback`, `restart` and `packages sync` accept `--dry-run`,
 which prints the plan and changes nothing. Every command prints JSON and exits
 1 when its result is not `ok`. `--home` selects another Home (default

@@ -113,6 +113,10 @@ ad-hoc code signature. The output is `app/build/Octopus.app`, built for this
 machine. It is not a notarized installer or a universal binary. Repackaging
 replaces that bundle in place.
 
+Packaging ends with a notice of the space the build output takes and the space
+left on the volume. A build takes a lot of it: `target/` and the staged or
+previous bundles in `app/build/` can be deleted when you need the space back.
+
 ## First setup
 
 Follow the client screens. The actions depend on the setup already present on

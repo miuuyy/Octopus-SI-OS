@@ -57,6 +57,7 @@ if (require.main === module) Promise.resolve().then(() => {
   return buildCli({ runtime: rest.includes("--runtime"), target });
 }).then((directory) => {
   process.stdout.write(`Octopus CLI client modules built in ${directory}\n`);
+  require("./build-space-notice.cjs").printBuildSpaceNotice();
 }).catch((error) => {
   process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;

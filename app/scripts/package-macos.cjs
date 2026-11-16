@@ -184,6 +184,7 @@ if (ownedEngineCopy) ownedEngineVerifier.verifyPackagedEngineAfterSigning(ownedE
 run("codesign", ["--verify", "--deep", "--strict", bundleRoot], appRoot);
 
 console.log(`Packaged ${bundleRoot}`);
+require("./build-space-notice.cjs").printBuildSpaceNotice();
 
 // OCTOPUS_PACKAGE_BUNDLE packages into another bundle beside the default one, so an
 // installation running from app/build/Octopus.app keeps its bundle during the build.

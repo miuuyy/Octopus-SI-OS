@@ -24,6 +24,9 @@ presentation change, `npm --prefix app run build:cli-client` rebuilds only the
 shared client modules. If Node 24 is not on your `PATH`, set `OCTOPUS_NODE` to
 its executable when launching `./octopus`.
 
+The build ends with a notice of the space its output takes and the space left on
+the volume; `target/` and `app/build/` can be deleted when you need it back.
+
 A distribution is built on the machine it targets. The build resolves the host
 to one of `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`; `--target=<triple>`

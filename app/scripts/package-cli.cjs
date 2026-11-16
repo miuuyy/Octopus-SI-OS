@@ -47,7 +47,6 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = n
     packager.stripExecutables([...ownerExecutables, ...sharedExecutables]);
     const managed = require(path.join(source, "interface/world_provider_codex/packages/octopus-provider-codex/managed-cli/bootstrap.cjs"));
     const managedRoots = cli.components.managed_codex ? packager.bundleManagedCodex([baseline, packages]) : [];
-    // The provider executables must be the ones their build receipts attest, signed or not.
     const providerSigning = packager.captureProviderSigningInputs([baseline, packages]);
     if (cli.components.code_signing) {
       const managedSigning = managed.captureSigning(managedRoots);
@@ -86,6 +85,7 @@ if (require.main === module) {
     const { target, rest } = takeTargetArgument(process.argv.slice(2));
     if (rest.length) throw new Error(`Usage: node app/scripts/package-cli.cjs [--target=<${SUPPORTED_TARGETS.join("|")}>] (consumes target/release binaries)`);
     console.log(JSON.stringify(packageCliRuntime({ target })));
+    require("./build-space-notice.cjs").printBuildSpaceNotice();
   } catch (error) {
     console.error(`CLI runtime packaging failed: ${error.message}`);
     process.exitCode = 1;
