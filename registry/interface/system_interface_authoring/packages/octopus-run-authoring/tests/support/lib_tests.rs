@@ -3300,40 +3300,16 @@
             observed["interface_state"][provider.as_str()][FRONTIER_CHECKPOINT_IDS].as_array_mut().unwrap().push(serde_json::json!(id));
             observed["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"].as_array_mut().unwrap().push(serde_json::json!(route));
             let encode = |value: &serde_json::Value| { let mut bytes = serde_json::to_vec_pretty(value).unwrap(); bytes.push(b'\n'); bytes };
-            let projection = output_connections::protected_record(authored.content.as_bytes(), &encode(&observed), &handoff.config).unwrap().unwrap();
+            let projection = output_connections::extension(authored.content.as_bytes(), &encode(&observed), &handoff.config).unwrap().unwrap().protected;
             assert_eq!(projection, authored.content.as_bytes(), "routing projection must end at the exact evidenced bytes");
             let connected_bytes = encode(&observed);
-            assert_eq!(output_connections::protected_record(&connected_bytes, authored.content.as_bytes(), &handoff.config).unwrap().unwrap(), connected_bytes);
             assert!(checked_selected_run_advance_state(&ctx, &run_path, &connected_bytes, authored.content.as_bytes(), 23, &handoff.config).unwrap().is_empty());
-            let mut changed_history: serde_json::Value = serde_json::from_str(&authored.content).unwrap();
-            changed_history["interface_state"][provider.as_str()]["context_generation"] = serde_json::json!(200);
-            assert!(output_connections::protected_record(&connected_bytes, &encode(&changed_history), &handoff.config).unwrap().is_none());
-            let mut two_routes = observed.clone();
-            let mut second = route.clone();
-            second.name = "second_outgoing".into();
-            second.outbound_interface_bindings[0].interface = InterfaceId::new("system_worker_peer_two");
-            two_routes["checkpoints"].as_array_mut().unwrap().push(materialize_checkpoint(&second, "second_outgoing", &run, &roles));
-            two_routes["active_checkpoints"].as_array_mut().unwrap().push(serde_json::json!("second_outgoing"));
-            two_routes["interface_state"][provider.as_str()][FRONTIER_CHECKPOINT_IDS].as_array_mut().unwrap().push(serde_json::json!("second_outgoing"));
-            two_routes["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"].as_array_mut().unwrap().push(serde_json::json!(second));
-            let mut middle_removed = two_routes.clone();
-            middle_removed["checkpoints"].as_array_mut().unwrap().retain(|cp| cp["id"] != id);
-            middle_removed["active_checkpoints"].as_array_mut().unwrap().retain(|cp| cp != id);
-            middle_removed["interface_state"][provider.as_str()][FRONTIER_CHECKPOINT_IDS].as_array_mut().unwrap().retain(|cp| cp != id);
-            middle_removed["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"].as_array_mut().unwrap().retain(|cp| cp["name"] != route.name);
-            assert_eq!(output_connections::protected_record(&encode(&two_routes), &encode(&middle_removed), &handoff.config).unwrap().unwrap(), encode(&two_routes));
-            let mut pending_route = observed.clone();
-            pending_route["interface_state"][provider.as_str()]["pending_handoff"]["items"][0]["checkpoint"]["id"] = serde_json::json!(id);
-            assert!(output_connections::protected_record(&encode(&pending_route), authored.content.as_bytes(), &handoff.config).is_err());
-            let mut contextual_route = observed.clone();
-            contextual_route["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"].as_array_mut().unwrap().last_mut().unwrap()["include_context"] = serde_json::json!(true);
-            assert!(output_connections::protected_record(&encode(&contextual_route), authored.content.as_bytes(), &handoff.config).unwrap().is_none());
             let publication = handoff.author_context_publication(authored.content.as_bytes(), &authored.pending_handoff).unwrap();
             let rebased = authoring_retry::rebase_authored_run(authored.content.as_bytes(), &encode(&observed), &publication, &handoff.config, Some(JsonFormat::Compact)).unwrap();
             let rebased_record = RunRecord::from_bytes(rebased.content.as_bytes()).unwrap();
             assert_eq!(rebased.pending_handoff, publication.pending_handoff);
             assert_eq!(rebased_record.checkpoint(&CheckpointId::new(id)), RunRecord::from_bytes(&encode(&observed)).unwrap().checkpoint(&CheckpointId::new(id)));
-            assert_eq!(output_connections::protected_record(publication.content.as_bytes(), rebased.content.as_bytes(), &handoff.config).unwrap().unwrap(), publication.content.as_bytes());
+            assert_eq!(output_connections::extension(publication.content.as_bytes(), rebased.content.as_bytes(), &handoff.config).unwrap().unwrap().protected, publication.content.as_bytes());
             assert!(checked_selected_run_advance_state(&ctx, &run_path, authored.content.as_bytes(), &encode(&observed), 23, &handoff.config).unwrap().is_empty());
             let mut history = observed.clone();
             history["interface_state"][provider.as_str()]["context_generation"] = serde_json::json!(200);
@@ -3347,12 +3323,12 @@
                     2 => { invalid["active_checkpoints"].as_array_mut().unwrap().pop(); },
                     _ => invalid["interface_state"][provider.as_str()]["pending_handoff"]["items"][0]["checkpoint"]["id"] = serde_json::json!(id),
                 }
-                assert!(output_connections::protected_record(authored.content.as_bytes(), &encode(&invalid), &handoff.config).is_err(), "invalid outgoing mutation {mutation}");
+                assert!(output_connections::extension(authored.content.as_bytes(), &encode(&invalid), &handoff.config).is_err(), "invalid outgoing mutation {mutation}");
                 assert!(authoring_retry::rebase_authored_run(authored.content.as_bytes(), &encode(&invalid), &publication, &handoff.config, Some(JsonFormat::Compact)).is_err(), "invalid outgoing retry {mutation}");
             }
             let mut input_change = observed;
             input_change["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"][0]["include_context"] = serde_json::json!(false);
-            assert!(output_connections::protected_record(authored.content.as_bytes(), &encode(&input_change), &handoff.config).unwrap().is_none(), "input changes are not routing additions");
+            assert!(output_connections::extension(authored.content.as_bytes(), &encode(&input_change), &handoff.config).unwrap().is_none(), "input changes are not routing additions");
         }
         let call_file = handoff.materialize_file_write_call(&authored).unwrap();
         let receipt_file = InterfaceArtifactFile::write(var_dir.join("applied-write"), "file.write.result",

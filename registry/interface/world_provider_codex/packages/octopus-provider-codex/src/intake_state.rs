@@ -39,9 +39,7 @@ pub struct DeliverySource {
 
 impl DeliverySource {
     pub fn of_movement(movement: &Movement) -> Result<Self, String> {
-        let octopus_ledger::Endpoint::Interface(interface) = &movement.from else {
-            return Err("intake input did not come from an interface".into());
-        };
+        let octopus_ledger::Endpoint::Interface(interface) = &movement.from;
         let run = movement.invocation_metadata.as_ref()
             .and_then(|metadata| metadata.invocation())
             .and_then(|metadata| metadata.runtime.as_ref())

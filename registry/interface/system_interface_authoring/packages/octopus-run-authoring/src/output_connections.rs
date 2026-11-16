@@ -20,68 +20,6 @@ pub(super) fn is_withdrawal(before: &BoundRunAuthoringTopology, after: &BoundRun
         })
 }
 
-// Context-free outgoing bindings are future routing configuration. Appending or
-// withdrawing them leaves input/history under its complete checked writer chain;
-// a pending handoff cannot be withdrawn. Emission still passes normal policy gates.
-pub(super) fn protected_record(
-    before: &[u8],
-    current: &[u8],
-    config: &RunAuthoringConfig,
-) -> Result<Option<Vec<u8>>, String> {
-    if let Some(extension) = extension(before, current, config)? {
-        return Ok(Some(extension.protected));
-    }
-    withdrawal(before, current, config)
-}
-
-fn withdrawal(before_bytes: &[u8], current: &[u8], config: &RunAuthoringConfig) -> Result<Option<Vec<u8>>, String> {
-    let before = RunRecord::from_bytes(before_bytes).map_err(|error| error.to_string())?;
-    let after = RunRecord::from_bytes(current).map_err(|error| error.to_string())?;
-    let topology = |record: &RunRecord| -> Result<BoundRunAuthoringTopology, String> {
-        serde_json::from_value(record.interface_state.get(&config.provider_interface)
-            .and_then(|state| state.get(RUN_AUTHORING_BINDING)).cloned()
-            .ok_or("withdrawn connection has no provider topology")?).map_err(|error| error.to_string())
-    };
-    let prior = topology(&before)?;
-    let next = topology(&after)?;
-    if !is_withdrawal(&prior, &next) { return Ok(None); }
-    let retained = next.checkpoints.iter().map(|cp| &cp.name).collect::<BTreeSet<_>>();
-    let removed = prior.checkpoints.iter().filter(|cp| !retained.contains(&cp.name)).collect::<Vec<_>>();
-    let Some(pending) = persisted_pending_handoff(&before, &config.provider_interface)? else { return Ok(None); };
-    if !pending.terminal { return Ok(None); }
-    let mut ids = BTreeSet::new();
-    for template in removed {
-        let matches = before.checkpoints.iter().filter(|cp| before.active_checkpoints.contains(&cp.id)
-            && checkpoint_record_matches_template(cp, template, &before.id)).collect::<Vec<_>>();
-        let [checkpoint] = matches.as_slice() else { return Err("withdrawn connection has no unique active checkpoint".into()); };
-        if pending.items.iter().any(|item| item.checkpoint.id == checkpoint.id) || !ids.insert(checkpoint.id.as_str().to_string()) {
-            return Err("withdrawn connection belongs to a pending handoff".into());
-        }
-    }
-    prior.validate_identity(&before, &config.provider_interface)?;
-    next.validate_identity(&after, &config.provider_interface)?;
-    for (record, topology) in [(&before, &prior), (&after, &next)] {
-        let mut bound = config.clone(); bound.checkpoints = topology.checkpoints.clone();
-        bound.validate(&config.provider_interface, &record.id)?;
-        validate_bound_run_authoring_topology(record, &bound, None)?;
-    }
-    let mut protected: serde_json::Value = serde_json::from_slice(before_bytes).map_err(|error| error.to_string())?;
-    protected["checkpoints"].as_array_mut().ok_or("connection checkpoints are absent")?
-        .retain(|cp| !cp["id"].as_str().is_some_and(|id| ids.contains(id)));
-    protected["active_checkpoints"].as_array_mut().ok_or("connection frontier is absent")?
-        .retain(|id| !id.as_str().is_some_and(|id| ids.contains(id)));
-    let state = &mut protected["interface_state"][config.provider_interface.as_str()];
-    for field in [FRONTIER_CHECKPOINT_IDS, "owned_checkpoint_ids", "cycle_checkpoint_ids"] {
-        if let Some(items) = state.get_mut(field).and_then(serde_json::Value::as_array_mut) {
-            items.retain(|id| !id.as_str().is_some_and(|id| ids.contains(id)));
-        }
-    }
-    state[RUN_AUTHORING_BINDING]["checkpoints"].as_array_mut().ok_or("connection templates are absent")?
-        .retain(|cp| cp["name"].as_str().is_some_and(|name| retained.iter().any(|id| id.as_str() == name)));
-    let current: serde_json::Value = serde_json::from_slice(current).map_err(|error| error.to_string())?;
-    Ok((protected == current).then(|| before_bytes.to_vec()))
-}
-
 pub(super) struct Extension {
     pub protected: Vec<u8>,
     checkpoints: Vec<serde_json::Value>,
