@@ -17,10 +17,25 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-static CANCELLATION_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Ends the verifier processes one runtime started. Each runtime owns its
+/// scope, so a runtime that stops cannot end a verifier that another runtime
+/// in the same process still waits for.
+#[derive(Clone, Debug, Default)]
+pub struct VerifierCancellation {
+    generation: std::sync::Arc<AtomicU64>,
+}
 
-pub fn cancel_running_verifier_processes() {
-    CANCELLATION_GENERATION.fetch_add(1, Ordering::SeqCst);
+impl VerifierCancellation {
+    pub fn cancel_running(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Whether a verifier started at this call has been cancelled since.
+    pub fn started_now(&self) -> impl Fn() -> bool + Send + Sync + 'static {
+        let generation = self.generation.clone();
+        let started = generation.load(Ordering::SeqCst);
+        move || generation.load(Ordering::SeqCst) != started
+    }
 }
 
 
@@ -410,10 +425,7 @@ pub fn run_pinned_verifier_process(
     input: &VerificationInput,
     payload_bytes: Vec<u8>,
 ) -> VerificationVerdict {
-    let generation = CANCELLATION_GENERATION.load(Ordering::SeqCst);
-    run_pinned_verifier_process_until(ctx, input, payload_bytes, &|| {
-        CANCELLATION_GENERATION.load(Ordering::SeqCst) != generation
-    })
+    run_pinned_verifier_process_until(ctx, input, payload_bytes, &|| false)
 }
 
 pub fn run_pinned_verifier_process_until(
@@ -1187,6 +1199,16 @@ mod tests {
         );
         assert_eq!(verdict.details["exit_code"], 23);
         assert_eq!(verdict.details["stderr"], "verifier launch failed");
+    }
+
+    #[test]
+    fn a_cancellation_scope_ends_only_verifiers_it_started_before_the_cancel() {
+        let (mine, neighbour) = (VerifierCancellation::default(), VerifierCancellation::default());
+        let (running, beside) = (mine.started_now(), neighbour.started_now());
+        mine.clone().cancel_running();
+        assert!(running());
+        assert!(!beside());
+        assert!(!mine.started_now()());
     }
 
     #[test]

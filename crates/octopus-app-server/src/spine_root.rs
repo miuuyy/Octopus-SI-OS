@@ -25,7 +25,8 @@ use octopus_runtime::{
 use octopus_run_record::GrantEpoch;
 use octopus_tool_registry::ToolDescriptor;
 use octopus_verifiers::{
-    VerifierDescriptor, VerifierPackageContext, pin_verifier_package, run_pinned_verifier_process,
+    VerifierCancellation, VerifierDescriptor, VerifierPackageContext, pin_verifier_package,
+    run_pinned_verifier_process_until,
 };
 use octopus_worker_env::WorkerEnvKindSpec;
 
@@ -1593,9 +1594,15 @@ pub struct EmbeddedRuntime {
     pub ee_tree: EeTree,
     pub existence_ee_id: EeId,
     pub formation_source_hashes: BTreeMap<DescriptorName, DescriptorHash>,
+    verifier_cancellation: VerifierCancellation,
 }
 
 impl EmbeddedRuntime {
+    /// Ends the verifier processes this runtime's admissions still wait for.
+    pub fn cancel_running_verifier_processes(&self) {
+        self.verifier_cancellation.cancel_running();
+    }
+
     pub fn run_records_dir(&self) -> PathBuf {
         self.run_records_root.clone()
     }
@@ -1678,6 +1685,7 @@ struct RegistryVerifiedArtifactAdmission {
     repository_root: PathBuf,
     verifier_scratch_root: PathBuf,
     blobs: SharedBlobs,
+    verifier_cancellation: VerifierCancellation,
 }
 
 impl RegistryVerifiedArtifactAdmission {
@@ -1833,6 +1841,7 @@ impl VerifiedArtifactAdmission for RegistryVerifiedArtifactAdmission {
             mark_class: mark_descriptor.class,
             verifier: verifier_id.clone(),
             verifier_package,
+            cancellation: self.verifier_cancellation.clone(),
         }))
     }
 }
@@ -1845,6 +1854,7 @@ struct PreparedRegistryVerification {
     mark_class: MarkClass,
     verifier: VerifierId,
     verifier_package: VerifierPackagePin,
+    cancellation: VerifierCancellation,
 }
 
 impl PreparedVerification for PreparedRegistryVerification {
@@ -1857,8 +1867,11 @@ impl PreparedVerification for PreparedRegistryVerification {
             mark_class,
             verifier,
             verifier_package,
+            cancellation,
         } = *self;
-        let verdict = run_pinned_verifier_process(&pinned_package, &input, payload_bytes);
+        let cancelled = cancellation.started_now();
+        let verdict =
+            run_pinned_verifier_process_until(&pinned_package, &input, payload_bytes, &cancelled);
         if !verdict.passed {
             return Err(VerifiedArtifactError::VerifierRejected {
                 mark: mark.as_str().to_string(),
@@ -1988,11 +2001,13 @@ pub async fn build_embedded_spine(
             )
         })?
         .to_path_buf();
+    let verifier_cancellation = VerifierCancellation::default();
     runtime.set_verified_artifact_admission(Arc::new(RegistryVerifiedArtifactAdmission {
         registry_root: config.registry_root.clone(),
         repository_root,
         verifier_scratch_root: config.interface_artifact_root.join("verifier-processes"),
         blobs: config.blobs.clone(),
+        verifier_cancellation: verifier_cancellation.clone(),
     }));
     runtime.set_context_artifact_resolver(Arc::new(RegistryContextArtifactCache::new(
         config.registry_root.clone(),
@@ -2022,6 +2037,7 @@ pub async fn build_embedded_spine(
         ee_tree,
         existence_ee_id: bootstrap_ee,
         formation_source_hashes,
+        verifier_cancellation,
     })
 }
 
@@ -2159,6 +2175,7 @@ mod required_artifact_verification_tests {
                 .join(format!("octopus-verifier-processes-{}", std::process::id())),
             registry_root,
             blobs,
+            verifier_cancellation: VerifierCancellation::default(),
         }
     }
 
@@ -2475,6 +2492,7 @@ description: ""
                 .to_path_buf(),
             verifier_scratch_root: scratch_registry.join("verifier-processes"),
             blobs: blobs.clone(),
+            verifier_cancellation: VerifierCancellation::default(),
         };
         let malformed_required = RequiredVerifiedArtifact {
             mark: MarkId::new("context.recipe.valid"),
