@@ -1,10 +1,15 @@
 #[tokio::test]
 async fn a_turn_cut_by_process_death_continues_from_its_late_result() {
-    continue_cut_turn(false, true, None).await;
-    continue_cut_turn(true, false, Some(TURN_TOKEN_USAGE_LABEL)).await;
+    continue_cut_turn(false, true, None, 0).await;
+    continue_cut_turn(true, false, Some(TURN_TOKEN_USAGE_LABEL), 0).await;
 }
 
-async fn continue_cut_turn(own_boundary: bool, input_changes_context: bool, interrupted_after_artifact: Option<&str>) {
+#[tokio::test]
+async fn a_late_result_adopts_the_context_generation_authored_while_its_call_waited() {
+    continue_cut_turn(false, true, None, 2).await;
+}
+
+async fn continue_cut_turn(own_boundary: bool, input_changes_context: bool, interrupted_after_artifact: Option<&str>, authored_advance: u64) {
     use octopus_appserver_proto::{ApprovalsReviewer, AskForApproval, SandboxPolicy, SessionSource, Thread, ThreadStatus};
     let temp = tempfile::tempdir().unwrap();
     let cwd = octopus_util_abspath::AbsolutePathBuf::from_absolute_path(temp.path()).unwrap();
@@ -121,7 +126,7 @@ done
     let admitted_record = serde_json::to_vec(&admitted).unwrap();
     octopus_run_record::RunRecord::from_bytes(&admitted_record).unwrap();
     let mut current = admitted;
-    current["interface_state"]["world_provider_codex"]["context_generation"] = serde_json::json!(if own_boundary { 8 } else { 7 });
+    current["interface_state"]["world_provider_codex"]["context_generation"] = serde_json::json!(if own_boundary { 8 } else { 7 + authored_advance });
     if own_boundary {
         current["interface_state"]["world_provider_codex"]["pending_handoff"] = serde_json::json!({
             "source_movement_seq": 1, "terminal": false, "items": [],
@@ -204,6 +209,6 @@ done
     assert_eq!(continued.thread_id, "thr-exact");
     assert!(continued.interrupted_pending.is_none() && continued.native_terminal.is_none());
     assert!(matches!(continued.pending, Some(CodexPendingContinuity::DynamicTool { ref call_id, .. }) if call_id == "call-2"));
-    assert_eq!(continued.context_generation, 9, "the late result and the next call each advance the call's generation once");
+    assert_eq!(continued.context_generation, 9 + authored_advance, "the late result and the next call each advance the call's generation once");
     driver.shutdown().await.unwrap();
 }

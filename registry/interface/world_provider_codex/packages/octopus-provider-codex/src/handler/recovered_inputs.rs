@@ -198,43 +198,138 @@ pub(crate) fn interrupted_transport_output(
     )
 }
 
+/// Where a durable pending continuity stands against the context generation
+/// its result is admitted under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PendingGeneration {
+    Current,
+    /// Checked authoring advanced the provider context after the call left.
+    Behind,
+}
+
+pub(crate) fn pending_generation(
+    stored: &CodexContinuityState,
+    admitted_generation: u64,
+    live_generation: Option<u64>,
+) -> Result<PendingGeneration, InterfaceDriverError> {
+    if stored.context_generation > admitted_generation {
+        return Err(InterfaceDriverError::FailedClosed(format!(
+            "Codex pending continuity generation {} is ahead of its admitted context generation {admitted_generation}",
+            stored.context_generation
+        )));
+    }
+    if live_generation.is_some_and(|live| live > stored.context_generation) {
+        return Err(InterfaceDriverError::FailedClosed(format!(
+            "Codex pending continuity generation {} regressed behind the live transport context generation",
+            stored.context_generation
+        )));
+    }
+    Ok(if stored.context_generation < admitted_generation {
+        PendingGeneration::Behind
+    } else {
+        PendingGeneration::Current
+    })
+}
+
 pub(crate) fn validate_live_pending_continuity(
     recovered: Option<&CodexContinuityState>,
     pending: &PendingServerRequest,
     context_generation: u64,
     live: &TransportState,
-) -> Result<(), InterfaceDriverError> {
-    if live.thread_id.as_deref() != Some(pending.thread_id.as_str())
-        || live.context_generation > context_generation
-        || live.thread_shape_fingerprint.is_none()
-        || live.static_context_fingerprint.is_none()
-    {
-        return Err(InterfaceDriverError::FailedClosed(
-            "Codex pending request conflicts with the live transport coordinates".to_string(),
-        ));
+) -> Result<PendingGeneration, InterfaceDriverError> {
+    let refused = |message: &str| Err(InterfaceDriverError::FailedClosed(message.to_string()));
+    if live.thread_id.as_deref() != Some(pending.thread_id.as_str()) {
+        return refused("Codex pending request names a thread other than the live transport thread");
     }
-    let recovered = recovered.ok_or_else(|| {
-        InterfaceDriverError::FailedClosed(
-            "Codex pending result has no immutable continuity artifact".to_string(),
-        )
-    })?;
-    if recovered.thread_id != pending.thread_id
-        || recovered.context_generation != context_generation
-        || live.thread_shape_fingerprint.as_deref()
-            != Some(recovered.thread_shape_fingerprint.as_str())
-        || live.static_context_fingerprint.as_deref()
-            != Some(recovered.static_context_fingerprint.as_str())
-    {
-        return Err(InterfaceDriverError::FailedClosed(
-            "Codex pending continuity has stale transport coordinates".to_string(),
-        ));
+    let (Some(live_shape), Some(live_static)) = (
+        live.thread_shape_fingerprint.as_deref(),
+        live.static_context_fingerprint.as_deref(),
+    ) else {
+        return refused("Codex live transport has no thread fingerprints for its pending request");
+    };
+    if live.context_generation > context_generation {
+        return refused("Codex live transport is ahead of the admitted context generation");
     }
+    let Some(recovered) = recovered else {
+        return refused("Codex pending result has no immutable continuity artifact");
+    };
+    if recovered.thread_id != pending.thread_id {
+        return refused("Codex pending continuity names a thread other than its live request");
+    }
+    if live_shape != recovered.thread_shape_fingerprint
+        || live_static != recovered.static_context_fingerprint
+    {
+        return refused("Codex pending continuity fingerprints differ from the live transport thread");
+    }
+    let generation = pending_generation(recovered, context_generation, Some(live.context_generation))?;
     if !pending_coordinates_match(recovered.outstanding_call(&pending.key), pending) {
-        return Err(InterfaceDriverError::FailedClosed(
-            "Codex durable pending coordinates do not match the live app-server request".into(),
-        ));
+        return refused("Codex durable pending coordinates do not match the live app-server request");
     }
-    Ok(())
+    Ok(generation)
+}
+
+/// A tool or interface result closes the call it answers even when checked
+/// authoring advanced the provider context while that call was in flight.
+/// The result continues from the admitted generation; the thread, its
+/// fingerprints and the pending call remain exactly those the call left with.
+pub(crate) fn adopt_admitted_result_generation(
+    stored: &CodexContinuityState,
+    key: &str,
+    admitted_generation: u64,
+    pending: Option<&PendingServerRequest>,
+    live: Option<&TransportState>,
+) -> Result<Option<CodexContinuityState>, InterfaceDriverError> {
+    if stored.context_generation >= admitted_generation
+        || stored.interrupted_pending.is_some()
+        || stored.native_terminal.is_some()
+        || stored.outstanding_call(key).is_none()
+    {
+        return Ok(None);
+    }
+    let generation = match (pending, live) {
+        (Some(pending), _)
+            if pending
+                .turn_interrupted
+                .load(std::sync::atomic::Ordering::Acquire) =>
+        {
+            return Ok(None);
+        }
+        (Some(pending), Some(live)) => {
+            validate_live_pending_continuity(Some(stored), pending, admitted_generation, live)?
+        }
+        (Some(_), None) => {
+            return Err(InterfaceDriverError::FailedClosed(
+                "Codex pending request has no live transport coordinates".to_string(),
+            ));
+        }
+        (None, live) => pending_generation(
+            stored,
+            admitted_generation,
+            live.filter(|live| live.thread_id.is_some())
+                .map(|live| live.context_generation),
+        )?,
+    };
+    Ok((generation == PendingGeneration::Behind).then(|| {
+        let mut adopted = stored.clone();
+        adopted.context_generation = admitted_generation;
+        adopted
+    }))
+}
+
+pub(crate) fn require_admitted_generation(
+    state: &CodexContinuityState,
+    admitted_generation: u64,
+    family: &str,
+) -> Result<(), InterfaceDriverError> {
+    match pending_generation(state, admitted_generation, None)
+        .map_err(|error| InterfaceDriverError::FailedClosed(format!("{family}: {error}")))?
+    {
+        PendingGeneration::Current => Ok(()),
+        PendingGeneration::Behind => Err(InterfaceDriverError::FailedClosed(format!(
+            "{family} continuity generation {} is behind its admitted context generation {admitted_generation} and was not adopted",
+            state.context_generation
+        ))),
+    }
 }
 
 pub(crate) fn pending_coordinates_match(durable: Option<&CodexPendingContinuity>, pending: &PendingServerRequest) -> bool {

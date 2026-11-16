@@ -321,11 +321,7 @@ impl CodexAppServerInterfaceDriver {
                     "cold tool result has no source continuity".into(),
                 )
             })?;
-            if state.context_generation != source_context_generation {
-                return Err(InterfaceDriverError::FailedClosed(
-                    "cold tool result has stale source context generation".into(),
-                ));
-            }
+            require_admitted_generation(state, source_context_generation, "cold tool result")?;
             let source = source.ok_or_else(|| {
                 InterfaceDriverError::FailedClosed("cold tool result has no source continuity".into())
             })?;
@@ -662,11 +658,7 @@ impl CodexAppServerInterfaceDriver {
                     "cold interface result has no source continuity".into(),
                 )
             })?;
-            if state.context_generation != source_context_generation {
-                return Err(InterfaceDriverError::FailedClosed(
-                    "cold interface result has stale source context generation".into(),
-                ));
-            }
+            require_admitted_generation(state, source_context_generation, "cold interface result")?;
             let source = source.ok_or_else(|| {
                 InterfaceDriverError::FailedClosed("cold interface result has no source continuity".into())
             })?;

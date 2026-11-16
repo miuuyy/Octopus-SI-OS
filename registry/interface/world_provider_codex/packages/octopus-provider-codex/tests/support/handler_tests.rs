@@ -1784,6 +1784,107 @@
         assert!(validate_live_pending_continuity(None, &pending, 8, &live).is_err());
     }
 
+    #[test]
+    fn a_result_adopts_the_context_generation_authored_while_its_call_was_in_flight() {
+        let key = "tool:call-1";
+        let stored = continuity(
+            "world_provider_codex",
+            "run-a",
+            "thr-exact",
+            8,
+            Some(CodexPendingContinuity::DynamicTool {
+                native_operation: None,
+                turn_id: "turn-1".to_string(),
+                call_id: "call-1".to_string(),
+                tool: "coder.exec".to_string(),
+            }),
+        );
+        let pending = PendingServerRequest {
+            request_id: RequestId::Integer(1),
+            thread_id: "thr-exact".to_string(),
+            turn_id: "turn-1".to_string(),
+            key: key.to_string(),
+            kind: PendingServerRequestKind::DynamicTool {
+                call_id: "call-1".to_string(),
+                tool: "coder.exec".to_string(),
+            },
+            effect_gate: Arc::new(tokio::sync::Mutex::new(())),
+            turn_interrupted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let live = |generation: u64| TransportState {
+            context_generation: generation,
+            hooks_catalog_emitted: true,
+            thread_id: Some("thr-exact".to_string()),
+            thread_shape_fingerprint: Some("a".repeat(64)),
+            static_context_fingerprint: Some("b".repeat(64)),
+            rollout_path: None,
+        };
+        let refusal = |error: InterfaceDriverError| error.to_string();
+
+        assert_eq!(
+            validate_live_pending_continuity(Some(&stored), &pending, 8, &live(8)).unwrap(),
+            PendingGeneration::Current
+        );
+        assert_eq!(
+            validate_live_pending_continuity(Some(&stored), &pending, 10, &live(8)).unwrap(),
+            PendingGeneration::Behind
+        );
+        let mut expected = stored.clone();
+        expected.context_generation = 10;
+        let adopted = adopt_admitted_result_generation(&stored, key, 10, Some(&pending), Some(&live(8)))
+            .unwrap()
+            .expect("a live result adopts the newer admitted generation");
+        assert_eq!(adopted, expected, "adoption moves the generation and nothing else");
+        assert_eq!(
+            validate_live_pending_continuity(Some(&adopted), &pending, 10, &live(8)).unwrap(),
+            PendingGeneration::Current
+        );
+        let cold = adopt_admitted_result_generation(&stored, key, 10, None, None)
+            .unwrap()
+            .expect("a cold result adopts the newer admitted generation");
+        assert_eq!(cold, expected);
+        require_admitted_generation(&cold, 10, "cold tool result").unwrap();
+
+        assert!(adopt_admitted_result_generation(&stored, key, 8, Some(&pending), Some(&live(8))).unwrap().is_none());
+        assert!(adopt_admitted_result_generation(&stored, "tool:another-call", 10, None, None).unwrap().is_none());
+        assert!(refusal(require_admitted_generation(&stored, 10, "cold tool result").unwrap_err()).contains("is behind"));
+
+        assert!(refusal(validate_live_pending_continuity(Some(&stored), &pending, 7, &live(7)).unwrap_err())
+            .contains("ahead of its admitted context generation"));
+        assert!(adopt_admitted_result_generation(&stored, key, 7, None, None).unwrap().is_none());
+        assert!(refusal(require_admitted_generation(&stored, 7, "cold tool result").unwrap_err())
+            .contains("ahead of its admitted context generation"));
+        assert!(refusal(adopt_admitted_result_generation(&stored, key, 10, Some(&pending), Some(&live(9))).unwrap_err())
+            .contains("regressed behind the live transport"));
+        assert!(refusal(adopt_admitted_result_generation(&stored, key, 10, Some(&pending), Some(&live(11))).unwrap_err())
+            .contains("live transport is ahead"));
+
+        let mut forged_shape = stored.clone();
+        forged_shape.thread_shape_fingerprint = "c".repeat(64);
+        let mut forged_static = stored.clone();
+        forged_static.static_context_fingerprint = "c".repeat(64);
+        for forged in [forged_shape, forged_static] {
+            assert!(refusal(adopt_admitted_result_generation(&forged, key, 10, Some(&pending), Some(&live(8))).unwrap_err())
+                .contains("fingerprints differ"));
+        }
+        let mut other_thread = stored.clone();
+        other_thread.thread_id = "thr-other".to_string();
+        assert!(refusal(adopt_admitted_result_generation(&other_thread, key, 10, Some(&pending), Some(&live(8))).unwrap_err())
+            .contains("other than its live request"));
+        let mut moved = live(8);
+        moved.thread_id = Some("thr-other".to_string());
+        assert!(refusal(adopt_admitted_result_generation(&stored, key, 10, Some(&pending), Some(&moved)).unwrap_err())
+            .contains("other than the live transport thread"));
+        assert!(refusal(adopt_admitted_result_generation(&stored, key, 10, Some(&pending), None).unwrap_err())
+            .contains("no live transport coordinates"));
+
+        let mut interrupted = stored.clone();
+        interrupted.interrupted_pending = interrupted.pending.take();
+        assert!(adopt_admitted_result_generation(&interrupted, key, 10, None, None).unwrap().is_none());
+        pending.turn_interrupted.store(true, std::sync::atomic::Ordering::Release);
+        assert!(adopt_admitted_result_generation(&stored, key, 10, Some(&pending), Some(&live(8))).unwrap().is_none());
+    }
+
     fn native_result_test_source(value: &impl serde::Serialize) -> ArtifactRef {
         bound("native.result", serde_json::to_value(value).unwrap()).artifact
     }

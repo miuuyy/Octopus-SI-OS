@@ -447,6 +447,14 @@ impl CodexAppServerInterfaceDriver {
         } else {
             (source_base_generation, authored_context_generation)
         };
+        if !durable_interrupt_override
+            && let Some(adopted) = self
+                .adopt_admitted_result_generation(&scope, &provider_input, recovered.as_ref(), source_context_generation)
+                .await?
+        {
+            sink.set_continuity(adopted.clone());
+            recovered = Some(adopted);
+        }
         let invocation_context_generation = if input_changes_context {
             context_generation.checked_add(1).ok_or_else(|| {
                 InterfaceDriverError::FailedClosed(
@@ -927,7 +935,7 @@ fn own_boundary_base_generation(
     }
     let pinned = read_codex_context_generation(admitted, provider)?;
     Ok(match recovered {
-        Some(state) if state.context_generation == pinned && pinned <= current_generation => pinned,
+        Some(state) if state.context_generation <= pinned && pinned <= current_generation => pinned,
         _ => current_generation,
     })
 }

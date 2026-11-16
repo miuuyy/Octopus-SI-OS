@@ -74,7 +74,48 @@ impl CodexAppServerInterfaceDriver {
                 "Codex pending request has no live transport coordinates".to_string(),
             )
         })?;
-        validate_live_pending_continuity(recovered, pending, context_generation, live)
+        match validate_live_pending_continuity(recovered, pending, context_generation, live)? {
+            PendingGeneration::Current => Ok(()),
+            PendingGeneration::Behind => Err(InterfaceDriverError::FailedClosed(
+                "Codex pending continuity is behind the admitted context generation and was not adopted for this input"
+                    .to_string(),
+            )),
+        }
+    }
+
+    pub(crate) async fn adopt_admitted_result_generation(
+        &self,
+        scope: &TransportStateScope,
+        input: &ProviderInput,
+        recovered: Option<&CodexContinuityState>,
+        admitted_generation: u64,
+    ) -> Result<Option<CodexContinuityState>, InterfaceDriverError> {
+        let key = match input {
+            ProviderInput::ToolResult(result) => {
+                result.correlation_id.as_ref().map(|call| format!("tool:{call}"))
+            }
+            ProviderInput::InterfaceOperationResult(result) => {
+                Some(format!("tool:{}", result.correlation_id))
+            }
+            _ => None,
+        };
+        let (Some(key), Some(stored)) = (key, recovered) else {
+            return Ok(None);
+        };
+        let pending = self
+            .pending_server_requests
+            .lock()
+            .await
+            .get(&(scope.clone(), key.clone()))
+            .cloned();
+        let transport_state = self.transport_state.lock().await;
+        adopt_admitted_result_generation(
+            stored,
+            &key,
+            admitted_generation,
+            pending.as_ref(),
+            transport_state.get(scope),
+        )
     }
 
     pub(crate) async fn record_drain_outcome(
