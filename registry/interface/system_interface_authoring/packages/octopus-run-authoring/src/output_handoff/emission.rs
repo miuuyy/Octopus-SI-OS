@@ -359,9 +359,10 @@ impl ProviderOutputHandoff {
             };
             let mut carried_context = Vec::new();
             if snapshot_output {
+                let limits = active.ctx.required_host_io_limits()?;
                 carried_context = result_inputs::snapshot_carried_context(
-                    &active.config, &manifest.label, &next_context, &next_static_context, &next_session_context,
-                    &active.session_snapshot_labels,
+                    &active.config, &next_context, &next_static_context, &next_session_context,
+                    |id| result_inputs::pinned_session_snapshot(&active.ctx.blobs_dir, limits, &active.config.provider_interface, id),
                 )?;
                 artifact = materialize_session_snapshot(
                     &artifact,

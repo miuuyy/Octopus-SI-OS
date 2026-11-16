@@ -504,10 +504,13 @@ snapshot does not capture is not dropped and does not refuse the output: it
 stays bound after the snapshot, in its bound order, and the next admission reads
 the snapshot first and that binding after it. This holds for an answer as for a
 failure or interruption closure, so context bound while a turn was in flight
-never ends the turn. One case is refused for an ordinary snapshot: an uncovered
-binding that is itself a session snapshot, because a run carries one current
-session snapshot and every later admission would fail on two. A failure or
-interruption closure is delivered even then, so that its source is closed.
+never ends the turn. One case is refused, for an answer as for a failure or
+interruption closure: an uncovered binding that is itself a session snapshot of
+this provider, known as the next admission would know it, by the session
+context its pinned payload carries, because a run carries one current session
+snapshot and every later admission would fail on two. The run keeps the
+snapshot its record holds, and a refused closure closes its source through the
+provider's failure route.
 
 The provider declares conversational input formats in `private_config.input_messages`.
 Each label names the payload fields that carry its text, client observations,
@@ -966,6 +969,12 @@ that admitted call, with matching provider, run and transport coordinates.
 Completing an older result can project the same generation as a newly admitted
 call. That projection cannot clear the new call's wait: its exact call evidence
 prevails until an equally new recorded continuity carrier proves a successor.
+A result whose stored pending continuity is behind the context generation it
+is admitted under continues from the admitted generation: checked authoring
+advanced the context while the call was in flight, and the thread, its
+fingerprints and the outstanding call are exactly those the call left with. A
+continuity ahead of its admission, a regressed transport, another thread or
+differing fingerprints fail closed.
 
 A native turn may wait on several external calls at once. The provider admits
 every ordinary dynamic tool or interface-operation request that arrives while

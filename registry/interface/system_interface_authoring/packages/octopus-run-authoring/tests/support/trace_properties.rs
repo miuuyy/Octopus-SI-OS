@@ -1,10 +1,3 @@
-//! Generated call and result traces through the authoring gate.
-//!
-//! A turn emits batches of tool calls, their results arrive in any order,
-//! context is bound while results wait, and the turn closes on whichever
-//! result arrives last. A model of the run context states what every result's
-//! rebase and every snapshot owe; the real authoring path is held to it.
-
 use super::*;
 use crate::property_check::check;
 use proptest::prelude::*;
@@ -13,15 +6,9 @@ const CLOSING_LABELS: [&str; 3] = ["reply", "turn.error", "turn.interrupted.resu
 
 #[derive(Clone, Debug)]
 struct Trace {
-    /// Each call names its door and whether it ends its batch. The call that
-    /// ends a batch leaves on the terminal write; the calls before it in the
-    /// batch leave on non-terminal writes.
     calls: Vec<(bool, bool)>,
-    /// The order in which results arrive and are consumed.
     arrival: Vec<usize>,
-    /// Whether every result is admitted before the first is consumed.
     upfront: bool,
-    /// Context bound from another input before the arrival at each position.
     steers: Vec<usize>,
     closing: usize,
 }
@@ -46,7 +33,6 @@ struct Called {
     call: ArtifactRef,
     tool: &'static str,
     correlation: String,
-    /// How much of the run context the call's result row admitted.
     held: usize,
     evidence: bool,
 }
@@ -60,8 +46,6 @@ fn written(authored: &AuthoredRun) -> ArtifactRef {
     ArtifactRef { id: item.artifact_id.clone(), content: ContentHash::from_hex(&item.artifact_content_hash).unwrap() }
 }
 
-/// An earlier call of a batch: its write does not end the emission, so its
-/// result row holds the call as evidence and its publication binds it.
 fn leave_on_a_non_terminal_write(fixture: &mut CompletedInputReplayFixture, door: &str, tool: &str, correlation: &str) -> ArtifactRef {
     let before = std::fs::read(&fixture.handoff.run_path).unwrap();
     let record = RunRecord::from_bytes(&before).unwrap();
@@ -85,7 +69,6 @@ fn leave_on_a_non_terminal_write(fixture: &mut CompletedInputReplayFixture, door
     call
 }
 
-/// Another input is consumed while results wait and binds its context.
 fn steer(fixture: &mut CompletedInputReplayFixture, context: &mut Vec<ArtifactRef>, number: usize) {
     let file = InterfaceArtifactFile::write(fixture.handoff.var_dir.join(format!("steer-{number}")), "tool.result",
         &serde_json::to_vec(&serde_json::json!({"label":"tool.result","tool":"read","correlation_id":format!("steer-{number}"),"ok":true,"body":{"value":number}})).unwrap()).unwrap();
@@ -110,9 +93,7 @@ fn drive(trace: &Trace) {
         let mut fixture = parallel_call_fixture();
         fixture.handoff.context_output_labels.insert(closing.into());
         fixture.handoff.session_snapshot_labels.insert(closing.into());
-        let snapshot_labels = CLOSING_LABELS.iter().map(|label| label.to_string()).collect::<BTreeSet<_>>();
         let limits = fixture.handoff.ctx.required_host_io_limits().unwrap();
-        // The model: the run context only grows, in the order things are bound.
         let mut context = vec![fixture.input.clone()];
         let mut called = Vec::new();
         for (index, (search, ends_batch)) in trace.calls.iter().enumerate() {
@@ -155,14 +136,9 @@ fn drive(trace: &Trace) {
             assert_eq!(fixture.handoff.state.try_lock().unwrap().context_artifacts, ids(&context),
                 "the published context holds every call, result and bound input in the order it was bound");
             assert_eq!(fixture.handoff.recover_source().await.unwrap(), ProviderSourceRecovery::Process);
-            // Conservation: the rebase is everything bound since the result's
-            // row was admitted. Its own call is in it only when the row held
-            // the call as evidence, since otherwise the row admitted it.
             let expected = context[entry.held..].iter().filter(|artifact| entry.evidence || **artifact != entry.call).cloned().collect::<Vec<_>>();
             let mut state = fixture.handoff.state.try_lock().unwrap().clone();
             assert_eq!(state.result_rebase.clone().unwrap_or_default(), expected, "result {index} consumed at position {position}");
-            // The session a snapshot is made of is the one a restarted provider
-            // reads: the context the result's row admitted, then its rebase.
             let record = RunRecord::from_bytes(&std::fs::read(&fixture.handoff.run_path).unwrap()).unwrap();
             let (session, head, _) = recover_source_session_context_from_cache(&fixture.handoff.ctx.blobs_dir, limits,
                 &ProviderHandoffSession::new(&fixture.handoff.ctx).unwrap(), &record, &fixture.handoff.config, source, &expected,
@@ -181,17 +157,13 @@ fn drive(trace: &Trace) {
             for (earlier, earlier_result) in consumed.iter().map(|(earlier, result)| (*earlier, result)).chain([(index, &result)]) {
                 assert!(at(&called[earlier].call) < at(earlier_result), "a result precedes its call in the session");
             }
-            for label in CLOSING_LABELS {
-                assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, label, &state.context_artifacts,
-                    &state.static_context_artifacts, &state.session_context, &snapshot_labels), Ok(Vec::new()),
-                    "a snapshot taken on result {index} covers every binding");
-            }
+            assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, &state.context_artifacts,
+                &state.static_context_artifacts, &state.session_context, |_| Ok(false)), Ok(Vec::new()),
+                "a snapshot taken on result {index} covers every binding");
             if position + 1 < trace.arrival.len() {
                 let before = RunRecord::from_bytes(&std::fs::read(&fixture.handoff.run_path).unwrap()).unwrap();
                 let write = fixture.consume_result(&result, "interface.context.updated", true);
                 assert_eq!(write.pending_handoff.rebase, expected, "the consuming write records the rebase it consumed against");
-                // Soundness in both directions: a rebase that names more or
-                // less than the record's difference is refused.
                 for forge in [true, false] {
                     let mut forged: serde_json::Value = serde_json::from_str(&write.content).unwrap();
                     let rebase = forged["interface_state"]["provider"]["pending_handoff"]["rebase"].as_array_mut();
@@ -209,17 +181,12 @@ fn drive(trace: &Trace) {
                 consumed.push((index, result));
                 continue;
             }
-            // The turn closes on this result, whichever call it answers.
             let mut two_heads = state.context_artifacts.clone();
             let stray = ArtifactId::new(format!("{closing}:{}", ContentHash::of_bytes(b"another head").to_hex()));
             two_heads.push(stray.clone());
-            let beside = result_inputs::snapshot_carried_context(&fixture.handoff.config, closing, &two_heads,
-                &state.static_context_artifacts, &state.session_context, &snapshot_labels);
-            if closing == "reply" {
-                assert!(beside.unwrap_err().contains(stray.as_str()), "an answer never binds a second session snapshot beside itself");
-            } else {
-                assert_eq!(beside, Ok(vec![stray]), "a failure closure is delivered beside any binding");
-            }
+            let beside = result_inputs::snapshot_carried_context(&fixture.handoff.config, &two_heads,
+                &state.static_context_artifacts, &state.session_context, |id| Ok(id == &stray));
+            assert!(beside.unwrap_err().contains(stray.as_str()), "no closing output binds a second session snapshot beside itself");
             let current = std::fs::read(&fixture.handoff.run_path).unwrap();
             let before = RunRecord::from_bytes(&current).unwrap();
             let answer = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("closing"), closing,
@@ -255,24 +222,22 @@ fn a_snapshot_keeps_what_it_does_not_capture_and_refuses_only_a_second_head() {
     let fixture = parallel_call_fixture();
     let config = fixture.handoff.config.clone();
     let snapshot_labels = CLOSING_LABELS.iter().map(|label| label.to_string()).collect::<BTreeSet<_>>();
-    let universe = (0..12u8).map(|index| addressed(["tool.call", "tool.result", "operator.message", "reply", "turn.error", "turn.interrupted.result"]
-        [index as usize % 6], &[index])).collect::<Vec<_>>();
+    let labels = ["tool.call", "tool.result", "operator.message", "reply", "turn.error", "turn.interrupted.result"];
+    let universe = (0..12u8).map(|index| addressed(labels[index as usize % 6], &[index])).collect::<Vec<_>>();
+    let declared = universe.iter().enumerate().map(|(index, artifact)| (artifact.id.clone(), labels[index % 6].to_string())).collect::<BTreeMap<_, _>>();
     let some = || prop::sample::subsequence(universe.clone(), 0..=universe.len());
-    check(256, (some().prop_shuffle(), some(), some(), 0..CLOSING_LABELS.len()), |(bound, statics, captured, label)| {
-        let label = CLOSING_LABELS[label];
+    check(256, (some().prop_shuffle(), some(), some()), |(bound, statics, captured)| {
         let captured = ResolvedSessionContext { provider_interface: "provider".into(), artifacts: captured.into_iter().map(|artifact| SessionContextArtifact {
-            label: artifact.id.as_str().rsplit_once(':').unwrap().0.into(), payload: serde_json::json!({}), source_artifact: artifact, source_movement_seq: None,
+            label: declared[&artifact.id].clone(), payload: serde_json::json!({}), source_artifact: artifact, source_movement_seq: None,
         }).collect() };
         let outside = bound.iter().filter(|artifact| !statics.contains(artifact)
             && !captured.artifacts.iter().any(|held| &held.source_artifact == *artifact)).map(|artifact| artifact.id.clone()).collect::<Vec<_>>();
-        let second_head = outside.iter().find(|id| snapshot_labels.contains(id.as_str().rsplit_once(':').unwrap().0));
-        let carried = result_inputs::snapshot_carried_context(&config, label, &ids(&bound), &ids(&statics), &captured, &snapshot_labels);
+        let second_head = outside.iter().find(|id| snapshot_labels.contains(&declared[*id]));
+        let carried = result_inputs::snapshot_carried_context(&config, &ids(&bound), &ids(&statics), &captured,
+            |id| Ok(snapshot_labels.contains(&declared[id])));
         match second_head {
-            // An answer is the one current session snapshot of its run.
-            Some(head) if label == "reply" => prop_assert!(carried.as_ref().is_err_and(|error| error.contains(head.as_str())), "{:?}", carried),
-            // A failure closure reaches the run beside anything; and without a
-            // second head every snapshot keeps the uncovered bindings in order.
-            _ => prop_assert_eq!(carried, Ok(outside)),
+            Some(head) => prop_assert!(carried.as_ref().is_err_and(|error| error.contains(head.as_str())), "{:?}", carried),
+            None => prop_assert_eq!(carried, Ok(outside)),
         }
         Ok(())
     });
@@ -292,7 +257,6 @@ fn a_tool_call_gets_an_output_route_only_inside_the_formed_grant() {
             (false, _) => prop_assert!(route.as_ref().is_err_and(|error| error.contains("outside the formed invocation grant")), "{:?}", route),
             (true, "read") => prop_assert_eq!(route, Ok("tool".to_string())),
             (true, "search") => prop_assert_eq!(route, Ok("search".to_string())),
-            // A granted tool no checkpoint routes still has nowhere to go.
             (true, _) => prop_assert!(route.as_ref().is_err_and(|error| error.contains("no descriptor-derived output owner")), "{:?}", route),
         }
         Ok(())
@@ -316,8 +280,6 @@ fn a_session_prefix_fingerprint_ignores_key_order_and_ledger_coordinates_and_not
         let recorded = session(false, false, None);
         let prefix = session_snapshot_prefix_fingerprint(&recorded).unwrap();
         prop_assert_eq!(&prefix, &session_snapshot_prefix_fingerprint(&recorded).unwrap());
-        // The same payloads built in another key order, with every movement
-        // coordinate grounded since, are the same prefix.
         let grounded = session(true, true, None);
         prop_assert_eq!(&prefix, &session_snapshot_prefix_fingerprint(&grounded).unwrap());
         prop_assert_ne!(session_artifacts_fingerprint(&recorded).unwrap(), session_artifacts_fingerprint(&grounded).unwrap());

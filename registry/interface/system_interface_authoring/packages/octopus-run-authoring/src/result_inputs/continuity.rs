@@ -1,6 +1,6 @@
 use super::*;
 
-fn content_ref(id: &ArtifactId) -> Option<ArtifactRef> {
+pub(super) fn content_ref(id: &ArtifactId) -> Option<ArtifactRef> {
     let (label, hex) = id.as_str().rsplit_once(':')?;
     let content = ContentHash::from_hex(hex)?;
     (!label.trim().is_empty() && content.to_hex() == hex).then(|| ArtifactRef { id: id.clone(), content })

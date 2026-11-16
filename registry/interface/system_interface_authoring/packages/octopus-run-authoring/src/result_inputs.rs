@@ -1592,10 +1592,6 @@ pub(super) fn checked_topology_advance(
     Ok(true)
 }
 
-/// Snapshot outputs that close a failed or interrupted source. They must reach
-/// the run even when context was bound after their source was admitted.
-const FAILURE_SNAPSHOT_LABELS: [&str; 2] = ["turn.error", "turn.interrupted.result"];
-
 pub(super) fn context_outside_snapshot(
     config: &RunAuthoringConfig,
     future: &[ArtifactId],
@@ -1618,34 +1614,37 @@ pub(super) fn context_outside_snapshot(
         .collect()
 }
 
-/// Context a snapshot does not capture is context it would drop. Those bindings
-/// stay bound beside the snapshot, so the next admission reads them after it.
-/// A refusal would not keep them in order either: the failure snapshot that
-/// closes a refused source carries the same bindings, and the answer is lost.
-/// An ordinary snapshot is refused in one case: an uncovered binding that is
-/// itself a session snapshot would bind two heads, and every later admission
-/// fails on two heads.
 pub(super) fn snapshot_carried_context(
     config: &RunAuthoringConfig,
-    label: &str,
     future: &[ArtifactId],
     static_context: &[ArtifactId],
     captured: &ResolvedSessionContext,
-    session_snapshot_labels: &BTreeSet<String>,
+    carries_session_snapshot: impl Fn(&ArtifactId) -> Result<bool, String>,
 ) -> Result<Vec<ArtifactId>, String> {
     let outside = context_outside_snapshot(config, future, static_context, captured);
-    if FAILURE_SNAPSHOT_LABELS.contains(&label) {
-        return Ok(outside);
-    }
-    if let Some(head) = outside.iter().find(|id| {
-        id.as_str()
-            .rsplit_once(':')
-            .is_some_and(|(label, _)| session_snapshot_labels.contains(label))
-    }) {
-        return Err(format!(
-            "provider snapshot would bind session snapshot '{}' beside itself; a run carries one current session snapshot",
-            head.as_str()
-        ));
+    for id in &outside {
+        if carries_session_snapshot(id)? {
+            return Err(format!(
+                "provider snapshot would bind session snapshot '{}' beside itself; a run carries one current session snapshot",
+                id.as_str()
+            ));
+        }
     }
     Ok(outside)
+}
+
+pub(super) fn pinned_session_snapshot(
+    blobs_dir: &Path,
+    limits: InterfaceHostIoLimits,
+    provider: &InterfaceId,
+    id: &ArtifactId,
+) -> Result<bool, String> {
+    let Some(reference) = continuity::content_ref(id) else {
+        return Ok(false);
+    };
+    let (_, payload) = read_pinned_artifact_from_cache(blobs_dir, limits, &reference)?;
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&payload) else {
+        return Ok(false);
+    };
+    Ok(bound_session_snapshot(&value, &reference)?.is_some_and(|snapshot| snapshot.provider_interface == *provider))
 }

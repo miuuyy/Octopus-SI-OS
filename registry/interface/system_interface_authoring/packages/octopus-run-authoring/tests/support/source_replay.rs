@@ -1146,25 +1146,21 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
         assert_eq!(state.context_artifacts, expected);
         assert_eq!(state.session_context.provider_interface, captured_provider);
         assert_eq!(serde_json::to_value(&state.session_context.artifacts).unwrap(), captured_artifacts);
-        let snapshots = BTreeSet::from(["reply".to_string(), "turn.error".to_string(), "turn.interrupted.result".to_string()]);
         assert!(result_inputs::context_outside_snapshot(&fixture.handoff.config, &state.context_artifacts, &[], &state.session_context).contains(&b.id));
         let future = state.context_artifacts.clone();
         assert!(result_inputs::context_outside_snapshot(&fixture.handoff.config, &future, &future, &state.session_context).is_empty());
-        let carried = result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &state.context_artifacts, &[], &state.session_context, &snapshots).unwrap();
-        assert!(carried.contains(&b.id), "a terminal error keeps the context bound while its call waited");
-        assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.interrupted.result", &state.context_artifacts, &[],
-            &state.session_context, &snapshots).unwrap(), carried);
-        assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &state.context_artifacts, &[], &state.session_context, &snapshots).unwrap(),
-            carried, "an ordinary snapshot keeps the same bindings beside itself");
-        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &future, &future, &state.session_context, &snapshots).unwrap().is_empty(),
+        let limits = fixture.handoff.ctx.required_host_io_limits().unwrap();
+        let pinned = |id: &ArtifactId| result_inputs::pinned_session_snapshot(&fixture.handoff.ctx.blobs_dir, limits, &fixture.handoff.config.provider_interface, id);
+        assert_eq!(pinned(&b.id), Ok(false), "an operator input carries no session snapshot");
+        let carried = result_inputs::snapshot_carried_context(&fixture.handoff.config, &state.context_artifacts, &[], &state.session_context, &pinned).unwrap();
+        assert!(carried.contains(&b.id), "a snapshot keeps the context bound while its call waited beside itself");
+        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, &future, &future, &state.session_context, &pinned).unwrap().is_empty(),
             "context the snapshot already covers is not carried twice");
         let mut two_heads = state.context_artifacts.clone();
         let stray = ArtifactId::new(format!("reply:{}", ContentHash::of_bytes(b"another head").to_hex()));
         two_heads.push(stray.clone());
-        let refused = result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &two_heads, &[], &state.session_context, &snapshots).unwrap_err();
-        assert!(refused.contains(stray.as_str()), "an ordinary snapshot never binds a second session snapshot beside itself: {refused}");
-        assert!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "turn.error", &two_heads, &[], &state.session_context, &snapshots).unwrap().contains(&stray),
-            "a failure snapshot still closes its source");
+        let refused = result_inputs::snapshot_carried_context(&fixture.handoff.config, &two_heads, &[], &state.session_context, |id| Ok(id == &stray)).unwrap_err();
+        assert!(refused.contains(stray.as_str()), "no snapshot binds a second session snapshot beside itself: {refused}");
         carried
     };
     let answer = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("answer"), "reply", br#"{"text":"done"}"#).unwrap();
@@ -2338,8 +2334,6 @@ async fn an_earlier_parallel_call_whose_result_arrives_last_is_covered_by_the_an
     let mut fixture = parallel_call_fixture();
     fixture.handoff.context_output_labels.insert("reply".into());
     fixture.handoff.session_snapshot_labels.insert("reply".into());
-    // The first call of the pair leaves on a non-terminal write: its result row
-    // holds it as read-only evidence, and its publication adds it to the context.
     let before = std::fs::read(&fixture.handoff.run_path).unwrap();
     let record = RunRecord::from_bytes(&before).unwrap();
     let mut context = effective_context_artifacts(&record, &fixture.handoff.config).unwrap();
@@ -2388,8 +2382,8 @@ async fn an_earlier_parallel_call_whose_result_arrives_last_is_covered_by_the_an
     let positions = [&first, &second, &later_result, &update, &earlier_result].map(|reference| state.session_context.artifacts.iter()
         .position(|entry| &entry.source_artifact == reference).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "the session keeps both calls before their results");
-    assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, "reply", &state.context_artifacts,
-        &state.static_context_artifacts, &state.session_context, &fixture.handoff.session_snapshot_labels).unwrap(), Vec::<ArtifactId>::new(),
+    assert_eq!(result_inputs::snapshot_carried_context(&fixture.handoff.config, &state.context_artifacts,
+        &state.static_context_artifacts, &state.session_context, |_| Ok(false)).unwrap(), Vec::<ArtifactId>::new(),
         "the answer that ends the turn covers every binding, so nothing is left beside it");
 
     let current = std::fs::read(&fixture.handoff.run_path).unwrap();
