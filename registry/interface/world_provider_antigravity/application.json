@@ -16,7 +16,7 @@
   },
   "connection": {
     "disclosure": [
-      "Connect downloads Google's official Antigravity ACP server and signs in with your Google account in the browser; model calls of this provider use its Antigravity subscription.",
+      "Connect downloads Google's official Antigravity ACP server and signs in with your Google account in the browser; model calls use its Antigravity subscription.",
       "Google's server keeps its own default instructions ahead of the instructions Octopus sends, and its built-in tools stay turned off."
     ]
   }
