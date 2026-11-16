@@ -1039,6 +1039,24 @@ function isMemberDataPath(member, relative) {
   return (member.data_directories ?? []).some(directory => relative.startsWith(`${directory}/`));
 }
 
+function isMemberDataDirectory(member, relative) {
+  return (member.data_directories ?? []).some(directory => relative === directory || relative.startsWith(`${directory}/`));
+}
+
+// Installed files under a declared data directory that the package does not ship are installation data:
+// they are not local changes, and repair carries them into the replacement owner unchanged.
+function memberRuntimeData(member, active) {
+  if (!active?.present) return { files: [], directories: [] };
+  const shipped = new Set(member.files.map(file => snapshotRelativePath(file.relative_path)));
+  return {
+    files: active.files.filter(file => {
+      const relative = snapshotRelativePath(file.relative_path);
+      return !shipped.has(relative) && isMemberDataPath(member, relative);
+    }),
+    directories: active.directories.filter(directory => isMemberDataDirectory(member, snapshotRelativePath(directory))),
+  };
+}
+
 function validateMemberDataPaths(member, snapshot) {
   for (const absolute of snapshot.excludedEntries) {
     const relative = snapshotRelativePath(path.relative(snapshot.root, absolute));
@@ -1541,6 +1559,7 @@ async function readPackageState(roots, manifest, source) {
       const installed = active?.present ? sourceFileMap(active) : new Map();
       return [...new Set([...baseline.keys(), ...installed.keys()])].sort(compareSnapshotPaths).flatMap(relative => {
         const before = baseline.get(relative), current = installed.get(relative);
+        if (!before && current && isMemberDataPath(active, relative)) return [];
         return sameOwnedFile(before, current) ? [] : [{ registry_kind: member.registry_kind, owner: member.owner, path: relative,
           change: !before ? "added" : !current ? "removed" : "modified",
           source_digest: before?.sha256 ?? null, installed_digest: current?.sha256 ?? null,
@@ -2118,7 +2137,9 @@ async function preparePackageRepair(manifest, source, state) {
     const active = state.activeMembers.find((candidate) => memberKey(candidate) === memberKey(member));
     const receipt = state.receipt?.members.find((candidate) => memberKey(candidate) === memberKey(member));
     const baselines = new Map((receipt?.source_files ?? []).map((file) => [file.path, file]));
-    for (const file of active.files.filter((file) => path.extname(file.relative_path).toLowerCase() === ".json")) {
+    const runtimeData = memberRuntimeData(member, active);
+    for (const file of active.files.filter((file) => path.extname(file.relative_path).toLowerCase() === ".json"
+      && !runtimeData.files.includes(file))) {
       const relative = snapshotRelativePath(file.relative_path);
       const expected = snapshotFile(member, relative);
       const configured = member.projectedFiles.get(relative);
@@ -2141,7 +2162,15 @@ async function preparePackageRepair(manifest, source, state) {
       files.push(merged.file);
       projectedFiles.set(relative, merged.projected);
     }
-    members.push({ ...member, files, digest: snapshotDigest(files), projectedFiles });
+    if (!runtimeData.files.length) {
+      members.push({ ...member, files, digest: snapshotDigest(files), projectedFiles });
+      continue;
+    }
+    files.push(...runtimeData.files);
+    files.sort((left, right) => compareSnapshotPaths(snapshotRelativePath(left.relative_path), snapshotRelativePath(right.relative_path)));
+    const directories = [...new Set([...member.directories, ...runtimeData.directories])]
+      .sort((left, right) => compareSnapshotPaths(snapshotRelativePath(left), snapshotRelativePath(right)));
+    members.push({ ...member, files, directories, digest: snapshotDigest(files), projectedFiles });
   }
   return { ...source, members };
 }
@@ -2194,6 +2223,12 @@ async function removeResolvedPackages(roots, entries, operation) {
     const source = await snapshotPackageSource(roots, entry.manifest, { fresh: true });
     const state = await readPackageState(roots, entry.manifest, source);
     if (state.localChanges.length) throw new Error(`local package '${entry.manifest.id}' has local changes; removal cannot delete authored files`);
+    for (const member of source.members) {
+      const active = state.activeMembers.find((candidate) => memberKey(candidate) === memberKey(member));
+      if (memberRuntimeData(member, active).files.length) {
+        throw new Error(`local package '${entry.manifest.id}' holds installation data in '${memberKey(member)}' data directories; removal cannot delete it`);
+      }
+    }
     if (!state.materialized || state.receiptState !== "valid" || !state.receipt) {
       throw new Error(`local package '${entry.manifest.id}' has no valid installed receipt`);
     }

@@ -197,6 +197,54 @@ async function packageExportFixture(root, repoRoot) {
   result = publish(); assert.equal(result.status, 1); assert.match(result.stderr, /development executable path.*life.json/);
   assert.deepEqual(await fs.readdir(out), [path.basename(output)]);
 }
+async function dataDirectoryFixture(root) {
+  const roots = await fixture(root);
+  const manifestPath = path.join(roots.libraryRoot, "packages", "fixture.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath));
+  manifest.members[0].data_directories = ["entries", "usage"];
+  await json(manifestPath, manifest);
+  await json(ownerFile(roots, false, "entries/shipped.json"), { id: "shipped", text: "one" });
+  await install(roots);
+  const runtime = {
+    "entries/memory-001.json": `${JSON.stringify({ id: "memory-001", note: "remembered" })}\n`,
+    "usage/memory-001.json": "{\"days\":[\"2026-11-16\"]}\n",
+    "usage/nested/deep.bin": Buffer.from([0, 1, 2, 255]),
+  };
+  for (const [relative, body] of Object.entries(runtime)) {
+    await fs.mkdir(path.dirname(ownerFile(roots, true, relative)), { recursive: true });
+    await fs.writeFile(ownerFile(roots, true, relative), body, { mode: 0o600 });
+  }
+  let current = await record(roots);
+  assert.equal(current.receipt_state, "valid");
+  assert.deepEqual(current.local_changes, []);
+  await assert.rejects(removeLocalPackages({ ...roots, operationId: "fixture_data_remove_001", packageIds: ["fixture"],
+    expectedInstalledDigests: { fixture: current.installed_digest } }), /installation data|removal/);
+  await json(ownerFile(roots, false, "entries/shipped.json"), { id: "shipped", text: "two" });
+  current = await record(roots);
+  assert.equal(current.update_available, true);
+  assert.deepEqual(current.local_changes, []);
+  await repair(roots, "fixture_data_repair_001");
+  for (const [relative, body] of Object.entries(runtime)) {
+    assert.deepEqual(await fs.readFile(ownerFile(roots, true, relative)), Buffer.from(body));
+    assert.equal((await fs.stat(ownerFile(roots, true, relative))).mode & 0o777, 0o600);
+  }
+  assert.deepEqual(JSON.parse(await fs.readFile(ownerFile(roots, true, "entries/shipped.json"))), { id: "shipped", text: "two" });
+  current = await record(roots);
+  assert.equal(current.update_available, false);
+  assert.deepEqual(current.local_changes, []);
+  await json(ownerFile(roots, true, "entries/shipped.json"), { id: "shipped", text: "hand edited" });
+  await json(ownerFile(roots, false, "entries/shipped.json"), { id: "shipped", text: "three" });
+  current = await record(roots);
+  assert.deepEqual(current.local_changes.map(change => [change.path, change.change]), [["entries/shipped.json", "modified"]]);
+  await assert.rejects(repair(roots, "fixture_data_repair_002"), /local changes|unowned JSON changes/);
+  assert.equal(JSON.parse(await fs.readFile(ownerFile(roots, true, "entries/shipped.json"))).text, "hand edited");
+  await fs.rm(ownerFile(roots, true, "entries/shipped.json"));
+  current = await record(roots);
+  assert.deepEqual(current.local_changes.map(change => [change.path, change.change]), [["entries/shipped.json", "removed"]]);
+  await assert.rejects(repair(roots, "fixture_data_repair_003"), /local changes/);
+  assert.deepEqual(await fs.readFile(ownerFile(roots, true, "entries/memory-001.json")), Buffer.from(runtime["entries/memory-001.json"]));
+}
+
 async function run() {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-package-ownership-")));
   try {
@@ -330,13 +378,14 @@ async function run() {
     assert.equal(isGeneratedSourcePath(`${generated[0]}../../unexpected`, generated), false);
     assert.throws(() => assertDeclaredGeneratedOutput(path.join(repoRoot, "registry", "unrelated", "payload"), repoRoot, generated), /not declared/);
     assert.throws(() => validatePublicPayload("life.json", Buffer.from('{"bin":"target/debug/unreviewed"}'), { privateRoots: [], rejectDevelopmentExecutables: true }), /development executable path/);
+    await dataDirectoryFixture(path.join(root, "data-directories"));
     await sourceBoundaryFixture(path.join(root, "source-boundary"), repoRoot);
     await packageExportFixture(path.join(root, "package-export"), repoRoot);
     process.stdout.write("package configuration ownership and rename-window recovery passed\n");
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 if (require.main === module) {
-  const focused = { "--publication-recovery": publicationRecoveryFixture }[process.argv[2]];
+  const focused = { "--publication-recovery": publicationRecoveryFixture, "--data-directories": dataDirectoryFixture }[process.argv[2]];
   const action = process.argv[2] === "--crash" ? crash(process.argv[3], process.argv[4])
     : focused ? (async () => {
       const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-package-contract-")));
