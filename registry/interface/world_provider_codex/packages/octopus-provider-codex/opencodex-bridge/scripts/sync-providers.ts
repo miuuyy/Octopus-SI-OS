@@ -431,6 +431,15 @@ for (const provider of spec.providers) {
   if (provider.cli && provider.key) throw new Error(`${provider.interface}: a CLI provider keeps its sign-in inside the CLI`);
   if (provider.account && (provider.key || provider.cli || provider.local || provider.model)) throw new Error(`${provider.interface}: an account is the provider's only credential`);
   if (provider.account && !/^packages\/[A-Za-z0-9_-]+\.cjs$/.test(provider.account.client_module)) throw new Error(`${provider.interface}: the account module is a .cjs file in the interface's packages folder`);
+  if (provider.account) {
+    const { disclosure } = provider.account;
+    if (!Array.isArray(disclosure) || disclosure.length > 4) throw new Error(`${provider.interface}: an account disclosure lists at most 4 statements`);
+    disclosure.forEach((statement, index) => {
+      if (typeof statement !== "string" || !statement.trim() || statement.trim() !== statement || statement.length > 160 || /[\u0000-\u001f\u007f]/u.test(statement)) {
+        throw new Error(`${provider.interface}: account disclosure ${index} must be plain text of 1..160 characters`);
+      }
+    });
+  }
   if (provider.models && provider.model) throw new Error(`${provider.interface}: declare a model catalog or a model setup field, not both`);
   if (provider.acp && (adapter !== "antigravity-acp" || provider.account?.provider !== "antigravity-acp" || !provider.models
       || !Array.isArray(provider.acp.residual_sources) || provider.acp.residual_sources.some((source) => typeof source?.name !== "string"))) {
