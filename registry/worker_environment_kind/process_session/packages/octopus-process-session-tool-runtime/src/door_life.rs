@@ -2520,6 +2520,21 @@ impl LedgerChangeWatch {
     }
 }
 
+/// inotify reports a reader opening the ledger beside its writes. Only an
+/// event that can carry new rows wakes a ledger reader; otherwise every read
+/// of the ledger would schedule the next one.
+#[cfg(not(target_os = "macos"))]
+fn ledger_event_reports_a_change(event: &notify::Event) -> bool {
+    use notify::event::{AccessKind, AccessMode};
+    event.need_rescan()
+        || !matches!(
+            event.kind,
+            notify::EventKind::Access(
+                AccessKind::Read | AccessKind::Open(_) | AccessKind::Close(AccessMode::Read)
+            )
+        )
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(super) fn ledger_change_watch(path: &Path) -> Result<LedgerChangeWatch, String> {
     if !path.is_file() {
@@ -2529,8 +2544,10 @@ pub(super) fn ledger_change_watch(path: &Path) -> Result<LedgerChangeWatch, Stri
         ));
     }
     let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-    let mut watcher = notify::recommended_watcher(move |event| {
-        let _ = tx.send(event);
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.as_ref().map_or(true, ledger_event_reports_a_change) {
+            let _ = tx.send(event);
+        }
     })
     .map_err(|error| {
         format!(
@@ -2928,6 +2945,24 @@ mod tests {
         match endpoint {
             Endpoint::Interface(id) => ("interface", id.as_str().to_string()),
         }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn reading_the_ledger_does_not_wake_its_readers_but_writes_and_rescans_do() {
+        use notify::event::{AccessKind, AccessMode, Flag, ModifyKind};
+        for (kind, expected) in [
+            (notify::EventKind::Access(AccessKind::Open(AccessMode::Any)), false),
+            (notify::EventKind::Access(AccessKind::Read), false),
+            (notify::EventKind::Access(AccessKind::Close(AccessMode::Read)), false),
+            (notify::EventKind::Access(AccessKind::Close(AccessMode::Write)), true),
+            (notify::EventKind::Modify(ModifyKind::Any), true),
+            (notify::EventKind::Remove(notify::event::RemoveKind::File), true),
+        ] {
+            assert_eq!(super::ledger_event_reports_a_change(&notify::Event::new(kind)), expected, "{kind:?}");
+        }
+        let read = notify::EventKind::Access(AccessKind::Read);
+        assert!(super::ledger_event_reports_a_change(&notify::Event::new(read).set_flag(Flag::Rescan)));
     }
 
     #[test]

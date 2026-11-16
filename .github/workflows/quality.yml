@@ -273,6 +273,9 @@ jobs:
       - name: Interface executable freshness and receipt checks
         run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_)'
 
+      - name: Ledger readers wake on changes, not on their own reads
+        run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources)'
+
       - name: Runtime and product dependency boundaries
         run: cargo test --locked -p octopus-app --test architecture_dependency_guard -- --exact production_roots_keep_registry_implementation_boundaries worker_environment_kind_packages_link_neither_runtime_nor_app_server
 

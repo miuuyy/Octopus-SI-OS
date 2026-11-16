@@ -1799,6 +1799,21 @@ impl LedgerChangeWatch {
     }
 }
 
+/// inotify reports a reader opening the ledger beside its writes. Only an
+/// event that can carry new rows wakes a ledger reader; otherwise every read
+/// of the ledger would schedule the next one.
+#[cfg(not(target_os = "macos"))]
+fn ledger_event_reports_a_change(event: &notify::Event) -> bool {
+    use notify::event::{AccessKind, AccessMode};
+    event.need_rescan()
+        || !matches!(
+            event.kind,
+            notify::EventKind::Access(
+                AccessKind::Read | AccessKind::Open(_) | AccessKind::Close(AccessMode::Read)
+            )
+        )
+}
+
 #[cfg(not(target_os = "macos"))]
 fn ledger_change_watch(path: &Path) -> Result<LedgerChangeWatch, String> {
     if !path.is_file() {
@@ -1808,8 +1823,10 @@ fn ledger_change_watch(path: &Path) -> Result<LedgerChangeWatch, String> {
         ));
     }
     let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-    let mut watcher = notify::recommended_watcher(move |event| {
-        let _ = tx.send(event);
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.as_ref().map_or(true, ledger_event_reports_a_change) {
+            let _ = tx.send(event);
+        }
     })
     .map_err(|error| {
         format!(
