@@ -6,19 +6,16 @@ installing the folder starts nothing. It never posts comments or changes GitHub.
 
 ## Configuration and credentials
 
-Copy this owner folder and install its explicit `world_legacy_watch` code
-dependency. `life.json` imports only that owner's private-file, hash, ledger and
-stdin/stdout protocol helpers, not its mail-watch behavior. No kernel changes,
-webhooks, public listener, or notifications permission are needed.
+Install the GitHub watch package from Applications; it brings its explicit
+`world_legacy_watch` code dependency. `life.json` imports only that owner's
+private-file, hash, ledger and stdin/stdout protocol helpers, not its mail-watch
+behavior. No kernel changes, webhooks, public listener, or notifications
+permission are needed.
 
-Set `github-watch.json`. The life reads `$OCTOPUS_VAR_DIR/github-watch.json`
-(normally `<Home>/interfaces/world_github_watch/github-watch.json`) first and
-this folder's `github-watch.json` only when no private file exists. Keep an
-installation's own repository in the private file: the registry folder holds
-the `OWNER/REPOSITORY` template and is rewritten by a package repair or a
-rebuild, while the private state directory is not. A private file that is
-unreadable or invalid stops the life; it never falls back to the template.
-The configuration is read once at start, so restart the life after changing it.
+Set `github-watch.json` in the installed interface folder. It is the sensor's
+only configuration; the package declares its fields as the installation's own,
+so a package repair keeps them. The file is read once at start, so restart the
+life after changing it.
 
 - `repository`: exact `OWNER/REPOSITORY`;
 - `branch`: branch whose failed workflow runs matter;

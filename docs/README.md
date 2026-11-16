@@ -24,6 +24,8 @@
 - [Scenarios](scenarios.md) - what the primitives are meant to express.
 - [Legacy watch](../registry/interface/world_legacy_watch/README.md) - a
   trigger that hands the system over to a model when its owner dies.
+- [GitHub watch](../registry/interface/world_github_watch/README.md) - a
+  read-only trigger on activity in one GitHub repository.
 
 ---
 

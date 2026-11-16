@@ -1,0 +1,98 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_github_watch",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_github_watch",
+  "release_status": "optional",
+  "display": {
+    "name": "GitHub watch",
+    "description": "A trigger template: new activity in one GitHub repository (issues, pull requests, reviews, discussions and failed workflow runs on a branch) wakes the tasks bound to it. It only reads.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "github"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_github_watch",
+      "primary": true,
+      "configuration": [
+        {
+          "path": "github-watch.json",
+          "fields": [
+            {
+              "pointer": "/repository",
+              "schema": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+              }
+            },
+            {
+              "pointer": "/branch",
+              "schema": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            {
+              "pointer": "/poll_seconds",
+              "schema": {
+                "type": "integer",
+                "minimum": 300,
+                "maximum": 86400
+              }
+            },
+            {
+              "pointer": "/ignore_comment_authors",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_\\[\\]-]{1,100}$"
+                }
+              }
+            },
+            {
+              "pointer": "/max_pages",
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            },
+            {
+              "pointer": "/max_requests",
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5000
+              }
+            },
+            {
+              "pointer": "/max_resources",
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              }
+            },
+            {
+              "pointer": "/timeout_seconds",
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "required_packages": [
+    "world_legacy_watch"
+  ]
+}

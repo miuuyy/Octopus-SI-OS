@@ -13,9 +13,6 @@ from pathlib import Path
 from github_api import API, PollError, validate_config
 from github_watch import Watcher
 
-CONFIG_NAME = "github-watch.json"
-MAX_CONFIG_BYTES = 65536
-
 
 def load_boundary(path):
     path = Path(path)
@@ -24,23 +21,6 @@ def load_boundary(path):
     boundary = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(boundary)
     return boundary
-
-
-def load_config(boundary):
-    """Read the watch configuration, private state first.
-
-    The registry folder holds the package's template and is rewritten by a
-    package repair or a rebuild; a copy in the private state directory
-    survives both. Only an absent private file falls back to the registry
-    folder: an unusable one is an error, never a silent fallback.
-    """
-    try:
-        raw = boundary.stable_read(Path(boundary.VAR_DIR) / CONFIG_NAME, MAX_CONFIG_BYTES, "private github watch config")
-        source = "private_state"
-    except FileNotFoundError:
-        raw = boundary.stable_read(Path(boundary.INTERFACE_DIR) / CONFIG_NAME, MAX_CONFIG_BYTES, "github watch config")
-        source = "registry"
-    return validate_config(json.loads(raw)), source
 
 
 def main():
@@ -52,7 +32,8 @@ def main():
     lock = os.open(str(Path(b.VAR_DIR) / "watch.lock"),
                    os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    c, _source = load_config(b)
+    c = validate_config(json.loads(b.stable_read(
+        Path(os.environ["OCTOPUS_INTERFACE_DIR"]) / "github-watch.json", 65536, "github watch config")))
     watcher = Watcher(c, b)
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
