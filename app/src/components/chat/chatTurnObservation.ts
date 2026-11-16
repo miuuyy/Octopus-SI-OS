@@ -1,4 +1,4 @@
-import { loadChatRunMessages } from "../../chatRuns";
+import { loadChatRunMessages, type ChatRunMessage } from "../../chatRuns";
 import type {
   OctopusClientAccessProfile,
   OctopusOperatorChatArtifact,
@@ -82,7 +82,7 @@ export async function observeChatReply(input: {
   cursor: OctopusOperatorChatCursor;
   isCurrent: () => boolean;
   onArtifacts: (artifacts: OctopusOperatorChatArtifact[]) => void;
-}): Promise<{ runId: string; terminal: ObservedTerminalArtifact } | null> {
+}): Promise<{ runId: string; terminal: ObservedTerminalArtifact; messages?: ChatRunMessage[] } | null> {
   if (!input.knownRunId) throw new Error("operator turn returned no run id");
   const currentFailure = (failure: unknown) => {
     if (input.isCurrent()) throw failure;
@@ -136,6 +136,9 @@ export async function observeChatReply(input: {
           artifactId: reply.artifactId,
           eventData: reply.eventData,
         },
+        // This path reads the task history and reports no live artifacts, so the turn's own messages travel with its
+        // terminal: the caller decides from the same read that showed the turn had ended.
+        messages: messages.filter((message) => message.movementSeq > input.afterSeq),
       };
     }
     const currentGeneration = currentProjectionGeneration();
