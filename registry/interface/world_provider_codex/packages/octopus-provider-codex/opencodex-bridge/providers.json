@@ -3,6 +3,7 @@
   "template_interface": "world_provider_codex",
   "policy_allowances": {
     "workers": [
+      "system_worker_client_maintenance",
       "system_worker_coder",
       "system_worker_coder_max",
       "system_worker_computer_use",
@@ -16,6 +17,7 @@
       "system_worker_reviewer",
       "system_worker_sovereign",
       "system_worker_startup_manager",
+      "system_worker_system_review",
       "system_worker_web"
     ],
     "ee_templates": [
