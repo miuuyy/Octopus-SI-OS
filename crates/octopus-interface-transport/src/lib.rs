@@ -2450,6 +2450,10 @@ mod interface_life_switch_tests {
         }
 
         fn life(&self, name: &str, script: &str, frames: &[serde_json::Value], write_paths: &[&Path]) {
+            self.life_in("/bin/sh", name, script, frames, write_paths);
+        }
+
+        fn life_in(&self, shell: &str, name: &str, script: &str, frames: &[serde_json::Value], write_paths: &[&Path]) {
             let iface_dir = self.root.join("registry").join("interface").join(name);
             std::fs::create_dir_all(&iface_dir).unwrap();
             let var_dir = self.var_dir(name);
@@ -2471,13 +2475,13 @@ mod interface_life_switch_tests {
             args.extend(frames.iter().map(|frame| serde_json::json!(frame.to_string())));
             std::fs::write(iface_dir.join("life.json"), serde_json::json!({
                 "processes": [{
-                    "bin": "/bin/sh",
+                    "bin": shell,
                     "io_limits": {"max_control_frame_bytes": 65536, "max_stderr_bytes": 65536,
                         "max_manifest_bytes": 65536, "max_payload_bytes": 1048576},
                     "args": args,
                     "authority": {
                         "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
-                        "read_paths": [], "write_paths": write_paths, "executable_paths": ["/bin/sh"],
+                        "read_paths": [], "write_paths": write_paths, "executable_paths": [shell],
                         "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
                         "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
                     },
@@ -2712,7 +2716,9 @@ mod interface_life_switch_tests {
             heard = heard.display(),
         );
         let frames = [ready_frame(), serde_json::json!({"kind": "asleep", "sockets": [socket]})];
-        lives.life(name, &script, &frames, &[&marker, &heard]);
+        // The script reads the inherited connection by its descriptor number,
+        // which a POSIX sh need not duplicate beyond a single digit.
+        lives.life_in("/bin/bash", name, &script, &frames, &[&marker, &heard]);
         lives.bind("run_knock", &[name]);
         let mut reconciler = lives.reconciler(tokio::sync::mpsc::channel(4).0);
         let interface = InterfaceId::new(name);
@@ -2733,7 +2739,7 @@ mod interface_life_switch_tests {
         assert!(asleep(&reconciler), "a caller that leaves without a word wakes nobody");
 
         let held = std::fs::metadata(&socket).unwrap().ino();
-        lives.life(name, &format!(": ; {script}"), &frames, &[&marker, &heard]);
+        lives.life_in("/bin/bash", name, &format!(": ; {script}"), &frames, &[&marker, &heard]);
         reconciler.reconcile_once().await.unwrap();
         assert!(asleep(&reconciler), "a changed configuration does not wake a sleeping life");
         assert_ne!(

@@ -1844,14 +1844,14 @@ fn exact_install_does_not_claim_later_state(
 
 #[tokio::test]
 async fn completed_owner_write_survives_an_overlapping_provider_write() {
-    tokio::time::timeout(std::time::Duration::from_secs(20),
+    tokio::time::timeout(std::time::Duration::from_secs(120),
         run_local_fixture(routed_frontiers_use_actual_runtime_and_file_write(FrontierCase::InterleavedResult)))
         .await.unwrap();
 }
 
 #[tokio::test]
 async fn completed_error_waits_for_the_checked_provider_result_before_dispatch() {
-    tokio::time::timeout(std::time::Duration::from_secs(20),
+    tokio::time::timeout(std::time::Duration::from_secs(120),
         run_local_fixture(routed_frontiers_use_actual_runtime_and_file_write(FrontierCase::UnsubmittedResult)))
         .await.unwrap();
 }

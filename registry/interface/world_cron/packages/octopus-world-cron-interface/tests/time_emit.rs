@@ -132,7 +132,7 @@ async fn a_time_interface_sends_each_tick_into_the_standing_route_of_the_run_tha
         .collect::<Vec<_>>();
     let run = serde_json::json!({
         "id": CRON_RUN, "ee": "ee_existence", "worker": "system_worker_operator_task",
-        "trace": format!("trace:{CRON_RUN}"), "status": "running",
+        "trace": format!("trace:{CRON_RUN}"), "status": "idle",
         "active_checkpoints": ["cp_time"],
         "checkpoints": [{
             "id": "cp_time", "run": CRON_RUN, "epoch": 0,
