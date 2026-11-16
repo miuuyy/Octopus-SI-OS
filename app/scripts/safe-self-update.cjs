@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -190,6 +191,153 @@ function newInterfaceFailures(before, after) {
   return (Array.isArray(after?.interface_failures) ? after.interface_failures : []).map(failureIdentity).filter((identity) => !known.has(identity));
 }
 
+// A bench receipt is evidence about one commit, measured on another machine.
+// Its digest covers the producer's canonical form: the receipt without
+// `digests`, keys sorted by code point, no whitespace, every character outside
+// printable ASCII escaped as \uXXXX, and every number spelled as the file
+// spells it (100.0 stays 100.0). JSON.parse loses that spelling, so the reader
+// below keeps each number's text.
+const RECEIPT_SCHEMA = "octopus.linux_bench_receipt.v1";
+const RECEIPT_MAX_BYTES = 1024 * 1024;
+const RECEIPT_FAILURE_SETS = [["rust_workspace", "failed_tests"], ["node_contracts", "failed_suites"], ["python_sensors_verifiers", "failed_files"]];
+const RECEIPT_STRING_ESCAPES = { "\"": "\\\"", "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f" };
+
+function readStrictJson(text) {
+  let at = 0;
+  const fail = (what) => { throw new Error(`not strict JSON: ${what} at offset ${at}`); };
+  const space = () => { while (at < text.length && " \t\n\r".includes(text[at])) at += 1; };
+  const number = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  const string = () => {
+    const start = at;
+    for (at += 1; text[at] !== "\""; at += text[at] === "\\" ? 2 : 1) if (at >= text.length) fail("unterminated string");
+    at += 1;
+    try { return JSON.parse(text.slice(start, at)); } catch { return fail("malformed string"); }
+  };
+  const value = (depth) => {
+    if (depth > 64) fail("nesting too deep");
+    space();
+    const first = text[at];
+    if (first === "\"") return { string: string() };
+    if (first === "{" || first === "[") {
+      const close = first === "{" ? "}" : "]", entries = [], keys = new Set();
+      const container = () => (first === "{" ? { members: entries } : { items: entries });
+      at += 1;
+      space();
+      if (text[at] === close) { at += 1; return container(); }
+      for (;;) {
+        if (first === "{") {
+          space();
+          if (text[at] !== "\"") fail("expected a key");
+          const key = string();
+          if (keys.has(key)) fail(`duplicate key ${JSON.stringify(key)}`);
+          keys.add(key);
+          space();
+          if (text[at] !== ":") fail("expected ':'");
+          at += 1;
+          entries.push([key, value(depth + 1)]);
+        } else entries.push(value(depth + 1));
+        space();
+        if (text[at] === close) { at += 1; return container(); }
+        if (text[at] !== ",") fail(`expected ',' or '${close}'`);
+        at += 1;
+      }
+    }
+    for (const word of ["true", "false", "null"]) if (text.startsWith(word, at)) { at += word.length; return { literal: word }; }
+    number.lastIndex = at;
+    const match = number.exec(text);
+    if (!match) fail("unexpected token");
+    at += match[0].length;
+    return { literal: match[0] };
+  };
+  const root = value(0);
+  space();
+  if (at !== text.length) fail("trailing content");
+  return root;
+}
+
+function codePointOrder(left, right) {
+  const a = Array.from(left), b = Array.from(right);
+  for (let index = 0; index < a.length && index < b.length; index += 1) {
+    const difference = a[index].codePointAt(0) - b[index].codePointAt(0);
+    if (difference) return difference;
+  }
+  return a.length - b.length;
+}
+
+const canonicalString = (value) => `"${value.replace(/["\\]|[^ -~]/g,
+  (unit) => RECEIPT_STRING_ESCAPES[unit] ?? `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`)}"`;
+
+function canonicalJson(node, omit = []) {
+  if (node.members) {
+    return `{${node.members.filter(([key]) => !omit.includes(key)).sort(([a], [b]) => codePointOrder(a, b))
+      .map(([key, member]) => `${canonicalString(key)}:${canonicalJson(member)}`).join(",")}}`;
+  }
+  if (node.items) return `[${node.items.map((item) => canonicalJson(item)).join(",")}]`;
+  return node.string === undefined ? node.literal : canonicalString(node.string);
+}
+
+function loadReceipt(file) {
+  const stat = fs.statSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile()) throw new Error("no such file");
+  if (stat.size > RECEIPT_MAX_BYTES) throw new Error(`larger than ${RECEIPT_MAX_BYTES} bytes`);
+  const text = fs.readFileSync(file, "utf8"), tree = readStrictJson(text);
+  if (!tree.members) throw new Error("not a JSON object");
+  const receipt = JSON.parse(text);
+  if (receipt.schema !== RECEIPT_SCHEMA) throw new Error(`schema is ${JSON.stringify(receipt.schema ?? null)}, not ${RECEIPT_SCHEMA}`);
+  const recorded = receipt.digests?.sha256;
+  if (typeof recorded !== "string" || !/^[0-9a-f]{64}$/.test(recorded)) throw new Error("digests.sha256 is absent or malformed");
+  const sha256 = crypto.createHash("sha256").update(canonicalJson(tree, ["digests"]), "utf8").digest("hex");
+  if (sha256 !== recorded) throw new Error(`sha256 mismatch: recorded ${recorded}, recomputed ${sha256}`);
+  return { receipt, sha256 };
+}
+
+// The gate a bundle passes before it is adopted. The candidate receipt must be
+// intact, measured at the bundle's own revision, and record a clean cargo
+// check. With a reference receipt, every failure the candidate records must be
+// a failure the reference records too: failures are compared by name, so an
+// equal count that hides a new failure does not pass.
+function receiptGate(bundle, { requireReceipt = null, referenceReceipt = null } = {}) {
+  if (!requireReceipt) {
+    if (referenceReceipt) throw Object.assign(new Error("--reference-receipt requires --require-receipt"), { usage: true });
+    return null;
+  }
+  const problems = [], newFailures = {};
+  const load = (role, file) => {
+    try { return { path: file, ...loadReceipt(file) }; } catch (error) { problems.push(`${role} receipt ${file}: ${error.message}`); return null; }
+  };
+  const candidate = load("candidate", requireReceipt), reference = referenceReceipt ? load("reference", referenceReceipt) : null;
+  const revision = buildInfo(bundle)?.revision ?? null;
+  if (candidate) {
+    if (typeof revision !== "string" || candidate.receipt.commit !== revision) {
+      problems.push(`candidate receipt is for commit ${JSON.stringify(candidate.receipt.commit ?? null)}; the bundle is ${JSON.stringify(revision)}`);
+    }
+    const rc = candidate.receipt.metrics?.cargo_check?.rc;
+    if (rc !== 0) problems.push(`candidate receipt records cargo check rc ${JSON.stringify(rc ?? null)}`);
+  }
+  if (candidate && reference) {
+    if (candidate.receipt.os_arch !== reference.receipt.os_arch) {
+      problems.push(`candidate was measured on ${JSON.stringify(candidate.receipt.os_arch ?? null)}, the reference on ${JSON.stringify(reference.receipt.os_arch ?? null)}`);
+    }
+    const names = (list) => Array.isArray(list) && list.every((name) => typeof name === "string");
+    for (const [suite, field] of RECEIPT_FAILURE_SETS) {
+      const mine = candidate.receipt.metrics?.[suite]?.[field], theirs = reference.receipt.metrics?.[suite]?.[field];
+      if (!names(mine) || !names(theirs)) {
+        problems.push(`${names(mine) ? "reference" : "candidate"} receipt has no list of names at metrics.${suite}.${field}`);
+        continue;
+      }
+      const known = new Set(theirs), added = [...new Set(mine)].filter((name) => !known.has(name));
+      newFailures[suite] = added;
+      if (added.length) problems.push(`${suite} has ${added.length} failure(s) the reference does not have: ${added.join(", ")}`);
+    }
+  }
+  const describe = (loaded) => loaded && { path: loaded.path, commit: loaded.receipt.commit ?? null, sha256: loaded.sha256, timestamp_utc: loaded.receipt.timestamp_utc ?? null };
+  const ok = problems.length === 0;
+  return { ok, detail: ok ? `receipt ${candidate.sha256} for ${revision}${reference ? `; no failure beyond reference ${reference.sha256}` : ""}` : problems.join("; "),
+    bundle_revision: revision, candidate: describe(candidate), reference: describe(reference), compared: Boolean(referenceReceipt), new_failures: newFailures };
+}
+
+const receiptRefusal = (gate, extra = {}) => ({ ok: false, applied: false, refused: "receipt_gate", detail: gate.detail, new_failures: gate.new_failures, receipt_gate: gate, ...extra });
+
 const lastLines = (result) => `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ");
 
 function buildStaging(layout, { dryRun = false } = {}) {
@@ -309,8 +457,10 @@ async function smokeTest(bundle, packageIds) {
   return rows;
 }
 
-async function verifyStaging(layout, home, { smoke = true, allowModifiedSource = false, smokePackages = [CHAT_CLIENT_PACKAGE, "world_provider_codex"] } = {}) {
+async function verifyStaging(layout, home, { smoke = true, allowModifiedSource = false, smokePackages = [CHAT_CLIENT_PACKAGE, "world_provider_codex"],
+  requireReceipt = null, referenceReceipt = null } = {}) {
   const bundle = requireBundle(layout.staging), checks = [];
+  const gate = receiptGate(bundle, { requireReceipt, referenceReceipt });
   const check = (name, ok, detail = "") => checks.push({ name, ok, detail });
   if (process.platform === "darwin") {
     const signed = spawnSync("codesign", ["--verify", "--deep", "--strict", bundle], { encoding: "utf8" });
@@ -323,16 +473,20 @@ async function verifyStaging(layout, home, { smoke = true, allowModifiedSource =
     const doctor = octopus(bundle, home, ["doctor"]);
     check("doctor_home", doctor.status === 0, lastLines(doctor));
   }
+  if (gate) check("receipt_gate", gate.ok, gate.detail);
   if (smoke) checks.push(...await smokeTest(bundle, smokePackages));
-  return { ok: checks.every((row) => row.ok), bundle, build: info, checks };
+  return { ok: checks.every((row) => row.ok), bundle, build: info, checks, ...(gate ? { receipt_gate: gate } : {}) };
 }
 
 async function restartRuntime(layout, home, options = {}) {
   const { callerRun = null, allowInFlightRuns = [], dryRun = false, force = false, swap = false, rollback = true,
-    timeoutMs = 300_000, readTurns = readTurnsInFlight } = options;
+    timeoutMs = 300_000, readTurns = readTurnsInFlight, requireReceipt = null, referenceReceipt = null } = options;
   const before = await control(home, "status");
   if (before.outcome !== "status") throw new Error(`no runtime answers for Home ${home} (${before.error}); only a running runtime is restarted`);
   if (swap) requireBundle(layout.staging);
+  // The receipt speaks for the bundle the successor runs: staging when it is swapped in, otherwise the live one.
+  const gate = receiptGate(swap ? layout.staging : layout.live, { requireReceipt, referenceReceipt });
+  if (gate && !gate.ok) return receiptRefusal(gate);
   const blocking = blockingTurns(await readTurns(layout.live, home, { sinceUnixMs: before.started_at_unix_ms }), [callerRun, ...allowInFlightRuns]);
   const plan = [...(swap ? swapBundles(layout, { dryRun: true }).plan : []), "restart through the control socket", "wait for a ready successor",
     rollback ? `on failure: restore ${layout.prev} and restart again` : "on failure: report only"];
@@ -373,16 +527,27 @@ async function status(layout, home) {
 const USAGE = `Usage: node app/scripts/safe-self-update.cjs <command> [options]
   status                          live runtime, bundle revisions, turns in flight (every run)
   build [--dry-run]               package into app/build/Octopus.staging.app
-  verify [--no-smoke] [--allow-modified-source]
+  verify [--no-smoke] [--allow-modified-source] [receipt options]
   packages status | packages sync [--dry-run] [--with-chat-client] [--only=a,b]
-  swap [--dry-run]                Octopus.app -> Octopus.prev.app, staging -> Octopus.app
+  swap [--dry-run] [receipt options]
+                                  Octopus.app -> Octopus.prev.app, staging -> Octopus.app
   restart [--swap] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
-                                  refuses while any run other than the caller and the allowed ones has a turn in flight
+          [receipt options]       refuses while any run other than the caller and the allowed ones has a turn in flight
   rollback [--dry-run]            Octopus.prev.app -> Octopus.app
+Receipt options (verify, swap, restart):
+  --require-receipt=<file>        an ${RECEIPT_SCHEMA} file: its SHA-256 must match its content (its BLAKE3 digest is not
+                                  checked), its commit must be the bundle's revision and its cargo check must have passed;
+                                  verify records the outcome as the receipt_gate check, swap and restart refuse before
+                                  touching a bundle (restart without --swap checks the live bundle)
+  --reference-receipt=<file>      with --require-receipt: every failed test, suite and file the required receipt names
+                                  must also be named by this one
 Common: --home=<Octopus Home, default $OCTOPUS_HOME or ~/.octopus> --build-root=<dir>`;
 
 // Options that take a value, either as --name=value or as the next argument, and may repeat.
 const REPEATABLE_VALUE_OPTIONS = new Set(["allow-in-flight-run"]);
+// Options that take one file, either as --name=file or as the next argument.
+const FILE_OPTIONS = new Set(["require-receipt", "reference-receipt"]);
+const RECEIPT_COMMANDS = new Set(["verify", "swap", "restart"]);
 
 function parseArgs(argv) {
   const positional = [], options = {};
@@ -397,6 +562,13 @@ function parseArgs(argv) {
       (options[key] ??= []).push(value);
       continue;
     }
+    if (FILE_OPTIONS.has(name)) {
+      const value = rest.length ? rest.join("=") : argv[++index];
+      if (typeof value !== "string" || !value || value.startsWith("--")) throw Object.assign(new Error(`--${name} requires a file`), { usage: true });
+      if (key in options) throw Object.assign(new Error(`--${name} is given more than once`), { usage: true });
+      options[key] = value;
+      continue;
+    }
     options[key] = rest.length ? rest.join("=") : true;
   }
   return { positional, options };
@@ -407,18 +579,29 @@ async function main(argv) {
   const layout = bundles(options.buildRoot ? path.resolve(options.buildRoot) : undefined);
   const home = path.resolve(options.home || process.env.OCTOPUS_HOME || path.join(os.homedir(), ".octopus"));
   const dryRun = options.dryRun === true, [command, sub] = positional;
+  const receipts = { requireReceipt: options.requireReceipt ? path.resolve(options.requireReceipt) : null,
+    referenceReceipt: options.referenceReceipt ? path.resolve(options.referenceReceipt) : null };
+  if (receipts.referenceReceipt && !receipts.requireReceipt) throw Object.assign(new Error("--reference-receipt requires --require-receipt"), { usage: true });
+  if (receipts.requireReceipt && !RECEIPT_COMMANDS.has(command)) throw Object.assign(new Error("--require-receipt applies to verify, swap and restart"), { usage: true });
   if (command === "status") return status(layout, home);
   if (command === "build") return buildStaging(layout, { dryRun });
-  if (command === "verify") return verifyStaging(layout, home, { smoke: options.noSmoke !== true, allowModifiedSource: options.allowModifiedSource === true });
+  if (command === "verify") return verifyStaging(layout, home, { smoke: options.noSmoke !== true, allowModifiedSource: options.allowModifiedSource === true, ...receipts });
   if (command === "packages" && sub === "status") return { packages: await packageStatus(layout.live, home), baseline: baselineDrift(layout.live, home) };
   if (command === "packages" && sub === "sync") {
     return syncPackages(layout.live, home, { dryRun, withChatClient: options.withChatClient === true, only: typeof options.only === "string" ? options.only.split(",") : null });
   }
-  if (command === "swap") return swapBundles(layout, { dryRun });
+  if (command === "swap") {
+    const gate = receipts.requireReceipt ? receiptGate(requireBundle(layout.staging), receipts) : null;
+    if (gate && !gate.ok) return receiptRefusal(gate, { plan: swapBundles(layout, { dryRun: true }).plan });
+    return { ...swapBundles(layout, { dryRun }), ...(gate ? { receipt_gate: gate } : {}) };
+  }
   if (command === "rollback") return rollbackBundles(layout, { dryRun });
   if (command === "restart") {
     if (options.detach === true && !dryRun) {
       if (typeof options.log !== "string") throw new Error("--detach requires --log=<file>");
+      // The detached child checks the gate again; the caller learns of a refusal here.
+      const gate = receiptGate(options.swap === true ? requireBundle(layout.staging) : layout.live, receipts);
+      if (gate && !gate.ok) return receiptRefusal(gate);
       const log = fs.openSync(path.resolve(options.log), "a");
       const child = spawn(process.execPath, [__filename, ...argv.filter((arg) => arg !== "--detach")], { detached: true, stdio: ["ignore", log, log] });
       child.unref();
@@ -426,13 +609,13 @@ async function main(argv) {
     }
     return restartRuntime(layout, home, { callerRun: typeof options.callerRun === "string" ? options.callerRun : null, dryRun,
       allowInFlightRuns: Array.isArray(options.allowInFlightRun) ? options.allowInFlightRun : [],
-      force: options.force === true, swap: options.swap === true, rollback: options.noRollback !== true });
+      force: options.force === true, swap: options.swap === true, rollback: options.noRollback !== true, ...receipts });
   }
   throw Object.assign(new Error(USAGE), { usage: true });
 }
 
 module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
-  newInterfaceFailures, packageAction, restartRuntime, parseArgs, main };
+  newInterfaceFailures, packageAction, restartRuntime, parseArgs, main, readStrictJson, canonicalJson, loadReceipt, receiptGate, verifyStaging };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {

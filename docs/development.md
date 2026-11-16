@@ -314,9 +314,28 @@ What the tool relies on, and its limits:
 - Rollback restores the bundle, not Home state. A new kernel that changes a
   persisted format still needs a fresh Home.
 
+`verify`, `swap` and `restart` accept `--require-receipt=<file>`, a Linux bench
+receipt (`octopus.linux_bench_receipt.v1`) for the bundle being adopted. The
+receipt's SHA-256 is recomputed over its canonical form (the receipt without
+`digests`, keys sorted, compact, non-ASCII escaped, numbers spelled as the file
+spells them) and must match the recorded one; its BLAKE3 digest is not checked.
+Its `commit` must be the bundle's revision and its cargo check must have
+passed. `--reference-receipt=<file>` adds a comparison with an earlier
+receipt: every failed test, suite and file the required receipt names must be
+named by the reference too, so a new failure is caught even when the number of
+failures is unchanged. `verify` records the outcome as its `receipt_gate`
+check. `swap` and `restart` refuse with `refused: "receipt_gate"` and the new
+failures before they move a bundle or ask the runtime to restart; `restart`
+without `--swap` checks the live bundle, which is the one its successor runs.
+
+```sh
+node app/scripts/safe-self-update.cjs verify --require-receipt=<candidate.json> --reference-receipt=<baseline.json>
+```
+
 `node app/scripts/test-safe-self-update.cjs` covers swap, rollback, the guard
-for client and background runs, the failure-identity check and the rollback
-path on temporary bundles, a temporary ledger and a fake control socket.
+for client and background runs, the failure-identity check, the receipt gate
+and the rollback path on temporary bundles, a temporary ledger and a fake
+control socket.
 
 ## Client iteration and acceptance
 

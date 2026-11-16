@@ -5,7 +5,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { bundles, buildInfo, swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
-  packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
+  packageAction, restartRuntime, parseArgs, main: selfUpdate, readStrictJson, canonicalJson, loadReceipt, receiptGate, verifyStaging } = require("./safe-self-update.cjs");
 
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const roots = [];
@@ -83,6 +83,160 @@ function fakeProjectionBundle(layout, clientRuns, chats) {
 }
 
 const idle = async () => [];
+
+// A receipt and its SHA-256 as the bench producer wrote them: Python's
+// json.dumps with sorted keys, compact separators and ASCII-only output.
+const PRODUCER_RECEIPT = String.raw`{"schema":"octopus.linux_bench_receipt.v1","commit":"1111111111111111111111111111111111111111","commit_subject":"Na\u00efve caf\u00e9 \u2014 \u0442\u0435\u0441\u0442 \ud83d\udc19 \"quoted\" back\\slash\ttab","os_arch":"linux-x86_64","metrics":{"cargo_check":{"rc":0,"wall_sec":49.419},"rust_workspace":{"pass_rate_pct":100.0,"tiny":1e-05,"failed_tests":[]},"node_contracts":{"failed_suites":[]},"python_sensors_verifiers":{"failed_files":[]}},"zeta":{"b":1,"a":[true,false,null],"\u00e9":"x","Z":-0.0},"digests":{"canonical_serialization":"json-sorted-keys-compact-utf8","sha256":"725971f2b6db50af3654efddb4bffd10a4ba9e9f0d10fcabd3dcabf0ef95e303"}}`;
+const PRODUCER_SHA256 = "725971f2b6db50af3654efddb4bffd10a4ba9e9f0d10fcabd3dcabf0ef95e303";
+
+function receiptFile(text) {
+  const file = path.join(tempRoot(), "receipt.json");
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+function receipt(commit, edit = () => {}) {
+  const payload = { schema: "octopus.linux_bench_receipt.v1", commit, os_arch: "linux-x86_64", timestamp_utc: "2026-01-01T00:00:00Z",
+    metrics: { cargo_check: { rc: 0, wall_sec: 1.5 }, rust_workspace: { failed_tests: [] }, node_contracts: { failed_suites: [] },
+      python_sensors_verifiers: { failed_files: [] } } };
+  edit(payload);
+  const sha256 = crypto.createHash("sha256").update(canonicalJson(readStrictJson(JSON.stringify(payload))), "utf8").digest("hex");
+  return receiptFile(JSON.stringify({ ...payload, digests: { canonical_serialization: "json-sorted-keys-compact-utf8", sha256 } }, null, 2));
+}
+
+async function receiptGateChecks() {
+  const candidateCommit = "c".repeat(40), referenceCommit = "a".repeat(40);
+  const staged = () => fakeLayout({ live: referenceCommit, staging: candidateCommit });
+
+  // The canonical form is the producer's, not JSON.stringify's: 100.0, 1e-05 and -0.0 keep their spelling,
+  // non-ASCII text is escaped per UTF-16 unit, and keys sort by code point.
+  assert.equal(loadReceipt(receiptFile(PRODUCER_RECEIPT)).sha256, PRODUCER_SHA256);
+  const unescaped = PRODUCER_RECEIPT.replace(/\\u([0-9a-f]{4})/g, (_, unit) => String.fromCharCode(parseInt(unit, 16)));
+  assert.notEqual(unescaped, PRODUCER_RECEIPT);
+  assert.equal(loadReceipt(receiptFile(unescaped)).sha256, PRODUCER_SHA256);
+  assert.equal(loadReceipt(receiptFile(JSON.stringify(JSON.parse(PRODUCER_RECEIPT), null, 2).replace("100,", "100.0,").replace("0.00001", "1e-05")
+    .replace('"Z": 0', '"Z": -0.0'))).sha256, PRODUCER_SHA256);
+  assert.throws(() => loadReceipt(receiptFile(JSON.stringify(JSON.parse(PRODUCER_RECEIPT)))), /sha256 mismatch/);
+  assert.throws(() => readStrictJson('{"a":1,"a":2}'), /duplicate key/);
+  assert.throws(() => readStrictJson('{"a":1} x'), /trailing content/);
+  assert.throws(() => readStrictJson('{"a":01}'), /not strict JSON/);
+  assert.throws(() => loadReceipt(path.join(tempRoot(), "absent.json")), /no such file/);
+  assert.throws(() => loadReceipt(receipt(candidateCommit, (payload) => { payload.schema = "another.schema"; })), /schema is/);
+
+  let layout = staged();
+  const good = receipt(candidateCommit);
+  assert.equal(receiptGate(layout.staging), null);
+  assert.throws(() => receiptGate(layout.staging, { referenceReceipt: good }), /requires --require-receipt/);
+  let gate = receiptGate(layout.staging, { requireReceipt: good });
+  assert.equal(gate.ok, true);
+  assert.equal(gate.compared, false);
+  assert.equal(gate.candidate.commit, candidateCommit);
+
+  const tampered = receiptFile(fs.readFileSync(good, "utf8").replace('"rc": 0', '"rc": 0, "extra": 1'));
+  gate = receiptGate(layout.staging, { requireReceipt: tampered });
+  assert.equal(gate.ok, false);
+  assert.match(gate.detail, /sha256 mismatch/);
+  assert.equal(gate.candidate, null);
+
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(referenceCommit) });
+  assert.equal(gate.ok, false);
+  assert.match(gate.detail, /candidate receipt is for commit/);
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(candidateCommit, (payload) => { payload.metrics.cargo_check.rc = 101; }) });
+  assert.equal(gate.ok, false);
+  assert.match(gate.detail, /cargo check rc 101/);
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(candidateCommit, (payload) => { delete payload.metrics.cargo_check; }) });
+  assert.match(gate.detail, /cargo check rc null/);
+
+  const failing = (tests, suites = [], files = []) => (payload) => {
+    payload.metrics.rust_workspace.failed_tests = tests;
+    payload.metrics.node_contracts.failed_suites = suites;
+    payload.metrics.python_sensors_verifiers.failed_files = files;
+  };
+  const reference = receipt(referenceCommit, failing(["suite::a", "suite::b"], ["node-x"], ["sensor_y.py"]));
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(candidateCommit, failing(["suite::b"])), referenceReceipt: reference });
+  assert.equal(gate.ok, true);
+  assert.equal(gate.compared, true);
+  assert.deepEqual(gate.new_failures, { rust_workspace: [], node_contracts: [], python_sensors_verifiers: [] });
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(candidateCommit, failing(["suite::a", "suite::b"], ["node-x"], ["sensor_y.py"])),
+    referenceReceipt: reference });
+  assert.equal(gate.ok, true);
+
+  // The same number of failures as the reference, but one of them is another test.
+  const swapped = receipt(candidateCommit, failing(["suite::a", "suite::c"], ["node-x"], ["sensor_y.py"]));
+  gate = receiptGate(layout.staging, { requireReceipt: swapped, referenceReceipt: reference });
+  assert.equal(gate.ok, false);
+  assert.deepEqual(gate.new_failures, { rust_workspace: ["suite::c"], node_contracts: [], python_sensors_verifiers: [] });
+  assert.match(gate.detail, /rust_workspace has 1 failure\(s\) the reference does not have: suite::c/);
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(candidateCommit, failing([], ["node-z"], ["sensor_w.py"])), referenceReceipt: reference });
+  assert.deepEqual(gate.new_failures, { rust_workspace: [], node_contracts: ["node-z"], python_sensors_verifiers: ["sensor_w.py"] });
+
+  // A failure list that is absent is not an empty one, and a damaged reference proves nothing.
+  gate = receiptGate(layout.staging, { requireReceipt: good, referenceReceipt: receipt(referenceCommit, (payload) => { delete payload.metrics.node_contracts; }) });
+  assert.equal(gate.ok, false);
+  assert.match(gate.detail, /reference receipt has no list of names at metrics.node_contracts.failed_suites/);
+  gate = receiptGate(layout.staging, { requireReceipt: receipt(candidateCommit, (payload) => { payload.metrics.rust_workspace.failed_tests = 4; }), referenceReceipt: reference });
+  assert.match(gate.detail, /candidate receipt has no list of names at metrics.rust_workspace.failed_tests/);
+  gate = receiptGate(layout.staging, { requireReceipt: good, referenceReceipt: tampered });
+  assert.equal(gate.ok, false);
+  assert.match(gate.detail, /reference receipt .* sha256 mismatch/);
+  gate = receiptGate(layout.staging, { requireReceipt: good, referenceReceipt: receipt(referenceCommit, (payload) => { payload.os_arch = "linux-aarch64"; }) });
+  assert.match(gate.detail, /measured on "linux-x86_64", the reference on "linux-aarch64"/);
+
+  // verify records the gate as a check of its own.
+  let verified = await verifyStaging(layout, tempRoot(), { smoke: false, requireReceipt: good, referenceReceipt: reference });
+  assert.deepEqual(verified.checks.find((row) => row.name === "receipt_gate").ok, true);
+  assert.equal(verified.receipt_gate.candidate.commit, candidateCommit);
+  verified = await verifyStaging(layout, tempRoot(), { smoke: false, requireReceipt: swapped, referenceReceipt: reference });
+  assert.equal(verified.ok, false);
+  assert.equal(verified.checks.find((row) => row.name === "receipt_gate").ok, false);
+  assert.deepEqual(verified.receipt_gate.new_failures.rust_workspace, ["suite::c"]);
+  verified = await verifyStaging(layout, tempRoot(), { smoke: false });
+  assert.equal(verified.checks.some((row) => row.name === "receipt_gate"), false);
+
+  // swap refuses before it touches a bundle, and applies once the gate passes.
+  const buildRoot = `--build-root=${layout.buildRoot}`;
+  let result = await selfUpdate(["swap", buildRoot, `--require-receipt=${swapped}`, "--reference-receipt", reference]);
+  assert.deepEqual([result.ok, result.applied, result.refused], [false, false, "receipt_gate"]);
+  assert.deepEqual(result.new_failures.rust_workspace, ["suite::c"]);
+  assert.equal(buildInfo(layout.live).revision, referenceCommit);
+  assert.equal(buildInfo(layout.staging).revision, candidateCommit);
+  assert.equal(fs.existsSync(layout.prev), false);
+  result = await selfUpdate(["swap", buildRoot, "--require-receipt", tampered]);
+  assert.equal(result.refused, "receipt_gate");
+  assert.equal(buildInfo(layout.live).revision, referenceCommit);
+  await assert.rejects(selfUpdate(["swap", buildRoot, `--reference-receipt=${reference}`]), (error) => error.usage === true && /requires --require-receipt/.test(error.message));
+  await assert.rejects(selfUpdate(["rollback", buildRoot, `--require-receipt=${good}`]), (error) => error.usage === true);
+  assert.throws(() => parseArgs(["swap", "--require-receipt"]), /requires a file/);
+  assert.throws(() => parseArgs(["swap", "--require-receipt=a", "--require-receipt=b"]), /more than once/);
+  assert.deepEqual(parseArgs(["verify", "--require-receipt", "a.json", "--reference-receipt=b.json"]),
+    { positional: ["verify"], options: { requireReceipt: "a.json", referenceReceipt: "b.json" } });
+  assert.equal(buildInfo(layout.live).revision, referenceCommit);
+  result = await selfUpdate(["swap", buildRoot, `--require-receipt=${good}`, `--reference-receipt=${reference}`]);
+  assert.equal(result.applied, true);
+  assert.equal(result.receipt_gate.ok, true);
+  assert.equal(buildInfo(layout.live).revision, candidateCommit);
+  assert.equal(buildInfo(layout.prev).revision, referenceCommit);
+
+  // restart refuses before the swap and before it asks the runtime to restart.
+  layout = staged();
+  const runtime = await fakeRuntime([]);
+  try {
+    result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle, requireReceipt: swapped, referenceReceipt: reference });
+    assert.deepEqual([result.ok, result.applied, result.refused], [false, false, "receipt_gate"]);
+    assert.deepEqual(result.new_failures.rust_workspace, ["suite::c"]);
+    assert.deepEqual(runtime.state.requests, ["status"]);
+    assert.equal(buildInfo(layout.live).revision, referenceCommit);
+    assert.equal(buildInfo(layout.staging).revision, candidateCommit);
+    // Without a swap the successor runs the live bundle, so the receipt must be the live bundle's.
+    result = await restartRuntime(layout, runtime.home, { ...options, readTurns: idle, requireReceipt: good });
+    assert.equal(result.refused, "receipt_gate");
+    assert.equal(runtime.state.requests.includes("restart"), false);
+    result = await restartRuntime(layout, runtime.home, { ...options, swap: true, readTurns: idle, requireReceipt: good, referenceReceipt: reference });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, candidateCommit);
+    assert.equal(runtime.state.requests.filter((request) => request === "restart").length, 1);
+  } finally { await runtime.close(); }
+}
 const options = { timeoutMs: 1500 };
 
 async function main() {
@@ -257,6 +411,7 @@ async function main() {
   layout = fakeLayout();
   await assert.rejects(restartRuntime(layout, tempRoot(), { ...options, swap: true, readTurns: idle }), /no runtime answers/);
   assert.equal(buildInfo(layout.live).revision, "live");
+  await receiptGateChecks();
   console.log("safe self-update checks passed");
 }
 
