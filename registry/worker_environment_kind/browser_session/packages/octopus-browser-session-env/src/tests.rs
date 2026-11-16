@@ -614,8 +614,30 @@ async fn spawn_context_cdp_mock(context_available: bool, target_available: bool,
     (discovery_url, ws)
 }
 
-#[tokio::test]
-async fn browser_room_keeps_one_cdp_session_across_snapshot_ref_actions_and_publishes_viewer() {
+/// Stack of the thread that runs the one-session scenario. The scenario is a single long async body, which an
+/// unoptimised build polls in one frame of about a megabyte on top of the room's own dispatch frame; with the wider
+/// types a whole-workspace build selects, that exceeds the stack a test thread gets by default and aborts the binary.
+const ONE_SESSION_SCENARIO_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+#[test]
+fn browser_room_keeps_one_cdp_session_across_snapshot_ref_actions_and_publishes_viewer() {
+    let scenario = std::thread::Builder::new()
+        .name("one-cdp-session-scenario".into())
+        .stack_size(ONE_SESSION_SCENARIO_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(one_cdp_session_across_snapshot_ref_actions_and_viewer())
+        })
+        .unwrap();
+    if let Err(panic) = scenario.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+async fn one_cdp_session_across_snapshot_ref_actions_and_viewer() {
     let (discovery_url, ws) = spawn_context_cdp_mock(true, true, 3).await;
     let root = tempfile::tempdir().unwrap();
     let interface_dir = root.path().join("registry/interface").join(DOOR);
