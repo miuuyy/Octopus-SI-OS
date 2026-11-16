@@ -188,6 +188,14 @@ records to force a retry.
   Node 24.
 - **Rust errors about the edition or a locked dependency** - update to current
   stable Rust.
+- **`swift build` fails on `swift-tools-version:6.2`** - the selected
+  developer tools are older than Swift 6.2. Install Xcode 26 or current
+  Command Line Tools, then check `swift --version`. To use one Xcode for the
+  build without changing the system selection, set it for the command:
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer npm --prefix app run package:mac`.
+- **Cargo cannot fetch a git dependency** (authentication or SSH errors) -
+  let Cargo use the `git` command line and its credentials, as CI does:
+  `export CARGO_NET_GIT_FETCH_WITH_CLI=true`.
 - **The packager built the wrong architecture** - it builds for the
   architecture of the Node process running it. Use a native arm64 Node on Apple
   silicon.

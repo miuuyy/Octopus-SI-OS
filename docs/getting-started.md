@@ -65,8 +65,10 @@ release.
 ### Prerequisites
 
 - macOS 14 or later, with the checkout on an APFS volume.
-- Xcode Command Line Tools (`xcode-select --install`), including Clang, Swift,
-  the macOS SDK, and `/usr/bin/python3`.
+- Xcode 26 or later, or its Command Line Tools (`xcode-select --install`),
+  including Clang, Swift 6.2 or later, the macOS SDK, and `/usr/bin/python3`.
+  The desktop session package declares `swift-tools-version:6.2`, so older
+  tools fail `swift build`; see [Troubleshooting](../TROUBLESHOOTING.md#the-build-fails).
 - [Node.js 24 LTS](https://nodejs.org/en/download) and npm. Node 20 does not
   support the required native rebuild and SQLite checks.
 - Current stable [Rust](https://www.rust-lang.org/tools/install) and Cargo.
@@ -123,7 +125,10 @@ Follow the client screens. The actions depend on the setup already present on
 your machine:
 
 - **Sign in with ChatGPT** opens browser authentication. Complete it in the
-  browser and return to the client.
+  browser and return to the client. To look around first, unlock the **Test**
+  profile, a fixture lab with no live runtime ([client guide](client.md)). To
+  use another model provider, configure an API-key, OpenAI-compatible, Claude
+  CLI, Gemini or Vertex provider in **Applications**.
 - The access screen lets you configure or enter the local administrator password.
 - The embedded launch terminal prepares a command ending in `octopus up`.
   Press Enter to run it and wait for the runtime's ready state.

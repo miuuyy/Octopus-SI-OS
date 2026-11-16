@@ -41,7 +41,7 @@ Underneath, its architecture gives an agent a structure to execute in and a pict
 
 ## Get started
 
-You need macOS 14+, Node 24, stable Rust, and a ChatGPT account.
+You need macOS 14+, Swift 6.2+ (Xcode 26 or its Command Line Tools), Node 24, stable Rust, and a ChatGPT account. Without one, you can explore the client in its read-only **Test** profile ([client guide](docs/client.md)) or configure an API-key, OpenAI-compatible, Claude CLI, Gemini or Vertex provider in **Applications**.
 
 ```sh
 git clone https://github.com/miuuyy/Octopus-SI-OS.git
