@@ -399,7 +399,8 @@ test("right-pane navigation opens the current task without changing the left pan
   stubIn("secondary", "scheduled").props.onSelectChat("run-1");
   await until(() => stubIn("secondary", "chat")?.dataset.run === "run-1", "the trigger's existing task did not open on the right");
   assert.equal(stubIn("primary", "chat").dataset.run, "run-1");
-  assert.deepEqual(secondaryTabs().map(tab => tab.textContent), ["Task run-1", "Triggers"]);
+  // The replaced launcher tab stays mounted and inert while its exit animation runs, so the strip is read once it settles.
+  await until(() => secondaryTabs().map((tab) => tab.textContent).join() === "Task run-1,Triggers", () => `the launcher was not replaced by the surface it opened: ${secondaryTabs().map((tab) => tab.textContent)}`);
 
   stubIn("primary", "chat").props.workspace.selectRun("run-2");
   await until(() => !stubIn("primary", "chat"), "the primary task did not enter its loading state");
