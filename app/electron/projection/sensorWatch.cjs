@@ -11,12 +11,7 @@ async function sensorWatchProjection(projection, descriptor, interfaceId) {
   const watch = await read(path.join(directory, "watch.json"));
   if (!watch) return {};
   let condition;
-  if (watch.github_stars) {
-    const stars = watch.github_stars;
-    if (typeof stars.repository !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(stars.repository)
-      || !Number.isSafeInteger(stars.at_least) || stars.at_least < 1) throw new Error("Invalid star watch condition");
-    condition = `stars >= ${stars.at_least} on ${stars.repository}`;
-  } else if (Array.isArray(watch.terms) && watch.terms.length && watch.terms.every(term => typeof term === "string" && term)
+  if (Array.isArray(watch.terms) && watch.terms.length && watch.terms.every(term => typeof term === "string" && term)
     && Array.isArray(watch.match_fields) && watch.match_fields.length && watch.match_fields.every(field => ["subject", "body"].includes(field))) {
     condition = `Email ${watch.match_fields.join(" / ")} contains any of: ${watch.terms.join(", ")}`;
   } else throw new Error("Unsupported sensor watch condition");
