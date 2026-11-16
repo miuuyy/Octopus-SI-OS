@@ -33,8 +33,25 @@ fn late_parallel_call_continues_its_completed_source_through_run_authoring() {
     }).unwrap().join().unwrap();
 }
 
+#[test]
+fn a_turn_ending_on_the_earlier_parallel_calls_result_hands_its_answer() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+            .block_on(native_terminal_handoff_cases(Some(28)));
+    }).unwrap().join().unwrap();
+}
+
+#[test]
+fn a_turn_failing_on_the_earlier_parallel_calls_result_hands_its_error() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+            .block_on(native_terminal_handoff_cases(Some(29)));
+    }).unwrap().join().unwrap();
+}
+
 include!("retained_native_delivery.rs");
 include!("late_call_continuation.rs");
+include!("earlier_parallel_result.rs");
 
 async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     use octopus_interfaces::DeliveryVerdict;
@@ -202,7 +219,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                             continue;
                         }
                     }
-                    let marked=(phase==27).then(||row.clone());
+                    let marked=matches!(phase,27|28|29).then(||row.clone());
                     let seq=append(&gate_ctx,row);
                     for (requirement,mut mark_row) in marked.into_iter().flat_map(|row|cp.required_verified_artifacts.iter().map(move |requirement|(requirement,row.clone()))) {
                         let mark=octopus_interfaces::Mark::passed(requirement.mark.clone(),cp.id.clone(),current_record.id.clone(),cp.epoch.0,
@@ -419,6 +436,124 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     let live=native.driver;
     std::sync::Arc::try_unwrap(live).ok().expect("the woken driver is no longer shared").shutdown().await.unwrap();
     native.server.await.unwrap();
+    }
+    // Admits the result of one outstanding call on its own result row and
+    // returns the source envelope, its movement sequence and the pinned record.
+    fn admit_call_result(
+        ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,
+        tool:&str,call:&ArtifactRef,correlation:&str,
+    ) -> (InterfaceInvocationEnvelope,u64,Vec<u8>) {
+        let pinned=std::fs::read(run_path).unwrap();let record=RunRecord::from_bytes(&pinned).unwrap();
+        let cp=result_input_row(&record,call);
+        let label=cp.required_verified_artifacts[0].artifact_label.to_string();
+        let file=artifact(&root.join(format!("parallel-result-{correlation}")),&label,
+            json!({"label":label,"tool":tool,"correlation_id":correlation,"ok":true,"body":{}}));
+        let mut row=edge(ctx,&pinned,cp,&file,MovementKind::InterfaceOutbound,descriptor.id.clone());
+        keep_declared_role_artifacts(&mut row,&record,&descriptor.id);
+        let envelope=source_envelope(ctx,root,&row,file);let seq=append(ctx,row);
+        (envelope,seq,pinned)
+    }
+    // Two calls leave in one provider batch: the first on a non-terminal write,
+    // the second on the terminal one. The second call's result is consumed
+    // first, and the turn closes on the first call's result with an answer
+    // (phase 28) or an error (phase 29).
+    #[allow(clippy::too_many_arguments)]
+    async fn earlier_parallel_result_case(
+        ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,run:&RunId,
+        record:&RunRecord,initial:&[u8],authoring_id:&InterfaceId,listener:&tokio::net::UnixListener,
+        receiver:&mut tokio::sync::mpsc::Receiver<octopus_interface_transport::InterfaceActivationArrival>,
+        phase:usize,
+    ) {
+    let failing=phase==29;
+    let bound_context=|record:&RunRecord| octopus_run_authoring::provider_context_bindings(record,&descriptor.id).unwrap()
+        .into_iter().map(|binding|binding.id).collect::<Vec<_>>();
+    let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id)
+        && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.message")).unwrap();
+    let file=artifact(&root.join("parallel-input"),"operator.message",json!({"text":"look up a and b","message_id":"parallel-input"}));
+    let row=edge(ctx,initial,cp,&file,MovementKind::InterfaceOutbound,descriptor.id.clone());
+    let input=source_envelope(ctx,root,&row,file);let source_seq=append(ctx,row);
+    let template=record.interface_state[&descriptor.id]["run_authoring_binding"]["checkpoints"].as_array().unwrap().iter()
+        .find(|template|template["role"]=="provider_tool_output").unwrap();
+    let tool=template["required_verified_artifacts"][0]["params"]["tools"][0].as_str().unwrap().to_string();
+    let session=ProviderHandoffSession::new(ctx).unwrap();
+    let handoff=session.from_invocation(ctx,descriptor,run,&input,source_seq,initial).unwrap();
+
+    let outcomes=hand_through_gate(Box::pin(handoff.hand_progress_batch(vec![parallel_tool_call(ctx,&tool,"call-a")])),
+        pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,usize::MAX,true,phase,false)).await.unwrap();
+    let [outcome]=outcomes.as_slice() else {panic!("one call leaves on the non-terminal write: {outcomes:?}")};
+    let call_a=admitted_artifact(outcome);
+    let outcome=hand_through_gate(Box::pin(handoff.hand_final(parallel_tool_call(ctx,&tool,"call-b"))),
+        pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+    let call_b=admitted_artifact(&outcome);
+    drop(handoff);
+
+    let waiting=RunRecord::from_bytes(&std::fs::read(run_path).unwrap()).unwrap();
+    assert_eq!(result_input_templates(&waiting,&descriptor.id).len(),2,"both calls of the batch wait for their results");
+    assert!(result_row_holds_call_as_evidence(&waiting,&descriptor.id,&call_a),
+        "the call that left on the non-terminal write is evidence of its result row, not admitted context");
+    assert!(!result_row_holds_call_as_evidence(&waiting,&descriptor.id,&call_b),
+        "the call that left on the terminal write is read from the context its result row admits");
+    let bound=bound_context(&waiting);
+    assert!(bound.contains(&call_a.id),"the non-terminal write published the earlier call into the run context: {bound:?}");
+    assert!(!bound.contains(&call_b.id),"the terminal call defers its publication until its result is consumed: {bound:?}");
+    assert!(result_input_row(&waiting,&call_b).artifact_bindings.iter().any(|binding|binding.id==call_b.id),
+        "the later call's result row admits the call as context");
+
+    let (result_b,result_b_seq,pinned)=admit_call_result(ctx,root,run_path,descriptor,&tool,&call_b,"call-b");
+    let later=session.from_invocation(ctx,descriptor,run,&result_b,result_b_seq,&pinned).unwrap();
+    let recovery=hand_through_gate(Box::pin(later.recover_source()),
+        pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+    assert_eq!(recovery,ProviderSourceRecovery::Process);
+    let update=artifact(&ctx.interface_var_dir().join("parallel-update"),"interface.context.updated",
+        json!({"label":"interface.context.updated","text":"the later call's result is consumed"}));
+    let outcome=hand_through_gate(Box::pin(later.hand_final(ProviderEmission{artifact:update,route:ProviderEmissionRoute::ClientProjection})),
+        pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+    let update=admitted_artifact(&outcome);
+    drop(later);
+
+    let (result_a,result_a_seq,pinned)=admit_call_result(ctx,root,run_path,descriptor,&tool,&call_a,"call-a");
+    let earlier=session.from_invocation(ctx,descriptor,run,&result_a,result_a_seq,&pinned).unwrap();
+    let recovery=hand_through_gate(Box::pin(earlier.recover_source()),
+        pump(ctx,root,run_path,authoring_id,listener,receiver,&result_a.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+    assert_eq!(recovery,ProviderSourceRecovery::Process);
+    let closing=if failing {
+        artifact(&ctx.interface_var_dir().join("parallel-closing"),"turn.error",json!({"label":"turn.error","message":"the turn failed","will_retry":false}))
+    } else {
+        artifact(&ctx.interface_var_dir().join("parallel-closing"),"interface.artifact.output",json!({"label":"interface.artifact.output","text":"done"}))
+    };
+    let outcome=hand_through_gate(Box::pin(earlier.hand_final(ProviderEmission{artifact:closing,route:ProviderEmissionRoute::ClientProjection})),
+        pump(ctx,root,run_path,authoring_id,listener,receiver,&result_a.artifact,0,usize::MAX,true,phase,true)).await
+        .unwrap_or_else(|error|panic!("the turn closes on the earlier call's result: {error}"));
+    let closing=admitted_artifact(&outcome);
+    drop(earlier);
+
+    let closed_bytes=std::fs::read(run_path).unwrap();let closed=RunRecord::from_bytes(&closed_bytes).unwrap();
+    assert_eq!(closed.interface_state[&descriptor.id]["pending_handoff"]["items"][0]["artifact_id"],json!(closing.id));
+    let bound=bound_context(&closed);
+    assert!(bound.contains(&closing.id),"the closing snapshot is the bound context of the next admission: {bound:?}");
+    let turn=[&call_a,&call_b,&result_b.artifact,&update,&result_a.artifact];
+    for covered in turn {
+        assert!(!bound.contains(&covered.id),"'{}' is covered by the closing snapshot, not bound beside it: {bound:?}",covered.id.as_str());
+    }
+    let sources=pending_snapshot_sources(ctx,&closed,&descriptor.id);
+    let positions=turn.map(|covered|sources.iter().position(|id|id==covered.id.as_str())
+        .unwrap_or_else(||panic!("the closing snapshot covers '{}': {sources:?}",covered.id.as_str())));
+    assert!(positions.windows(2).all(|pair|pair[0]<pair[1]),
+        "the snapshot keeps both calls before their results, in the order the turn consumed them: {sources:?}");
+
+    let cp=closed.checkpoints.iter().find(|cp|closed.active_checkpoints.contains(&cp.id)
+        && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.message")).unwrap();
+    let file=artifact(&root.join("parallel-next"),"operator.message",json!({"text":"continue","message_id":"parallel-next"}));
+    let mut row=edge(ctx,&closed_bytes,cp,&file,MovementKind::InterfaceOutbound,descriptor.id.clone());
+    keep_declared_role_artifacts(&mut row,&closed,&descriptor.id);
+    let next_input=source_envelope(ctx,root,&row,file);let next_seq=append(ctx,row);
+    let next=session.from_invocation(ctx,descriptor,run,&next_input,next_seq,&closed_bytes).unwrap();
+    assert!(next.invocation_session_snapshot().is_some(),"the next admission starts from the closing snapshot");
+    let context=next.current_session_context_artifacts().await;
+    for read in [&call_a,&result_a.artifact,&closing] {
+        assert!(context.iter().any(|entry|entry.source_artifact.id==read.id),"the next admission reads '{}'",read.id.as_str());
+    }
+    assert!(receiver.try_recv().is_err());
     }
     async fn source_with_snapshot(
         ctx:&InterfaceLiftContext,root:&Path,run_path:&Path,descriptor:&InterfaceDescriptor,run:&RunId,
@@ -1198,6 +1333,10 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         }
         if settlement_phase==Some(27) {
             late_call_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&plan.worker_interface_id,&authoring_id,&listener,&mut receiver).await;
+            return;
+        }
+        if let Some(phase @ (28 | 29))=settlement_phase {
+            Box::pin(earlier_parallel_result_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&authoring_id,&listener,&mut receiver,phase)).await;
             return;
         }
         if let Some(phase)=settlement_phase {
