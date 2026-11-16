@@ -16,6 +16,7 @@
     "memory.search",
     "memory.read",
     "memory.list",
+    "memory.inspect_evidence",
     "memory.save"
   ],
   "allowed_interfaces": [

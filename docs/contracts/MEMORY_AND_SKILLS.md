@@ -127,15 +127,55 @@ processed. One unprojectable source never stops the projection.
 ## Remembering is one call
 
 The model never works out which JSON file to write where. The **Memory** plugin
-(Applications → Plugins, included in the Codex pack) gives Home and tasks four
+(Applications → Plugins, included in the Codex pack) gives Home and tasks five
 tools behind the `system_memory` door:
 
 | Tool | What it does |
 | --- | --- |
-| `memory.save` | Store one note. Optional `title`; optional `supersedes` withdraws earlier notes of the same environment in the same write. |
-| `memory.search` | Keyword search over the notes this run can see, ranked by hits, with previews and ids. |
-| `memory.read` | Open one note in full; records that it was used today. |
+| `memory.save` | Store one note. Optional `title`; optional `supersedes` withdraws earlier notes of the same environment in the same write; optional `corrects` names notes the run can see but cannot replace. |
+| `memory.search` | Word search over the notes this run can see, ranked by BM25, with previews, usage and ids. |
+| `memory.read` | Open one note in full; records that it was used today. `include_evidence` adds a bounded description of the call that saved it. |
 | `memory.list` | Page through visible notes with their usage; `include_withdrawn` for maintenance. |
+| `memory.inspect_evidence` | Trace one note to the call that saved it, with a bounded preview; not counted as a use. |
+
+**Ranking.** A note and a query are read as words: maximal runs of Unicode
+letters and digits, lowercased. A query word that equals a word of the note is
+scored with BM25 (`k1` 1.2, `b` 0.75) over the notes the caller can see, a title
+word counting twice. A query word of three or more characters that occurs only
+inside a longer word is a partial match. Every whole-word match ranks above
+every partial one, so `port` finds the note about a port before the notes about
+a report or a portal, and a word that starts with the query word ranks above
+one that only contains it. Equal ranks list the newer note first. Each match
+carries its `score`, its `match` kind (`word` or `partial`) and its `usage`
+(`days_used`, `last_used`).
+
+**Corrections.** `supersedes` withdraws a note, so it works only on notes of the
+saving run's own EE. `corrects` leaves the named note as it is: the note must be
+active and visible to the saving run, and the save writes one receipt per
+corrected note at `corrections/<corrected id>/<correcting id>.json`, beside the
+collection's `entries` and `usage`. Entries keep their shape, and a receipt is
+only ever added. The conflict is resolved when a note is read: `memory.read`,
+`memory.search`, `memory.list` and `memory.inspect_evidence` give every note a
+`corrected_by` list of the active notes visible to the caller that correct it,
+each with its id, revision, title, `saved_at` and `scope_ee_ids`. A correcting
+note the caller cannot see, or one that was withdrawn, is not listed.
+
+**Evidence.** A note records the call that saved it as its evidence.
+`memory.inspect_evidence`, and `memory.read` with `include_evidence`, take the
+id of a note visible to the caller, never an artifact id, and follow only the
+references that note records. A reference is described only when it is the
+note's own saving call, a `tool.call` whose `arguments.note` is the note's text;
+any other recorded artifact is reported as `withheld`, so an edited evidence
+list does not make the door a reader of unrelated artifacts. The call is read
+from the content-addressed blob store through an optional read grant on
+`artifact_blobs_root`, and each blob is checked against the hash that names it.
+The description gives the tool, the correlation id, the origin the provider
+recorded beside the arguments, the payload's hash and size, and a preview of
+at most `max_bytes` (2048 by default, 8192 at most) cut on a character
+boundary. A missing grant, a missing blob or a blob that differs from its hash
+is `unavailable`. Host paths are not returned. The movement log is not read, so
+the description carries no movement sequence; the note's `saved_at` is the time
+of the save.
 
 Behind them, the system room's own executable does the artifact work. The door
 names its collection in its configuration (`memory_collection`); the shipped

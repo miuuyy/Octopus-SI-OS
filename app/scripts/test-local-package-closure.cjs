@@ -555,7 +555,7 @@ async function boundedAgentPresetFixture(executable) {
     const policy = JSON.parse(await fs.readFile(path.join(active, "interface", agent.worker_interface, "policy.json")));
     const sourcePolicy = JSON.parse(await fs.readFile(path.join(active, "interface", recipe.worker_interface_id, "policy.json")));
     assert.ok(sourcePolicy.ceiling.interfaces.includes("system_memory")
-      && ["memory.save", "memory.search", "memory.read", "memory.list"].every((tool) => sourcePolicy.ceiling.tools.includes(tool)),
+      && ["memory.save", "memory.search", "memory.read", "memory.list", "memory.inspect_evidence"].every((tool) => sourcePolicy.ceiling.tools.includes(tool)),
     "installed applications enter the preset worker's ceiling with their task tools");
     assert.deepEqual(policy, { ...sourcePolicy, id: agent.worker_interface });
     const settings = JSON.parse(await fs.readFile(path.join(active, "interface", agent.worker_interface, "client_template.json")));

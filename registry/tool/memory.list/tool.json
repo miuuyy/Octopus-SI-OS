@@ -14,7 +14,7 @@
   },
   "supported_worker_environment_kinds": ["system_room"],
   "handler_config": { "operation": "memory_list" },
-  "description": "List remembered notes visible to this run in id order, notes saved earlier first, with their usage. Continue with next_cursor. include_withdrawn also shows notes that were superseded, for maintenance work.",
+  "description": "List remembered notes visible to this run in id order, notes saved earlier first, with their usage and, in corrected_by, the active notes saved to correct them. Continue with next_cursor. include_withdrawn also shows notes that were superseded, for maintenance work.",
   "args_schema": {
     "type": "object",
     "properties": {

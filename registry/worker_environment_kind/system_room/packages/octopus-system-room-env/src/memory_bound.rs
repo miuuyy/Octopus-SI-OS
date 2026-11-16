@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use octopus_context_collections::{
@@ -16,6 +16,8 @@ const MAX_NOTE_BYTES: usize = 8192;
 const MAX_TITLE_CHARS: usize = 120;
 const MAX_DESCRIPTION_CHARS: usize = 280;
 const MAX_SUPERSEDED: usize = 16;
+const MAX_CORRECTED: usize = 16;
+const MAX_CORRECTIONS: usize = 64;
 const DEFAULT_SEARCH_RESULTS: usize = 8;
 const MAX_SEARCH_RESULTS: usize = 20;
 const DEFAULT_PAGE: usize = 20;
@@ -43,6 +45,8 @@ pub struct MemoryHost<'a> {
     pub effect_root: Option<&'a Path>,
     pub maximum_bytes: u64,
     pub observed_run: Option<&'a str>,
+    /// The artifact blob store, when this call holds a read grant on it.
+    pub artifact_blobs_root: Option<&'a Path>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +57,8 @@ struct SaveArguments {
     title: Option<String>,
     #[serde(default)]
     supersedes: Vec<String>,
+    #[serde(default)]
+    corrects: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +75,18 @@ struct ReadArguments {
     id: String,
     #[serde(default)]
     revision: Option<String>,
+    #[serde(default)]
+    include_evidence: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceArguments {
+    id: String,
+    #[serde(default)]
+    revision: Option<String>,
+    #[serde(default)]
+    max_bytes: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +135,10 @@ pub fn execute(
         "memory_list" => {
             let arguments = parse(call)?;
             Memory::open(input, call, host)?.list(arguments)?
+        }
+        "memory_inspect_evidence" => {
+            let arguments = parse(call)?;
+            Memory::open(input, call, host)?.inspect_evidence(arguments)?
         }
         other => {
             return Err(ToolHandlerError::Execution {
@@ -204,6 +226,18 @@ impl<'a> Memory<'a> {
                 "supersedes lists at most {MAX_SUPERSEDED} distinct memory ids"
             )));
         }
+        let mut corrected = BTreeSet::new();
+        if arguments.corrects.len() > MAX_CORRECTED
+            || !arguments
+                .corrects
+                .iter()
+                .all(|id| corrected.insert(id.trim()))
+            || !corrected.is_disjoint(&superseded)
+        {
+            return Err(self.invalid(format!(
+                "corrects lists at most {MAX_CORRECTED} distinct memory ids, none of them also superseded"
+            )));
+        }
         let grant = self
             .input
             .grant()
@@ -240,7 +274,7 @@ impl<'a> Memory<'a> {
                         "memory": self.pin(existing),
                     }));
                 }
-                let plan = self.plan_save(note, title, &superseded, &records)?;
+                let plan = self.plan_save(note, title, &superseded, &corrected, &records)?;
                 let mut bytes = serde_json::to_vec(&plan)
                     .map_err(|error| self.execution(error.to_string()))?;
                 bytes.push(b'\n');
@@ -266,12 +300,49 @@ impl<'a> Memory<'a> {
                 }
             }
         }
+        let corrects = self.record_corrections(&plan)?;
         Ok(json!({
             "result": "memory_saved",
             "memory": plan["memory"],
             "withdrawn": plan["withdrawn"],
+            "corrects": corrects,
             "writes": writes,
         }))
+    }
+
+    /// Records, beside the collection's entries, that the saved note corrects
+    /// each named note. A corrected note is not changed: it may belong to a
+    /// wider scope this call cannot write, so the edge is kept apart and the
+    /// conflict is resolved when a note is read.
+    fn record_corrections(&self, plan: &Value) -> Result<Value, ToolHandlerError> {
+        let Some(targets) = plan
+            .get("corrects")
+            .and_then(Value::as_array)
+            .filter(|targets| !targets.is_empty())
+        else {
+            return Ok(json!([]));
+        };
+        let name = |value: &Value| {
+            value
+                .as_str()
+                .filter(|id| !id.is_empty() && !id.starts_with('.') && !id.contains(['/', '\\', '\0']))
+                .map(str::to_string)
+                .ok_or_else(|| self.execution("memory save plan names a malformed correction"))
+        };
+        let by = name(&plan["memory"]["id"])?;
+        let root = self.collection.directory().join("corrections");
+        self.real_directory(&root, true)?;
+        for target in targets {
+            let directory = root.join(name(&target["id"])?);
+            self.real_directory(&directory, true)?;
+            let receipt = json!({"schema_version": 1, "corrected": target, "by": plan["memory"]});
+            let mut bytes = octopus_descriptors::canonical_bytes(&receipt);
+            bytes.push(b'\n');
+            crate::file_write::install_effect_record(&directory.join(format!("{by}.json")), &bytes).map_err(
+                |error| self.execution(format!("memory correction was not recorded; the same call completes it: {error}")),
+            )?;
+        }
+        Ok(Value::Array(targets.clone()))
     }
 
     fn apply(&self, entries: &Path, staging: &Path, write: &PlannedWrite) -> Result<Value, String> {
@@ -316,6 +387,7 @@ impl<'a> Memory<'a> {
         note: &str,
         title: String,
         superseded: &BTreeSet<&str>,
+        corrected: &BTreeSet<&str>,
         records: &[CollectionRecord],
     ) -> Result<Value, ToolHandlerError> {
         let now = unix_seconds().map_err(|error| self.execution(error))?;
@@ -368,6 +440,20 @@ impl<'a> Memory<'a> {
             withdrawn.push(json!({"id": id, "revision": plan.pin.revision.to_hex()}));
             writes.extend(plan.file_write.writes);
         }
+        let mut corrects = Vec::new();
+        for id in corrected {
+            let record = records
+                .iter()
+                .find(|record| record.entry.id == *id)
+                .ok_or_else(|| {
+                    self.invalid(format!("memory '{id}' is not an active memory visible here"))
+                })?;
+            corrects.push(json!({
+                "id": id,
+                "revision": record.revision.to_hex(),
+                "scope_ee_ids": record.entry.scope.ee_ids,
+            }));
+        }
         let batch = serde_json::to_value(OrderedFileWritePlan {
             ordered: true,
             writes,
@@ -384,6 +470,7 @@ impl<'a> Memory<'a> {
                 "scope_ee_ids": [self.caller.ee_id],
             },
             "withdrawn": withdrawn,
+            "corrects": corrects,
             "file_write": batch,
         }))
     }
@@ -413,25 +500,28 @@ impl<'a> Memory<'a> {
             return Err(self.invalid("query must contain searchable words"));
         }
         let limit = self.bounded(arguments.max_results, DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS)?;
-        let mut matches = self
-            .records(false)?
+        let records = self.records(false)?;
+        let active = active_notes(&records);
+        let documents = records.iter().map(|record| document(&record.entry)).collect::<Vec<_>>();
+        let mut matches = crate::memory_rank::rank(&documents, &terms)
             .into_iter()
-            .filter_map(|record| {
-                let score = score(&record.entry, &terms);
-                (score > 0).then_some((score, record))
-            })
+            .zip(&records)
+            .filter(|(rank, _)| rank.matched())
             .collect::<Vec<_>>();
-        matches.sort_by(|(left_score, left), (right_score, right)| {
-            right_score
-                .cmp(left_score)
+        matches.sort_by(|(left_rank, left), (right_rank, right)| {
+            left_rank
+                .best_first(right_rank)
                 .then_with(|| right.entry.id.cmp(&left.entry.id))
         });
         matches.truncate(limit);
         let rows = matches
             .iter()
-            .map(|(score, record)| {
-                let mut row = self.summary(record)?;
-                row["score"] = json!(score);
+            .map(|(rank, record)| {
+                let mut row = self.summary(record, &active)?;
+                let whole_word = rank.exact > 0.0;
+                let score = if whole_word { rank.exact } else { rank.partial };
+                row["score"] = json!((score * 10_000.0).round() / 10_000.0);
+                row["match"] = json!(if whole_word { "word" } else { "partial" });
                 row["preview"] = json!(note_text(&record.entry).map(|text| preview(text, PREVIEW_CHARS)));
                 Ok(row)
             })
@@ -444,13 +534,62 @@ impl<'a> Memory<'a> {
     }
 
     fn read(&self, arguments: ReadArguments) -> Result<Value, ToolHandlerError> {
-        let id = arguments.id.trim();
         let records = self.records(false)?;
+        let record = self.visible(&records, &arguments.id, arguments.revision.as_deref())?;
+        self.record_usage(record)?;
+        let mut memory = self.summary(record, &active_notes(&records))?;
+        memory["applicability"] = json!(record.entry.applicability);
+        memory["text"] = json!(note_text(&record.entry));
+        memory["evidence"] = json!(record.entry.content.as_ref().map(|content| &content.evidence));
+        if arguments.include_evidence {
+            memory["evidence_details"] = self.evidence(record, crate::memory_evidence::DEFAULT_PREVIEW_BYTES);
+        }
+        memory["selection"] = record.entry.selection.clone();
+        memory["requires"] = json!(record.entry.requires);
+        Ok(json!({"result": "memory_read", "memory": memory}))
+    }
+
+    /// Describes the evidence one visible note records, without counting as a
+    /// use of the note. The caller names a note, never an artifact.
+    fn inspect_evidence(&self, arguments: EvidenceArguments) -> Result<Value, ToolHandlerError> {
+        let preview_bytes =
+            crate::memory_evidence::preview_bound(arguments.max_bytes).map_err(|reason| self.invalid(reason))?;
+        let records = self.records(false)?;
+        let record = self.visible(&records, &arguments.id, arguments.revision.as_deref())?;
+        Ok(json!({
+            "result": "memory_evidence",
+            "memory": self.summary(record, &active_notes(&records))?,
+            "evidence": self.evidence(record, preview_bytes),
+        }))
+    }
+
+    fn evidence(&self, record: &CollectionRecord, preview_bytes: usize) -> Value {
+        let recorded = record
+            .entry
+            .content
+            .as_ref()
+            .map(|content| content.evidence.as_slice())
+            .unwrap_or_default();
+        crate::memory_evidence::describe(
+            self.host.artifact_blobs_root,
+            note_text(&record.entry),
+            recorded,
+            preview_bytes,
+        )
+    }
+
+    fn visible<'r>(
+        &self,
+        records: &'r [CollectionRecord],
+        id: &str,
+        revision: Option<&str>,
+    ) -> Result<&'r CollectionRecord, ToolHandlerError> {
+        let id = id.trim();
         let record = records
             .iter()
             .find(|record| record.entry.id == id)
             .ok_or_else(|| self.execution(format!("memory '{id}' is not an active memory visible here")))?;
-        if let Some(revision) = arguments.revision.as_deref().map(str::trim) {
+        if let Some(revision) = revision.map(str::trim) {
             if revision != record.revision.to_hex() {
                 return Err(self.execution(format!(
                     "memory '{id}' changed; its current revision is {}",
@@ -458,18 +597,12 @@ impl<'a> Memory<'a> {
                 )));
             }
         }
-        self.record_usage(record)?;
-        let mut memory = self.summary(record)?;
-        memory["applicability"] = json!(record.entry.applicability);
-        memory["text"] = json!(note_text(&record.entry));
-        memory["evidence"] = json!(record.entry.content.as_ref().map(|content| &content.evidence));
-        memory["selection"] = record.entry.selection.clone();
-        memory["requires"] = json!(record.entry.requires);
-        Ok(json!({"result": "memory_read", "memory": memory}))
+        Ok(record)
     }
 
     fn list(&self, arguments: ListArguments) -> Result<Value, ToolHandlerError> {
         let records = self.records(arguments.include_withdrawn)?;
+        let active = active_notes(&records);
         let rows = records
             .iter()
             .map(|record| json!([record.entry.id, record.revision.to_hex()]))
@@ -494,7 +627,7 @@ impl<'a> Memory<'a> {
         let end = start.saturating_add(limit).min(records.len());
         let memories = records[start..end]
             .iter()
-            .map(|record| self.summary(record))
+            .map(|record| self.summary(record, &active))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(json!({
             "result": "memories_listed",
@@ -534,12 +667,47 @@ impl<'a> Memory<'a> {
         })
     }
 
-    fn summary(&self, record: &CollectionRecord) -> Result<Value, ToolHandlerError> {
+    fn summary(
+        &self,
+        record: &CollectionRecord,
+        active: &BTreeMap<&str, &CollectionRecord>,
+    ) -> Result<Value, ToolHandlerError> {
         let mut summary = self.pin(record);
         summary["description"] = json!(record.entry.description);
         summary["state"] = json!(record.entry.state);
         summary["usage"] = self.usage(&record.entry.id)?;
+        summary["corrected_by"] = json!(self.corrected_by(&record.entry.id, active)?);
         Ok(summary)
+    }
+
+    /// The active notes visible to this caller that were saved as corrections
+    /// of `id`. A correcting note the caller cannot see, or one that was
+    /// withdrawn, corrects nothing here.
+    fn corrected_by(
+        &self,
+        id: &str,
+        active: &BTreeMap<&str, &CollectionRecord>,
+    ) -> Result<Vec<Value>, ToolHandlerError> {
+        let root = self.collection.directory().join("corrections");
+        let directory = root.join(id);
+        if !self.real_directory(&root, false)? || !self.real_directory(&directory, false)? {
+            return Ok(Vec::new());
+        }
+        let mut correcting = BTreeSet::new();
+        for entry in std::fs::read_dir(&directory)
+            .map_err(|error| self.execution(format!("memory corrections of '{id}' cannot be listed: {error}")))?
+            .take(MAX_CORRECTIONS)
+        {
+            let name = entry.map_err(|error| self.execution(error.to_string()))?.file_name();
+            let by = name
+                .to_str()
+                .filter(|name| !name.starts_with('.'))
+                .and_then(|name| name.strip_suffix(".json"));
+            if let Some((by, _)) = by.and_then(|by| active.get_key_value(by)) {
+                correcting.insert(*by);
+            }
+        }
+        Ok(correcting.into_iter().map(|by| self.pin(active[by])).collect())
     }
 
     fn usage(&self, id: &str) -> Result<Value, ToolHandlerError> {
@@ -760,6 +928,30 @@ fn note_text(entry: &CollectionEntry) -> Option<&str> {
     entry.content.as_ref().and_then(|content| content.text.as_deref())
 }
 
+fn active_notes(records: &[CollectionRecord]) -> BTreeMap<&str, &CollectionRecord> {
+    records
+        .iter()
+        .filter(|record| record.entry.state == PublicationState::Active)
+        .map(|record| (record.entry.id.as_str(), record))
+        .collect()
+}
+
+/// The words a note is searched by. A note's description is the first line of
+/// its text and every note carries the same applicability sentence, so each is
+/// read only where it says something the title and text do not.
+fn document(entry: &CollectionEntry) -> crate::memory_rank::Document {
+    let text = note_text(entry).unwrap_or_default();
+    let lead = entry.description.trim_end_matches('…');
+    let mut body = vec![text];
+    if lead.is_empty() || !text.trim_start().starts_with(lead) {
+        body.push(entry.description.as_str());
+    }
+    if entry.applicability != APPLICABILITY {
+        body.push(entry.applicability.as_str());
+    }
+    crate::memory_rank::Document::new(&entry.title, &body)
+}
+
 fn normalized(text: &str) -> String {
     text.to_lowercase()
         .split_whitespace()
@@ -809,33 +1001,12 @@ fn slug(text: &str) -> String {
 
 fn terms(query: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
-    query
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
+    crate::memory_rank::words(query)
+        .into_iter()
         .filter(|term| term.chars().count() >= 2)
-        .filter(|term| seen.insert(term.to_string()))
+        .filter(|term| seen.insert(term.clone()))
         .take(MAX_QUERY_TERMS)
-        .map(str::to_string)
         .collect()
-}
-
-fn score(entry: &CollectionEntry, terms: &[String]) -> u64 {
-    let fields = [
-        (entry.title.to_lowercase(), 3),
-        (entry.description.to_lowercase(), 2),
-        (entry.applicability.to_lowercase(), 1),
-        (note_text(entry).unwrap_or_default().to_lowercase(), 2),
-    ];
-    terms
-        .iter()
-        .map(|term| {
-            fields
-                .iter()
-                .filter(|(text, _)| text.contains(term.as_str()))
-                .map(|(_, weight)| *weight)
-                .sum::<u64>()
-        })
-        .sum()
 }
 
 fn unix_seconds() -> Result<u64, String> {

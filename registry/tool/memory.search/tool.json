@@ -14,7 +14,7 @@
   },
   "supported_worker_environment_kinds": ["system_room"],
   "handler_config": { "operation": "memory_search" },
-  "description": "Search remembered notes visible to this run: those of its environment and of the environments above it. Pass a few concrete keywords from the task; matches are ranked by keyword hits, newest first on ties, with a preview and the id to open with memory.read. No match only means these words were not found. If supplied, max_results must be an integer from 1 to 20.",
+  "description": "Search remembered notes visible to this run: those of its environment and of the environments above it. Pass a few concrete keywords from the task; a note that holds a query word as a whole word is ranked by BM25, its title counting double, above every note that holds the word only inside a longer one, and ties go to the newer note. Each match carries its score and kind of match, a preview, its usage (days_used and last_used), the active notes that correct it in corrected_by, and the id to open with memory.read. No match only means these words were not found. If supplied, max_results must be an integer from 1 to 20.",
   "args_schema": {
     "type": "object",
     "properties": {

@@ -488,7 +488,8 @@
       "owner": "artifact-system-library",
       "data_directories": [
         "entries",
-        "usage"
+        "usage",
+        "corrections"
       ]
     },
     {

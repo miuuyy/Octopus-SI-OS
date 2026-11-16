@@ -1167,6 +1167,16 @@
     "query_arguments": [],
     "surface": "integration"
   },
+  "memory.inspect_evidence": {
+    "kind": "read",
+    "conversation_visible": true,
+    "label": "Trace memory",
+    "target_arguments": [
+      "id"
+    ],
+    "query_arguments": [],
+    "target_kind": "artifact"
+  },
   "memory.list": {
     "kind": "list",
     "conversation_visible": true,

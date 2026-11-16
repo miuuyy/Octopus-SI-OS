@@ -24,6 +24,7 @@
     {"registry_kind":"tool","owner":"memory.search","configuration":[{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]},
     {"registry_kind":"tool","owner":"memory.read","configuration":[{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]},
     {"registry_kind":"tool","owner":"memory.list","configuration":[{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]},
+    {"registry_kind":"tool","owner":"memory.inspect_evidence","configuration":[{"path":"tool.json","fields":[{"pointer":"/process/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]},
     {"registry_kind":"artifact","owner":"artifact-memory-guide"}
   ],
   "required_packages": [

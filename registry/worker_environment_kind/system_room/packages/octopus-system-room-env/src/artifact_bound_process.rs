@@ -67,6 +67,7 @@ impl ArtifactBoundProcess {
                 effect_root: effect_root.as_deref(),
                 maximum_bytes: self.maximum_bytes,
                 observed_run: self.observed_run.as_deref(),
+                artifact_blobs_root: self.artifact_blobs_root.as_deref(),
             },
         )
     }
@@ -116,7 +117,7 @@ impl ToolProcessHandler for ArtifactBoundProcess {
                 Some("collection_discover" | "collection_read" | "collection_prepare")) {
                 crate::collection_tools::execute(&invocation.envelope, &call, self.registry_artifact_root.as_deref(), self.maximum_bytes)
             } else if matches!(call.handler_config.get("operation").and_then(serde_json::Value::as_str),
-                Some("memory_save" | "memory_search" | "memory_read" | "memory_list")) {
+                Some("memory_save" | "memory_search" | "memory_read" | "memory_list" | "memory_inspect_evidence")) {
                 self.memory(&invocation.envelope, &call)
             } else {
                 self.handler.execute(&context, &call).await

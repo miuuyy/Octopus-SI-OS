@@ -22,7 +22,9 @@ mod file_write;
 mod file_delete;
 mod file_read;
 mod memory_bound;
+mod memory_evidence;
 mod memory_observation;
+mod memory_rank;
 mod skill_bound;
 
 pub use artifact_bound_process::run_artifact_bound_tool_process;

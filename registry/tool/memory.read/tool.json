@@ -8,6 +8,7 @@
       "read_root_slots": ["ee_instances_root", "registry_artifact_root"],
       "write_root_slots": ["registry_artifact_root"],
       "executable_root_slots": [],
+      "optional_read_root_slots": ["artifact_blobs_root"],
       "read_paths": [], "write_paths": [], "executable_paths": [],
       "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
       "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
@@ -15,12 +16,13 @@
   },
   "supported_worker_environment_kinds": ["system_room"],
   "handler_config": { "operation": "memory_read" },
-  "description": "Read one remembered note in full by its id, with when it was saved, its scope and how often it has been used. Reading records that the note was used today; consolidation keeps used notes and lets unused ones go. Pass revision to make sure the note has not changed since you found it.",
+  "description": "Read one remembered note in full by its id, with when it was saved, its scope and how often it has been used. Reading records that the note was used today; consolidation keeps used notes and lets unused ones go. Pass revision to make sure the note has not changed since you found it. Each note names, in corrected_by, the active notes you can see that were saved to correct it. Set include_evidence to also receive evidence_details: for the call that saved the note, its tool, its origin and a bounded preview of what was passed. Evidence the store no longer holds is reported as unavailable, and a recorded artifact that is not this note's saving call is withheld.",
   "args_schema": {
     "type": "object",
     "properties": {
       "id": { "type": "string", "minLength": 1, "maxLength": 512 },
-      "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+      "include_evidence": { "type": "boolean" }
     },
     "required": ["id"],
     "additionalProperties": false

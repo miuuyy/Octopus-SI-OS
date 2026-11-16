@@ -1,0 +1,30 @@
+{
+  "id": "memory.inspect_evidence",
+  "interface": "system_memory",
+  "process": {
+    "bin": "target/debug/octopus-artifact-bound-tool",
+    "interrupted_effect_recovery": "reinvoke_exact_artifact",
+    "authority": {
+      "read_root_slots": ["ee_instances_root", "registry_artifact_root"],
+      "write_root_slots": [], "executable_root_slots": [],
+      "optional_read_root_slots": ["artifact_blobs_root"],
+      "read_paths": [], "write_paths": [], "executable_paths": [],
+      "executable_commands": [], "read_env_paths": [], "write_env_paths": [],
+      "executable_env_paths": [], "allow_network": false, "allow_local_ipc": false
+    }
+  },
+  "supported_worker_environment_kinds": ["system_room"],
+  "handler_config": { "operation": "memory_inspect_evidence" },
+  "description": "Trace one remembered note back to the call that saved it. Name a note visible to this run by its id; the tool follows only the evidence that note records and returns, for its saving call, the tool, the origin its provider recorded and a preview of what was passed, cut to max_bytes (2048 by default, at most 8192) on a character boundary. Evidence the store no longer holds is reported as unavailable, and a recorded artifact that is not this note's saving call is withheld. Tracing does not count as a use of the note. Use it when a note's basis matters before you rely on it or correct it.",
+  "args_schema": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "minLength": 1, "maxLength": 512 },
+      "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+      "max_bytes": { "type": "integer", "minimum": 16, "maximum": 8192 }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  },
+  "is_world_effect": false
+}

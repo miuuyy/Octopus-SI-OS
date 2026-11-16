@@ -145,6 +145,7 @@
       "memory.search",
       "memory.read",
       "memory.list",
+      "memory.inspect_evidence",
       "workspace.apply_patch",
       "workspace.build",
       "workspace.exec",

@@ -1600,6 +1600,7 @@ mod movement_gate {
                         effect_root: Some(&root.join("memory-effects")),
                         maximum_bytes: 1 << 26,
                         observed_run: Some(&plan.run_id),
+                        artifact_blobs_root: None,
                     },
                 )
                 .unwrap()

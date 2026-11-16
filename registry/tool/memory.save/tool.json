@@ -15,13 +15,17 @@
   },
   "supported_worker_environment_kinds": ["system_room"],
   "handler_config": { "operation": "memory_save" },
-  "description": "Remember one durable note: a user preference, a correction, a proven command, path or procedure, or a decision later work must respect. Call it when the user asks you to remember, forget or update something, or when a correction or adopted procedure should outlive this task. Write the note so it stands alone. The memory collection stores it scoped to this run's environment, keeps this call as provenance, and returns the existing note instead of a duplicate. To replace or forget notes saved in this same environment, list their ids in supersedes; they are withdrawn with this save. Never save secrets, credentials, private raw conversations or guesses.",
+  "description": "Remember one durable note: a user preference, a correction, a proven command, path or procedure, or a decision later work must respect. Call it when the user asks you to remember, forget or update something, or when a correction or adopted procedure should outlive this task. Write the note so it stands alone. The memory collection stores it scoped to this run's environment, keeps this call as provenance, and returns the existing note instead of a duplicate. To replace or forget notes saved in this same environment, list their ids in supersedes; they are withdrawn with this save. To correct a note you can see but cannot replace, such as one saved in an environment above this one, list its id in corrects: that note stays as it is, and every reader who can also see this note finds it under the older note's corrected_by. Never save secrets, credentials, private raw conversations or guesses.",
   "args_schema": {
     "type": "object",
     "properties": {
       "note": { "type": "string", "minLength": 1, "maxLength": 8192 },
       "title": { "type": "string", "minLength": 1, "maxLength": 120 },
       "supersedes": {
+        "type": "array", "maxItems": 16, "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+      },
+      "corrects": {
         "type": "array", "maxItems": 16, "uniqueItems": true,
         "items": { "type": "string", "minLength": 1, "maxLength": 512 }
       }

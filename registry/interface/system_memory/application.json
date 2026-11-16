@@ -14,7 +14,8 @@
       { "tool": "memory.save", "interface": "system_memory", "worker_environment_kind": "system_room" },
       { "tool": "memory.search", "interface": "system_memory", "worker_environment_kind": "system_room" },
       { "tool": "memory.read", "interface": "system_memory", "worker_environment_kind": "system_room" },
-      { "tool": "memory.list", "interface": "system_memory", "worker_environment_kind": "system_room" }
+      { "tool": "memory.list", "interface": "system_memory", "worker_environment_kind": "system_room" },
+      { "tool": "memory.inspect_evidence", "interface": "system_memory", "worker_environment_kind": "system_room" }
     ]
   }
 }
