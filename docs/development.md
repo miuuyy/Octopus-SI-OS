@@ -154,6 +154,12 @@ Code Mode, process session and file publication tests one at a time.
 Source/type checks and contract tests do not prove a
 fresh packaged setup, a real model reply, or physical device permissions.
 
+The generated-trace suites (`gate_trace_properties` in `octopus-runtime` and
+the `*_properties` modules of `octopus-run-authoring`) draw their cases from a
+fixed seed, so a failure reports the same minimal trace on every machine. Set
+`PROPTEST_RNG_SEED` to search from another seed and `PROPTEST_CASES` to change
+how many cases each property runs.
+
 The `dependency-audit` job fails on any high or critical npm advisory in the
 production dependencies, or in the development dependencies that ship
 (Electron in the client, Bun in the OpenCodex bridge, listed under

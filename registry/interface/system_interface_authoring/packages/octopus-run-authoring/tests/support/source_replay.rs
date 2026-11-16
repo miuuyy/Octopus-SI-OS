@@ -1,6 +1,9 @@
 use super::*;
 include!("rejected_final.rs");
 
+#[path = "trace_properties.rs"]
+mod trace_properties;
+
 #[test]
 #[ignore = "requires explicitly selected read-only completed-source installation evidence"]
 fn selected_run_replays_completed_source_after_outgoing_withdrawal() {

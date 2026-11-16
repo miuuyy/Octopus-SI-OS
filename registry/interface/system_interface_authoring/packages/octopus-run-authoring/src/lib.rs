@@ -487,6 +487,10 @@ pub mod capability_amendment;
 pub use capability_amendment::ProviderCapabilityAmendment;
 
 #[cfg(test)]
+#[path = "../tests/support/property_check.rs"]
+mod property_check;
+
+#[cfg(test)]
 #[path = "../tests/support/source_replay.rs"]
 mod source_replay_tests;
 

@@ -387,6 +387,10 @@ impl ProviderOutputHandoff {
 }
 
 #[cfg(test)]
+#[path = "../../tests/support/rebase_properties.rs"]
+mod rebase_properties;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;

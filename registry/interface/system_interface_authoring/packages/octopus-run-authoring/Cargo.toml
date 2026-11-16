@@ -36,5 +36,6 @@ octopus-tool-handlers = { path = "../../../../../crates/octopus-tool-handlers" }
 
 [dev-dependencies]
 octopus-system-room-env = { path = "../../../../worker_environment_kind/system_room/packages/octopus-system-room-env" }
+proptest.workspace = true
 tempfile = "3.23.0"
 tokio-util = "0.7"

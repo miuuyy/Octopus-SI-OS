@@ -25,6 +25,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 anyhow = "1"
 notify = "8.2"
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 [workspace.lints]
 [profile.dev]
 incremental = false
