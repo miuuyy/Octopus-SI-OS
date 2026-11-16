@@ -16,10 +16,16 @@ pub(super) struct WriterCallIndex {
 
 #[derive(Default)]
 struct WriterCallDirectory {
-    fingerprint: Option<(std::time::SystemTime, u64)>,
+    fingerprint: Option<WriterCallDirectoryFingerprint>,
     by_generation: BTreeMap<u64, BTreeSet<PathBuf>>,
     unclassified: BTreeSet<PathBuf>,
 }
+
+/// Every entry of a hand-in directory with its size, modification time and,
+/// on Unix, its inode. The directory's own metadata is not enough: its length
+/// is constant on common filesystems and its modification time is too coarse
+/// to see a file removed and another created within one clock tick.
+type WriterCallDirectoryFingerprint = Vec<(std::ffi::OsString, u64, std::time::SystemTime, u64)>;
 
 impl WriterCallIndex {
     fn candidates(&mut self, root: &Path, generation: u64) -> Result<Vec<PathBuf>, String> {
@@ -91,15 +97,29 @@ impl WriterCallIndex {
             .collect())
     }
 
-    fn fingerprint(root: &Path) -> Result<(std::time::SystemTime, u64), std::io::Error> {
-        let metadata = std::fs::metadata(root)?;
-        if !metadata.is_dir() {
+    fn fingerprint(root: &Path) -> Result<WriterCallDirectoryFingerprint, std::io::Error> {
+        if !std::fs::metadata(root)?.is_dir() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotADirectory,
                 "provider hand-in root is not a directory",
             ));
         }
-        Ok((metadata.modified()?, metadata.len()))
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(root)? {
+            let entry = entry?;
+            let metadata = match std::fs::symlink_metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            #[cfg(unix)]
+            let inode = std::os::unix::fs::MetadataExt::ino(&metadata);
+            #[cfg(not(unix))]
+            let inode = 0;
+            entries.push((entry.file_name(), metadata.len(), metadata.modified()?, inode));
+        }
+        entries.sort();
+        Ok(entries)
     }
 
     fn record(&mut self, path: PathBuf, generation: Option<u64>) {
