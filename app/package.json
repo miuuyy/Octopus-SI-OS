@@ -34,7 +34,7 @@
     "build": "npm run sync:gesture-assets && npm run gen:licenses && npm run check:design-system && tsc --noEmit && vite build",
     "build:cli": "node scripts/build-cli.cjs --runtime",
     "build:cli-client": "node scripts/build-cli.cjs",
-    "test:cli": "node scripts/build-cli.cjs && node --test scripts/test-cli-client.cjs scripts/test-cli-transcript.cjs scripts/test-cli-terminal.cjs scripts/test-cli-package.cjs scripts/test-cli-inspection.cjs && node scripts/test-cli-setup.cjs",
+    "test:cli": "node scripts/build-cli.cjs && node --test scripts/test-cli-client.cjs scripts/test-cli-transcript.cjs scripts/test-cli-terminal.cjs scripts/test-cli-package.cjs scripts/test-cli-target.cjs scripts/test-cli-inspection.cjs && node scripts/test-cli-setup.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "package:mac": "node scripts/package-macos.cjs",
     "self-update": "node scripts/safe-self-update.cjs",

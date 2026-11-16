@@ -7,9 +7,10 @@ The terminal does not need Computer Use to send work or read its results.
 
 ## Build and open
 
-The current distribution targets macOS 14 or later. Use Node.js 24 or newer,
-Rust, and the Xcode Command Line Tools listed in
-[Getting started](getting-started.md#prerequisites). From the checkout:
+The distribution targets macOS 14 or later, and Linux on x86-64 and arm64 as a
+headless runtime. Use Node.js 24 or newer and Rust; on macOS also the Xcode
+Command Line Tools listed in [Getting started](getting-started.md#prerequisites).
+From the checkout:
 
 ```sh
 npm ci --prefix app
@@ -22,6 +23,18 @@ under `app/build/cli`. It does not build or open the desktop app. For a terminal
 presentation change, `npm --prefix app run build:cli-client` rebuilds only the
 shared client modules. If Node 24 is not on your `PATH`, set `OCTOPUS_NODE` to
 its executable when launching `./octopus`.
+
+A distribution is built on the machine it targets. The build resolves the host
+to one of `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`; `--target=<triple>`
+states the expected one and fails when the host differs, and any other host is
+refused. `runtime-build-receipt.json` in the output records the target and what
+it carries. A Linux distribution holds the runtime, the registry and the
+provider executables, copied with ordinary file copies and left unsigned. It
+has no client file helper, no desktop helper and no bundled Codex, because
+those are built or pinned for macOS only; point `OCTOPUS_CODEX_BIN` at a Codex
+executable to use a provider that needs one. Process isolation on Linux is set
+up separately, see [Linux](linux.md).
 
 To use an existing desktop Home, select that exact directory:
 

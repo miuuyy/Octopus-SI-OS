@@ -103,6 +103,7 @@ jobs:
         run: |
           node scripts/test-local-packages.cjs --consent-recipe
           node scripts/test-safe-self-update.cjs
+          node --test scripts/test-cli-target.cjs scripts/test-cli-package.cjs
           node scripts/test-client-extensions.cjs
           node scripts/test-client-extension-authoring.cjs
 

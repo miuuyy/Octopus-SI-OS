@@ -2,27 +2,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { planTree } = require("./package-copy.cjs");
 
 function copyTree(source, destination, options = {}) {
-  const entries = [];
-  function visit(from, to) {
-    if (options.filter && !options.filter(from, to)) return;
-    const stat = fs.lstatSync(from);
-    if (stat.isSymbolicLink()) {
-      const target = fs.readlinkSync(from);
-      entries.push({ type: "symlink", destination: to, target: options.verbatimSymlinks ? target : path.resolve(path.dirname(from), target) });
-    } else if (stat.isDirectory()) {
-      if (!options.recursive) throw new Error(`Recursive copy is required for ${from}`);
-      entries.push({ type: "directory", destination: to, mode: stat.mode & 0o777 });
-      for (const name of fs.readdirSync(from)) visit(path.join(from, name), path.join(to, name));
-    } else if (stat.isFile()) {
-      entries.push({ type: "file", source: from, destination: to });
-    } else {
-      throw new Error(`Unsupported package entry: ${from}`);
-    }
-  }
-  visit(path.resolve(source), path.resolve(destination));
-  cloneEntries(entries);
+  cloneEntries(planTree(source, destination, options));
 }
 
 function copyFile(source, destination) {
@@ -49,4 +32,4 @@ function cloneEntries(entries) {
   }
 }
 
-module.exports = { copyTree, copyFile, cloneFiles };
+module.exports = { copyTree, copyFile, cloneFiles, cloneEntries };

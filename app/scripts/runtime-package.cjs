@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { copyTree, copyFile } = require("./copy-macos.cjs");
+const { copyTree, copyFile } = require("./package-copy.cjs");
 const { readGeneratedSourcePaths, assertDeclaredGeneratedOutput } = require("./generated-source-boundary.cjs");
 
 function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {

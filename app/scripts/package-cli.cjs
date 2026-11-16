@@ -1,10 +1,12 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { copyTree, copyFile } = require("./copy-macos.cjs");
+const { copyTree, copyFile } = require("./package-copy.cjs");
 const { createRuntimePackager } = require("./runtime-package.cjs");
+const { SUPPORTED_TARGETS, resolveCliTarget, takeTargetArgument } = require("./cli-target.cjs");
 
-function packageCliRuntime({ appRoot = path.resolve(__dirname, "..") } = {}) {
+function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = null } = {}) {
+  const cli = resolveCliTarget({ target });
   appRoot = fs.realpathSync(appRoot);
   const repoRoot = path.dirname(appRoot);
   const outputParent = path.join(appRoot, "build", "cli");
@@ -13,9 +15,11 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, "..") } = {}) {
   const stage = fs.mkdtempSync(path.join(outputParent, ".runtime-stage-"));
   let previous = null;
   try {
-    const clientFilesystem = require("../native/build.cjs").buildClientFilesystem();
-    fs.mkdirSync(path.join(stage, "native", "build"), { recursive: true });
-    copyFile(clientFilesystem, path.join(stage, "native", "build", path.basename(clientFilesystem)));
+    if (cli.components.client_filesystem) {
+      const clientFilesystem = require("../native/build.cjs").buildClientFilesystem();
+      fs.mkdirSync(path.join(stage, "native", "build"), { recursive: true });
+      copyFile(clientFilesystem, path.join(stage, "native", "build", path.basename(clientFilesystem)));
+    }
     const packager = createRuntimePackager({ repoRoot, appRoot, outputRoot: stage });
     const source = path.join(repoRoot, "registry");
     const baseline = path.join(stage, "registry");
@@ -41,18 +45,21 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, "..") } = {}) {
     const installationBinaries = packager.sharedBinaries(installationReferences);
     const sharedExecutables = packager.copyBundledBinaries(installationBinaries);
     packager.stripExecutables([...ownerExecutables, ...sharedExecutables]);
-    const managedRoots = packager.bundleManagedCodex([baseline, packages]);
     const managed = require(path.join(source, "interface/world_provider_codex/packages/octopus-provider-codex/managed-cli/bootstrap.cjs"));
+    const managedRoots = cli.components.managed_codex ? packager.bundleManagedCodex([baseline, packages]) : [];
+    // The provider executables must be the ones their build receipts attest, signed or not.
     const providerSigning = packager.captureProviderSigningInputs([baseline, packages]);
-    const managedSigning = managed.captureSigning(managedRoots);
-    packager.signClientResources(stage);
-    managed.sealSigning(managedSigning);
-    packager.sealProviderSigningInputs(providerSigning);
+    if (cli.components.code_signing) {
+      const managedSigning = managed.captureSigning(managedRoots);
+      packager.signClientResources(stage);
+      managed.sealSigning(managedSigning);
+      packager.sealProviderSigningInputs(providerSigning);
+    }
     packager.validateBundledLayout([baseline, packages], installationBinaries, ownerExecutables);
     const receipt = {
       schema: "octopus.cli_runtime_distribution", schema_version: 1,
       package_version: JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8")).version,
-      platform: process.platform, architecture: process.arch,
+      platform: cli.platform, architecture: cli.architecture, target: cli.triple, components: cli.components,
       binaries: installationBinaries.map((binary) => {
         const bytes = fs.readFileSync(path.join(stage, "bin", binary));
         return { path: `bin/${binary}`, bytes: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
@@ -68,7 +75,7 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, "..") } = {}) {
     try { fs.renameSync(stage, outputRoot); }
     catch (error) { if (previous) fs.renameSync(previous, outputRoot); previous = null; throw error; }
     if (previous) fs.rmSync(previous, { recursive: true });
-    return { outputRoot, binaryCount: installationBinaries.length, ownerExecutableCount: ownerExecutables.size };
+    return { outputRoot, target: cli.triple, binaryCount: installationBinaries.length, ownerExecutableCount: ownerExecutables.size };
   } finally {
     if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true });
   }
@@ -76,8 +83,9 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, "..") } = {}) {
 
 if (require.main === module) {
   try {
-    if (process.argv.length !== 2) throw new Error("Usage: node app/scripts/package-cli.cjs (consumes target/release binaries)");
-    console.log(JSON.stringify(packageCliRuntime()));
+    const { target, rest } = takeTargetArgument(process.argv.slice(2));
+    if (rest.length) throw new Error(`Usage: node app/scripts/package-cli.cjs [--target=<${SUPPORTED_TARGETS.join("|")}>] (consumes target/release binaries)`);
+    console.log(JSON.stringify(packageCliRuntime({ target })));
   } catch (error) {
     console.error(`CLI runtime packaging failed: ${error.message}`);
     process.exitCode = 1;
