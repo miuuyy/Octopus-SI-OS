@@ -12,7 +12,7 @@
     "src/adapters/base.ts#AdapterRequest,IncomingMeta,ProviderAdapter",
     "src/adapters/claude-cli/adapter.ts#ClaudeCliAdapterDeps,buildArgs,buildChildEnv,findClaudeCliBinary,withClaudeLoginHint",
     "src/adapters/claude-cli/profiles.ts#CLAUDE_CLI_PROFILES,ClaudeCliProfile",
-    "src/adapters/claude-cli/stable-replay.ts#CLAUDE_REPLAY_SYSTEM_PROMPT,buildStableClaudeConversationInput,stableClaudeToolBridge",
+    "src/adapters/claude-cli/stable-replay.ts#CLAUDE_REPLAY_SYSTEM_PROMPT,buildStableClaudeConversationInput,canonicalClaudeJson,stableClaudeToolBridge",
     "src/adapters/codebuddy/tool-bridge.ts#CODEBUDDY_MCP_SERVER_NAME,CODEBUDDY_MCP_TOOL_PREFIX,CODEBUDDY_TOOL_LIMITS,buildCodeBuddyToolBridge",
     "src/adapters/coding-agent/protocol.ts#buildSystemPrompt,readJsonLines,usageFromResult",
     "src/adapters/coding-agent/turn.ts#CodingAgentToolBridgeInput,runCodingAgentTurn",

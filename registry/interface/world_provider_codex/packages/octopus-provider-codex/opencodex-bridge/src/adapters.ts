@@ -18,6 +18,8 @@ type Context = {
   modelId: string;
   request: Request;
   budget: TranslatorBudget;
+  maxRequestBytes: number;
+  requestTimeoutMs: number;
   cacheRetention?: "none" | "short" | "long";
   account?: AntigravityAccountConfig;
 };
@@ -37,7 +39,8 @@ const cli: Record<string, (provider: OcxProviderConfig, context: Context) => Pro
   "grok-cli": createGrokCliAdapter,
   "antigravity-acp": (provider, context) => {
     if (!context.account) throw new Error("Antigravity requires its connected account directory");
-    return createAntigravityAcpAdapter(provider, context.account);
+    return createAntigravityAcpAdapter(provider, context.account, { owner: context.ownerId, thread: context.request.headers.get("thread-id") ?? "",
+      directory: process.cwd(), maxRequestBytes: context.maxRequestBytes, idleTimeoutMs: context.requestTimeoutMs });
   },
 };
 const registered = new Set(["anthropic", "azure", "google", "openai-chat", "openai-responses"]);

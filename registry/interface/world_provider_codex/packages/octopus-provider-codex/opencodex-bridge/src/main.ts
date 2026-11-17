@@ -1,7 +1,7 @@
 import { createProviderAdapter, supportsAdapter } from "./adapters.ts";
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { ANTIGRAVITY_ACCOUNT_PROVIDER, ANTIGRAVITY_CAPTURE_ENTRY, AntigravityAccountError, antigravityAccountStatus, antigravityLogin, antigravityLogout, runAntigravityCaptureMcpServer, type AntigravityAccountConfig } from "./antigravity-acp.ts";
+import { ANTIGRAVITY_ACCOUNT_PROVIDER, closeAntigravityConversations, AntigravityAccountError, antigravityAccountStatus, antigravityLogin, antigravityLogout, type AntigravityAccountConfig } from "./antigravity-acp.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
 import { runGrokCaptureMcpServer } from "./grok-cli.ts";
 import { runCodeBuddyMcpServer } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/mcp-server.ts";
@@ -445,6 +445,8 @@ async function adapterFor(config: BridgeConfig, request: Request, modelId: strin
     adapter: config.provider.adapter,
     providerId: config.provider.registry_entry ?? config.provider.id,
     ownerId: config.interface_id,
+    maxRequestBytes: config.limits.max_request_bytes,
+    requestTimeoutMs: config.limits.request_timeout_ms,
     modelId,
     request,
     cacheRetention: config.provider.cache_retention,
@@ -994,8 +996,9 @@ async function serve(config: BridgeConfig): Promise<void> {
     },
   });
   process.stdout.write(`${JSON.stringify({ schema_version: 1, status: "ready", port: server.port, interface_id: config.interface_id })}\n`);
-  const stop = () => {
+  const stop = async () => {
     server.stop(true);
+    await closeAntigravityConversations();
     process.exit(0);
   };
   process.on("SIGINT", stop);
@@ -1006,11 +1009,6 @@ async function serve(config: BridgeConfig): Promise<void> {
 if (process.argv[2] === "__codebuddy-mcp") {
   await runCodeBuddyMcpServer(process.argv[3] ?? "");
   await new Promise<never>(() => undefined);
-}
-
-if (process.argv[2] === ANTIGRAVITY_CAPTURE_ENTRY) {
-  await runAntigravityCaptureMcpServer(process.argv[3] ?? "", process.argv[4] ?? "", process.argv[5] ?? "");
-  process.exit(0);
 }
 
 if (process.argv[2] === "__grok-mcp") {

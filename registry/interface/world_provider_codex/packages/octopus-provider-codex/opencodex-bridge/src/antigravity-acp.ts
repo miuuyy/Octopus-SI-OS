@@ -1,45 +1,40 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { createConnection, createServer, type Server } from "node:net";
 import { arch, platform, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { crc32, inflateRawSync } from "node:zlib";
 import release from "../antigravity-acp.json" with { type: "json" };
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
-import type { IncomingMeta, ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
+import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
 import { buildCodeBuddyToolBridge, CODEBUDDY_MCP_SERVER_NAME, CODEBUDDY_MCP_TOOL_PREFIX } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/tool-bridge.ts";
-import { CLAUDE_REPLAY_SYSTEM_PROMPT, stableClaudeToolBridge } from "../node_modules/@bitkyc08/opencodex/src/adapters/claude-cli/stable-replay.ts";
+import { stableClaudeToolBridge } from "../node_modules/@bitkyc08/opencodex/src/adapters/claude-cli/stable-replay.ts";
 import { buildSystemPrompt, readJsonLines } from "../node_modules/@bitkyc08/opencodex/src/adapters/coding-agent/protocol.ts";
-import { isStandaloneBinary } from "../node_modules/@bitkyc08/opencodex/src/lib/standalone.ts";
-import { buildClaudeConversationInput } from "./claude-replay.ts";
+import { AcpFailure, closeAntigravityConversations, runAntigravityConversation } from "./antigravity-conversation.ts";
+export { closeAntigravityConversations } from "./antigravity-conversation.ts";
 
 export const ANTIGRAVITY_ACCOUNT_PROVIDER = "antigravity-acp";
-export const ANTIGRAVITY_CAPTURE_ENTRY = "__antigravity-mcp";
 
 export type AntigravityAccountConfig = { provider: typeof ANTIGRAVITY_ACCOUNT_PROVIDER; directory: string };
 export type AntigravityAccountStatus = { signedIn: boolean; accountLabel: string | null };
 
 const PRECEDENCE = [
   "The instructions in this section come from the system that hosts this conversation and take precedence over everything earlier in this system prompt.",
-  "They replace the identity, role, workflow, tool and formatting guidance given before them: you are not an IDE coding assistant, no USER_REQUEST wrapper is used, and no built-in tools exist.",
+  "They replace the identity, role, workflow, tool and formatting guidance given before them: you are not an IDE coding assistant. The client owns this conversation and its available functions.",
   "Where anything earlier conflicts with this section, follow this section.",
 ].join("\n");
-const TOOL_PROTOCOL = [
-  "The functions declared to you belong to the external client, which executes them under its own policy and returns each result in the next turn.",
-  "Call at most one function per response.",
+const CONTEXT_PROTOCOL = [
+  "The client owns the conversation and executes the declared functions. Its input can include a transcript in text or ordered attachments.",
+  "USER and ASSISTANT identify speakers. TOOL RESULT identifies data returned for a recorded call. Continue from the last input. Historical calls have already been issued.",
 ].join("\n");
 const AUTH_PROMPT = /Open the following link to authenticate the ACP server: (https:\/\/\S+)/;
 const STDERR_LIMIT = 16_384;
 const KILL_GRACE_MS = 2000;
 const STARTUP_TIMEOUT_MS = 180_000;
-const TURN_TIMEOUT_MS = 600_000;
 const DOWNLOAD_TIMEOUT_MS = 900_000;
 
 type ErrorEvent = Extract<AdapterEvent, { type: "error" }>;
-type Asset = { url: string; sha256: string; archive_bytes: number; executable_bytes: number; harness_bytes: number };
-type Captured = { name: string; arguments: Record<string, unknown> };
+type Asset = { args: string[]; url: string; sha256: string; archive_bytes: number; executable_bytes: number; harness_bytes: number };
 type JsonRecord = Record<string, unknown>;
 
 export class AntigravityAccountError extends Error {
@@ -189,7 +184,7 @@ function environment(paths: ReturnType<typeof layout>, turn: string): Record<str
   };
 }
 
-type Pending = { resolve: (value: JsonRecord) => void; reject: (error: Error) => void };
+type Pending = { method: string; resolve: (value: JsonRecord) => void; reject: (error: Error) => void };
 
 class AcpProcess {
   readonly child: ChildProcess;
@@ -200,28 +195,47 @@ class AcpProcess {
   readonly closed: Promise<number | null>;
   onNotification: (method: string, params: JsonRecord) => void = () => undefined;
   onRequest: (method: string, params: JsonRecord) => JsonRecord | undefined = () => undefined;
+  onDiagnostic: (line: string) => void = () => undefined;
   onAuthorizationUrl: (url: string) => void = () => undefined;
 
-  constructor(paths: ReturnType<typeof layout>, turn: string, spawn: typeof nodeSpawn) {
-    this.child = spawn(paths.executable, [], {
+  constructor(paths: ReturnType<typeof layout>, turn: string, spawn: typeof nodeSpawn, private readonly maxFrameBytes = 8 * 1024 * 1024) {
+    this.child = spawn(paths.executable, asset().args, {
       cwd: join(turn, "workspace"), env: environment(paths, turn), stdio: ["pipe", "pipe", "pipe"], detached: true,
     });
     this.closed = new Promise(resolve => {
       this.child.once("close", code => resolve(code));
       this.child.once("error", () => resolve(null));
     });
+    this.child.stdin?.on("error", () => this.kill());
+    let diagnosticLine = "";
     this.child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       const url = AUTH_PROMPT.exec(this.stderr.slice(-2048) + text)?.[1];
-      if (this.stderr.length < STDERR_LIMIT) this.stderr += text.slice(0, STDERR_LIMIT - this.stderr.length);
+      this.stderr = (this.stderr + text).slice(-STDERR_LIMIT);
+      diagnosticLine += text;
+      let newline: number;
+      while ((newline = diagnosticLine.indexOf("\n")) >= 0) {
+        this.onDiagnostic(diagnosticLine.slice(0, newline));
+        diagnosticLine = diagnosticLine.slice(newline + 1);
+      }
+      if (diagnosticLine.length > STDERR_LIMIT) diagnosticLine = diagnosticLine.slice(-STDERR_LIMIT);
       if (url) this.onAuthorizationUrl(url);
     });
     void this.read();
     void this.closed.then(code => {
-      const error = new Error(`Antigravity ACP server exited${code === null ? "" : ` with ${code}`}: ${this.diagnostic()}`);
+      const error = new AcpFailure(`Antigravity ACP server exited${code === null ? "" : ` with ${code}`}: ${this.diagnostic()}`, "antigravity_connection_closed", 502, true);
       for (const entry of this.pending.values()) entry.reject(error);
       this.pending.clear();
     });
+  }
+
+  authenticate(): Promise<JsonRecord> {
+    const signedOut = Promise.withResolvers<never>();
+    const auth = connect(this, () => {
+      signedOut.reject(new AcpFailure("Antigravity is signed out. Connect it again in Applications.", "antigravity_not_signed_in", 401));
+      this.kill();
+    });
+    return withTimeout(Promise.race([auth, signedOut.promise]), STARTUP_TIMEOUT_MS, "Antigravity sign-in");
   }
 
   diagnostic(): string {
@@ -236,7 +250,7 @@ class AcpProcess {
   request(method: string, params: JsonRecord): Promise<JsonRecord> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { method, resolve, reject });
       try { this.send({ id, method, params }); } catch (error) {
         this.pending.delete(id);
         reject(error as Error);
@@ -250,7 +264,7 @@ class AcpProcess {
 
   private async read(): Promise<void> {
     try {
-      for await (const message of readJsonLines(this.child.stdout!)) {
+      for await (const message of readJsonLines(this.child.stdout!, { maxLineBytes: this.maxFrameBytes, maxTotalBytes: Number.MAX_SAFE_INTEGER })) {
         const id = message.id;
         if (typeof message.method === "string") {
           const params = record(message.params) ?? {};
@@ -266,31 +280,29 @@ class AcpProcess {
           const entry = this.pending.get(id)!;
           this.pending.delete(id);
           const error = record(message.error);
-          if (error) entry.reject(new AcpRequestError(Number(error.code), String(error.message ?? "ACP request failed"), error.data));
-          else entry.resolve(record(message.result) ?? {});
+          if (error) entry.reject(Number(error.code) === -32000
+            ? new AcpFailure(String(error.message ?? "Antigravity requires sign-in."), "antigravity_not_signed_in", 401)
+            : new AcpFailure(`Antigravity ${entry.method} failed (${error.code}): ${error.message ?? "no diagnostic"}`));
+          else if (record(message.result)) entry.resolve(message.result as JsonRecord);
+          else entry.reject(new AcpFailure(`Antigravity ${entry.method} returned a malformed RPC response.`));
         }
       }
     } catch (error) {
       for (const entry of this.pending.values()) entry.reject(error as Error);
       this.pending.clear();
+      this.kill();
     }
   }
 
   kill(): void {
-    if (this.killed || this.child.exitCode !== null || this.child.pid === undefined) return;
+    if (this.killed || this.child.exitCode !== null || this.child.signalCode !== null || this.child.pid === undefined) return;
     this.killed = true;
     try { process.kill(-this.child.pid, "SIGTERM"); } catch {}
     setTimeout(() => {
-      if (this.child.exitCode === null && this.child.pid !== undefined) {
+      if (this.child.exitCode === null && this.child.signalCode === null && this.child.pid !== undefined) {
         try { process.kill(-this.child.pid, "SIGKILL"); } catch {}
       }
     }, KILL_GRACE_MS).unref();
-  }
-}
-
-class AcpRequestError extends Error {
-  constructor(readonly code: number, message: string, readonly data: unknown) {
-    super(message);
   }
 }
 
@@ -355,7 +367,8 @@ export async function antigravityLogin(config: AntigravityAccountConfig, options
 export async function antigravityLogout(config: AntigravityAccountConfig): Promise<AntigravityAccountStatus> {
   const directory = accountDirectory(config);
   const paths = layout(directory);
-  await rm(paths.home, { recursive: true, force: true });
+  await closeAntigravityConversations(directory);
+  await rm(join(paths.home, release.agent, "acp_token.json"), { force: true });
   await rm(join(directory, "account.json"), { force: true });
   return { signedIn: false, accountLabel: null };
 }
@@ -371,277 +384,42 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
-function contentBlocks(parsed: OcxParsedRequest, vendorNameByWire: ReadonlyMap<string, string>): JsonRecord[] {
-  const frame = JSON.parse(buildClaudeConversationInput(parsed, { vendorNameByWire })[0]!) as { message: { content: JsonRecord[] } };
-  return frame.message.content.map(block => {
-    if (block.type === "text") return { type: "text", text: String(block.text ?? "") };
-    const source = record(block.source);
-    if (block.type === "image" && source?.type === "base64" && typeof source.media_type === "string" && typeof source.data === "string") {
-      return { type: "image", mimeType: source.media_type, data: source.data };
-    }
-    throw new Error("Antigravity turns carry inline images only; this request holds an image reference.");
-  });
-}
-
-function effortValue(parsed: OcxParsedRequest): string | undefined {
-  const requested = parsed.options.reasoning;
-  if (!requested || requested === "none") return undefined;
-  return requested;
-}
-
-export function createAntigravityAcpAdapter(_provider: OcxProviderConfig, account: AntigravityAccountConfig, deps: { spawn?: typeof nodeSpawn } = {}): ProviderAdapter {
+export function createAntigravityAcpAdapter(_provider: OcxProviderConfig, account: AntigravityAccountConfig,
+  scope: { owner: string; thread: string; directory: string; maxRequestBytes: number; idleTimeoutMs: number }): ProviderAdapter {
   return {
     name: "antigravity-acp",
     buildRequest() { throw new Error("Antigravity runs through Google's ACP server."); },
     async *parseStream() { throw new Error("Antigravity runs through Google's ACP server."); },
     async runTurn(parsed, incoming, emit) {
-      let bridge;
-      let blocks: JsonRecord[];
       try {
-        bridge = stableClaudeToolBridge(buildCodeBuddyToolBridge(parsed));
-        const vendorByWire = new Map([...bridge.emittedNameMap].map(([emitted, wire]) => [wire, emitted.slice(CODEBUDDY_MCP_TOOL_PREFIX.length)]));
-        blocks = contentBlocks(parsed, vendorByWire);
-      } catch (error) {
-        emit(failure(error instanceof Error ? error.message : String(error), "antigravity_input_invalid", 400));
-        return;
-      }
-      let paths;
-      try {
-        paths = await installed(accountDirectory(account));
-      } catch (error) {
-        emit(failure(error instanceof Error ? error.message : String(error), "antigravity_account_invalid", 401));
-        return;
-      }
-      if (!paths) {
-        emit(failure("Antigravity is not connected on this Mac. Connect it in Applications to install Google's ACP server and sign in.", "antigravity_not_connected", 401));
-        return;
-      }
-      const wireByName = new Map([...bridge.emittedNameMap].map(([emitted, wire]) => [emitted.slice(CODEBUDDY_MCP_TOOL_PREFIX.length), wire]));
-      const systemPrompt = [PRECEDENCE, buildSystemPrompt(parsed), CLAUDE_REPLAY_SYSTEM_PROMPT, bridge.tools.length ? TOOL_PROTOCOL : ""].filter(Boolean).join("\n\n");
-      const turn = await turnDirectory();
-      let capture: Capture | undefined;
-      try {
-        capture = await captureServer();
-        const mcpServers: JsonRecord[] = [];
-        if (bridge.tools.length) {
-          const catalogPath = join(turn, "catalog.json");
-          await writeFile(catalogPath, JSON.stringify(bridge.tools), { encoding: "utf8", mode: 0o600, flag: "wx" });
-          const entry = isStandaloneBinary() ? [] : [fileURLToPath(new URL("./main.ts", import.meta.url))];
-          mcpServers.push({
-            name: CODEBUDDY_MCP_SERVER_NAME,
-            command: process.execPath,
-            args: [...entry, ANTIGRAVITY_CAPTURE_ENTRY, catalogPath, String(capture.port), capture.token],
-            env: [],
-          });
+        if (!scope.owner || !scope.thread) {
+          emit(failure("Antigravity requests require an explicit native thread-id for context continuity.", "antigravity_thread_required", 400));
+          return;
         }
-        await runTurn({
-          paths, turn, mcpServers, systemPrompt, blocks, parsed, wireByName,
-          requireToolCall: bridge.requireToolCall, capture, incoming, emit, spawn: deps.spawn ?? nodeSpawn,
+        const directory = accountDirectory(account);
+        const paths = await installed(directory);
+        if (!paths) {
+          emit(failure(`Connect Antigravity in Applications to install Google's ACP server ${release.version} and use the connected account.`, "antigravity_not_connected", 401));
+          return;
+        }
+        for (const message of parsed.context.messages) {
+          if (message.role === "developer" && Array.isArray(message.content) && message.content.some(part => part.type !== "text")) {
+            emit(failure("Antigravity requires text in developer instructions.", "antigravity_developer_content", 400));
+            return;
+          }
+        }
+        const bridge = stableClaudeToolBridge(buildCodeBuddyToolBridge(parsed));
+        const wireByName = new Map([...bridge.emittedNameMap].map(([emitted, wire]) => [emitted.slice(CODEBUDDY_MCP_TOOL_PREFIX.length), wire]));
+        const systemPrompt = [PRECEDENCE, buildSystemPrompt(parsed), CONTEXT_PROTOCOL].filter(Boolean).join("\n\n");
+        await runAntigravityConversation({
+          account: directory, ...scope, serverName: CODEBUDDY_MCP_SERVER_NAME,
+          start: root => new AcpProcess(paths, root, nodeSpawn, Math.max(8 * 1024 * 1024, scope.maxRequestBytes * 2)),
+        }, {
+          parsed, systemPrompt, tools: bridge.tools, wireByName, requireToolCall: bridge.requireToolCall, incoming, emit,
         });
       } catch (error) {
-        emit(failure(`Antigravity turn could not be prepared: ${error instanceof Error ? error.message : String(error)}`, "antigravity_turn_failed", 502, true));
-      } finally {
-        capture?.close();
-        await rm(turn, { recursive: true, force: true });
+        emit(failure(error instanceof Error ? error.message : String(error), "antigravity_turn_failed", 502));
       }
     },
   };
-}
-
-type Capture = { port: number; token: string; next: Promise<Captured>; close: () => void };
-
-async function captureServer(): Promise<Capture> {
-  const token = randomBytes(24).toString("hex");
-  let deliver!: (call: Captured) => void;
-  const next = new Promise<Captured>(resolveCall => { deliver = resolveCall; });
-  const server: Server = createServer(socket => {
-    let buffer = "";
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      if (buffer.length > 4 * 1024 * 1024) socket.destroy();
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      try {
-        const value = record(JSON.parse(buffer.slice(0, newline)));
-        const args = record(value?.arguments);
-        if (value?.token === token && typeof value.name === "string" && args) deliver({ name: value.name, arguments: args });
-      } catch {}
-      socket.end();
-    });
-    socket.on("error", () => undefined);
-  });
-  await new Promise<void>((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolveListen());
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Antigravity capture server has no port");
-  return { port: address.port, token, next, close: () => server.close() };
-}
-
-async function runTurn(input: {
-  paths: ReturnType<typeof layout>; turn: string; mcpServers: JsonRecord[]; systemPrompt: string; blocks: JsonRecord[];
-  parsed: OcxParsedRequest; wireByName: ReadonlyMap<string, string>; requireToolCall: boolean; capture: Capture;
-  incoming: IncomingMeta; emit: (event: AdapterEvent) => void; spawn: typeof nodeSpawn;
-}): Promise<void> {
-  const { emit, incoming } = input;
-  if (incoming.abortSignal?.aborted) {
-    emit(failure("Antigravity turn was aborted before start.", "aborted"));
-    return;
-  }
-  let terminal = false;
-  const finish = (event: AdapterEvent) => {
-    if (terminal) return;
-    terminal = true;
-    emit(event);
-  };
-  let acp: AcpProcess;
-  try {
-    acp = new AcpProcess(input.paths, input.turn, input.spawn);
-  } catch (error) {
-    emit(failure(`Antigravity ACP server could not start: ${error instanceof Error ? error.message : String(error)}`, "acp_spawn_failed"));
-    return;
-  }
-  let used: number | undefined;
-  let sessionId: string | undefined;
-  const abort = () => acp.kill();
-  incoming.abortSignal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(() => {
-    finish(failure("Antigravity turn exceeded its time limit.", "antigravity_timeout", 504, true));
-    acp.kill();
-  }, TURN_TIMEOUT_MS);
-  acp.onNotification = (method, params) => {
-    if (method !== "session/update" || terminal) return;
-    const update = record(params.update);
-    const kind = update?.sessionUpdate;
-    const content = record(update?.content);
-    if (kind === "agent_message_chunk" && content?.type === "text" && typeof content.text === "string" && content.text) {
-      emit({ type: "text_delta", text: content.text });
-    } else if (kind === "agent_thought_chunk" && content?.type === "text" && typeof content.text === "string" && content.text) {
-      emit({ type: "thinking_delta", thinking: content.text });
-    } else if (kind === "usage_update" && typeof update?.used === "number") {
-      used = update.used;
-    }
-  };
-  acp.onRequest = (method, params) => {
-    if (method !== "session/request_permission") return undefined;
-    const options = Array.isArray(params.options) ? params.options.map(record) : [];
-    const allow = options.find(option => option?.kind === "allow_once") ?? options.find(option => option?.optionId === "allow");
-    return allow ? { outcome: { outcome: "selected", optionId: allow.optionId } } : { outcome: { outcome: "cancelled" } };
-  };
-  const usage = () => used === undefined ? undefined : { inputTokens: used, outputTokens: 0, totalTokens: used, contextTotalTokens: used };
-  try {
-    incoming.beforePhysicalSend?.();
-    await withTimeout(connect(acp, () => {
-      finish(failure("Antigravity is signed out on this Mac. Connect it again in Applications.", "antigravity_not_signed_in", 401));
-      acp.kill();
-    }), STARTUP_TIMEOUT_MS, "Antigravity ACP server start");
-    if (terminal) return;
-    const session = await acp.request("session/new", {
-      cwd: join(input.turn, "workspace"),
-      mcpServers: input.mcpServers,
-      _meta: {
-        antigravity: {
-          enabledTools: [],
-          systemPrompt: { append: input.systemPrompt },
-          ...(input.mcpServers.length ? { eagerMcpServers: [CODEBUDDY_MCP_SERVER_NAME] } : {}),
-        },
-      },
-    });
-    sessionId = typeof session.sessionId === "string" && /^[A-Za-z0-9-]+$/.test(session.sessionId) ? session.sessionId : undefined;
-    if (!sessionId) throw new Error("Antigravity ACP server returned no session.");
-    await selectModel(acp, sessionId, input.parsed.modelId, effortValue(input.parsed));
-    incoming.onPhysicalSend?.({ ordinal: 1 });
-    const prompt = acp.request("session/prompt", { sessionId, prompt: input.blocks });
-    prompt.catch(() => undefined);
-    const outcome = await Promise.race([
-      prompt.then(result => ({ kind: "stop" as const, result })),
-      input.capture.next.then(call => ({ kind: "call" as const, call })),
-    ]);
-    if (terminal) return;
-    if (outcome.kind === "call") {
-      const wire = input.wireByName.get(outcome.call.name);
-      if (!wire) {
-        finish(failure(`Antigravity called '${outcome.call.name}', which is outside the client's tool catalog.`, "antigravity_tool_outside_catalog", 502));
-        return;
-      }
-      const id = `call_${randomBytes(12).toString("hex")}`;
-      emit({ type: "tool_call_start", id, name: wire });
-      emit({ type: "tool_call_delta", arguments: JSON.stringify(outcome.call.arguments) });
-      emit({ type: "tool_call_end" });
-      const counted = usage();
-      finish({ type: "done", stopReason: "tool_use", ...(counted ? { usage: counted } : {}) });
-      return;
-    }
-    const stopReason = outcome.result.stopReason;
-    const counted = usage();
-    if (stopReason === "refusal") finish(failure("The model refused this request through Antigravity.", "antigravity_refusal", 400));
-    else if (stopReason === "cancelled") finish(failure("Antigravity turn was stopped before it completed.", "aborted"));
-    else if (input.requireToolCall) finish(failure("Antigravity ended the turn without the required tool call.", "antigravity_tool_call_required", 502));
-    else finish({ type: "done", stopReason: stopReason === "max_tokens" ? "max_tokens" : "stop", ...(counted ? { usage: counted } : {}) });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const signIn = error instanceof AcpRequestError && error.code === -32000;
-    finish(signIn
-      ? failure(`Antigravity is signed out on this Mac. Connect it again in Applications. ${message}`, "antigravity_not_signed_in", 401)
-      : failure(`Antigravity failed: ${message}${acp.diagnostic() ? ` (${acp.diagnostic()})` : ""}`, "antigravity_turn_failed", 502, !(error instanceof AcpRequestError)));
-  } finally {
-    clearTimeout(timer);
-    incoming.abortSignal?.removeEventListener("abort", abort);
-    acp.kill();
-    await acp.closed;
-    if (sessionId) await forgetSession(input.paths, sessionId);
-  }
-}
-
-async function forgetSession(paths: ReturnType<typeof layout>, sessionId: string): Promise<void> {
-  const root = join(paths.home, release.agent);
-  await rm(join(root, "brain", sessionId), { recursive: true, force: true });
-  for (const suffix of [".db", ".db-wal", ".db-shm", ".meta"]) await rm(join(root, "conversations", `${sessionId}${suffix}`), { force: true });
-}
-
-async function selectModel(acp: AcpProcess, sessionId: string, model: string, effort: string | undefined): Promise<void> {
-  try {
-    await acp.request("session/set_config_option", { sessionId, configId: "model", value: model });
-    if (effort) await acp.request("session/set_config_option", { sessionId, configId: "thinking_level", value: effort });
-  } catch (error) {
-    if (!(error instanceof AcpRequestError)) throw error;
-    throw new AcpRequestError(error.code, `model '${model}'${effort ? ` at ${effort} thinking` : ""} is not offered to this Google account: ${error.message}`, error.data);
-  }
-}
-
-export async function runAntigravityCaptureMcpServer(catalogPath: string, port: string, token: string): Promise<void> {
-  const tools = JSON.parse(await readFile(catalogPath, "utf8")) as unknown;
-  if (!Array.isArray(tools) || !tools.every(tool => typeof record(tool)?.name === "string" && record(record(tool)?.inputSchema))) {
-    throw new Error("Antigravity capture catalog is malformed");
-  }
-  if (!/^\d+$/.test(port) || !/^[0-9a-f]{48}$/.test(token)) throw new Error("Antigravity capture endpoint is malformed");
-  const names = new Set(tools.map(tool => (tool as { name: string }).name));
-  const send = (message: JsonRecord) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
-  for await (const message of readJsonLines(process.stdin)) {
-    const id = message.id;
-    const params = record(message.params);
-    if (message.method === "tools/call") {
-      const args = record(params?.arguments) ?? {};
-      if (typeof params?.name !== "string" || !names.has(params.name)) {
-        if (id !== undefined && id !== null) send({ id, error: { code: -32602, message: "unknown isolated tool" } });
-        continue;
-      }
-      const socket = createConnection({ host: "127.0.0.1", port: Number(port) });
-      socket.on("error", () => undefined);
-      socket.end(`${JSON.stringify({ token, name: params.name, arguments: args })}\n`);
-      continue;
-    }
-    if (id === undefined || id === null) continue;
-    if (message.method === "initialize") {
-      send({ id, result: { protocolVersion: typeof params?.protocolVersion === "string" ? params.protocolVersion : "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "octopus-antigravity-capture", version: "1.0.0" } } });
-    } else if (message.method === "tools/list") {
-      send({ id, result: { tools } });
-    } else if (message.method === "ping") {
-      send({ id, result: {} });
-    } else {
-      send({ id, error: { code: -32601, message: "method not found" } });
-    }
-  }
 }

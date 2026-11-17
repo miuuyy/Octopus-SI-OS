@@ -188,12 +188,25 @@ Antigravity runs on Google's official Antigravity ACP server, declared by the
 `acp` block of its `providers.json` entry; `antigravity-acp.json` pins the
 release per platform. Connect installs the verified server into the owner's
 `opencodex-account/` and signs in through the server itself, which keeps the
-token as a private file there. Each turn opens one session with every built-in
-tool disabled, appends the run's instructions as the session's system prompt
-under a section that takes precedence, and offers the client's tools as native
-functions; a call is returned to Codex as the turn's function call. Google's own
-default instructions cannot be removed through ACP and are declared as the
-residual source `antigravity_acp_default_system_instructions`.
+token as a private file there. A provider maps each Codex thread to its own ACP
+session. It appends the run instructions and offers the current client functions
+over a private MCP endpoint. Codex executes a call through its declared route.
+The admitted result answers that same MCP request. Large text travels as a
+`text/plain` document, including inside a function result.
+
+After a completed turn the process exits. The next input resumes the session
+when the caller's history extends the recorded response. Replacing history
+starts a fresh ACP session with the supplied transcript. If a restart interrupts
+a pending MCP call, ACP cannot reconnect that call. The provider restores the
+admitted transcript with its call ID and result in a fresh ACP session. The
+same recovery lets the bridge release an idle connection after its configured
+transport timeout while Octopus continues waiting for the tool. A retry
+of a recorded request returns its recorded response and call ID.
+
+The descriptor lists the server's residual instructions and MCP resource tools.
+The client endpoint publishes only its declared functions. A native execution
+failure reaches Codex as a failed response, including when ACP formats it as
+an agent message.
 
 ### Model catalogs
 

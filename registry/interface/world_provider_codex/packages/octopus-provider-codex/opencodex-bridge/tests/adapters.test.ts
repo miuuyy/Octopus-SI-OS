@@ -24,7 +24,7 @@ test("shared factory preserves OpenCode Go mixed wires, caller prompts and conve
         const request = new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { session_id: conversation } });
         const adapter = createProviderAdapter(provider, {
           adapter: provider.adapter, providerId: entry.id, ownerId: "fixture-owner", modelId,
-          request, budget, cacheRetention: "none",
+          request, budget, maxRequestBytes: 1048576, requestTimeoutMs: 10000, cacheRetention: "none",
         });
         const parsed = parseRequest({ model: modelId, instructions: prompt, input: "hello", stream: false }, { preserveCallerContext: true });
         const built = await adapter.buildRequest(parsed, { headers: request.headers, providerName: entry.id, translatorBudget: budget });

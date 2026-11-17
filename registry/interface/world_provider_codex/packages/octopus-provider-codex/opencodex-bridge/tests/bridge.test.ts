@@ -67,8 +67,8 @@ async function readLine(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 const bridgeBinary = process.env.OCTOPUS_TEST_BRIDGE_BINARY ?? resolve(import.meta.dir, "../bin/octopus-opencodex-bridge");
 
-async function spawnBridge(value: unknown, env?: Record<string, string>): Promise<SpawnedBridge> {
-  const child = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe", ...(env ? { env } : {}) });
+async function spawnBridge(value: unknown, env?: Record<string, string>, cwd?: string): Promise<SpawnedBridge> {
+  const child = Bun.spawn([bridgeBinary], { stdin: "pipe", stdout: "pipe", stderr: "pipe", cwd, ...(env ? { env } : {}) });
   children.push(child);
   child.stdin.write(JSON.stringify(value));
   child.stdin.end();
@@ -675,95 +675,120 @@ test("a hosted web_search is refused because the bridge serves no search backend
 
 const FAKE_ACP_SERVER = String.raw`
 const fs = require("node:fs");
-const { spawn } = require("node:child_process");
+const { createInterface } = require("node:readline");
 const root = require("node:path").dirname(process.env.GEMINI_HOME);
-const log = (entry) => fs.appendFileSync(root + "/acp-log.jsonl", JSON.stringify(entry) + "\n");
-const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
-log({ env: { GEMINI_HOME: process.env.GEMINI_HOME, HOME: process.env.HOME, BROWSER: process.env.BROWSER, FILE: process.env.AGY_ACP_FORCE_FILE_STORAGE, HARNESS: process.env.ANTIGRAVITY_HARNESS_PATH, SECRET: process.env.OCTOPUS_TEST_SECRET } });
-let servers = [];
-let buffer = "";
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  let newline;
-  while ((newline = buffer.indexOf("\n")) >= 0) {
-    const message = JSON.parse(buffer.slice(0, newline));
-    buffer = buffer.slice(newline + 1);
-    log({ method: message.method, params: message.params });
-    if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [] } });
-    else if (message.method === "authenticate") {
-      if (fs.existsSync(process.env.GEMINI_HOME + "/signed-out")) process.stderr.write("Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/auth?state=x\n");
-      else send({ id: message.id, result: { _meta: { antigravity: { tier: { name: "Google AI Pro" } } } } });
-    } else if (message.method === "session/new") {
-      servers = message.params.mcpServers;
-      send({ id: message.id, result: { sessionId: "session-1" } });
-    } else if (message.method === "session/set_config_option") send({ id: message.id, result: { configOptions: [] } });
-    else if (message.method === "session/prompt") {
-      if (servers.length) {
-        const capture = spawn(servers[0].command, servers[0].args, { stdio: ["pipe", "pipe", "inherit"] });
-        capture.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n");
-        capture.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } }) + "\n");
-      } else {
-        const update = (value) => send({ method: "session/update", params: { sessionId: "session-1", update: value } });
-        update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } });
-        update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "acp says hi" } });
-        update({ sessionUpdate: "usage_update", used: 42, size: 1000 });
-        send({ id: message.id, result: { stopReason: "end_turn" } });
-      }
-    }
+const log = (value) => fs.appendFileSync(root + "/acp-log.jsonl", JSON.stringify(value) + "\n");
+const send = (value) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...value }) + "\n");
+let session, mcp;
+async function receive(message) {
+  const { id, method, params } = message;
+  if (!method) { log({ id, outcome: message.result?.outcome }); return; }
+  if (method === "initialize") return send({ id, result: { protocolVersion: 1 } });
+  if (method === "authenticate" && fs.existsSync(process.env.GEMINI_HOME + "/signed-out")) {
+    process.stderr.write("Open the following link to authenticate the ACP server: https://accounts.google.com/signin\n"); return;
   }
-});
+  if (method === "session/new" || method === "session/resume") {
+    session = params.sessionId ?? crypto.randomUUID();
+    mcp = params.mcpServers[0];
+    log({ method, session, meta: params._meta.antigravity, env: { home: process.env.HOME, gemini: process.env.GEMINI_HOME, secret: process.env.OCTOPUS_TEST_SECRET } });
+    return send({ id, result: { sessionId: session } });
+  }
+  if (method === "session/set_config_option") log({ method, ...params });
+  if (method !== "session/prompt") return send({ id, result: {} });
+  const text = params.prompt.map(p => p.resource?.text ?? p.text ?? "").join("");
+  log({ method, session, text });
+  const update = (update) => send({ method: "session/update", params: { sessionId: session, update } });
+  const say = (text) => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+  if (text.includes("native-error")) {
+    say("Agent execution error: trajectory converted to zero chat messages");
+    process.stderr.write("E1117 01:02:03.004 12345 server.py:5737] Antigravity SDK error processing prompt for session " + session + "\n");
+  } else if (text.includes("call-inspect") && !text.includes("TOOL RESULT")) {
+    for (const name of ["exact_tool", "unoffered"]) send({ id: name, method: "session/request_permission", params: { sessionId: session,
+      toolCall: { _meta: { mcp: { server: "opencodex", tool: name } } }, options: [{ kind: "allow_once", optionId: "yes" }] } });
+    update({ sessionUpdate: "usage_update", used: 41, size: 1048576 });
+    const response = await fetch(mcp.url, { method: "POST", headers: { "content-type": "application/json", authorization: mcp.headers[0].value },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } }) });
+    const returned = (await response.json()).result;
+    log({ returned });
+    say("Result received.");
+  } else say(text.includes("quote-error") ? "Agent execution error: trajectory converted to zero chat messages" : "Continued.");
+  update({ sessionUpdate: "usage_update", used: 128, size: 1048576 });
+  send({ id, result: { stopReason: "end_turn", usage: { totalTokens: 128, inputTokens: 100, cachedReadTokens: 20, outputTokens: 8, thoughtTokens: 2 } } });
+}
+const input = createInterface({ input: process.stdin });
+input.on("line", line => receive(JSON.parse(line)).catch(error => { process.stderr.write(String(error)); process.exit(1); }));
+input.on("close", () => process.exit(0));
 `;
 
-test("Antigravity turns run Google's ACP server with its tools off, the run's prompt appended and the client's calls captured", async () => {
+test("Antigravity retains native context, delivers exact external results and distinguishes native failures from model text", async () => {
   const pin = JSON.parse(readFileSync(resolve(import.meta.dir, "../antigravity-acp.json"), "utf8"));
-  const asset = pin.assets[`${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`];
-  const home = mkdtempSync(join(tmpdir(), "octopus-antigravity-"));
-  directories.push(home);
-  const directory = join(home, "opencodex-account");
-  const install = join(directory, "acp", pin.version);
+  const directory = mkdtempSync(join(tmpdir(), "octopus-antigravity-"));
+  directories.push(directory);
+  const account = join(directory, "opencodex-account"), install = join(account, "acp", pin.version);
   mkdirSync(install, { recursive: true, mode: 0o700 });
-  mkdirSync(join(directory, "home"), { mode: 0o700 });
+  mkdirSync(join(account, "home"), { mode: 0o700 });
   writeFileSync(join(install, pin.executable), `#!${process.execPath}\n${FAKE_ACP_SERVER}`, { mode: 0o755 });
   writeFileSync(join(install, pin.harness), "", { mode: 0o755 });
-  writeFileSync(join(install, "receipt.json"), JSON.stringify({ version: pin.version, sha256: asset.sha256 }));
-  const bridge = await spawnBridge(config("https://cloudcode-pa.googleapis.com", {
+  writeFileSync(join(install, "receipt.json"), JSON.stringify({ version: pin.version, sha256: pin.assets[`${process.platform}-${process.arch}`].sha256 }));
+  const start = () => spawnBridge(config("https://cloudcode-pa.googleapis.com", {
     id: "world_provider_antigravity", adapter: "antigravity-acp", models: ["gemini-4-hydrogen"], default_model: "gemini-4-hydrogen",
     api_key: undefined, auth_header: undefined, auth_value_prefix: undefined, headers: {}, allow_private_network: false,
-    account: { provider: "antigravity-acp", directory },
-  }), { PATH: "/usr/bin:/bin", OCTOPUS_TEST_SECRET: "must-not-reach-the-server" });
-  const turn = async (tools: unknown[]) => {
-    const response = await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, reasoning: { effort: "high" }, instructions: "You are the run's worker.", input: userInput, tools }) });
+    account: { provider: "antigravity-acp", directory: account },
+  }), { PATH: "/usr/bin:/bin", OCTOPUS_TEST_SECRET: "private" }, directory);
+  let bridge = await start();
+  const turn = async (thread: string, input: unknown[]) => {
+    const response = await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json", "thread-id": thread },
+      body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, instructions: "The worker's role.", reasoning: { effort: "high" }, input, tools: [exactTool] }) });
     return (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   };
-  const called = await turn([exactTool]);
-  const calls = called.find(event => event.type === "response.completed").response.output.filter((item: { type: string }) => item.type === "function_call");
-  expect(calls.map((call: { name: string; arguments: string }) => [call.name, call.arguments])).toEqual([["exact_tool", JSON.stringify({ value: "a" })]]);
-  const answered = await turn([]);
-  const completed = answered.find(event => event.type === "response.completed");
-  expect(JSON.stringify(completed)).toContain("acp says hi");
-  const log = readFileSync(join(directory, "acp-log.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-  const env = log.find(entry => entry.env).env;
-  expect(env).toMatchObject({ GEMINI_HOME: join(directory, "home"), BROWSER: "/usr/bin/true", FILE: "1", HARNESS: join(install, pin.harness) });
-  expect(env.SECRET).toBeUndefined();
-  expect(env.HOME.startsWith(directory)).toBe(false);
-  const session = log.find(entry => entry.method === "session/new").params;
-  expect(session._meta.antigravity.enabledTools).toEqual([]);
-  expect(session._meta.antigravity.eagerMcpServers).toEqual(["opencodex"]);
-  const appended: string = session._meta.antigravity.systemPrompt.append;
-  expect(appended.startsWith("The instructions in this section come from the system that hosts this conversation")).toBe(true);
-  expect(appended).toContain("You are the run's worker.");
-  expect(log.filter(entry => entry.method === "session/set_config_option").map(entry => [entry.params.configId, entry.params.value]))
-    .toEqual(expect.arrayContaining([["model", "gemini-4-hydrogen"], ["thinking_level", "high"]]));
-  expect(JSON.stringify(log.find(entry => entry.method === "session/prompt").params.prompt)).toContain("hi");
-  writeFileSync(join(directory, "home", "signed-out"), "");
-  const signedOut = await turn([]);
-  expect(JSON.stringify(signedOut.find(event => event.type === "response.failed"))).toContain("signed out");
+  const user = (text: string) => ({ role: "user", content: text });
+  const end = (events: any[]) => events.find(e => e.type === "response.completed")?.response;
+  const logs = () => readFileSync(join(account, "acp-log.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(JSON.stringify(await turn("", [user("hi")]))).toContain("thread-id");
+  const initial = [user("call-inspect")];
+  const [one, again] = await Promise.all([turn("alpha", initial), turn("alpha", initial)]);
+  const call = end(one).output.find((item: any) => item.type === "function_call");
+  expect(call).toMatchObject({ name: "exact_tool", arguments: '{"value":"a"}' });
+  expect(end(again).output.find((item: any) => item.type === "function_call").call_id).toBe(call.call_id);
+  const result = "BEGIN\n" + "Ж".repeat(40_000) + "\nEND";
+  const history = [...initial, ...end(one).output, { type: "function_call_output", call_id: call.call_id, output: result }];
+  const done = end(await turn("alpha", history));
+  expect(JSON.stringify(done.output)).toContain("Result received.");
+  const first = logs().find(row => row.method === "session/new");
+  expect(first.meta).toMatchObject({ enabledTools: [], eagerMcpServers: ["opencodex"] });
+  expect(first.meta.systemPrompt.append).toContain("The worker's role.");
+  expect(first.env.gemini).toBe(join(account, "home"));
+  expect(first.env.secret).toBeUndefined();
+  expect(logs().filter(row => row.method === "session/set_config_option").map(row => row.value)).toContain("high");
+  expect(logs().find(row => row.id === "exact_tool").outcome.outcome).toBe("selected");
+  expect(logs().find(row => row.id === "unoffered").outcome.outcome).toBe("cancelled");
+  expect(logs().filter(row => row.method === "session/prompt")).toHaveLength(1);
+  const attached = logs().find(row => row.returned).returned.content[0].resource;
+  expect(attached.mimeType).toBe("text/plain");
+  expect(Buffer.from(attached.blob, "base64").toString()).toBe(result);
+  const next = end(await turn("alpha", [...history, ...done.output, user("next")]));
+  expect(next.usage).toMatchObject({ total_tokens: 128, output_tokens: 8, input_tokens_details: { cached_tokens: 20 }, output_tokens_details: { reasoning_tokens: 2 } });
+  expect(logs().find(row => row.method === "session/resume").session).toBe(first.session);
+  expect(logs().filter(row => row.method === "session/prompt").at(-1).text).toBe("USER:\nnext");
+  const interrupted = end(await turn("beta", initial));
+  const pending = interrupted.output.find((item: any) => item.type === "function_call");
+  bridge.child.kill(); await bridge.child.exited;
+  bridge = await start();
+  const recovered = end(await turn("beta", [...initial, ...interrupted.output, { type: "function_call_output", call_id: pending.call_id, output: "admitted result" }]));
+  expect(JSON.stringify(recovered.output)).toContain("Continued.");
+  expect(logs().filter(row => row.method === "session/prompt").at(-1).text).toContain(`TOOL RESULT (call_id: ${pending.call_id}):\nadmitted result`);
+  expect(end(await turn("beta", initial)).output.find((item: any) => item.type === "function_call").call_id).toBe(pending.call_id);
+  const failed = await turn("alpha", [user("native-error")]);
+  expect(failed.some(row => row.type === "response.completed" || row.type === "response.output_text.delta")).toBe(false);
+  expect(JSON.stringify(failed.find(row => row.type === "response.failed"))).toContain("trajectory converted to zero chat messages");
+  expect(JSON.stringify(end(await turn("alpha", [user("quote-error")])).output)).toContain("trajectory converted to zero chat messages");
+  writeFileSync(join(account, "home", "signed-out"), "");
+  expect(JSON.stringify((await turn("gamma", [user("new")])).find(e => e.type === "response.failed"))).toContain("signed out");
   const status = Bun.spawn([bridgeBinary, "__account"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: {} });
   children.push(status);
-  status.stdin.write(JSON.stringify({ operation: "status", account: { provider: "antigravity-acp", directory } }));
+  status.stdin.write(JSON.stringify({ operation: "status", account: { provider: "antigravity-acp", directory: account } }));
   status.stdin.end();
-  expect(JSON.parse((await new Response(status.stdout).text()).trim())).toEqual({ event: "result", result: { signedIn: false, accountLabel: null } });
+  expect(JSON.parse(await new Response(status.stdout).text())).toEqual({ event: "result", result: { signedIn: false, accountLabel: null } });
 });
 
 test("a Vertex provider binds exactly one declared credential and a provider status no retry can change ends the turn", async () => {

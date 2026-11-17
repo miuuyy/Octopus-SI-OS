@@ -4339,7 +4339,7 @@
           "name": "antigravity_acp_default_system_instructions",
           "suppressible_by_current_config": false,
           "octopus_authority": false,
-          "execution_boundary": "Google's ACP server places its default agent instructions before the system prompt the interface appends; the appended section opens by taking precedence over them, and every built-in tool of the session is disabled, so the model can call only the client's functions"
+          "execution_boundary": "Google's ACP server prepends its default instructions and wraps user input with local time metadata. The interface appends the run instructions, disables built-in agent tools and supplies the client's function catalog. The harness also advertises MCP resource discovery and reading. The client tool endpoint exposes no resources."
         }
       ],
       "suppressed_sources": [
