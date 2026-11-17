@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn opencodex_google_safety_settings_cross_the_descriptor_boundary() {
+    let mut descriptor: InterfaceDescriptor = serde_json::from_str(include_str!(
+        "../../../../../world_provider_gemini/interface.json"
+    ))
+    .unwrap();
+    let declared = descriptor_config(&descriptor).unwrap().unwrap();
+    let options = serde_json::to_value(&declared.options).unwrap();
+    let settings = options["google_safety_settings"].as_array().unwrap();
+    assert_eq!(settings.len(), 5);
+    assert!(settings.iter().all(|setting| setting["threshold"] == "OFF"));
+    let config = descriptor
+        .interface_driver_config
+        .as_mut()
+        .unwrap()
+        .private_config
+        .get_mut("opencodex")
+        .unwrap();
+    config["options"]["google_safety_settings"][1] = settings[0].clone();
+    assert!(descriptor_config(&descriptor).unwrap_err().contains("unique"));
+}
+
+#[test]
 fn opencodex_configuration_selects_the_bridge_at_the_toml_root() {
     let root = tempfile::tempdir().unwrap();
     let descriptor: InterfaceDescriptor = serde_json::from_str(include_str!(

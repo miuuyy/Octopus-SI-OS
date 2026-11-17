@@ -22,6 +22,7 @@ type ProviderSpec = {
   input_modalities?: string[];
   allow_private_network?: boolean;
   headers?: Record<string, string>;
+  options?: Record<string, unknown>;
   key?: { env: string; label: string; header?: string; prefix?: string };
   base_url?: { env: string; label: string };
   model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
@@ -271,6 +272,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     ...(spec.model ? { model_env: spec.model.env } : {}),
     ...(spec.cli ? { bridge_env_names: spec.cli.env } : {}),
     allow_private_network: spec.local === true || spec.allow_private_network === true,
+    ...(spec.options ? { options: clone(spec.options) } : {}),
     ...(adapter === "anthropic" ? { cache_retention: "short" } : {}),
     ...(spec.vertex ? { vertex: { location: spec.vertex.location, project_env: spec.vertex.project.env, credentials_file_env: spec.vertex.credentials.env } } : {}),
     limits: {

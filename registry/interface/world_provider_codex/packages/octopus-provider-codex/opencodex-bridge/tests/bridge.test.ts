@@ -167,7 +167,7 @@ function sse(events: Array<[string | null, unknown]>): Response {
 
 const userInput = [{ role: "user", content: [{ type: "input_text", text: "hi" }] }];
 
-async function exchange(provider: Record<string, unknown>, upstreamReply: Response, model = "test-model", tools: unknown[] = [], input: unknown[] = userInput) {
+async function exchange(provider: Record<string, unknown>, upstreamReply: Response, model = "test-model", tools: unknown[] = [], input: unknown[] = userInput, stream = true) {
   let observed: { path: string; search: string; headers: Headers; body: Record<string, unknown> } | undefined;
   const upstream = Bun.serve({
     hostname: "127.0.0.1",
@@ -184,7 +184,7 @@ async function exchange(provider: Record<string, unknown>, upstreamReply: Respon
   const response = await fetch(`${bridge.origin}/v1/responses`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, stream: true, input, tools }),
+    body: JSON.stringify({ model, stream, input, tools }),
   });
   return { status: response.status, text: await response.text(), observed: observed! };
 }
@@ -266,15 +266,38 @@ test("anthropic messages stream through the bridge", async () => {
   expect(result.text).toContain("response.completed");
 });
 
-test("gemini generateContent streams through the bridge", async () => {
-  const result = await exchange({ adapter: "google", base_url: "", auth_header: "x-goog-api-key", auth_value_prefix: "" }, sse([
+test("gemini generateContent sends the declared safety settings and streams through the bridge", async () => {
+  const descriptor = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../../../world_provider_gemini/interface.json"), "utf8"));
+  const options = descriptor.interface_driver_config.private_config.opencodex.options;
+  const result = await exchange({ adapter: "google", base_url: "", auth_header: "x-goog-api-key", auth_value_prefix: "", options }, sse([
     [null, { candidates: [{ index: 0, content: { role: "model", parts: [{ text: "gemini says hi" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 3, totalTokenCount: 6 } }],
   ]));
   expect(result.status).toBe(200);
   expect(result.observed.path).toBe("/v1beta/models/test-model:streamGenerateContent");
   expect(result.observed.search).toBe("?alt=sse");
+  expect(result.observed.body.safetySettings).toEqual([
+    "HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT", "JAILBREAK",
+  ].map(category => ({ category: `HARM_CATEGORY_${category}`, threshold: "OFF" })));
   expect(result.text).toContain("gemini says hi");
   expect(result.text).toContain("response.completed");
+});
+
+test("Gemini prompt and response blocks retain Google's reasons for streamed and buffered replies", async () => {
+  const ratings = [{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", probability: "HIGH", blocked: true }];
+  for (const payload of [
+    { promptFeedback: { blockReason: "SAFETY", safetyRatings: ratings } },
+    { candidates: [{ finishReason: "PROHIBITED_CONTENT", finishMessage: "Provider's reason", safetyRatings: ratings }] },
+  ]) {
+    for (const stream of [true, false]) {
+      const reply = stream ? sse([[null, payload]]) : Response.json(payload);
+      const result = await exchange({ adapter: "google", base_url: "", auth_header: "x-goog-api-key", auth_value_prefix: "" }, reply, "test-model", [], userInput, stream);
+      expect(result.text).toContain(stream ? "response.failed" : '"status":"failed"');
+      expect(result.text).toContain('"code":"content_filter"');
+      expect(result.text).toContain("HARM_CATEGORY_DANGEROUS_CONTENT");
+      expect(result.text).toContain("promptFeedback" in payload ? "SAFETY" : "Provider's reason");
+      expect(result.text).not.toContain("response.completed");
+    }
+  }
 });
 
 test("a reasoning-only completion is retried once as the identical turn instead of passing as an empty success", async () => {

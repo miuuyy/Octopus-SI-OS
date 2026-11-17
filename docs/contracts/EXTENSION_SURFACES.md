@@ -175,6 +175,13 @@ text. What Codex adds that cannot be turned off is listed in the descriptor's
 transient failures are retried by Codex. The bridge serves no hosted web search:
 runs search through Octopus's own `web.search` and `web.extract`.
 
+Google's adapter accepts `private_config.opencodex.options.google_safety_settings`
+as the native array of `category` and `threshold` pairs, sent as `safetySettings`
+on every request. The AI Studio provider declares `OFF` for all five supported
+categories, the minimum configurable filtering. Google's built-in protections
+and the model's own refusals remain. A blocked prompt or response retains
+Google's reason and safety ratings in the terminal error.
+
 ### Antigravity
 
 Antigravity runs on Google's official Antigravity ACP server, declared by the

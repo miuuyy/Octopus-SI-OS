@@ -59,6 +59,8 @@ pub(crate) struct OpenCodexProviderOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_gemini_wire_renames: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google_safety_settings: Option<Vec<OpenCodexGoogleSafetySetting>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserve_responses_reasoning_content: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_adjacent_responses_tool_results: Option<bool>,
@@ -70,6 +72,13 @@ pub(crate) struct OpenCodexProviderOptions {
     pub supports_service_tier: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_http_version: Option<OpenCodexHttpVersion>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenCodexGoogleSafetySetting {
+    pub category: String,
+    pub threshold: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -338,6 +347,20 @@ pub(crate) fn descriptor_config(
             return Err(
                 "opencodex options.responses_path must be an absolute resource path".to_string(),
             );
+        }
+    }
+    if let Some(settings) = &parsed.options.google_safety_settings {
+        if parsed.adapter != "google" {
+            return Err("opencodex options.google_safety_settings requires the google adapter".into());
+        }
+        let mut categories = BTreeSet::new();
+        for setting in settings {
+            if !valid_text_atom(&setting.category)
+                || !valid_text_atom(&setting.threshold)
+                || !categories.insert(&setting.category)
+            {
+                return Err("opencodex options.google_safety_settings requires unique non-empty categories and non-empty thresholds".into());
+            }
         }
     }
     Ok(Some(parsed))

@@ -49,6 +49,7 @@ type ProviderOptions = {
   codex_tool_mode?: "code_mode_only" | "shell";
   decodes_native_compaction_blobs?: boolean;
   direct_gemini_wire_renames?: boolean;
+  google_safety_settings?: Array<{ category: string; threshold: string }>;
   preserve_responses_reasoning_content?: boolean;
   requires_adjacent_responses_tool_results?: boolean;
   responses_path?: string;
@@ -98,6 +99,7 @@ const optionNames = new Set([
   "codex_tool_mode",
   "decodes_native_compaction_blobs",
   "direct_gemini_wire_renames",
+  "google_safety_settings",
   "preserve_responses_reasoning_content",
   "requires_adjacent_responses_tool_results",
   "responses_path",
@@ -255,6 +257,19 @@ function optionsValue(value: unknown): ProviderOptions {
   if (value.upstream_http_version !== undefined && !["auto", "h1", "h2", "http1.1", "http2"].includes(String(value.upstream_http_version))) {
     throw new Error("provider.options.upstream_http_version is invalid");
   }
+  if (value.google_safety_settings !== undefined) {
+    const path = "provider.options.google_safety_settings";
+    if (!Array.isArray(value.google_safety_settings)) throw new Error(`${path} must be an array`);
+    const categories = new Set<string>();
+    for (const setting of value.google_safety_settings) {
+      if (!isObject(setting)) throw new Error(`${path} entries must be objects`);
+      exactKeys(setting, ["category", "threshold"], path);
+      const category = stringValue(setting.category, `${path}.category`);
+      stringValue(setting.threshold, `${path}.threshold`);
+      if (categories.has(category)) throw new Error(`${path} must not repeat a category`);
+      categories.add(category);
+    }
+  }
   return value as ProviderOptions;
 }
 
@@ -284,6 +299,10 @@ function parseConfig(value: unknown): BridgeConfig {
   ], "provider");
   const adapter = stringValue(value.provider.adapter, "provider.adapter") as AdapterName;
   if (!supportsAdapter(adapter)) throw new Error(`provider.adapter '${adapter}' is unsupported`);
+  const options = optionsValue(value.provider.options);
+  if (options.google_safety_settings !== undefined && adapter !== "google") {
+    throw new Error("provider.options.google_safety_settings requires the google adapter");
+  }
   const baseUrl = stringValue(value.provider.base_url, "provider.base_url");
   const parsedUrl = new URL(baseUrl);
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") throw new Error("provider.base_url must use http or https");
@@ -363,7 +382,7 @@ function parseConfig(value: unknown): BridgeConfig {
       headers: headersValue(value.provider.headers, "provider.headers"),
       allow_private_network: allowPrivateNetwork,
       ...(cacheRetention === undefined ? {} : { cache_retention: cacheRetention }),
-      options: optionsValue(value.provider.options),
+      options,
     },
     limits: {
       max_request_bytes: boundedInteger(limits.max_request_bytes, 32 * 1024 * 1024, 1024, 256 * 1024 * 1024, "limits.max_request_bytes"),
@@ -411,6 +430,7 @@ function upstreamProvider(config: RuntimeProvider): OcxProviderConfig {
     ...(config.options.preserve_responses_reasoning_content === undefined ? {} : { preserveResponsesReasoningContent: config.options.preserve_responses_reasoning_content }),
     ...(config.options.decodes_native_compaction_blobs === undefined ? {} : { decodesNativeCompactionBlobs: config.options.decodes_native_compaction_blobs }),
     ...(config.options.direct_gemini_wire_renames === undefined ? {} : { directGeminiWireRenames: config.options.direct_gemini_wire_renames }),
+    ...(config.options.google_safety_settings === undefined ? {} : { googleSafetySettings: config.options.google_safety_settings }),
     ...(config.options.supports_service_tier === undefined ? {} : { supportsServiceTier: config.options.supports_service_tier }),
     ...(config.options.upstream_http_version === undefined ? {} : { upstreamHttpVersion: config.options.upstream_http_version }),
     ...(config.vertex === undefined ? {} : { googleMode: "vertex" as const, project: config.vertex.project, location: config.vertex.location }),

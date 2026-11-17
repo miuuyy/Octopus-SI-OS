@@ -53,6 +53,7 @@
   "patches": [
     "upstream/patches/caller-context.patch",
     "upstream/patches/opencode-go-argon-wire.patch",
-    "upstream/patches/vertex-multi-region.patch"
+    "upstream/patches/vertex-multi-region.patch",
+    "upstream/patches/google-safety-settings.patch"
   ]
 }

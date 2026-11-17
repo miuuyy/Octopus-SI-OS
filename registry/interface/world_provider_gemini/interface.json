@@ -4168,6 +4168,30 @@
         "credential_owner_interface": "world_provider_gemini",
         "registry_entry": "google",
         "allow_private_network": false,
+        "options": {
+          "google_safety_settings": [
+            {
+              "category": "HARM_CATEGORY_HARASSMENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_HATE_SPEECH",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_JAILBREAK",
+              "threshold": "OFF"
+            }
+          ]
+        },
         "limits": {
           "max_request_bytes": 33554432,
           "max_translated_call_bytes": 2097152,

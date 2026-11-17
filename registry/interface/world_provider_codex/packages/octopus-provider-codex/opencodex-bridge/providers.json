@@ -146,6 +146,15 @@
       "developer": "Google",
       "description": "Gemini models through a Google AI Studio API key.",
       "icon": "gemini-color.svg",
+      "options": {
+        "google_safety_settings": [
+          {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+          {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
+          {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+          {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+          {"category": "HARM_CATEGORY_JAILBREAK", "threshold": "OFF"}
+        ]
+      },
       "key": {
         "env": "OCTOPUS_PROVIDER_GEMINI_API_KEY",
         "label": "Gemini API key"

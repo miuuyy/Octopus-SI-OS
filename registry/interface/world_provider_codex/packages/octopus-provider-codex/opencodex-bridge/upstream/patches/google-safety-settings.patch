@@ -1,0 +1,80 @@
+--- a/src/types/provider.ts
++++ b/src/types/provider.ts
+@@ -571,6 +571,7 @@
+    * serves the bare ids. Absent (default) keeps the rename.
+    */
+   directGeminiWireRenames?: boolean;
++  googleSafetySettings?: Array<{ category: string; threshold: string }>;
+   /** Keep provider settings on disk but exclude it from routing and model/catalog listings. */
+   disabled?: boolean;
+   /**
+--- a/src/adapters/google-wire-compiler.ts
++++ b/src/adapters/google-wire-compiler.ts
+@@ -233,6 +233,10 @@
+   const contents = compileContents(source.contents, names.toWire);
+   if (contents) body.contents = contents;
+   if (isObject(source.systemInstruction)) body.systemInstruction = source.systemInstruction;
++  if (source.safetySettings !== undefined) {
++    if (!Array.isArray(source.safetySettings)) throw new Error("google safetySettings must be an array");
++    body.safetySettings = source.safetySettings;
++  }
+   const tools = compileTools(source.tools, names.toWire, profile, toolSchemaLossReport);
+   if (tools) body.tools = tools;
+   // Strict mode refuses proven loss and bounded-comparison indeterminacy alike: an exhausted
+--- a/src/adapters/google.ts
++++ b/src/adapters/google.ts
+@@ -798,6 +798,25 @@
+   return value !== null && typeof value === "object" && !Array.isArray(value);
+ }
+ 
++function googleContentBlockEvent(root: Record<string, unknown>): Extract<AdapterEvent, { type: "error" }> | undefined {
++  const feedback = isGoogleRecord(root.promptFeedback) ? root.promptFeedback : undefined;
++  const candidate = Array.isArray(root.candidates) && isGoogleRecord(root.candidates[0]) ? root.candidates[0] : undefined;
++  const finishReason = candidate?.finishReason;
++  const promptBlocked = typeof feedback?.blockReason === "string" && feedback.blockReason.length > 0
++    && feedback.blockReason !== "BLOCK_REASON_UNSPECIFIED";
++  if (!promptBlocked && !["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"].includes(String(finishReason ?? ""))) return undefined;
++  return {
++    type: "error",
++    status: 400,
++    errorType: "invalid_request_error",
++    code: "content_filter",
++    retryable: false,
++    usage: usageFromGemini(root.usageMetadata as Record<string, number> | undefined),
++    message: `Google blocked content: ${JSON.stringify({ promptFeedback: feedback, finishReason,
++      finishMessage: candidate?.finishMessage, safetyRatings: candidate?.safetyRatings })}`,
++  };
++}
++
+ function googleStructuralValueType(value: unknown): string {
+   if (value === null) return "null";
+   return Array.isArray(value) ? "array" : typeof value;
+@@ -1079,6 +1098,7 @@
+       const tools = toolsToGeminiFormat(parsed);
+ 
+       const body: Record<string, unknown> = { contents };
++      if (provider.googleSafetySettings !== undefined) body.safetySettings = provider.googleSafetySettings;
+       if (systemInstruction) body.systemInstruction = systemInstruction;
+       if (tools) body.tools = tools;
+       // Only meaningful with declarations on the wire: mode ANY with an empty
+@@ -1418,6 +1438,11 @@
+           // dropped on EOF and the stream never yields two `done` events.
+           pendingUsage = usageFromGemini(usageMeta);
+           sawTerminalSignal = true;
++        }
++        const blocked = googleContentBlockEvent(root);
++        if (blocked) {
++          yield blocked;
++          return "terminate";
+         }
+         const rawCandidates = root.candidates;
+         // `null` is an absence encoding, not corruption, and terminating on it is the #1219
+@@ -1719,6 +1744,8 @@
+         }
+         json = wrapped as Record<string, unknown>;
+       }
++      const blocked = googleContentBlockEvent(json);
++      if (blocked) return finish([blocked]);
+       const events: AdapterEvent[] = [];
+ 
+       const rawCandidates: unknown = json.candidates;
