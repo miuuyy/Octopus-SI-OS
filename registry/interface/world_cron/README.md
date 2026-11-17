@@ -85,3 +85,14 @@ stops the interface explicitly.
 
 Editing the prompt or duration preserves the consumed activity sequence.
 Pausing stops the interface; resuming catches up on the same ledger history.
+
+## Completed staging files
+
+After confirmed ledger admission and durable completion, the driver reclaims
+its content-addressed staging manifest and payload. Prepared/pending references
+protect both files, including payloads shared by different manifests. Cleanup
+refuses symlinks, non-regular files, escaping paths and invalid content hashes.
+Admitted readers use the runtime's immutable blob copies, not these staging
+paths. Refused or uncertain deliveries are retained for exact replay. This is
+not a startup orphan sweep or ledger/blob garbage collection; a crash between
+completion and cleanup can leave staging files behind.

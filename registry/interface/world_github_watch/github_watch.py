@@ -140,8 +140,23 @@ class Watcher:
         with self.db:
             self.write("state", pending["candidate"])
             self.db.execute("DELETE FROM records WHERE name='pending'")
+        self.reclaim_completed(pending["notices"])
         self.status("watching", pending=False, last_admitted_seq=admitted, refusal_reason=None)
         return True
+
+    def reclaim_completed(self, notices):
+        if self.db.in_transaction:
+            raise RuntimeError("staging cleanup requires a committed database")
+        pending = self.read("pending")
+        protected = [n["manifest_hash"] for n in pending["notices"]] if pending else []
+        completed = set()
+        for notice in notices:
+            sequence = notice["admitted_seq"]
+            artifact_id = notice["label"] + ":" + notice["manifest_hash"]
+            if type(sequence) is not int or self.b.find_admitted_arrival_seq(artifact_id, sequence) != sequence:
+                raise RuntimeError("staging cleanup requires confirmed admission")
+            completed.add(notice["manifest_hash"])
+        self.b.reclaim_staging_pairs(completed, protected)
 
     def cycle(self, api):
         if not self.deliver():

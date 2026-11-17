@@ -227,6 +227,7 @@ impl OwnerHandoff {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn with_json_format(json_format: Option<octopus_run_authoring::JsonFormat>) -> Arc<Self> {
         Arc::new(Self { states: tokio::sync::Mutex::new(BTreeMap::new()), changed: Arc::new(tokio::sync::Notify::new()), json_format })
     }

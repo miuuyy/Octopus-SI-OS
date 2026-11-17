@@ -1226,7 +1226,6 @@ mod tests {
     use octopus_util_abspath::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::num::NonZeroUsize;
-    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::tempdir;
 

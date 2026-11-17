@@ -12,6 +12,7 @@ pub fn write(root: &Path, relative: &str, value: Value) {
     std::fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 }
 
+#[allow(dead_code)]
 pub fn client_fixture(root: &Path) -> RunCompositionRequest {
     let mut request = fixture(root);
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../..");

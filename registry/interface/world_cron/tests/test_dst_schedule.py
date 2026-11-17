@@ -24,7 +24,7 @@ class DaylightSavingSchedule(unittest.TestCase):
             if clock[0] > end:
                 raise InterruptedError
 
-        with patch.object(self.module, "now", lambda schedule: clock[0].astimezone(NEW_YORK)), patch.object(self.module.time, "sleep", sleep), patch.object(self.module, "emit_time_artifact", lambda minute, *rest: fired.append(minute.astimezone(timezone.utc).strftime("%m-%d %H:%MZ"))), patch.object(self.module, "load_last_fired_minute", lambda: None), patch.object(self.module, "commit_last_fired_minute", lambda key: None):
+        with patch.object(self.module, "now", lambda schedule: clock[0].astimezone(NEW_YORK)), patch.object(self.module.time, "sleep", sleep), patch.object(self.module, "prepare_time_artifact", lambda schedule, minute, *rest: (fired.append(minute.astimezone(timezone.utc).strftime("%m-%d %H:%MZ")) or "label", "path", "hash")), patch.object(self.module, "prepared_manifest_path", return_value="path"), patch.object(self.module, "deliver_time_artifact", return_value=1), patch.object(self.module, "reclaim_completed_artifact"), patch.object(self.module, "load_last_fired_minute", lambda: None), patch.object(self.module, "commit_last_fired_minute", lambda key: None):
             with self.assertRaises(InterruptedError):
                 self.module.run_cron({"cron": cron, "fire_on_start": False, "timezone": NEW_YORK}, "")
         return fired

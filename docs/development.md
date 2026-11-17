@@ -25,7 +25,7 @@ Use [Getting started](getting-started.md) for the macOS build,
 
 | Crate | Role |
 | --- | --- |
-| `octopus-app` | The `octopus` binary: `up`, `down`, `doctor`. Boots a Home and runs the arrival loop. |
+| `octopus-app` | The `octopus` binary: `up`, `down`, `restart`, `doctor`, `project-ee-policies`. Boots a Home and runs the arrival loop. |
 | `octopus-app-server` | The composition root: registry snapshot, artifact arrival handling, and the worker-policy wiring. |
 | `octopus-runtime` | Grant formation per arrival, admission, and outbound transfers. |
 | `octopus-run-record` | Run and checkpoint records, grant epochs, and the run-records index. Rooms and interfaces read and author runs through it without linking the runtime. |
@@ -42,6 +42,7 @@ Use [Getting started](getting-started.md) for the macOS build,
 | `octopus-verifiers` | The blind verifier runner: pins a package and executes its script. |
 | `octopus-ledger`, `octopus-ledger-store` | Movement types and the append-only log. |
 | `octopus-ledger-index` | The in-memory arrival index and the disposable SQLite index. |
+| `octopus-file-storage` | Bounded file reads and writes, ordered RFC 6902 patches, and publication verification. |
 | `octopus-schemas` | The published JSON Schemas. |
 
 Adding a capability over an existing driver or room is descriptors and

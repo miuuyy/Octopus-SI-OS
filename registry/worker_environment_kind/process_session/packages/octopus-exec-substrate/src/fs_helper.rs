@@ -330,7 +330,6 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
     use octopus_util_pathuri::PathUri;
     use pretty_assertions::assert_eq;

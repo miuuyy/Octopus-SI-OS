@@ -2068,7 +2068,6 @@ mod tests {
     use super::*;
     use crate::protocol::v2;
     use crate::schema_fixtures::generate_typescript_schema_fixture_subtree_for_tests;
-    use anyhow::Context;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;
@@ -2298,17 +2297,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    fn schema_root() -> Result<PathBuf> {
-        let typescript_index =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/typescript/index.ts");
-        let schema_root = typescript_index
-            .parent()
-            .and_then(|parent| parent.parent())
-            .context("derive schema root from schema/typescript/index.ts")?
-            .to_path_buf();
-        Ok(schema_root)
     }
 
     #[test]

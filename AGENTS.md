@@ -20,7 +20,7 @@ repository.
 
 ### 1. The kernel is small and blind
 
-About 45,000 lines of Rust in `crates/`. It knows no provider, channel, tool,
+About 62,000 lines of Rust in `crates/`. It knows no provider, channel, tool,
 model, or artifact by name. Keeping it small is the point of the research: every
 capability added by declaring something instead of coding a branch is one more
 thing the system can inspect, replay, and change about itself.

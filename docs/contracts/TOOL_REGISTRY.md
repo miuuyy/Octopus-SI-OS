@@ -46,6 +46,10 @@ registry/tool/<tool-id>/tool.json
 - `interface` - the door that owns the tool.
 - `process` - the tool's own executable and the authority it runs under: root
   slots, paths, environment, network.
+  In the source tree `bin` names a workspace build such as
+  `target/debug/octopus-coder-fs-tool`; package materialization copies that
+  binary into its owning room kind and rewrites `bin` to
+  `owner://packages/bin/<binary>` in the installed registry.
 - `handler_config` - opaque JSON for that executable. Together with `id`, it
   routes between operations inside one binary.
 - `supported_worker_environment_kinds` - exactly one kind. A tool belongs to

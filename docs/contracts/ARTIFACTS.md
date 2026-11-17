@@ -22,9 +22,12 @@ private request lane and not a handler-specific payload. What crosses names:
   and projection, carried alongside the artifact reference.
 
 The runtime records that reference as movement evidence and fails closed on a
-malformed, unreadable, or hash-mismatched one. The payload stays wherever the
-emitting interface put it. The manifest stays pinned by content hash in the
-blob store.
+malformed, unreadable, or hash-mismatched one. At hand-in the boundary captures
+the manifest and payload bytes; admission pins both by content hash in the
+durable blob store before recording the movement. Later readers resolve the
+pinned bytes, not the original staging paths. The emitting interface owns its
+staging files and may reclaim them after admission and its own durable completion,
+provided no prepared or pending work still needs them.
 
 This shape is the only coupling between an interface and the runtime. A
 terminal UI, a provider bridge, an HTTP poller, a microphone adapter, and the

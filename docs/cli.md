@@ -10,6 +10,7 @@ The terminal does not need Computer Use to send work or read its results.
 The distribution targets macOS 14 or later, and Linux on x86-64 and arm64 as a
 headless runtime. Use Node.js 24 or newer and Rust; on macOS also the Xcode
 Command Line Tools listed in [Getting started](getting-started.md#prerequisites).
+On Linux, install the [C and ALSA build prerequisites](linux.md#build-prerequisites).
 From the checkout:
 
 ```sh

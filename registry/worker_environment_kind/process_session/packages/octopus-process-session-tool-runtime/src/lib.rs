@@ -14,7 +14,7 @@ pub mod room;
 pub use contract_update::{ToolContractUpdateRequest, ToolContractUpdateProof, ToolRetirementRequest, tool_contract_update_quiescent, tool_retirement_quiescent};
 pub use completed_output::{PreparedToolOutputRecovery, prepare_tool_output_recovery};
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 #[path = "../tests/support/execution_loading.rs"]
 mod execution_loading_tests;
 #[cfg(test)]
@@ -62,7 +62,7 @@ pub use door_life::{
     LedgerTailReader, OwnOutboundMovement, run_spawned_interface_life,
 };
 pub use notify;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 use process_authority::ProcessAuthority;
 use process_authority::{ProcessAuthoritySpecExecution, ProcessInvocationAuthorityError};
 

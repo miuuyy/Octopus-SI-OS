@@ -308,3 +308,44 @@ def find_admitted_arrival_seq(artifact_id, expected_seq=None):
         if expected_seq is None or movement["seq"] == expected_seq:
             return movement["seq"]
     return None
+
+
+def staging_pair(manifest_hash):
+    if not isinstance(manifest_hash, str) or re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None:
+        raise ValueError("invalid staging manifest hash")
+    path = os.path.join(PAYLOADS_DIR, manifest_hash + ".artifact.json")
+    raw = stable_read(path, IO_LIMITS["max_manifest_bytes"], "staging manifest", private=True)
+    if octopus_content_hash(raw) != manifest_hash:
+        raise ValueError("staging manifest hash mismatch")
+    manifest = json.loads(raw)
+    digest = manifest.get("payload_content_hash")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("invalid staging payload hash")
+    payload = os.path.join(PAYLOADS_DIR, digest + ".payload")
+    if manifest.get("payload_path") != payload:
+        raise ValueError("staging payload escapes its content-addressed path")
+    raw_payload = stable_read(payload, IO_LIMITS["max_payload_bytes"], "staging payload", private=True)
+    if octopus_content_hash(raw_payload) != digest:
+        raise ValueError("staging payload hash mismatch")
+    return path, payload
+
+
+def reclaim_staging_pairs(manifest_hashes, protected_hashes):
+    private_directory(PAYLOADS_DIR)
+    pairs = [staging_pair(digest) for digest in manifest_hashes]
+    protected = set()
+    for digest in protected_hashes:
+        protected.update(staging_pair(digest))
+    paths = {path for pair in pairs if not protected.intersection(pair) for path in pair}
+    directory = os.open(PAYLOADS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        names = [os.path.basename(path) for path in paths]
+        for name in names:
+            state = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not stat.S_ISREG(state.st_mode):
+                raise PermissionError("staging cleanup refuses non-regular files")
+        for name in names:
+            os.unlink(name, dir_fd=directory)
+        os.fsync(directory)
+    finally:
+        os.close(directory)

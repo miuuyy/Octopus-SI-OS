@@ -926,6 +926,70 @@ def materialize_artifact(label, payload, root=PAYLOADS_DIR):
     return manifest_path, manifest_hash
 
 
+def staging_pair(manifest_hash):
+    if not isinstance(manifest_hash, str) or re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None:
+        raise ValueError("invalid staging manifest hash")
+    path = os.path.join(PAYLOADS_DIR, "artifact-" + manifest_hash + ".artifact.json")
+    raw = read_regular_file_bounded(path, HOST_IO_LIMITS["max_manifest_bytes"], "staging manifest", private=True)
+    if octopus_content_hash(raw) != manifest_hash:
+        raise ValueError("staging manifest hash mismatch")
+    manifest = json.loads(raw)
+    digest = manifest.get("payload_content_hash")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("invalid staging payload hash")
+    payload = os.path.join(PAYLOADS_DIR, "artifact-" + digest + ".payload")
+    if manifest.get("payload_path") != payload:
+        raise ValueError("staging payload escapes its content-addressed path")
+    raw_payload = read_regular_file_bounded(payload, HOST_IO_LIMITS["max_payload_bytes"], "staging payload", private=True)
+    if octopus_content_hash(raw_payload) != digest:
+        raise ValueError("staging payload hash mismatch")
+    return path, payload
+
+
+def reclaim_staging_pair(manifest_hash, protected_hashes):
+    private_directory(PAYLOADS_DIR)
+    pair = staging_pair(manifest_hash)
+    protected = set()
+    for digest in protected_hashes:
+        protected.update(staging_pair(digest))
+    if protected.intersection(pair):
+        return
+    directory = os.open(PAYLOADS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        names = [os.path.basename(path) for path in pair]
+        for name in names:
+            state = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not stat.S_ISREG(state.st_mode):
+                raise PermissionError("staging cleanup refuses non-regular files")
+        for name in names:
+            os.unlink(name, dir_fd=directory)
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def reclaim_completed_artifact(label, manifest_hash, admitted_seq):
+    artifact_id, _ = arrival_identity(label, manifest_hash)
+    if type(admitted_seq) is not int or find_admitted_arrival_seq(artifact_id, admitted_seq) is None:
+        raise RuntimeError("staging cleanup requires confirmed admission")
+    paths = [START_STATE_PATH, INTERVAL_STATE_PATH, INACTIVITY_STATE_PATH]
+    one_shots = os.path.join(VAR_DIR, "one-shot")
+    if os.path.lexists(one_shots):
+        private_directory(one_shots)
+        paths.extend(os.path.join(one_shots, name) for name in os.listdir(one_shots) if name.endswith(".json"))
+    protected = []
+    for path in paths:
+        try:
+            state = load_json_object(path, "staging reference state", MAX_LEDGER_ROW_BYTES, private=True)
+        except FileNotFoundError:
+            continue
+        if state.get("status") not in {"admitted", "completed_without_artifact", "idle", "waiting", "prepared"}:
+            raise ValueError("unknown staging reference state")
+        if state.get("manifest_hash") is not None and state["status"] != "admitted":
+            protected.append(state["manifest_hash"])
+    reclaim_staging_pair(manifest_hash, protected)
+
+
 def _ledger_path():
     path = os.environ.get("OCTOPUS_MOVEMENTS_JSONL")
     if not isinstance(path, str) or not path or not os.path.isabs(path):
@@ -1143,16 +1207,6 @@ def hold_while_pinning_runs_work():
         time.sleep(HOLD_POLL_SECONDS)
 
 
-def emit_time_artifact(moment, reminder, schedule_kind, schedule):
-    label, manifest_path, manifest_hash = prepare_time_artifact(
-        schedule,
-        moment,
-        reminder,
-        schedule_kind,
-    )
-    return deliver_time_artifact(schedule, label, manifest_path, manifest_hash)
-
-
 def next_interval_due(due_unix_ns, interval_ns, observed_unix_ns):
     next_due = due_unix_ns + interval_ns
     if next_due <= observed_unix_ns:
@@ -1225,16 +1279,17 @@ def run_one_shot(schedule, reminder):
     else:
         label = state["artifact_label"]
         manifest_hash = state["manifest_hash"]
-        manifest_path = prepared_manifest_path(label, manifest_hash)
     if state["status"] == "admitted":
         artifact_id, _ = arrival_identity(label, manifest_hash)
         if find_admitted_arrival_seq(artifact_id, state["admitted_seq"]) is None:
             raise RuntimeError("cron one-shot completion is missing its recorded arrival evidence")
         return state["admitted_seq"]
+    manifest_path = prepared_manifest_path(label, manifest_hash)
     sequence = deliver_time_artifact(schedule, label, manifest_path, manifest_hash)
     state["status"] = "admitted"
     state["admitted_seq"] = sequence
     atomic_write_json(one_shot_state_path(schedule), state)
+    reclaim_completed_artifact(label, manifest_hash, sequence)
     return sequence
 
 
@@ -1267,6 +1322,7 @@ def emit_interval_due(schedule, reminder, state):
         time.time_ns(),
     )
     commit_interval_state(schedule, "waiting", next_due)
+    reclaim_completed_artifact(label, manifest_hash, admitted_seq)
     return admitted_seq
 
 
@@ -1304,6 +1360,7 @@ def emit_fire_on_start(moment, reminder, schedule_kind, schedule):
         manifest_hash,
         admitted_seq,
     )
+    reclaim_completed_artifact(label, manifest_hash, admitted_seq)
     return admitted_seq
 
 
@@ -1366,9 +1423,12 @@ def run_cron(schedule, reminder):
         minute_key = minute.isoformat(timespec="minutes")
         if minute_key != last_minute:
             hold_while_pinning_runs_work()
-            emit_time_artifact(minute, reminder, "cron", schedule)
+            label, _, manifest_hash = prepare_time_artifact(schedule, minute, reminder, "cron")
+            manifest_path = prepared_manifest_path(label, manifest_hash)
+            admitted_seq = deliver_time_artifact(schedule, label, manifest_path, manifest_hash)
             last_minute = minute_key
             commit_last_fired_minute(minute_key)
+            reclaim_completed_artifact(label, manifest_hash, admitted_seq)
 
 
 def validate_inactivity(value):
@@ -1623,6 +1683,7 @@ class InactivityTrigger:
         admitted = hand_artifact_idempotent(manifest_path, label, manifest_hash)
         state.update(status="admitted", consumed_seq=state["activity"]["seq"], admitted_seq=admitted, next_due_unix_ms=None)
         self.save()
+        reclaim_completed_artifact(label, manifest_hash, admitted)
         return None
 
 

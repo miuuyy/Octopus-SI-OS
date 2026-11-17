@@ -24,7 +24,6 @@ use octopus_worker_env::{
 };
 use serde_json::{json, Value};
 use tokio::net::TcpListener as TokioTcpListener;
-use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::browser_session::{safe_control_body_evidence, BrowserRoom};

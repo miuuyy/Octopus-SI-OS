@@ -17,6 +17,20 @@ the directories it already created, but never executes the target. Runtime
 libraries, executable interpreters and operating-system resources are included
 in the process's runtime closure.
 
+## Build prerequisites
+
+Linux workspace checks and the [terminal build](cli.md#build-and-open) require
+Rust, Node.js 24 or newer, a C toolchain, pkg-config, and the OpenSSL, SQLite
+and ALSA development headers. On Debian/Ubuntu:
+
+```sh
+sudo apt-get install build-essential pkg-config libssl-dev libsqlite3-dev libasound2-dev
+```
+
+ALSA headers are needed by the audio capability built with the workspace and
+CLI distribution, even when the runtime is used headlessly. These build
+prerequisites are separate from the process-isolation service below.
+
 ## Install the platform component
 
 The backend requires Linux 6.5 or later, AppArmor 4 or later, the AppArmor 4.0
@@ -70,6 +84,10 @@ socket through the file rule of its path, so such a process reaches one only
 where its declared file authority already lets it write that path. The service's
 control socket is granted by path to a process with sandbox delegation and
 denied by path to every other process.
+
+Library tests that launch confined processes (including `octopus-verifiers`) also
+require this service to be installed and running. Without it they fail closed;
+installing the distribution AppArmor package alone is not sufficient.
 
 ## Process lifetime and recovery
 

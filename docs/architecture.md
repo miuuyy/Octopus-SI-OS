@@ -18,7 +18,7 @@ locations.*
 
 The runtime is the kernel. Models, clients, tools, rooms, memory, and sensors
 are applications and drivers attached to it through JSON descriptors and one
-boundary contract. The kernel is about 45,000 lines of Rust. Most of the code
+boundary contract. The kernel is about 62,000 lines of Rust. Most of the code
 in this repository is what has been ported onto it - starting with Codex CLI,
 which runs here as one interface among many.
 
