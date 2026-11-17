@@ -101,6 +101,7 @@ jobs:
       - name: Client package and lifecycle contracts
         working-directory: app
         run: |
+          node --test scripts/support/native-publication.test.cjs
           node scripts/test-local-packages.cjs --consent-recipe
           node scripts/test-safe-self-update.cjs
           node --test scripts/test-cli-target.cjs scripts/test-cli-package.cjs
@@ -148,11 +149,15 @@ jobs:
           python3 -m unittest discover -s registry/interface/world_cron/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_issues/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_watch/tests -p 'test_*.py'
+          python3 -m unittest discover -s registry/interface/world_quiet_watch/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_legacy_watch/tests -p 'test_*.py'
           node registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/configure-transport.test.cjs
           node registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/setup-host.test.cjs
           node registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/tests/engine-mode.test.cjs
           node registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/tests/standard-history.test.cjs
+
+      - name: Standalone agent-ready-radar contracts
+        run: python3 -m unittest discover -s examples/agent-ready-radar/tests -p 'test_*.py'
 
       - name: Public source boundary
         run: node app/scripts/check-public-source.cjs
@@ -274,6 +279,9 @@ jobs:
 
       - name: Ledger readers wake on changes, not on their own reads
         run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources)'
+
+      - name: Standalone mcp-identity-guard contracts
+        run: cargo test --manifest-path examples/mcp-identity-guard/Cargo.toml --locked
 
       - name: Runtime and product dependency boundaries
         run: cargo test --locked -p octopus-app --test architecture_dependency_guard -- --exact production_roots_keep_registry_implementation_boundaries worker_environment_kind_packages_link_neither_runtime_nor_app_server

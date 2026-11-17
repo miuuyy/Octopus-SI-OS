@@ -5,8 +5,11 @@ members = [
     "registry/interface/*/packages/*",
     "registry/worker_environment_kind/*/packages/*",
 ]
-# Managed provider executables are distribution inputs, not Rust packages.
-exclude = ["registry/interface/world_provider_codex/packages/bin"]
+# Managed provider executables are distribution inputs; examples build independently.
+exclude = [
+    "registry/interface/world_provider_codex/packages/bin",
+    "examples/mcp-identity-guard",
+]
 [workspace.package]
 edition = "2021"
 version = "0.1.0"

@@ -1,0 +1,23 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_quiet_watch",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_quiet_watch",
+  "release_status": "optional",
+  "display": {
+    "name": "One-shot watch",
+    "description": "An explicitly armed trigger template for email terms, a public GitHub star threshold, or default-branch commit age. Configure and arm an installed instance before binding a task.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "scheduled"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_quiet_watch",
+      "primary": true
+    }
+  ]
+}

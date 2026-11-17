@@ -231,7 +231,16 @@ staged-file inventory. It does not establish asset provenance or runtime accepta
 A release is the packaged app as a disk image,
 `Octopus-<version>-macos-<arch>.dmg`, with `install.sh` and `checksums.txt`.
 The version is `version` in `app/package.json`; the packager writes it into
-the bundle, and the release tag is `v<version>`.
+the bundle, and the release tag is `v<version>`. The packager and release script
+require three numeric components (currently `0.1.0`), not an `-alpha` suffix.
+The Cargo workspace declares the same version.
+
+The current distribution is **ad-hoc signed, not Apple-notarized**. Packaging
+uses `codesign --sign -` and verifies the signature; no Apple Developer
+certificate, signing secret, or notarization credential is consumed by the
+workflow. Do not describe these builds as Developer ID signed or notarized.
+Keep the [Gatekeeper instructions](getting-started.md#install-the-app) with any
+published download. Checksums verify downloaded bytes, not publisher identity.
 
 After `npm --prefix app run package:mac`, build the release assets locally with:
 
@@ -254,6 +263,19 @@ is a dry run whose assets stay on the run for seven days. Pushing a tag that
 matches `app/package.json` builds the assets and creates a **draft** GitHub
 release; it becomes public only when a maintainer publishes the draft. Asset
 digests reported by GitHub are checked against `checksums.txt`.
+
+For a first release, run `quality` on the exact commit, then dispatch `release`
+on `main`. Confirm the macOS job completed the mounted-image comparison and
+asset upload before pushing a matching version tag. The tag run also checks the
+version and creates the draft with the workflow's `contents: write` token; manual
+dispatch never publishes. Review the draft, its three assets (disk image,
+installer, checksums), and the successful uploaded-digest check before publishing.
+Dispatching requires GitHub Actions write permission; creating or publishing a
+release requires Contents write permission. A credential's actual API result,
+not its description, establishes access.
+
+There is no Pages or documentation deployment workflow in this checkout. The
+public documentation is the README and the linked Markdown files on GitHub.
 
 Quit the client and runtime before replacing the release. If the release changes
 persisted contracts, initialize a fresh Home and retain only sign-in credentials.

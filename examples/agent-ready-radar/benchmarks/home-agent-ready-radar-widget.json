@@ -1,0 +1,105 @@
+{
+  "data": {
+    "observed_at": "2026-11-17T10:33:12.127020+00:00",
+    "statistics": {
+      "any_verified_artifact": 35,
+      "by_path": {
+        "/.well-known/ai-plugin.json": {
+          "false_positives": 4,
+          "html_redirect_illusions": 3,
+          "naive_200": 5,
+          "verified": 1
+        },
+        "/.well-known/mcp": {
+          "false_positives": 5,
+          "html_redirect_illusions": 2,
+          "naive_200": 7,
+          "verified": 2
+        },
+        "/.well-known/mcp.json": {
+          "false_positives": 7,
+          "html_redirect_illusions": 2,
+          "naive_200": 9,
+          "verified": 2
+        },
+        "/agents.md": {
+          "false_positives": 2,
+          "html_redirect_illusions": 2,
+          "naive_200": 11,
+          "verified": 9
+        },
+        "/llms-full.txt": {
+          "false_positives": 15,
+          "html_redirect_illusions": 5,
+          "naive_200": 21,
+          "verified": 6
+        },
+        "/llms.txt": {
+          "false_positives": 6,
+          "html_redirect_illusions": 2,
+          "naive_200": 39,
+          "verified": 33
+        },
+        "/robots.txt": {
+          "false_positives": 3,
+          "html_redirect_illusions": 0,
+          "naive_200": 57,
+          "verified": 54
+        }
+      },
+      "domains": 60,
+      "false_positive_domains": 11,
+      "focus_false": 20,
+      "focus_html_redirect_illusions": 8,
+      "focus_naive": 66
+    }
+  },
+  "glyph": "sites",
+  "id": "home.agent-ready-radar",
+  "release_channel": "stable",
+  "render": {
+    "density": "compact",
+    "kind": "native",
+    "root": {
+      "align": "stretch",
+      "children": [
+        {
+          "label": "Domains with verified artifacts",
+          "type": "metric",
+          "value": "35 / 60"
+        },
+        {
+          "role": "body",
+          "type": "text",
+          "value": "20 of 66 naive positives fail verification."
+        },
+        {
+          "role": "caption",
+          "tone": "muted",
+          "type": "text",
+          "value": "Snapshot: 2026-11-17T10:33:12.127020+00:00 \u00b7 heuristic checks, not protocol conformance."
+        }
+      ],
+      "gap": "sm",
+      "type": "stack"
+    }
+  },
+  "revision": 1,
+  "schema": "octopus.client_surface",
+  "schema_version": 1,
+  "target": {
+    "kind": "voice.widget",
+    "layout": {
+      "content_fit": "reflow",
+      "max_height": 360,
+      "max_width": 460,
+      "min_height": 100,
+      "min_width": 184,
+      "preferred_height": 200,
+      "preferred_width": 300
+    },
+    "order": 20,
+    "slot": "right"
+  },
+  "title": "Agent-ready radar"
+}

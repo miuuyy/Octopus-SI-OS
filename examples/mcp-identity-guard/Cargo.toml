@@ -1,0 +1,17 @@
+[package]
+name = "mcp-identity-guard"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Provider-pinned MCP stdio proxy with scoped secret handles and verifiable receipts"
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/BENCHMARK_REPORT.md", "/benchmark.json", "/measurement-environment.txt", "/test-results.txt", "/clippy-results.txt", "/benchmark-build.txt", "/oracle-benchmark.json", "/oracle-build.txt"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.10.9"
+libc = "0.2.186"
+
+[profile.release]
+# The standalone example keeps release symbols for inspection.
+strip = "none"

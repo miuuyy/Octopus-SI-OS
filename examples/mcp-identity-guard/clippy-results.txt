@@ -1,0 +1,2 @@
+    Checking mcp-identity-guard v0.2.0 (<package-root>)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.82s

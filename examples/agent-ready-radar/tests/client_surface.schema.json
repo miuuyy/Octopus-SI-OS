@@ -1,0 +1,1231 @@
+{
+  "$defs": {
+    "action": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "pattern": "^[a-z][a-z0-9._-]{1,95}$",
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "type": "object"
+    },
+    "buttonNode": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "glyph": {
+          "$ref": "#/$defs/glyph"
+        },
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "type": {
+          "const": "button"
+        },
+        "variant": {
+          "enum": [
+            "quiet",
+            "secondary",
+            "primary",
+            "danger",
+            "footer"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "action"
+      ],
+      "type": "object"
+    },
+    "children": {
+      "items": {
+        "$ref": "#/$defs/node"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "collectionBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "dividerNode": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "divider"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "donutNode": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/donutSegment"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "type": {
+          "const": "donut"
+        },
+        "value": {
+          "$ref": "#/$defs/numberValue"
+        }
+      },
+      "required": [
+        "type",
+        "value",
+        "segments"
+      ],
+      "type": "object"
+    },
+    "donutSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "value": {
+          "$ref": "#/$defs/numberValue"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "type": "object"
+    },
+    "glyph": {
+      "enum": [
+        "octopus",
+        "dashboard",
+        "registry",
+        "metrics",
+        "dollar",
+        "chat",
+        "interfaces",
+        "topology",
+        "ee",
+        "artifact",
+        "file",
+        "binding",
+        "descriptor",
+        "filter",
+        "search",
+        "expand",
+        "more",
+        "close",
+        "copy",
+        "trash",
+        "send",
+        "plus",
+        "microphone",
+        "voice",
+        "volume",
+        "volumeOff",
+        "phoneEnd",
+        "transcript",
+        "weather",
+        "deviceTablet",
+        "deviceMobile",
+        "terminal",
+        "browser",
+        "changes",
+        "desktop",
+        "retry",
+        "stop",
+        "paperclip",
+        "image",
+        "settings",
+        "sliders",
+        "chevronDown",
+        "check",
+        "refresh",
+        "arrowLeft",
+        "navigateBack",
+        "sidebarOpen",
+        "sidebarClosed",
+        "user",
+        "sun",
+        "keyboard",
+        "pulse",
+        "newTask",
+        "scheduled",
+        "plugins",
+        "sites",
+        "pin",
+        "pinOff",
+        "project",
+        "lightbulb",
+        "folder",
+        "folderOpen",
+        "splitPane",
+        "widgets",
+        "layers",
+        "progress",
+        "insights",
+        "memory",
+        "target",
+        "hand"
+      ]
+    },
+    "id": {
+      "pattern": "^[a-z0-9][a-z0-9._-]{1,63}$",
+      "type": "string"
+    },
+    "imageNode": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "$ref": "#/$defs/value"
+        },
+        "fit": {
+          "enum": [
+            "contain",
+            "cover"
+          ]
+        },
+        "ratio": {
+          "enum": [
+            "square",
+            "portrait",
+            "landscape",
+            "wide"
+          ]
+        },
+        "source": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/value"
+            },
+            {
+              "if": {
+                "type": "string"
+              },
+              "then": {
+                "maxLength": 524288,
+                "pattern": "^[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/(?:[aA][vV][iI][fF]|[gG][iI][fF]|[jJ][pP][eE][gG]|[pP][nN][gG]|[wW][eE][bB][pP]);[bB][aA][sS][eE]64,[a-zA-Z0-9+/]+={0,2}$",
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Native image literals must be embedded AVIF, GIF, JPEG, PNG, or WebP base64 data URLs (at most 524288 characters), not HTTP(S), file, or blob URLs. A value binding must resolve to the same embedded format."
+        },
+        "type": {
+          "const": "image"
+        }
+      },
+      "required": [
+        "type",
+        "source"
+      ],
+      "type": "object"
+    },
+    "inputNode": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "input_kind": {
+          "enum": [
+            "text",
+            "search",
+            "url"
+          ]
+        },
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "placeholder": {
+          "$ref": "#/$defs/value"
+        },
+        "type": {
+          "const": "input"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "keyValueNode": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "type": {
+          "const": "key_value"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "value"
+      ],
+      "type": "object"
+    },
+    "listNode": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "$ref": "#/$defs/children"
+        },
+        "divided": {
+          "type": "boolean"
+        },
+        "empty": {
+          "$ref": "#/$defs/value"
+        },
+        "items": {
+          "$ref": "#/$defs/collectionBinding"
+        },
+        "type": {
+          "const": "list"
+        }
+      },
+      "required": [
+        "type",
+        "items",
+        "children"
+      ],
+      "type": "object"
+    },
+    "metricNode": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/value"
+        },
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "type": {
+          "const": "metric"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "value"
+      ],
+      "type": "object"
+    },
+    "nativeRender": {
+      "additionalProperties": false,
+      "properties": {
+        "density": {
+          "enum": [
+            "compact",
+            "standard",
+            "comfortable"
+          ]
+        },
+        "kind": {
+          "const": "native"
+        },
+        "root": {
+          "$ref": "#/$defs/node"
+        }
+      },
+      "required": [
+        "kind",
+        "root"
+      ],
+      "type": "object"
+    },
+    "node": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/stackNode"
+        },
+        {
+          "$ref": "#/$defs/rowNode"
+        },
+        {
+          "$ref": "#/$defs/sectionNode"
+        },
+        {
+          "$ref": "#/$defs/textNode"
+        },
+        {
+          "$ref": "#/$defs/keyValueNode"
+        },
+        {
+          "$ref": "#/$defs/statusNode"
+        },
+        {
+          "$ref": "#/$defs/metricNode"
+        },
+        {
+          "$ref": "#/$defs/progressNode"
+        },
+        {
+          "$ref": "#/$defs/donutNode"
+        },
+        {
+          "$ref": "#/$defs/sparklineNode"
+        },
+        {
+          "$ref": "#/$defs/listNode"
+        },
+        {
+          "$ref": "#/$defs/tableNode"
+        },
+        {
+          "$ref": "#/$defs/imageNode"
+        },
+        {
+          "$ref": "#/$defs/videoNode"
+        },
+        {
+          "$ref": "#/$defs/inputNode"
+        },
+        {
+          "$ref": "#/$defs/buttonNode"
+        },
+        {
+          "$ref": "#/$defs/dividerNode"
+        },
+        {
+          "$ref": "#/$defs/spacerNode"
+        }
+      ]
+    },
+    "numberListValue": {
+      "oneOf": [
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 120,
+          "minItems": 2,
+          "type": "array"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "numberValue": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fallback": {
+              "type": "number"
+            },
+            "format": {
+              "enum": [
+                "number",
+                "percent"
+              ]
+            },
+            "path": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "progressNode": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/value"
+        },
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "type": {
+          "const": "progress"
+        },
+        "value": {
+          "$ref": "#/$defs/numberValue"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "type": "object"
+    },
+    "projectionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "const": "projection"
+        },
+        "method": {
+          "$ref": "https://octopus.local/schemas/projection_read_contract.schema.json#/$defs/clientSurfaceProjectionReadMethod"
+        },
+        "params": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "method"
+      ],
+      "type": "object"
+    },
+    "rowNode": {
+      "additionalProperties": false,
+      "properties": {
+        "align": {
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ]
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        },
+        "gap": {
+          "enum": [
+            "none",
+            "xs",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "justify": {
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "between"
+          ]
+        },
+        "type": {
+          "const": "row"
+        },
+        "wrap": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "type": "object"
+    },
+    "sandboxRender": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/action"
+          },
+          "maxProperties": 32,
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "type": "object"
+        },
+        "css": {
+          "maxLength": 131072,
+          "type": "string"
+        },
+        "html": {
+          "maxLength": 262144,
+          "minLength": 1,
+          "type": "string"
+        },
+        "initial_height": {
+          "maximum": 1600,
+          "minimum": 80,
+          "type": "integer"
+        },
+        "javascript": {
+          "maxLength": 131072,
+          "type": "string"
+        },
+        "kind": {
+          "const": "sandbox"
+        }
+      },
+      "required": [
+        "kind",
+        "html"
+      ],
+      "type": "object"
+    },
+    "scalar": {
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
+    },
+    "sectionNode": {
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "$ref": "#/$defs/children"
+        },
+        "glyph": {
+          "$ref": "#/$defs/glyph"
+        },
+        "title": {
+          "$ref": "#/$defs/value"
+        },
+        "type": {
+          "const": "section"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "children"
+      ],
+      "type": "object"
+    },
+    "spacerNode": {
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "enum": [
+            "xs",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "type": {
+          "const": "spacer"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "sparklineNode": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "type": {
+          "const": "sparkline"
+        },
+        "values": {
+          "$ref": "#/$defs/numberListValue"
+        }
+      },
+      "required": [
+        "type",
+        "values"
+      ],
+      "type": "object"
+    },
+    "stackNode": {
+      "additionalProperties": false,
+      "properties": {
+        "align": {
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ]
+        },
+        "children": {
+          "$ref": "#/$defs/children"
+        },
+        "gap": {
+          "enum": [
+            "none",
+            "xs",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "type": {
+          "const": "stack"
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "type": "object"
+    },
+    "statusNode": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/value"
+        },
+        "glyph": {
+          "$ref": "#/$defs/glyph"
+        },
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "state": {
+          "$ref": "#/$defs/value"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "type": {
+          "const": "status"
+        }
+      },
+      "required": [
+        "type",
+        "label"
+      ],
+      "type": "object"
+    },
+    "tableColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "align": {
+          "enum": [
+            "start",
+            "center",
+            "end"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "$ref": "#/$defs/value"
+        },
+        "role": {
+          "enum": [
+            "text",
+            "number",
+            "mono"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "value"
+      ],
+      "type": "object"
+    },
+    "tableNode": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/tableColumn"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "type": "array"
+        },
+        "empty": {
+          "$ref": "#/$defs/value"
+        },
+        "rows": {
+          "$ref": "#/$defs/collectionBinding"
+        },
+        "type": {
+          "const": "table"
+        }
+      },
+      "required": [
+        "type",
+        "rows",
+        "columns"
+      ],
+      "type": "object"
+    },
+    "textNode": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "title",
+            "body",
+            "caption",
+            "mono"
+          ]
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "truncate": {
+          "type": "boolean"
+        },
+        "type": {
+          "const": "text"
+        },
+        "value": {
+          "$ref": "#/$defs/value"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "type": "object"
+    },
+    "tone": {
+      "enum": [
+        "default",
+        "muted",
+        "positive",
+        "warning",
+        "danger",
+        "accent"
+      ]
+    },
+    "value": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/scalar"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fallback": {
+              "$ref": "#/$defs/scalar"
+            },
+            "format": {
+              "enum": [
+                "text",
+                "number",
+                "percent",
+                "date",
+                "time",
+                "json"
+              ]
+            },
+            "path": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "videoNode": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "maxLength": 2048,
+          "pattern": "^https://",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "video"
+        }
+      },
+      "required": [
+        "type",
+        "source"
+      ],
+      "type": "object"
+    },
+    "voiceTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "voice.widget"
+        },
+        "layout": {
+          "$ref": "#/$defs/voiceWidgetLayout"
+        },
+        "order": {
+          "maximum": 1000,
+          "minimum": -1000,
+          "type": "integer"
+        },
+        "slot": {
+          "enum": [
+            "left",
+            "right"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "slot",
+        "order",
+        "layout"
+      ],
+      "type": "object"
+    },
+    "voiceWidgetLayout": {
+      "additionalProperties": false,
+      "properties": {
+        "content_fit": {
+          "enum": [
+            "reflow",
+            "scale"
+          ]
+        },
+        "max_height": {
+          "maximum": 720,
+          "minimum": 80,
+          "type": "integer"
+        },
+        "max_width": {
+          "maximum": 960,
+          "minimum": 120,
+          "type": "integer"
+        },
+        "min_height": {
+          "maximum": 720,
+          "minimum": 80,
+          "type": "integer"
+        },
+        "min_width": {
+          "maximum": 960,
+          "minimum": 120,
+          "type": "integer"
+        },
+        "preferred_height": {
+          "maximum": 720,
+          "minimum": 80,
+          "type": "integer"
+        },
+        "preferred_width": {
+          "maximum": 960,
+          "minimum": 120,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min_width",
+        "preferred_width",
+        "max_width",
+        "min_height",
+        "preferred_height",
+        "max_height",
+        "content_fit"
+      ],
+      "type": "object"
+    },
+    "voiceWindowTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "voice.window"
+        },
+        "order": {
+          "maximum": 1000,
+          "minimum": -1000,
+          "type": "integer"
+        },
+        "size": {
+          "enum": [
+            "compact",
+            "standard",
+            "wide"
+          ]
+        },
+        "slot": {
+          "enum": [
+            "left",
+            "right"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "slot",
+        "order"
+      ],
+      "type": "object"
+    },
+    "workerEnvironmentTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "worker_environment.surface"
+        },
+        "order": {
+          "maximum": 10000,
+          "minimum": -1000,
+          "type": "integer"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "worker_environment_id": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "required": [
+        "kind",
+        "worker_environment_id",
+        "surface_id",
+        "order"
+      ],
+      "type": "object"
+    },
+    "workspaceTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "chrome": {
+          "additionalProperties": false,
+          "properties": {
+            "search_placeholder": {
+              "maxLength": 96,
+              "minLength": 1,
+              "type": "string"
+            },
+            "titlebar_glyph": {
+              "$ref": "#/$defs/glyph"
+            },
+            "topbar": {
+              "enum": [
+                "wide",
+                "none"
+              ]
+            },
+            "workspace": {
+              "enum": [
+                "panel",
+                "immersive"
+              ]
+            }
+          },
+          "required": [
+            "topbar",
+            "workspace"
+          ],
+          "type": "object"
+        },
+        "kind": {
+          "const": "workspace.surface"
+        },
+        "order": {
+          "maximum": 10000,
+          "minimum": -1000,
+          "type": "integer"
+        },
+        "placements": {
+          "items": {
+            "enum": [
+              "shell",
+              "home"
+            ]
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "kind",
+        "placements",
+        "order",
+        "chrome"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://octopus.local/schemas/client_surface_document.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "data": {
+      "type": "object"
+    },
+    "glyph": {
+      "$ref": "#/$defs/glyph"
+    },
+    "header": {
+      "additionalProperties": false,
+      "properties": {
+        "show_glyph": {
+          "type": "boolean"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        }
+      },
+      "type": "object"
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "release_channel": {
+      "enum": [
+        "lab",
+        "stable"
+      ]
+    },
+    "render": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nativeRender"
+        },
+        {
+          "$ref": "#/$defs/sandboxRender"
+        }
+      ]
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "octopus.client_surface"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/projectionSource"
+      },
+      "maxItems": 8,
+      "type": "array"
+    },
+    "target": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/voiceTarget"
+        },
+        {
+          "$ref": "#/$defs/voiceWindowTarget"
+        },
+        {
+          "$ref": "#/$defs/workspaceTarget"
+        },
+        {
+          "$ref": "#/$defs/workerEnvironmentTarget"
+        }
+      ]
+    },
+    "title": {
+      "maxLength": 96,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "release_channel",
+    "id",
+    "revision",
+    "title",
+    "glyph",
+    "target",
+    "render"
+  ],
+  "title": "Octopus Client Surface Document",
+  "type": "object"
+}

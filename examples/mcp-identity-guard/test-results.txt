@@ -1,0 +1,43 @@
+   Compiling mcp-identity-guard v0.2.0 (<package-root>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.22s
+     Running unittests src/lib.rs (target/debug/deps/mcp_identity_guard-2cd96c3bfb295a83)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/mcp_identity_guard-54528d3541456fe2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security.rs (target/debug/deps/security-cc3d996b4e4783fb)
+
+running 18 tests
+test canonical_order_and_recursive_scrub ... ok
+test encoded_secrets_both_payloads_and_no_short_encoding_matches ... ok
+test executable_digest_change_denied ... ok
+test exhaustive_weighted_cover_matches_independent_reference ... ok
+test exact_recourse_changes_decision ... ok
+test encoded_upstream_results_scrubbed_and_errors_suppressed ... ok
+test cross_server_and_tool_ceiling_denied ... ok
+test ledger_tamper_and_writer_exclusion ... ok
+test all_six_benchmark_scenarios ... ok
+test mutation_freezes_session ... ok
+test namespaces_never_shadow ... ok
+test oracle_cli_rejects_all_five_spoofs ... ok
+test cli_lock_proxy_and_ledger ... ok
+test secret_injected_and_echo_scrubbed ... ok
+test secret_mode_and_symlink_refused ... ok
+test unsafe_executable_and_metadata_changes_rejected ... ok
+test weak_secret_is_never_injected ... ok
+test simultaneous_policy_failures_and_complete_repair ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.54s
+
+   Doc-tests mcp_identity_guard
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

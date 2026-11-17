@@ -1,0 +1,62 @@
+{
+  "card_validation": "PASS: jsonschema Draft202012Validator against saved live Octopus client schema",
+  "cohorts": 6,
+  "python": "3.12.16",
+  "report_reproducibility": "byte-identical regeneration from raw JSON",
+  "scan_domains": 60,
+  "scan_probes": 420,
+  "schema_sha256": "547399241f0a33e2ffe8410d9ba6ac61a27529970f904a4e6d52591bc3a41b20",
+  "statistics": {
+    "any_verified_artifact": 35,
+    "by_path": {
+      "/.well-known/ai-plugin.json": {
+        "false_positives": 4,
+        "html_redirect_illusions": 3,
+        "naive_200": 5,
+        "verified": 1
+      },
+      "/.well-known/mcp": {
+        "false_positives": 5,
+        "html_redirect_illusions": 2,
+        "naive_200": 7,
+        "verified": 2
+      },
+      "/.well-known/mcp.json": {
+        "false_positives": 7,
+        "html_redirect_illusions": 2,
+        "naive_200": 9,
+        "verified": 2
+      },
+      "/agents.md": {
+        "false_positives": 2,
+        "html_redirect_illusions": 2,
+        "naive_200": 11,
+        "verified": 9
+      },
+      "/llms-full.txt": {
+        "false_positives": 15,
+        "html_redirect_illusions": 5,
+        "naive_200": 21,
+        "verified": 6
+      },
+      "/llms.txt": {
+        "false_positives": 6,
+        "html_redirect_illusions": 2,
+        "naive_200": 39,
+        "verified": 33
+      },
+      "/robots.txt": {
+        "false_positives": 3,
+        "html_redirect_illusions": 0,
+        "naive_200": 57,
+        "verified": 54
+      }
+    },
+    "domains": 60,
+    "false_positive_domains": 11,
+    "focus_false": 20,
+    "focus_html_redirect_illusions": 8,
+    "focus_naive": 66
+  },
+  "unit_tests_passed": 19
+}

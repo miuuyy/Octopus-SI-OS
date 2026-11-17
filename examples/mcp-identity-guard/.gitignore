@@ -1,0 +1,6 @@
+/target/
+/.rustup/
+/manifest.lock.json
+/ledger.jsonl
+*.writer-lock
+/secrets/

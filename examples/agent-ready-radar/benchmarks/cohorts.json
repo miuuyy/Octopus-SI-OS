@@ -1,0 +1,74 @@
+{
+  "AI labs and agent platforms": [
+    "openai.com",
+    "anthropic.com",
+    "modelcontextprotocol.io",
+    "huggingface.co",
+    "mistral.ai",
+    "cohere.com",
+    "perplexity.ai",
+    "cursor.com",
+    "langchain.com",
+    "llamaindex.ai"
+  ],
+  "Developer and cloud infrastructure": [
+    "cloudflare.com",
+    "vercel.com",
+    "supabase.com",
+    "stripe.com",
+    "fly.io",
+    "render.com",
+    "netlify.com",
+    "railway.app",
+    "planetscale.com",
+    "neon.tech"
+  ],
+  "Code hosts docs and frameworks": [
+    "github.com",
+    "gitlab.com",
+    "docs.python.org",
+    "rust-lang.org",
+    "pydantic.dev",
+    "fastapi.tiangolo.com",
+    "astro.build",
+    "svelte.dev",
+    "deno.com",
+    "bun.sh"
+  ],
+  "Docs tooling and dev products": [
+    "mintlify.com",
+    "readme.com",
+    "gitbook.com",
+    "linear.app",
+    "raycast.com",
+    "zed.dev",
+    "posthog.com",
+    "sentry.io",
+    "datadoghq.com",
+    "resend.com"
+  ],
+  "Commerce SaaS and productivity": [
+    "shopify.com",
+    "notion.so",
+    "figma.com",
+    "slack.com",
+    "atlassian.com",
+    "zapier.com",
+    "airtable.com",
+    "webflow.com",
+    "framer.com",
+    "cal.com"
+  ],
+  "Open knowledge search and media": [
+    "arxiv.org",
+    "wikipedia.org",
+    "news.ycombinator.com",
+    "stackoverflow.com",
+    "mozilla.org",
+    "duckduckgo.com",
+    "brave.com",
+    "archive.org",
+    "npmjs.com",
+    "pypi.org"
+  ]
+}

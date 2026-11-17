@@ -1,8 +1,8 @@
 # Getting started
 
-The research preview runs locally on macOS. Install the released app, or build
-it from this repository; either way you finish setup inside the app. Codex is
-the first supported provider, and sign-in is **Sign in with ChatGPT** in the
+The research preview runs locally on macOS. Install a published binary as
+described below, or [build from source](#build-from-source). You finish setup inside
+the app. Codex is the first supported provider, and sign-in is **Sign in with ChatGPT** in the
 app - no separate provider CLI login.
 
 For the terminal client and its independent build command, see
@@ -10,10 +10,14 @@ For the terminal client and its independent build command, see
 
 ## Install the app
 
-Releases are published on
-[GitHub Releases](https://github.com/miuuyy/Octopus-SI-OS/releases) as a disk
-image for Apple Silicon, `Octopus-<version>-macos-arm64.dmg`, with
-`checksums.txt` and `install.sh`.
+The [release workflow](../.github/workflows/release.yml) builds a disk image
+for Apple Silicon, `Octopus-<version>-macos-arm64.dmg`, with `checksums.txt`
+and `install.sh`. A version tag creates a **draft** release; it is not an
+available download until a maintainer publishes it on
+[GitHub Releases](https://github.com/miuuyy/Octopus-SI-OS/releases).
+Check that a published release and its assets are available before using the
+installer. A draft or a workflow artifact is not a public release; if none is
+published, the latest-release URL returns 404 and you need the source build below.
 
 Requirements:
 
@@ -23,7 +27,7 @@ Requirements:
   first time something calls `python3`.
 - A ChatGPT account with access to the model you select.
 
-Install the latest release from Terminal:
+Once a release is published, install it from Terminal:
 
 ```sh
 curl -fsSL https://github.com/miuuyy/Octopus-SI-OS/releases/latest/download/install.sh | sh
@@ -59,8 +63,8 @@ Codex sign-in in `~/.codex` stay until you remove them.
 
 ## Build from source
 
-Building is for development and for architectures without a published
-release.
+Building from source is useful for development and architectures without a
+published release, and is required when no binary release is available.
 
 ### Prerequisites
 
@@ -93,19 +97,14 @@ The native presentation build requires the headers of the Node inside the
 pinned Electron, independently of the Node version running npm.
 `app/native/runtime.json` pins Electron 45.2.1, its Node 24.22.1, the sha256 of
 the headers archive (from the [Node.js release manifest](https://nodejs.org/download/release/v24.22.1/SHASUMS256.txt))
-and the sha256 of the Electron archives. Fetch and verify the headers:
-
-```sh
-node app/native/runtime.cjs headers
-```
-
-Electron no longer downloads its binary on install; packaging fetches the
+and the sha256 of the Electron archives. Electron no longer downloads its
+binary on install; packaging fetches the
 checksum-pinned Electron archive itself (`node app/native/runtime.cjs electron`
-does the same by hand). Then package and open the app:
+does the same by hand). Fetch the verified headers, then package and open the app:
 
 ```sh
-OCTOPUS_NATIVE_NODE_HEADERS="$PWD/app/build/node-v24.22.1/include/node" \
-  npm --prefix app run package:mac
+headers="$(node app/native/runtime.cjs headers)" &&
+OCTOPUS_NATIVE_NODE_HEADERS="$headers" npm --prefix app run package:mac &&
 open -n ./app/build/Octopus.app
 ```
 
@@ -114,6 +113,10 @@ provider bridge; it includes the managed Codex distribution and verifies an
 ad-hoc code signature. The output is `app/build/Octopus.app`, built for this
 machine. It is not a notarized installer or a universal binary. Repackaging
 replaces that bundle in place.
+
+If your running installation uses this checkout's bundle, do not run
+`package:mac` against it. Follow the [staged self-update procedure](development.md#updating-an-installation-that-runs-from-the-checkout)
+to build and verify a separate bundle before scheduling a swap.
 
 Packaging ends with a notice of the space the build output takes and the space
 left on the volume. A build takes a lot of it: `target/` and the staged or

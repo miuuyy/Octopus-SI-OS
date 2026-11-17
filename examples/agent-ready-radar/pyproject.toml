@@ -1,0 +1,16 @@
+[build-system]
+requires = []
+build-backend = "build_backend"
+backend-path = ["."]
+
+[project]
+name = "agent-ready-radar"
+version = "0.1.0"
+description = "Conservative empirical scanner for machine-readable web-agent surfaces"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+dependencies = []
+
+[project.scripts]
+agent-ready-radar = "agent_ready_radar.__main__:main"

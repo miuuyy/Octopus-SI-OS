@@ -1,0 +1,24 @@
+test_body_audit (test_contracts.Contracts.test_body_audit) ... ok
+test_cli_end_to_end (test_contracts.Contracts.test_cli_end_to_end) ... ok
+test_http_errors_and_loop (test_contracts.Contracts.test_http_errors_and_loop) ... ok
+test_json_adversaries (test_contracts.Contracts.test_json_adversaries) ... ok
+test_login_parked (test_contracts.Contracts.test_login_parked) ... ok
+test_markdown_error_is_not_artifact (test_contracts.Contracts.test_markdown_error_is_not_artifact) ... ok
+test_oversize (test_contracts.Contracts.test_oversize) ... ok
+test_plugin_manifest (test_contracts.Contracts.test_plugin_manifest) ... ok
+test_real_robots (test_contracts.Contracts.test_real_robots) ... ok
+test_redirect_home (test_contracts.Contracts.test_redirect_home) ... ok
+test_report_card_contract_and_counts (test_contracts.Contracts.test_report_card_contract_and_counts) ... ok
+test_robots_html (test_contracts.Contracts.test_robots_html) ... ok
+test_robots_no_rule_group_does_not_inherit_next (test_contracts.Contracts.test_robots_no_rule_group_does_not_inherit_next) ... ok
+test_spa_fools_naive_scanner_not_oracle (test_contracts.Contracts.test_spa_fools_naive_scanner_not_oracle) ... ok
+test_spacing (test_contracts.Contracts.test_spacing) ... ok
+test_timeout (test_contracts.Contracts.test_timeout) ... ok
+test_tls_error (test_contracts.Contracts.test_tls_error) ... ok
+test_unsafe_targets (test_contracts.Contracts.test_unsafe_targets) ... ok
+test_valid_markdown_and_mcp (test_contracts.Contracts.test_valid_markdown_and_mcp) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.849s
+
+OK

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.tools/
+.venv/
+dist/
+*.egg-info/
+/benchmarks/survey-2026-11-17.json
