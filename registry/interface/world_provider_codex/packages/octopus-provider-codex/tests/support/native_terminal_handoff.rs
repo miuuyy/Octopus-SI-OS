@@ -1379,7 +1379,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let session=ProviderHandoffSession::new(&ctx).unwrap();
         let mut handoff=session.from_invocation(&ctx,&descriptor,&run,&envelope,source_seq,&initial).unwrap();
         if with_answer || native_interrupted {
-            let progress=ProviderEmission{artifact:artifact(&root.join("usage"),"turn.token_usage",json!({"label":"turn.token_usage"})),route:ProviderEmissionRoute::ClientProjection};
+            let progress=ProviderEmission{artifact:artifact(&ctx.interface_var_dir().join("usage"),"turn.token_usage",json!({"label":"turn.token_usage"})),route:ProviderEmissionRoute::ClientProjection};
             let admit=Box::pin(handoff.hand_batch_with_outgoing_bindings(vec![progress],false,&[]));
             let gate=pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&result_ref,0,usize::MAX,true,1,false);
             let accepted=tokio::time::timeout(std::time::Duration::from_secs(5),async {tokio::select! {result=admit=>result.unwrap(), _=gate=>panic!("progress gate ended before handoff")}}).await.unwrap();
@@ -1425,7 +1425,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             let before=std::fs::read(&plan.run_write.path).unwrap();
             let mut wrong=emissions.iter().map(|e|ProviderEmission{artifact:e.artifact.clone(),route:e.route.clone()}).collect::<Vec<_>>();
             let mut payload=closed.clone(); payload["codex_continuity"]["context_generation"]=json!(settled_generation+1);
-            wrong.last_mut().unwrap().artifact=artifact(&root.join("wrong-generation"),TURN_INTERRUPTED_RESULT_LABEL,payload);
+            wrong.last_mut().unwrap().artifact=artifact(&ctx.interface_var_dir().join("wrong-generation"),TURN_INTERRUPTED_RESULT_LABEL,payload);
             let reference=materialized_artifact_ref(&wrong.last().unwrap().artifact).unwrap();
             assert!(admit_interrupted_result(&ctx,&handoff,&control,None,&run,source_seq,&reference,wrong).await.unwrap_err().contains("checked authored context generation"));
             assert_eq!(std::fs::read(&plan.run_write.path).unwrap(),before);

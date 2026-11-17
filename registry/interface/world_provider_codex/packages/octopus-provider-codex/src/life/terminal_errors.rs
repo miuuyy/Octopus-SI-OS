@@ -318,8 +318,7 @@ pub(crate) fn native_result_admitted_prefix(
         }
         if !source_verified { return Err("native result prefix passed its unverified source".into()); }
         let Some(reference) = movement.artifact.as_ref() else { return Ok(None); };
-        if !movement_is_artifact_admission(ctx, run, reference, &movement)
-            || !expected.iter().any(|item| artifact_ref_has_label(reference, &item.0)) {
+        if !movement_is_artifact_admission(ctx, run, reference, &movement) {
             return Ok(None);
         }
         let runtime = movement.runtime().ok_or("native result prefix has no runtime coordinates")?;
@@ -338,8 +337,7 @@ pub(crate) fn native_result_admitted_prefix(
             .ok_or("native result prefix pending source is malformed")?;
         if owner != source_seq { return Ok(None); }
         let (manifest, actual) = read_pinned_provider_artifact(ctx, reference, "native result prefix")?;
-        let index = expected.iter().position(|item| item.0 == manifest.label)
-            .ok_or("native result prefix manifest conflicts with its artifact label")?;
+        let Some(index) = expected.iter().position(|item| item.0 == manifest.label) else { return Ok(None); };
         if index != prefix.len() { return Err("native result admissions are not an exact contiguous prefix".into()); }
         let remaining = expected[index + 1..].iter().filter(|item| context_labels.contains(&item.0)).count() as u64;
         if state.get("context_generation").and_then(serde_json::Value::as_u64) != settled.checked_sub(remaining) {
