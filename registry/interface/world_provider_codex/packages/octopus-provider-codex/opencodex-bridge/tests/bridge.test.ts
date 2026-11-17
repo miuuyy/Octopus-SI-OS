@@ -690,7 +690,9 @@ async function receive(message) {
   if (method === "session/new" || method === "session/resume") {
     session = params.sessionId ?? crypto.randomUUID();
     mcp = params.mcpServers[0];
-    log({ method, session, meta: params._meta.antigravity, env: { home: process.env.HOME, gemini: process.env.GEMINI_HOME, secret: process.env.OCTOPUS_TEST_SECRET } });
+    const catalog = mcp ? await fetch(mcp.url, { method: "POST", headers: { "content-type": "application/json", authorization: mcp.headers[0].value },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }).then(r => r.json()) : undefined;
+    log({ method, session, tools: catalog?.result.tools ?? [], meta: params._meta.antigravity, env: { home: process.env.HOME, gemini: process.env.GEMINI_HOME, secret: process.env.OCTOPUS_TEST_SECRET } });
     return send({ id, result: { sessionId: session } });
   }
   if (method === "session/set_config_option") log({ method, ...params });
@@ -703,8 +705,10 @@ async function receive(message) {
     say("Agent execution error: trajectory converted to zero chat messages");
     process.stderr.write("E1117 01:02:03.004 12345 server.py:5737] Antigravity SDK error processing prompt for session " + session + "\n");
   } else if (text.includes("call-inspect") && !text.includes("TOOL RESULT")) {
-    for (const name of ["exact_tool", "unoffered"]) send({ id: name, method: "session/request_permission", params: { sessionId: session,
-      toolCall: { _meta: { mcp: { server: "opencodex", tool: name } } }, options: [{ kind: "allow_once", optionId: "yes" }] } });
+    for (const [id, server, tool] of [["exact_tool", "opencodex", "exact_tool"], ["unoffered", "opencodex", "unoffered"], ["other_server", "other", "exact_tool"]]) {
+      send({ id, method: "session/request_permission", params: { sessionId: session,
+        toolCall: { _meta: { mcp: { server, tool } } }, options: [{ kind: "allow_once", optionId: "yes" }] } });
+    }
     update({ sessionUpdate: "usage_update", used: 41, size: 1048576 });
     const response = await fetch(mcp.url, { method: "POST", headers: { "content-type": "application/json", authorization: mcp.headers[0].value },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } }) });
@@ -736,9 +740,11 @@ test("Antigravity retains native context, delivers exact external results and di
     account: { provider: "antigravity-acp", directory: account },
   }), { PATH: "/usr/bin:/bin", OCTOPUS_TEST_SECRET: "private" }, directory);
   let bridge = await start();
-  const turn = async (thread: string, input: unknown[]) => {
+  const write = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../../../../tool/file.write/tool.json"), "utf8"));
+  const granted = [exactTool, { type: "function", name: "file_write", description: write.description, parameters: write.args_schema }];
+  const turn = async (thread: string, input: unknown[], tools: unknown[] = granted) => {
     const response = await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json", "thread-id": thread },
-      body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, instructions: "The worker's role.", reasoning: { effort: "high" }, input, tools: [exactTool] }) });
+      body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, instructions: "The worker's role.", reasoning: { effort: "high" }, input, tools }) });
     return (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
   };
   const user = (text: string) => ({ role: "user", content: text });
@@ -755,13 +761,17 @@ test("Antigravity retains native context, delivers exact external results and di
   const done = end(await turn("alpha", history));
   expect(JSON.stringify(done.output)).toContain("Result received.");
   const first = logs().find(row => row.method === "session/new");
-  expect(first.meta).toMatchObject({ enabledTools: [], eagerMcpServers: ["opencodex"] });
+  expect(first.meta.enabledTools).toEqual(["call_mcp_tool"]);
+  expect(first.meta.eagerMcpServers ?? []).toEqual([]);
+  expect(first.tools).toContainEqual({ name: "file_write", description: write.description, inputSchema: write.args_schema });
+  expect(first.meta.systemPrompt.append).toContain(JSON.stringify(first.tools));
   expect(first.meta.systemPrompt.append).toContain("The worker's role.");
   expect(first.env.gemini).toBe(join(account, "home"));
   expect(first.env.secret).toBeUndefined();
   expect(logs().filter(row => row.method === "session/set_config_option").map(row => row.value)).toContain("high");
   expect(logs().find(row => row.id === "exact_tool").outcome.outcome).toBe("selected");
   expect(logs().find(row => row.id === "unoffered").outcome.outcome).toBe("cancelled");
+  expect(logs().find(row => row.id === "other_server").outcome.outcome).toBe("cancelled");
   expect(logs().filter(row => row.method === "session/prompt")).toHaveLength(1);
   const attached = logs().find(row => row.returned).returned.content[0].resource;
   expect(attached.mimeType).toBe("text/plain");
@@ -782,6 +792,10 @@ test("Antigravity retains native context, delivers exact external results and di
   expect(failed.some(row => row.type === "response.completed" || row.type === "response.output_text.delta")).toBe(false);
   expect(JSON.stringify(failed.find(row => row.type === "response.failed"))).toContain("trajectory converted to zero chat messages");
   expect(JSON.stringify(end(await turn("alpha", [user("quote-error")])).output)).toContain("trajectory converted to zero chat messages");
+  expect(end(await turn("no-tools", [user("hello")], [])).status).toBe("completed");
+  const empty = logs().filter(row => row.method === "session/new").at(-1);
+  expect(empty.meta.enabledTools).toEqual([]);
+  expect(empty.meta.systemPrompt.append).not.toContain("file_write");
   writeFileSync(join(account, "home", "signed-out"), "");
   expect(JSON.stringify((await turn("gamma", [user("new")])).find(e => e.type === "response.failed"))).toContain("signed out");
   const status = Bun.spawn([bridgeBinary, "__account"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: {} });

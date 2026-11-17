@@ -189,8 +189,11 @@ Antigravity runs on Google's official Antigravity ACP server, declared by the
 release per platform. Connect installs the verified server into the owner's
 `opencodex-account/` and signs in through the server itself, which keeps the
 token as a private file there. A provider maps each Codex thread to its own ACP
-session. It appends the run instructions and offers the current client functions
-over a private MCP endpoint. Codex executes a call through its declared route.
+session. The session instructions carry the run instructions and the full MCP
+catalog, including each granted function's name, description and JSON input
+schema. Google's native `call_mcp_tool` dispatches the chosen function to the
+private MCP endpoint. The provider checks its server and function name against
+the current grant. Codex executes the call through its declared route.
 The admitted result answers that same MCP request. Large text travels as a
 `text/plain` document, including inside a function result.
 

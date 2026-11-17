@@ -725,7 +725,7 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
   try {
     parsed = parseRequest(modelId === responseModel ? raw : { ...raw, model: modelId }, { preserveCallerContext: true });
     if (parsed.modelId !== modelId) throw new Error("parsed model disagrees with the exact interface model grant");
-    flattenRootSchemaAlternatives(parsed);
+    if (config.provider.adapter !== "antigravity-acp") flattenRootSchemaAlternatives(parsed);
     maps = buildToolBridgeMaps(parsed, budget);
     ({ adapter } = await adapterFor(config, request, modelId, budget));
   } catch (error) {

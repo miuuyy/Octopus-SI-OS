@@ -208,10 +208,16 @@ class Conversation {
       return { outcome: once ? { outcome: "selected", optionId: once.optionId } : { outcome: "cancelled" } };
     };
     await connection.authenticate();
+    const systemPrompt = tools.length ? [
+      input.systemPrompt,
+      `Call the client functions with call_mcp_tool on ServerName "${this.host.serverName}".`,
+      "Use the exact ToolName and supply Arguments matching its inputSchema. The complete current MCP catalog follows.",
+      JSON.stringify(tools),
+    ].join("\n") : input.systemPrompt;
     const setup = {
       cwd: join(this.root, "workspace"), mcpServers: native.endpoint ? [native.endpoint.descriptor] : [],
-      _meta: { antigravity: { enabledTools: [], systemPrompt: { append: input.systemPrompt },
-        eagerMcpServers: native.endpoint ? [this.host.serverName] : [], mcpMaxOutputBytes: this.host.maxRequestBytes * 2 } },
+      _meta: { antigravity: { enabledTools: native.endpoint ? ["call_mcp_tool"] : [], systemPrompt: { append: systemPrompt },
+        mcpMaxOutputBytes: this.host.maxRequestBytes * 2 } },
     };
     if (resume) await connection.request("session/resume", { ...setup, sessionId: resume });
     else {
