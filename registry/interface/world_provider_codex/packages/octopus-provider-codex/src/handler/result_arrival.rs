@@ -438,7 +438,7 @@ impl CodexAppServerInterfaceDriver {
                                 &operation.operation_name, effective_manifest_label, &receipt,
                                 self.model_result_projection()?,
                             )?;
-                            cut.activity = activity.with_native_terminal_events(native_terminal_events(&cut.activity.value)?);
+                            cut.activity = activity.with_native_terminal_events(native_terminal_events(&cut.activity.value)?.to_vec());
                         } else {
                             *recovered_tool_continuation = Some(RecoveredToolContinuation {
                                 item: recovered_function_call_output(

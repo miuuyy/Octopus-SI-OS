@@ -260,6 +260,29 @@ pub(crate) fn recover_sealed_interrupted_result(
     Ok(Some((emissions, closure)))
 }
 
+pub(crate) fn sealed_result_continues_cut_turn(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    run: &RunId,
+    source_seq: u64,
+    source: &crate::handler::CodexContinuityState,
+    emissions: &[ProviderEmission],
+) -> Result<bool, String> {
+    if source.pending.is_none() || source.interrupted_pending.is_some() || source.outstanding_len() != 1 {
+        return Ok(false);
+    }
+    let terminal = emissions.last().ok_or("sealed result group has no closure")?;
+    let payload: serde_json::Value = serde_json::from_slice(
+        &terminal.artifact.read_payload_bytes().map_err(|error| error.to_string())?,
+    ).map_err(|error| error.to_string())?;
+    if payload.get("native_terminal_status").and_then(serde_json::Value::as_str) != Some("interrupted") {
+        return Ok(false);
+    }
+    let labels = codex_context_output_labels(descriptor).map_err(|error| error.to_string())?;
+    let snapshots = codex_session_snapshot_labels(descriptor).map_err(|error| error.to_string())?;
+    Ok(native_result_admitted_prefix(ctx, run, source_seq, emissions, &snapshots, &labels)?.is_empty())
+}
+
 pub(crate) fn native_result_admitted_prefix(
     ctx: &InterfaceLiftContext,
     run: &RunId,

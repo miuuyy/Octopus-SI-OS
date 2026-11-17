@@ -954,7 +954,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             assert_eq!(Box::pin(failed.recover_source()).await.unwrap(),ProviderSourceRecovery::Process);
             if phase==19 {
                 let source=arbiter.durable_continuity(run).await.unwrap().unwrap();
-                let emissions=crate::handler::stopped_result::materialize_pending_interrupted(descriptor,&source,&envelope,result_seq,&ctx.interface_var_dir().join("emitted"),&ctx.interface_var_dir().join("streams"),failed.input_changes_context().await).unwrap().unwrap();
+                let emissions=crate::handler::stopped_result::materialize_pending_interrupted(descriptor,&source,&envelope,result_seq,&ctx.interface_var_dir().join("emitted"),&ctx.interface_var_dir().join("streams"),failed.input_changes_context().await,failed.context_generation().await.unwrap()).unwrap().unwrap();
                 let count=emissions.len();let reference=materialized_artifact_ref(&emissions.last().unwrap().artifact).unwrap();let broker=CodexTurnControlBroker::new(Some(result_seq));
                 let admit=Box::pin(admit_interrupted_result(ctx,&failed,&broker,Some(&arbiter),run,result_seq,&reference,emissions));
                 let gate=pump(ctx,root,run_path,&authoring_id,listener,receiver,&envelope.artifact,0,count,false,1,false);
@@ -1379,13 +1379,13 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let session=ProviderHandoffSession::new(&ctx).unwrap();
         let mut handoff=session.from_invocation(&ctx,&descriptor,&run,&envelope,source_seq,&initial).unwrap();
         if with_answer || native_interrupted {
-            let progress=ProviderEmission{artifact:artifact(&root.join("usage"),TURN_TOKEN_USAGE_LABEL,json!({"label":TURN_TOKEN_USAGE_LABEL})),route:ProviderEmissionRoute::ClientProjection};
+            let progress=ProviderEmission{artifact:artifact(&root.join("usage"),"turn.token_usage",json!({"label":"turn.token_usage"})),route:ProviderEmissionRoute::ClientProjection};
             let admit=Box::pin(handoff.hand_batch_with_outgoing_bindings(vec![progress],false,&[]));
             let gate=pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&result_ref,0,usize::MAX,true,1,false);
             let accepted=tokio::time::timeout(std::time::Duration::from_secs(5),async {tokio::select! {result=admit=>result.unwrap(), _=gate=>panic!("progress gate ended before handoff")}}).await.unwrap();
             assert_eq!(accepted.len(),1);
             handoff=ProviderHandoffSession::new(&ctx).unwrap().from_invocation_when_ready(&ctx,&descriptor,&run,&envelope,source_seq,&initial).await.unwrap();
-            assert!(matches!(Box::pin(handoff.recover_source()).await.unwrap(),ProviderSourceRecovery::Interrupted{last_artifact_label} if last_artifact_label==TURN_TOKEN_USAGE_LABEL));
+            assert!(matches!(Box::pin(handoff.recover_source()).await.unwrap(),ProviderSourceRecovery::Interrupted{last_artifact_label} if last_artifact_label=="turn.token_usage"));
             assert!(!handoff.input_changes_context().await);
         }
         let input_context=handoff.input_changes_context().await;
@@ -1398,6 +1398,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let turn=QueuedTurn{seq:source_seq,envelope:envelope.clone()};
         let (cold,cold_ref)=recover_sealed_interrupted_result(&ctx,&descriptor,&turn,&original).unwrap().unwrap();
         assert_eq!(cold_ref,source_closure); assert_eq!(cold.len(),count);
+        assert_eq!(sealed_result_continues_cut_turn(&ctx,&descriptor,&run,source_seq,&original,&cold).unwrap(),native_interrupted && !with_stop);
         let mut emissions=vec![stream]; emissions.extend(retained_outputs); emissions.push(closure);
         for (live,cold) in emissions.iter().zip(&cold) { assert_eq!(materialized_artifact_ref(&live.artifact).unwrap(),materialized_artifact_ref(&cold.artifact).unwrap()); assert_eq!(live.artifact.read_payload_bytes().unwrap(),cold.artifact.read_payload_bytes().unwrap()); }
         let closed:serde_json::Value=serde_json::from_slice(&emissions[count-1].artifact.read_payload_bytes().unwrap()).unwrap();
@@ -1420,6 +1421,15 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let mut all_delivered=Vec::new();
         let control = CodexTurnControlBroker::new(Some(source_seq));
         assert!(!control.is_finished());
+        if with_answer && !with_stop {
+            let before=std::fs::read(&plan.run_write.path).unwrap();
+            let mut wrong=emissions.iter().map(|e|ProviderEmission{artifact:e.artifact.clone(),route:e.route.clone()}).collect::<Vec<_>>();
+            let mut payload=closed.clone(); payload["codex_continuity"]["context_generation"]=json!(settled_generation+1);
+            wrong.last_mut().unwrap().artifact=artifact(&root.join("wrong-generation"),TURN_INTERRUPTED_RESULT_LABEL,payload);
+            let reference=materialized_artifact_ref(&wrong.last().unwrap().artifact).unwrap();
+            assert!(admit_interrupted_result(&ctx,&handoff,&control,None,&run,source_seq,&reference,wrong).await.unwrap_err().contains("checked authored context generation"));
+            assert_eq!(std::fs::read(&plan.run_write.path).unwrap(),before);
+        }
         for phase in 0..if with_answer {2}else{1} {
         let gate=pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&result_ref,all_delivered.len(),count,with_answer,phase,false);
         let supplied=if phase==0 {emissions.iter().map(|e|ProviderEmission{artifact:e.artifact.clone(),route:e.route.clone()}).collect()} else {recover_sealed_interrupted_result(&ctx,&descriptor,&turn,&original).unwrap().unwrap().0};
@@ -1448,6 +1458,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let current=RunRecord::from_bytes(&std::fs::read(&plan.run_write.path).unwrap()).unwrap();
         assert_eq!(current.interface_state[&descriptor.id]["context_generation"],json!(settled_generation));
         assert_eq!(Box::pin(handoff.recover_source()).await.unwrap(),ProviderSourceRecovery::Completed);
+        assert!(!sealed_result_continues_cut_turn(&ctx,&descriptor,&run,source_seq,&original,&emissions).unwrap());
         if with_stop { assert!(arbiter.reconciled(&run).await.unwrap()); } else { assert!(!interrupted_effect_journal_path(&ctx,&run).exists()); }
         assert_eq!(recover_sealed_interrupted_result(&ctx,&descriptor,&turn,&original).unwrap().unwrap().1,source_closure);
         if let Some(delayed)=delayed_stop {

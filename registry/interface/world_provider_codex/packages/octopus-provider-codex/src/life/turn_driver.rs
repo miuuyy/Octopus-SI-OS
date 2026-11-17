@@ -242,7 +242,9 @@ pub(crate) async fn drive_turn_with_retries_inner(
             .map_err(|error| error.to_string())?
     };
     if let Some(source) = native_terminal_source.as_ref() {
-        if let Some((emissions, closure)) = recover_sealed_interrupted_result(ctx, descriptor, &turn, source)? {
+        if let Some((emissions, closure)) = recover_sealed_interrupted_result(ctx, descriptor, &turn, source)?
+            && !sealed_result_continues_cut_turn(ctx, descriptor, run, turn.seq, source, &emissions)?
+        {
             admit_interrupted_result(ctx, &handoff, control, None, run, turn.seq, &closure, emissions).await?;
             control.finish();
             return Ok(());
