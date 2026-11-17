@@ -358,7 +358,7 @@ impl CodexAppServerInterfaceDriver {
                         result.ok,
                         &effective_source_artifact,
                     ),
-                    native_pending_operation(pending)?.is_none(),
+                    true,
                 )
                 .await?
             {
@@ -418,32 +418,38 @@ impl CodexAppServerInterfaceDriver {
                         return Ok(Arrival::Settled);
                     }
                     NativeStep::Complete { result: value } => {
-                        *recovered_tool_continuation = Some(RecoveredToolContinuation {
-                            item: recovered_function_call_output(
-                                &operation.call_id,
-                                recovered_result_output(native_result_content(
-                                    &value,
-                                    Vec::new(),
-                                )?)?,
-                            ),
-                            activity: CodexTurnOutput::dynamic_tool_completed(
-                                self.native_tool_namespace()?.name,
-                                operation.operation_name,
-                                operation.call_id,
-                                recovered
-                                    .as_ref()
-                                    .expect("recovered continuity")
-                                    .thread_id
-                                    .clone(),
-                                turn_id.clone(),
-                                native_result_success(&value),
-                                Some(value),
-                                None,
-                            ),
-                            activity_already_admitted: interrupted_after_artifact
-                                .as_deref()
-                                .is_some_and(|label| label != PROVIDER_TRANSPORT_DISPATCH_LABEL),
-                        });
+                        let activity = CodexTurnOutput::dynamic_tool_completed(
+                            self.native_tool_namespace()?.name,
+                            operation.operation_name.clone(),
+                            operation.call_id.clone(),
+                            state.thread_id.clone(),
+                            turn_id.clone(),
+                            native_result_success(&value),
+                            Some(value.clone()),
+                            None,
+                        );
+                        if let Some(cut) = cut_turn_continuation.as_mut() {
+                            let receipt = serde_json::to_vec(&serde_json::json!({
+                                "tool": operation.operation_name, "correlation_id": operation.call_id,
+                                "ok": native_result_success(&value), "body": value,
+                            })).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+                            cut.context = cut_turn_context(
+                                current_session_context, effective_source_artifact, state,
+                                &operation.operation_name, effective_manifest_label, &receipt,
+                                self.model_result_projection()?,
+                            )?;
+                            cut.activity = activity.with_native_terminal_events(native_terminal_events(&cut.activity.value)?);
+                        } else {
+                            *recovered_tool_continuation = Some(RecoveredToolContinuation {
+                                item: recovered_function_call_output(
+                                    &operation.call_id,
+                                    recovered_result_output(native_result_content(&value, Vec::new())?)?,
+                                ),
+                                activity,
+                                activity_already_admitted: interrupted_after_artifact.as_deref()
+                                    .is_some_and(|label| label != PROVIDER_TRANSPORT_DISPATCH_LABEL),
+                            });
+                        }
                     }
                     NativeStep::Wait { .. } => {
                         return Err(InterfaceDriverError::FailedClosed(

@@ -5,6 +5,7 @@ pub(crate) const DELTA_FLUSH_WINDOW: std::time::Duration = std::time::Duration::
 pub(crate) struct ContinuityEmitterState {
     pub(crate) continuity: Option<CodexContinuityState>,
     pub(crate) pending_input_context: bool,
+    pub(crate) authored_context_generation: u64,
 }
 
 impl Default for ContinuityEmitterState {
@@ -12,6 +13,7 @@ impl Default for ContinuityEmitterState {
         Self {
             continuity: None,
             pending_input_context: false,
+            authored_context_generation: 0,
         }
     }
 }
@@ -572,6 +574,14 @@ impl TurnSink<'_> {
                 self.continuity.lock().expect("continuity lock").pending_input_context
             );
         }
+        if native_terminal.is_some() || closure.value.get("native_terminal").is_some() {
+            let mut state = self.continuity.lock().expect("continuity lock");
+            let authored = state.authored_context_generation;
+            let continuity = state.continuity.as_mut().ok_or_else(|| InterfaceDriverError::FailedClosed(
+                "native result lost its source continuity".into(),
+            ))?;
+            continuity.context_generation = continuity.context_generation.max(authored);
+        }
         if self.has_live_stream() {
             self.advance_continuity(false)?;
         }
@@ -691,7 +701,7 @@ pub(crate) fn native_terminal_group_for_test(
     descriptor: &InterfaceDescriptor, output_root: &Path, stream_root: &Path,
     original: &CodexContinuityState, native_turn: Option<serde_json::Value>,
     source: &ArtifactRef, source_seq: u64, with_stop: bool,
-    input_changes_context: bool,
+    input_changes_context: bool, authored_context_generation: u64,
 ) -> ProviderStreamEmission {
     let mut retired = original.clone();
     if !with_stop { retired.interrupted_pending = retired.pending.take(); }
@@ -700,6 +710,7 @@ pub(crate) fn native_terminal_group_for_test(
     let (emit, mut outputs) = ProviderOutputStream::channel();
     emit.continuity.lock().unwrap().continuity = Some(retired);
     emit.continuity.lock().unwrap().pending_input_context = input_changes_context;
+    emit.continuity.lock().unwrap().authored_context_generation = authored_context_generation;
     let config = &descriptor.interface_driver_config.as_ref().unwrap().private_config;
     let labels = private_config_string_set(config, "context_output_labels").unwrap();
     let projected = private_config_string_set(config, "client_projection_output_labels").unwrap();

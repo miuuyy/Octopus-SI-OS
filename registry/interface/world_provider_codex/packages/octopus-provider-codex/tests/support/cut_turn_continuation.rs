@@ -1,15 +1,16 @@
 #[tokio::test]
 async fn a_turn_cut_by_process_death_continues_from_its_late_result() {
-    continue_cut_turn(false, true, None, 0).await;
-    continue_cut_turn(true, false, Some(TURN_TOKEN_USAGE_LABEL), 0).await;
+    continue_cut_turn(false, true, None, 0, false).await;
+    continue_cut_turn(true, false, Some(TURN_TOKEN_USAGE_LABEL), 0, false).await;
+    continue_cut_turn(true, false, Some(TURN_TOKEN_USAGE_LABEL), 0, true).await;
 }
 
 #[tokio::test]
 async fn a_late_result_adopts_the_context_generation_authored_while_its_call_waited() {
-    continue_cut_turn(false, true, None, 2).await;
+    continue_cut_turn(false, true, None, 2, false).await;
 }
 
-async fn continue_cut_turn(own_boundary: bool, input_changes_context: bool, interrupted_after_artifact: Option<&str>, authored_advance: u64) {
+async fn continue_cut_turn(own_boundary: bool, input_changes_context: bool, interrupted_after_artifact: Option<&str>, authored_advance: u64, native: bool) {
     use octopus_appserver_proto::{ApprovalsReviewer, AskForApproval, SandboxPolicy, SessionSource, Thread, ThreadStatus};
     let temp = tempfile::tempdir().unwrap();
     let cwd = octopus_util_abspath::AbsolutePathBuf::from_absolute_path(temp.path()).unwrap();
@@ -79,8 +80,14 @@ done
         name: "coder-dexec".into(), description: "execute".into(),
         input_schema: serde_json::json!({"type":"object"}), defer_loading: false,
     })], &NativeToolNamespace { name: "formed_interfaces".into(), description: "Formed interface tools.".into() }).unwrap();
+    let tool = if native { "artifact.send" } else { "coder.exec" };
+    let operation = native.then(|| serde_json::json!({
+        "call_id":"create-1","operation_name":"create_run","source_run":"run-a",
+        "effect":{"tool":tool,"correlation_id":"call-1","arguments":{}},
+        "state":{"phase":"applied_seeding","created":{"run_id":"created-run"},"files":[],"write_receipt":{"ok":true},"validation":{}},
+    }));
     let mut pending = continuity("world_provider_codex", "run-a", "thr-exact", 7, Some(CodexPendingContinuity::DynamicTool {
-        native_operation: None, turn_id: "turn-1".into(), call_id: "call-1".into(), tool: "coder.exec".into(),
+        native_operation: operation, turn_id: "turn-1".into(), call_id: "call-1".into(), tool: tool.into(),
     }));
     pending.static_context_fingerprint = sha256_hex(&static_bytes);
     pending.thread_shape_fingerprint = thread_shape_fingerprint(
@@ -144,8 +151,8 @@ done
     }));
     let snapshot = ProviderInvocationSessionSnapshot { carrier: carrier.artifact.clone(), artifacts: Arc::new(vec![earlier]) };
     let result_bytes = serde_json::to_vec(&serde_json::json!({
-        "label": "coder.exec.result", "tool": "coder.exec", "correlation_id": "call-1", "ok": true,
-        "body": {"output": "restarted · pid 4242 · phase ready\nSURVIVED\n", "exit_code": 0},
+        "label": format!("{tool}.result"), "tool": tool, "correlation_id": "call-1", "ok": true,
+        "body": if native { serde_json::json!({"admitted":{"seq":20}}) } else { serde_json::json!({"output": "restarted · pid 4242 · phase ready\nSURVIVED\n", "exit_code": 0}) },
     })).unwrap();
     metadata.runtime.as_mut().unwrap().run_record_hash = Some(octopus_ledger::ContentHash::of_bytes(&admitted_record).to_hex());
     metadata.artifact_binding_refs = vec![carrier.artifact.clone(), role.artifact.clone()];
@@ -154,7 +161,7 @@ done
             id: octopus_descriptors::ArtifactId::new("cut-call-result"),
             content: octopus_ledger::ContentHash::of_bytes(&result_bytes),
         },
-        artifact_file: InterfaceArtifactFile::write(temp.path().join("input"), "coder.exec.result", &result_bytes).unwrap(),
+        artifact_file: InterfaceArtifactFile::write(temp.path().join("input"), &format!("{tool}.result"), &result_bytes).unwrap(),
         artifact_binding_payloads: vec![carrier, role],
         metadata: Some(metadata),
     };
@@ -202,7 +209,8 @@ done
     assert_eq!(start["params"]["input"], serde_json::json!([]));
     assert_eq!(start["params"]["turnTrigger"], TURN_TRIGGER_RESUME_INTERRUPTED_TASK);
     let context = start["params"]["additionalContext"]["octopus_bound_context"]["value"].as_str().unwrap();
-    assert!(context.contains("coder.exec") && context.contains("SURVIVED") && context.contains("pid 4242"), "{context}");
+    if native { assert!(context.contains("create_run") && context.contains("created-run") && context.contains("seed_admitted"), "{context}"); }
+    else { assert!(context.contains("coder.exec") && context.contains("SURVIVED") && context.contains("pid 4242"), "{context}"); }
     let call = call.expect("the continued turn reaches its next call");
     assert_eq!(call["correlation_id"], "call-2");
     let continued: CodexContinuityState = serde_json::from_value(call[CODEX_CONTINUITY_FIELD].clone()).unwrap();

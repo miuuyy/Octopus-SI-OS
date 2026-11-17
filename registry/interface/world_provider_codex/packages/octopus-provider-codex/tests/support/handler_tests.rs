@@ -3458,6 +3458,7 @@ while IFS= read -r _; do :; done
             continuity: Arc::new(std::sync::Mutex::new(ContinuityEmitterState {
                 continuity: Some(recovered_queue.clone()),
                 pending_input_context: false,
+                authored_context_generation: recovered_queue.context_generation,
             })),
         };
         let source_artifact = bound(

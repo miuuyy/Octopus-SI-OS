@@ -520,7 +520,7 @@ pub(crate) fn interrupted_result_closure_payload(
     let maximum_generation = minimum_generation
         .checked_add(1 + retained.len() as u64)
         .ok_or_else(|| "provider interrupted-result closure generation overflowed".to_string())?;
-    let native_generation = if native_status.is_some() {
+    let native_minimum_generation = if native_status.is_some() {
         let input_context = payload.get("native_terminal_input_context").and_then(serde_json::Value::as_bool)
             .ok_or("native terminal closure lost its exact input context consumption")?;
         let outputs = retained.iter().filter(|output| output.get("label").and_then(serde_json::Value::as_str)
@@ -538,7 +538,7 @@ pub(crate) fn interrupted_result_closure_payload(
         || closure.parallel_pending != remaining.parallel_pending
         || closure.native_terminal != interrupted.native_terminal
         || native_status.as_ref().is_some_and(|status| payload.get("native_terminal_status") != serde_json::to_value(status).ok().as_ref())
-        || if let Some(generation) = native_generation { closure.context_generation != generation }
+        || if let Some(generation) = native_minimum_generation { closure.context_generation < generation }
             else { !(minimum_generation..=maximum_generation).contains(&closure.context_generation) }
     {
         return Err(
@@ -601,11 +601,12 @@ fn native_terminal_sibling_closure(
         .ok_or_else(|| refused("parallel native result closure lost its exact input context consumption"))?;
     let mut expected = source.clone();
     expected.settle_outstanding(&key);
-    expected.context_generation = source.context_generation
+    let minimum_generation = source.context_generation
         .checked_add(u64::from(input_context))
         .and_then(|generation| generation.checked_add(u64::from(context_output_labels.contains(TURN_INTERRUPTED_RESULT_LABEL))))
         .ok_or_else(|| refused("parallel native result closure generation overflowed"))?;
-    if closure != expected {
+    expected.context_generation = closure.context_generation;
+    if closure != expected || closure.context_generation < minimum_generation {
         return Err(refused("parallel native result closure does not settle exactly its own call"));
     }
     Ok(closure)

@@ -394,8 +394,12 @@ pub(crate) async fn admit_interrupted_result(
         let snapshots = codex_session_snapshot_labels(descriptor).map_err(|error| error.to_string())?;
         let (recovery, recovered) = native_recovery.ok_or("native result has no source recovery")?;
         outcomes = native_result_admitted_prefix(ctx, run, source_movement_seq, &emissions, &snapshots, &labels)?;
+        let preceding_progress = outcomes.is_empty()
+            && matches!(recovery, ProviderSourceRecovery::Interrupted { .. })
+            && !recovered.is_empty()
+            && recovered.iter().all(|outcome| matches!(outcome, ProviderHandoffOutcome::Admitted { .. }));
         for outcome in &recovered {
-            if !outcomes.iter().any(|admitted| matches!((admitted, outcome),
+            if !preceding_progress && !outcomes.iter().any(|admitted| matches!((admitted, outcome),
                 (ProviderHandoffOutcome::Admitted {seq:a,artifact:x},ProviderHandoffOutcome::Admitted {seq:b,artifact:y}) if a == b && x == y)) {
                 return Err("native result prefix conflicts with checked source recovery".into());
             }
@@ -403,8 +407,8 @@ pub(crate) async fn admit_interrupted_result(
         match recovery {
             ProviderSourceRecovery::Process if !outcomes.is_empty() => return Err("native result prefix has no checked pending frontier".into()),
             ProviderSourceRecovery::Completed if outcomes.len() != expected => return Err("native result source completed before its whole exact group".into()),
-            ProviderSourceRecovery::Interrupted { last_artifact_label } if outcomes.is_empty()
-                || emissions[outcomes.len()-1].artifact.read_manifest().map_err(|error| error.to_string())?.label != last_artifact_label
+            ProviderSourceRecovery::Interrupted { last_artifact_label } if !preceding_progress && (outcomes.is_empty()
+                || emissions[outcomes.len()-1].artifact.read_manifest().map_err(|error| error.to_string())?.label != last_artifact_label)
                 => return Err("native result prefix changed its checked last pending artifact".into()),
             _ => {}
         }

@@ -438,6 +438,7 @@ impl CodexAppServerInterfaceDriver {
         let authored_context_generation = authored_source_generation
             .checked_add(deferred_context_generations)
             .ok_or_else(|| InterfaceDriverError::FailedClosed("Codex authored context generation overflowed".to_string()))?;
+        sink.continuity.lock().expect("continuity lock").authored_context_generation = authored_context_generation;
         let (source_context_generation, context_generation) = if durable_interrupt_override {
             let generation = recovered
                 .as_ref()

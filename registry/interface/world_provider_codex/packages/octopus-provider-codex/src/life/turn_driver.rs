@@ -228,6 +228,7 @@ pub(crate) async fn drive_turn_with_retries_inner(
         if let Some(emissions) = crate::handler::stopped_result::materialize_pending_interrupted(
             descriptor, continuity, &turn.envelope, turn.seq, &ctx.interface_var_dir().join("emitted"), &ctx.interface_var_dir().join("streams"),
             handoff.input_changes_context().await,
+            handoff.context_generation().await?,
         ).map_err(|error| error.to_string())? {
             let reference = materialized_artifact_ref(&emissions.last().ok_or("interrupted result group has no closure")?.artifact)?;
             admit_interrupted_result(ctx, &handoff, control, Some(interrupted_effects), run, turn.seq, &reference, emissions).await?;

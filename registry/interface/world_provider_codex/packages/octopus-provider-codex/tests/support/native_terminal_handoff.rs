@@ -880,6 +880,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 let ProviderStreamEmission::InterruptedResult {stream:Some(stream),retained_outputs,closure,..}=crate::handler::native_terminal_group_for_test(
                     &descriptor,&ctx.interface_var_dir().join("emitted"),&ctx.interface_var_dir().join("streams"),
                     &interrupted,Some(native.clone()),&envelope.artifact,result_seq,true,handoff.input_changes_context().await,
+                    handoff.context_generation().await.unwrap(),
                 ) else {panic!("exact interrupted result group")};
                 let closure_ref=interrupted_result_closure_ref(&closure.artifact,&checked,&envelope.artifact,&labels).unwrap().unwrap();
                 let mut emissions=vec![stream];emissions.extend(retained_outputs);emissions.push(closure);let count=emissions.len();
@@ -1377,11 +1378,22 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         if with_stop { assert!(arbiter.begin_result(&run,source_seq,&envelope).await.unwrap()); }
         let session=ProviderHandoffSession::new(&ctx).unwrap();
         let mut handoff=session.from_invocation(&ctx,&descriptor,&run,&envelope,source_seq,&initial).unwrap();
+        if with_answer || native_interrupted {
+            let progress=ProviderEmission{artifact:artifact(&root.join("usage"),TURN_TOKEN_USAGE_LABEL,json!({"label":TURN_TOKEN_USAGE_LABEL})),route:ProviderEmissionRoute::ClientProjection};
+            let admit=Box::pin(handoff.hand_batch_with_outgoing_bindings(vec![progress],false,&[]));
+            let gate=pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&result_ref,0,usize::MAX,true,1,false);
+            let accepted=tokio::time::timeout(std::time::Duration::from_secs(5),async {tokio::select! {result=admit=>result.unwrap(), _=gate=>panic!("progress gate ended before handoff")}}).await.unwrap();
+            assert_eq!(accepted.len(),1);
+            handoff=ProviderHandoffSession::new(&ctx).unwrap().from_invocation_when_ready(&ctx,&descriptor,&run,&envelope,source_seq,&initial).await.unwrap();
+            assert!(matches!(Box::pin(handoff.recover_source()).await.unwrap(),ProviderSourceRecovery::Interrupted{last_artifact_label} if last_artifact_label==TURN_TOKEN_USAGE_LABEL));
+            assert!(!handoff.input_changes_context().await);
+        }
         let input_context=handoff.input_changes_context().await;
+        let authored_context=handoff.context_generation().await.unwrap();
         let count=if legacy {2}else if with_answer {4}else{3};
-        let settled_generation=base_context+u64::from(input_context)+if with_answer {2}else{1};
+        let settled_generation=authored_context+u64::from(input_context)+if with_answer {2}else{1};
         let output_root=ctx.interface_var_dir().join("emitted"); let stream_root=ctx.interface_var_dir().join("streams");
-        let ProviderStreamEmission::InterruptedResult { stream:Some(stream),retained_outputs,closure,.. }=crate::handler::native_terminal_group_for_test(&descriptor,&output_root,&stream_root,&original,(!legacy).then_some(native),&result_ref,source_seq,with_stop,input_context) else {panic!("sealed native group")};
+        let ProviderStreamEmission::InterruptedResult { stream:Some(stream),retained_outputs,closure,.. }=crate::handler::native_terminal_group_for_test(&descriptor,&output_root,&stream_root,&original,(!legacy).then_some(native),&result_ref,source_seq,with_stop,input_context,authored_context) else {panic!("sealed native group")};
         let source_closure=materialized_artifact_ref(&closure.artifact).unwrap();
         let turn=QueuedTurn{seq:source_seq,envelope:envelope.clone()};
         let (cold,cold_ref)=recover_sealed_interrupted_result(&ctx,&descriptor,&turn,&original).unwrap().unwrap();

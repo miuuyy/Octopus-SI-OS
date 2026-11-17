@@ -347,7 +347,7 @@ pub(crate) fn materialize_interrupted(
 
 pub(crate) fn materialize_pending_interrupted(
     descriptor: &InterfaceDescriptor, source: &CodexContinuityState, input: &InterfaceInvocationEnvelope,
-    source_seq: u64, output_root: &Path, stream_root: &Path, input_context: bool,
+    source_seq: u64, output_root: &Path, stream_root: &Path, input_context: bool, authored_context_generation: u64,
 ) -> Result<Option<Vec<ProviderEmission>>, InterfaceDriverError> {
     if !has_native_interrupted_result(source).map_err(InterfaceDriverError::FailedClosed)? { return Ok(None); }
     validate_interrupted_source(input, source)?;
@@ -362,6 +362,7 @@ pub(crate) fn materialize_pending_interrupted(
     let (emit, mut outputs) = ProviderOutputStream::channel();
     emit.continuity.lock().expect("continuity lock").continuity = Some(source.clone());
     emit.continuity.lock().expect("continuity lock").pending_input_context = input_context;
+    emit.continuity.lock().expect("continuity lock").authored_context_generation = authored_context_generation;
     let labels = codex_context_output_labels(descriptor)?;
     let projected = private_config_string_set(config, "client_projection_output_labels")?;
     let rules = LiveStreamRules::from_private_config(config)?;
