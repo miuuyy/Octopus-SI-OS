@@ -62,13 +62,20 @@ impl CodexAppServerInterfaceDriver {
     pub(crate) async fn inject_native_context(
         &self,
         sink: &TurnSink<'_>,
+        scope: &TransportStateScope,
         thread: &str,
         context: BTreeMap<String, AdditionalContextEntry>,
         recovering: bool,
     ) -> Result<(), InterfaceDriverError> {
+        let fingerprint = octopus_ledger::ContentHash::of_bytes(&serde_json::to_vec(&(thread, &context))
+            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?).to_hex();
+        if self.transport_state.lock().await.get(scope)
+            .is_some_and(|state| state.native_context_fingerprint.as_ref() == Some(&fingerprint)) {
+            return Ok(());
+        }
         let items = native_context_items(sink.source_movement_seq, context);
         if items.is_empty() { return Ok(()); }
-        if recovering {
+        let recorded = if recovering {
             // A fresh thread may not have had a rollout when it was acquired.
             // Injection materializes it; obtain its current native coordinate.
             let response = self.client.lock().await.request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
@@ -77,14 +84,19 @@ impl CodexAppServerInterfaceDriver {
             }).await.map_err(typed_error)?;
             let path = (response.thread.id == thread).then_some(response.thread.path).flatten()
                 .ok_or_else(|| InterfaceDriverError::FailedClosed("native context recovery has no exact rollout path".into()))?;
-            if recorded_native_context(&path, thread, &items)? { return Ok(()); }
+            recorded_native_context(&path, thread, &items)?
+        } else { false };
+        if !recorded {
+            let request = ClientRequest::ThreadInjectItems {
+                request_id: self.mint_request_id(),
+                params: ThreadInjectItemsParams { thread_id: thread.into(), items },
+            };
+            sink.admit_app_server_dispatch(&request, None).await?;
+            self.client.lock().await.request_typed::<ThreadInjectItemsResponse>(request).await.map_err(typed_error)?;
         }
-        let request = ClientRequest::ThreadInjectItems {
-            request_id: self.mint_request_id(),
-            params: ThreadInjectItemsParams { thread_id: thread.into(), items },
-        };
-        sink.admit_app_server_dispatch(&request, None).await?;
-        self.client.lock().await.request_typed::<ThreadInjectItemsResponse>(request).await.map_err(typed_error)?;
+        if let Some(state) = self.transport_state.lock().await.get_mut(scope) {
+            state.native_context_fingerprint = Some(fingerprint);
+        }
         Ok(())
     }
 }

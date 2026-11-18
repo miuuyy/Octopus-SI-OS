@@ -103,6 +103,7 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
         thread_id: Some("thread-a".into()),
         thread_shape_fingerprint: Some(initial.thread_shape_fingerprint.clone()),
         static_context_fingerprint: Some(initial.static_context_fingerprint.clone()),
+        native_context_fingerprint: None,
         rollout_path: None,
     });
     let labels = codex_context_labels();
@@ -294,7 +295,7 @@ async fn a_lone_interface_operation_leaves_its_wait_in_context_before_the_reques
     driver.transport_state.lock().await.insert(scope.clone(), TransportState {
         context_generation: 3, hooks_catalog_emitted: true, thread_id: Some("thread-a".into()),
         thread_shape_fingerprint: Some(initial.thread_shape_fingerprint.clone()),
-        static_context_fingerprint: Some(initial.static_context_fingerprint.clone()), rollout_path: None,
+        static_context_fingerprint: Some(initial.static_context_fingerprint.clone()), native_context_fingerprint: None, rollout_path: None,
     });
     let labels = codex_context_labels();
     let projected = codex_client_projection_labels();

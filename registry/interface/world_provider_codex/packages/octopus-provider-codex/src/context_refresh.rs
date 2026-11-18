@@ -1305,6 +1305,7 @@ impl CodexAppServerInterfaceDriver {
                     thread_id: Some(thread.clone()),
                     thread_shape_fingerprint: Some(fingerprint.clone()),
                     static_context_fingerprint: Some(current.static_fingerprint.into()),
+                    native_context_fingerprint: None,
                     rollout_path: response.thread.path,
                 },
             );
@@ -1360,7 +1361,7 @@ impl CodexAppServerInterfaceDriver {
             "source_thread": refresh.source_thread, "source_turn": pending_turn_id(&refresh.pending),
             "result": refresh.completed_output,
         })).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))? });
-        self.inject_native_context(context.sink, &thread_id, additional,
+        self.inject_native_context(context.sink, context.scope, &thread_id, additional,
             retained.is_some()).await?;
         let request = ClientRequest::TurnStart {
             request_id: self.mint_request_id(),

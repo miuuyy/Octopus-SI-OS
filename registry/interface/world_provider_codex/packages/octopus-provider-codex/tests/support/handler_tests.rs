@@ -1760,6 +1760,7 @@
             thread_id: Some("thr-exact".to_string()),
             thread_shape_fingerprint: Some("a".repeat(64)),
             static_context_fingerprint: Some("b".repeat(64)),
+            native_context_fingerprint: None,
             rollout_path: None,
         };
         let mut pending_continuity = recovered.clone();
@@ -1817,6 +1818,7 @@
             thread_id: Some("thr-exact".to_string()),
             thread_shape_fingerprint: Some("a".repeat(64)),
             static_context_fingerprint: Some("b".repeat(64)),
+            native_context_fingerprint: None,
             rollout_path: None,
         };
         let refusal = |error: InterfaceDriverError| error.to_string();
@@ -4854,6 +4856,7 @@ while IFS= read -r _; do :; done
             thread_id: Some("thr_1".to_string()),
             thread_shape_fingerprint: Some(fp_a.clone()),
             static_context_fingerprint: Some("context-a".to_string()),
+            native_context_fingerprint: None,
             rollout_path: None,
         };
 
@@ -6576,7 +6579,7 @@ while IFS= read -r _; do :; done
             if !cold { driver.record_drain_outcome(&scope, TurnDrainOutcome::Suspended(pending.clone())).await.unwrap(); }
             driver.transport_state.lock().await.insert(scope.clone(), TransportState {
                 context_generation: 1, thread_id: Some("thread-a".into()), thread_shape_fingerprint: Some(original.thread_shape_fingerprint.clone()),
-                static_context_fingerprint: Some(original.static_context_fingerprint.clone()), hooks_catalog_emitted: true, rollout_path: None,
+                static_context_fingerprint: Some(original.static_context_fingerprint.clone()), hooks_catalog_emitted: true, native_context_fingerprint: None, rollout_path: None,
             });
             let (emit, mut outputs) = ProviderOutputStream::channel();
             emit.continuity.lock().unwrap().continuity = Some(original.clone());

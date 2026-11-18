@@ -843,7 +843,7 @@ impl CodexAppServerInterfaceDriver {
         {
             self.inject_recovered_item(&sink, &recovered_rollout_evidence, &thread_id, &continuation.item).await?;
         }
-        self.inject_native_context(&sink, &thread_id, additional_context,
+        self.inject_native_context(&sink, &scope, &thread_id, additional_context,
             attempt > 1 || recovered_handoff_artifacts.iter().any(|artifact| {
                 serde_json::from_slice::<serde_json::Value>(&artifact.payload)
                     .is_ok_and(|value| value["method"] == "thread/inject_items")

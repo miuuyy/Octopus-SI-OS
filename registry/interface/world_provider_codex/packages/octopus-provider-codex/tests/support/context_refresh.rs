@@ -19,6 +19,8 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
         source:SessionSource::Exec, thread_source:None, agent_nickname:None, agent_role:None, git_info:None, name:None,
         turns:vec![serde_json::from_value(serde_json::json!({"id":"old-turn","items":[],"itemsView":"full","status":"inProgress","error":null})).unwrap()],
     };
+        let injected_context = Arc::new(std::sync::Mutex::new(None));
+        let capture_context = injected_context.clone();
         let server = tokio::spawn(async move {
             use futures::{SinkExt, StreamExt};
             let stream = listener.accept().await.unwrap();
@@ -115,6 +117,7 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
                     }
                     "thread/inject_items" => {
                         let params = request.params.as_ref().unwrap();
+                        *capture_context.lock().unwrap() = Some(params["items"].clone());
                         assert_eq!(params["threadId"], "new-thread");
                         let context = params["items"].to_string();
                         assert!(context.contains("effect-performed-once"));
@@ -221,6 +224,7 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
                 thread_id: Some("old-thread".into()),
                 thread_shape_fingerprint: Some(original.thread_shape_fingerprint.clone()),
                 static_context_fingerprint: Some(original.static_context_fingerprint.clone()),
+                native_context_fingerprint: None,
                 rollout_path: None,
             },
         );
@@ -486,6 +490,17 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
         .await
         .unwrap();
         assert!(finished.expect("context refresh"));
+        let repeated = injected_context.lock().unwrap().take().unwrap().as_array().unwrap().iter().map(|item| {
+            let name = item["id"].as_str().unwrap().strip_prefix(&format!("octopus-context-{}-", sink.source_movement_seq)).unwrap();
+            let kind = if item["role"] == "developer" { AdditionalContextKind::Application } else { AdditionalContextKind::Untrusted };
+            let tag = if kind == AdditionalContextKind::Application { name.to_string() } else { format!("external_{name}") };
+            let value = item["content"][0]["text"].as_str().unwrap().strip_prefix(&format!("<{tag}>\n")).unwrap()
+                .strip_suffix(&format!("\n</{tag}>")).unwrap().to_string();
+            (name.to_string(), AdditionalContextEntry { kind, value })
+        }).collect();
+        // The server has closed after the successor call. Unchanged context
+        // must be acknowledged locally, without another injection or ACP reset.
+        driver.inject_native_context(&sink, &scope, "new-thread", repeated, false).await.unwrap();
         let mut expected = vec!["prepared", "retired"];
         if quarantined_successor { expected.push("retired_request_rejected"); }
         expected.push("ready");

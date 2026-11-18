@@ -197,6 +197,7 @@ impl CodexAppServerInterfaceDriver {
                     thread_id: Some(continuity.thread_id.clone()),
                     thread_shape_fingerprint: Some(continuity.thread_shape_fingerprint.clone()),
                     static_context_fingerprint: Some(continuity.static_context_fingerprint.clone()),
+                    native_context_fingerprint: None,
                     rollout_path: None,
                 },
             )

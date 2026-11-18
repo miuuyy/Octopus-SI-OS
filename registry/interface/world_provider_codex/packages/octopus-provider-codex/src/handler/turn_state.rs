@@ -76,6 +76,7 @@ pub(crate) struct TransportState {
     pub(crate) thread_id: Option<String>,
     pub(crate) thread_shape_fingerprint: Option<String>,
     pub(crate) static_context_fingerprint: Option<String>,
+    pub(crate) native_context_fingerprint: Option<String>,
     pub(crate) rollout_path: Option<PathBuf>,
 }
 
