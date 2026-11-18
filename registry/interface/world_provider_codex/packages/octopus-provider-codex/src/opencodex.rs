@@ -142,6 +142,8 @@ impl Default for OpenCodexLimits {
 pub(crate) struct OpenCodexDescriptorConfig {
     pub schema_version: u32,
     pub adapter: String,
+    #[serde(default = "default_native_stream_max_retries")]
+    pub native_stream_max_retries: u32,
     pub credential_owner_interface: String,
     #[serde(default)]
     pub registry_entry: Option<String>,
@@ -164,6 +166,8 @@ pub(crate) struct OpenCodexDescriptorConfig {
     #[serde(default)]
     pub vertex: Option<OpenCodexVertex>,
 }
+
+fn default_native_stream_max_retries() -> u32 { 5 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -502,6 +506,7 @@ pub(crate) async fn connect_interface_driver(
         &provider_home,
         &local_base_url,
         config.model_catalog.as_ref(),
+        config.native_stream_max_retries,
     )
     .map_err(|error| error.to_string())?;
     let spawn_config = AppServerSource::from_descriptor(descriptor)

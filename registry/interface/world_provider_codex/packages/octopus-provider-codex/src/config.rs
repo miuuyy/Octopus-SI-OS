@@ -1150,13 +1150,14 @@ pub(crate) fn build_curated_opencodex_home(
     provider_home: &std::path::Path,
     base_url: &str,
     model_catalog: Option<&octopus_protocol::openai_models::ModelsResponse>,
+    stream_max_retries: u32,
 ) -> Result<std::path::PathBuf, CuratedHomeError> {
     std::fs::create_dir_all(provider_home).map_err(CuratedHomeError::Io)?;
     let curated = provider_home.join(CURATED_OPENCODEX_HOME_DIR);
     std::fs::create_dir_all(&curated).map_err(CuratedHomeError::Io)?;
     std::fs::create_dir_all(curated.join(CURATED_CODEX_TMP_DIR)).map_err(CuratedHomeError::Io)?;
     let provider = format!(
-        "[model_providers.octopus_opencodex]\nname = \"Octopus OpenCodex\"\nbase_url = {base_url:?}\nwire_api = \"responses\"\nrequires_openai_auth = false\nrequest_max_retries = 4\nstream_max_retries = 5\nsupports_websockets = false\n"
+        "[model_providers.octopus_opencodex]\nname = \"Octopus OpenCodex\"\nbase_url = {base_url:?}\nwire_api = \"responses\"\nrequires_openai_auth = false\nrequest_max_retries = 4\nstream_max_retries = {stream_max_retries}\nsupports_websockets = false\n"
     );
     let mut root = "model_provider = \"octopus_opencodex\"\n".to_string();
     if let Some(catalog) = model_catalog {

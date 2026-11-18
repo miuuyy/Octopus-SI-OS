@@ -367,6 +367,29 @@ test("Codex configuration_update items reach neither a translated nor a passthro
   }
 });
 
+test("claude-cli deadline fails the response and closes the child", async () => {
+  const home = mkdtempSync(join(tmpdir(), "octopus-claude-deadline-"));
+  directories.push(home);
+  mkdirSync(join(home, "bin"));
+  writeFileSync(join(home, "bin/claude"), '#!/bin/sh\necho $$ > "$HOME/child.pid"\ncat >/dev/null\nexec sleep 30\n', { mode: 0o755 });
+  const settings = config("https://api.anthropic.com", { id: "world_provider_claude_cli", adapter: "claude-cli",
+    registry_entry: "claude-cli", models: ["claude-sonnet-5"], default_model: "claude-sonnet-5",
+    api_key: undefined, auth_header: undefined, auth_value_prefix: undefined, headers: {} });
+  settings.limits.request_timeout_ms = 1000;
+  const bridge = await spawnBridge(settings, { HOME: home, USER: "octopus-test", PATH: `${home}/bin:/usr/bin:/bin`, TMPDIR: home });
+  const response = await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-5", stream: true, input: "wait for the response" }) });
+  const events = (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  const failed = events.filter(event => event.type === "response.failed");
+  expect(failed).toHaveLength(1);
+  expect(failed[0].response.error.message).toBe("Provider request deadline exceeded (1000 ms).");
+  expect(failed[0].response.error.code).toBe("timeout");
+  expect(events.some(event => event.type === "response.completed")).toBe(false);
+  const pid = Number(readFileSync(join(home, "child.pid"), "utf8"));
+  await Bun.sleep(50);
+  expect(() => process.kill(pid, 0)).toThrow();
+});
+
 test("claude-cli turns run through the signed-in CLI with a scoped env and the bridge's own capture MCP", async () => {
   const home = mkdtempSync(join(tmpdir(), "octopus-claude-cli-"));
   directories.push(home);

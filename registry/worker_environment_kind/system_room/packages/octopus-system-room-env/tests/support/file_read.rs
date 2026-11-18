@@ -17,6 +17,13 @@ fn read_evidence_and_paged_listing_respect_exact_room_roots() {
     let value = execute(&config, &serde_json::json!({"path":file}), &roots).unwrap();
     assert_eq!(value["content_hash"], ContentHash::of_bytes(body).to_hex());
     assert_eq!(value["content"], std::str::from_utf8(body).unwrap());
+    let selected = execute(&config, &serde_json::json!({"path":file,"json_pointers":["/checkpoint"]}), &roots).unwrap();
+    assert_eq!(selected["selected"]["/checkpoint"], "projected");
+    assert_eq!(selected["content_hash"], value["content_hash"]);
+    assert!(selected.get("content").is_none());
+    for pointer in ["checkpoint", "/missing", "/bad~2escape"] {
+        assert!(execute(&config, &serde_json::json!({"path":file,"json_pointers":[pointer]}), &roots).is_err());
+    }
     assert!(execute(
         &config,
         &serde_json::json!({"path":outside.path().join("private.json")}),

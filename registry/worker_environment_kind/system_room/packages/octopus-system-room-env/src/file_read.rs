@@ -28,6 +28,7 @@ enum ReadConfig {
 #[serde(deny_unknown_fields)]
 struct ReadArgs {
     path: PathBuf,
+    json_pointers: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +182,29 @@ fn execute(
             }
             let content_hash = ContentHash::of_bytes(&bytes).to_hex();
             let text = String::from_utf8(bytes).map_err(|_| "file.read accepts UTF-8 text only")?;
+            if let Some(pointers) = args.json_pointers {
+                let document: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|error| format!("JSON selection requires valid JSON: {error}"))?;
+                let mut selected = BTreeMap::new();
+                for pointer in pointers {
+                    let mut chars = pointer.chars();
+                    if !pointer.is_empty() && chars.next() != Some('/') {
+                        return Err(format!("invalid JSON pointer: {pointer}"));
+                    }
+                    while let Some(character) = chars.next() {
+                        if character == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                            return Err(format!("invalid JSON pointer escape: {pointer}"));
+                        }
+                    }
+                    let value = document.pointer(&pointer)
+                        .ok_or_else(|| format!("JSON pointer does not exist: {pointer}"))?;
+                    if selected.insert(pointer.clone(), value).is_some() {
+                        return Err(format!("duplicate JSON pointer: {pointer}"));
+                    }
+                }
+                return Ok(serde_json::json!({"path":path,"selected":selected,
+                    "content_hash":content_hash,"bytes":text.len()}));
+            }
             Ok(
                 serde_json::json!({"path": path, "content": text, "content_hash": content_hash, "bytes": text.len()}),
             )

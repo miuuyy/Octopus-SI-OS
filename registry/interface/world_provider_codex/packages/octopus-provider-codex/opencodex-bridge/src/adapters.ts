@@ -25,10 +25,11 @@ type Context = {
 };
 
 const cli: Record<string, (provider: OcxProviderConfig, context: Context) => ProviderAdapter> = {
-  "claude-cli": (provider) => {
+  "claude-cli": (provider, context) => {
     const directory = process.env.TMPDIR;
     if (!directory) throw new Error("CLI private temporary directory is missing");
     return createClaudeCliAdapter(provider, {
+      timeoutMs: context.requestTimeoutMs,
       spawn: (command, args, options) => spawn(command, args, {
         ...options, env: { ...options.env, CLAUDE_CODE_TMPDIR: directory },
       }),

@@ -48,7 +48,7 @@ fn authored_run_checks_provider_frontiers_without_treating_other_writers_as_prov
     });
     write(temp.path(), room_path, room);
     let plan = plan_run_composition(&request).unwrap();
-    let mut authored = AuthoredRunComposition {
+    let mut authored = AuthoredRunComposition { run_patch: None,
         run_id: plan.run_id.clone(), writes: composition_candidate_writes(&plan),
         outgoing_bindings: Vec::new(), publication_read_refs: Vec::new(), seed: None,
     };
@@ -777,7 +777,7 @@ fn selected_external_routes_preserve_checkpoints_profiles_and_scoped_dependencie
         ("model_outputs", json!(request.model_outputs))] {
         assert_eq!(sidecar["authoring_profile"][field], selection);
     }
-    let exact = plan_authored_run_composition(&request.roots, &request.admitted_parent_record, AuthoredRunComposition {
+    let exact = plan_authored_run_composition(&request.roots, &request.admitted_parent_record, AuthoredRunComposition { run_patch: None,
         run_id: plan.run_id.clone(), writes: composition_candidate_writes(&plan), outgoing_bindings: Vec::new(), publication_read_refs: Vec::new(), seed: None,
     }, false).unwrap();
     assert!(exact.validation.safe_to_apply, "{:?}", exact.validation.stages);
@@ -1549,7 +1549,7 @@ fn another_run_re_forms_a_composed_runs_model_interface_from_another_provider_by
     let client = record["interface_state"].as_object().unwrap().iter()
         .find(|(_, state)| state.get("client_surface_role").is_some()).unwrap().0.clone();
     record["interface_state"][&client]["provider_choice_interface"] = json!("world_provider_other");
-    let authored = |descriptor: &Value| AuthoredRunComposition { run_id: run_id.clone(), writes: vec![
+    let authored = |descriptor: &Value| AuthoredRunComposition { run_patch: None, run_id: run_id.clone(), writes: vec![
         RegistryCandidateWrite { path: descriptor_path.clone(), content: serde_json::to_string_pretty(descriptor).unwrap(),
             expected_before_hash: Some(octopus_ledger::ContentHash::of_bytes(&std::fs::read(&descriptor_path).unwrap()).to_hex()) },
         RegistryCandidateWrite { path: composition.run_write.path.clone(), content: serde_json::to_string_pretty(&record).unwrap(),

@@ -172,7 +172,12 @@ CLI each provider starts carries an empty base prompt and
 text. What Codex adds that cannot be turned off is listed in the descriptor's
 `residual_ambient.residual_sources`. An answer no retry can change (401, 402,
 403, 404, a 429 with exhausted quota) ends the turn with the provider's reason;
-transient failures are retried by Codex. The bridge serves no hosted web search:
+transient failures are retried by Codex within the descriptor's
+`private_config.opencodex.native_stream_max_retries` (default five). The Claude
+CLI descriptor declares zero: its request deadline ends the turn, without
+replaying the CLI through native stream retries. The CLI and bridge share the
+declared `transport.request_timeout_ms`; expiry returns the deadline in the error.
+The bridge serves no hosted web search:
 runs search through Octopus's own `web.search` and `web.extract`.
 
 Google's adapter accepts `private_config.opencodex.options.google_safety_settings`
@@ -218,6 +223,25 @@ the interface's allowed models. A provider whose models depend on the account
 declares `client_metadata`: an `interface://` import of a CommonJS module in its
 own `packages/` that exports `modelCatalog` (and optionally `probeAccount` and
 `signIn` for setup). A failing module is an error, never a static substitute.
+
+### Checked run revision
+
+The provider's `preview_revision` and `revise_run` accept either exact file
+writes or `authored.run_patch`: the target's `file.read` content hash and RFC
+6902 operations. `file.read` with `json_pointers` returns only selected JSON
+fields and the complete file's hash from the same read, so inspecting a field
+does not load the complete record into context. The patch applies only to that
+exact existing run; stale
+hashes, a second full write of the same target and edits to the in-flight
+caller are refused. Dependency writes precede the patched run. Both forms
+validate the complete candidate, preserve accepted work and publish through
+ordinary granted file writes with exact readback. Patch previews and results
+return a compact summary and file hashes, keeping the complete record out of
+model context. Full-file previews still return the complete authored contract.
+
+Explicitly selected Octopus `web.search` and `web.extract` remain visible on
+Codex and ChatGPT as well as the bridge providers. Codex's hosted search is
+independent of those granted tools.
 
 ## Add a channel or sensor
 

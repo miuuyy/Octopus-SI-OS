@@ -5,7 +5,7 @@ pub use octopus_app_server::{
 };
 use octopus_ee::EeInstance;
 pub use octopus_context_collections::CollectionSelection;
-use octopus_ledger::{ArtifactRef, InvocationMetadata};
+use octopus_ledger::{ArtifactRef, ContentHash, InvocationMetadata};
 use octopus_run_authoring::ProviderOutgoingBinding;
 use crate::publication_selection::{
     PublicationSelectionEvidence, PublicationSelectionSeeds, PublicationSourceAuthority,
@@ -201,17 +201,27 @@ pub struct RunCompositionPlan {
 pub struct AuthoredRunComposition {
     pub run_id: String,
     pub writes: Vec<RegistryCandidateWrite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_patch: Option<AuthoredRunPatch>,
     pub outgoing_bindings: Vec<ProviderOutgoingBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub publication_read_refs: Vec<ArtifactRef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<PlannedCompositionSeed>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredRunPatch {
+    pub expected_before_hash: String,
+    pub patch: json_patch::Patch,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthoredRunCompositionPlan {
     pub authored: AuthoredRunComposition,
+    pub writes: Vec<RegistryCandidateWrite>,
     pub run: RunRecord,
     pub validation: RegistryCandidateValidation,
 }
@@ -252,13 +262,39 @@ pub fn plan_authored_run_composition(
     revise: bool,
 ) -> Result<AuthoredRunCompositionPlan, String> {
     safe_segment(&authored.run_id, "authored run id")?;
-    if authored.writes.is_empty() {
+    if authored.run_id == source.id.as_str() {
+        return Err("in-flight caller edits must use its checked provider generation owner".into());
+    }
+    if authored.writes.is_empty() && authored.run_patch.is_none() {
         return Err("authored run requires exact file writes".into());
     }
     let path = roots
         .run_records_root
         .join(format!("{}.json", authored.run_id));
-    let run = match authored.writes.iter().find(|write| write.path == path) {
+    let mut writes = authored.writes.clone();
+    if let Some(edit) = &authored.run_patch {
+        if !revise {
+            return Err("run_patch requires an existing target through revise_run".into());
+        }
+        if writes.iter().any(|write| write.path == path) {
+            return Err("run_patch and a complete target run write are mutually exclusive".into());
+        }
+        if edit.patch.0.is_empty() {
+            return Err("run_patch requires at least one RFC 6902 operation".into());
+        }
+        let before = std::fs::read(&path).map_err(|error| error.to_string())?;
+        if ContentHash::of_bytes(&before).to_hex() != edit.expected_before_hash {
+            return Err("run_patch expected_before_hash differs from the current target; read the changed fields and content_hash again".into());
+        }
+        let mut value: Value = serde_json::from_slice(&before).map_err(|error| error.to_string())?;
+        json_patch::patch(&mut value, &edit.patch).map_err(|error| format!("run_patch failed: {error}"))?;
+        writes.push(RegistryCandidateWrite {
+            path: path.clone(),
+            content: serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
+            expected_before_hash: Some(edit.expected_before_hash.clone()),
+        });
+    }
+    let run = match writes.iter().find(|write| write.path == path) {
         Some(write) => RunRecord::from_bytes(write.content.as_bytes()),
         None if revise => RunRecord::from_bytes(&std::fs::read(&path).map_err(|error| error.to_string())?),
         None => return Err("authored run requires its complete exact run-record file".into()),
@@ -283,7 +319,7 @@ pub fn plan_authored_run_composition(
         }
         .into());
     }
-    for write in &authored.writes {
+    for write in &writes {
         if write.path == roots.run_records_root.join(format!("{}.json", source.id)) {
             return Err("authored graph cannot rewrite its in-flight caller".into());
         }
@@ -319,8 +355,7 @@ pub fn plan_authored_run_composition(
             .join("interface")
             .join(binding.interface.as_str())
             .join("interface.json");
-        let bytes = authored
-            .writes
+        let bytes = writes
             .iter()
             .find(|write| write.path == descriptor_path)
             .map(|write| Ok(write.content.as_bytes().to_vec()))
@@ -364,13 +399,13 @@ pub fn plan_authored_run_composition(
             return Err("authored seed has no active checkpoint on the target run".into());
         }
     }
-    let records = authored.writes.iter()
+    let records = writes.iter()
         .filter(|write| write.path.parent() == Some(roots.run_records_root.as_path()))
         .map(|write| RunRecord::from_bytes(write.content.as_bytes()).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let validation = octopus_app_server::validate_registry_candidate_with_inspector(
-        &validation_roots(roots), &authored.writes, |index, view| {
-            if index != authored.writes.len() { return Ok(()); }
+        &validation_roots(roots), &writes, |index, view| {
+            if index != writes.len() { return Ok(()); }
             for record in &records {
                 let interfaces = record.checkpoints.iter()
                     .filter(|checkpoint| record.active_checkpoints.contains(&checkpoint.id))
@@ -390,6 +425,7 @@ pub fn plan_authored_run_composition(
     )?;
     Ok(AuthoredRunCompositionPlan {
         authored,
+        writes,
         run,
         validation,
     })

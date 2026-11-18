@@ -710,7 +710,9 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
   const cancel = () => abort.abort(request.signal.reason);
   request.signal.addEventListener("abort", cancel, { once: true });
   if (request.signal.aborted) cancel();
-  const timer = setTimeout(() => abort.abort("request timeout"), config.limits.request_timeout_ms);
+  const timer = setTimeout(() => abort.abort(new DOMException(
+    `Provider request deadline exceeded (${config.limits.request_timeout_ms} ms).`, "TimeoutError",
+  )), config.limits.request_timeout_ms);
   const cleanup = () => {
     clearTimeout(timer);
     request.signal.removeEventListener("abort", cancel);
@@ -940,6 +942,10 @@ function turnEvents(
     queue.push({ type: "tool_call_delta", arguments: argumentsText });
   };
   const emit = (event: AdapterEvent) => {
+    if (event.type === "error" && abort.signal.reason instanceof DOMException && abort.signal.reason.name === "TimeoutError") {
+      event = { type: "error", message: abort.signal.reason.message, status: 504,
+        errorType: "upstream_error", code: "timeout", retryable: false };
+    }
     if (event.type !== "tool_call_delta") {
       flushArguments();
       queue.push(event);

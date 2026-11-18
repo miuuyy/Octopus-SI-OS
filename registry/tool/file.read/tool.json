@@ -42,13 +42,19 @@
     "operation": "read",
     "max_bytes": 4194304
   },
-  "description": "Read UTF-8 file bytes within this room's granted roots and return their content hash for an exact subsequent file.write.",
+  "description": "Read UTF-8 file bytes within this room's granted roots and return their content hash for an exact subsequent file.write. For JSON, select only needed fields with json_pointers; the hash always covers the complete original file, so a patch needs no full record in context.",
   "args_schema": {
     "type": "object",
     "properties": {
       "path": {
         "type": "string",
         "description": "Absolute path under this room's granted roots."
+      },
+      "json_pointers": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "string" },
+        "description": "Optional RFC 6901 pointers, e.g. /ee or /interface_state. Returns selected values keyed by pointer instead of full content, with the complete file's content_hash and byte count. Empty array returns only metadata; empty string selects the whole JSON value. Missing or malformed pointers fail. Omit for full UTF-8 text."
       }
     },
     "required": [

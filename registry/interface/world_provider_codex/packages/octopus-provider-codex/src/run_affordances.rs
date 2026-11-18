@@ -1306,6 +1306,7 @@ impl RunAffordances {
             );
         }
         let authored = AuthoredRunComposition {
+            run_patch: None,
             run_id: plan.run_id.clone(),
             writes: composition_candidate_writes(&plan),
             publication_read_refs: publication_read_refs(&plan.publication_evidence)?,
@@ -1344,16 +1345,26 @@ impl RunAffordances {
             .as_ref()
             .ok_or("creation roots are absent")?;
         if preview || !plan.validation.safe_to_apply {
+            let mut result = json!({
+                "ok":plan.validation.safe_to_apply,"preview":preview,"installed":false,"seed_admitted":false,
+                "creation_key":creation_key,"authored":plan.authored,
+                "validation":validation_report(&plan.validation),"work_completed":false,
+            });
+            if plan.authored.run_patch.is_some() {
+                result["run_summary"] = json!({"run_id":plan.run.id,"ee_id":plan.run.ee,
+                    "worker_interface_id":plan.run.worker,"checkpoint_count":plan.run.checkpoints.len(),
+                    "active_checkpoint_count":plan.run.active_checkpoints.len()});
+                result["files"] = json!(plan.writes.iter().map(|write| json!({"path":write.path,
+                    "expected_before_hash":write.expected_before_hash,
+                    "content_hash":ContentHash::of_bytes(write.content.as_bytes()).to_hex()})).collect::<Vec<_>>());
+            } else {
+                result["run_contract"] = json!(plan.run);
+            }
             return Ok(NativeStep::Complete {
-                result: json!({
-                    "ok":plan.validation.safe_to_apply,"preview":preview,"installed":false,"seed_admitted":false,
-                    "creation_key":creation_key,"authored":plan.authored,"run_contract":plan.run,
-                    "validation":validation_report(&plan.validation),"work_completed":false,
-                }),
+                result,
             });
         }
         let writes = plan
-            .authored
             .writes
             .iter()
             .map(|write| PlannedClientWrite {
@@ -1380,9 +1391,15 @@ impl RunAffordances {
             arguments,
             correlation_id: format!("{identity}:write"),
         };
-        let created = json!({"run_id":plan.run.id,"ee_id":plan.run.ee,"worker_interface_id":plan.run.worker,
-            "active_checkpoints":plan.run.active_checkpoints,"checkpoints":plan.run.checkpoints,
+        let mut created = json!({"run_id":plan.run.id,"ee_id":plan.run.ee,"worker_interface_id":plan.run.worker,
             "creation_key":creation_key});
+        if plan.authored.run_patch.is_some() {
+            created["checkpoint_count"] = json!(plan.run.checkpoints.len());
+            created["active_checkpoint_count"] = json!(plan.run.active_checkpoints.len());
+        } else {
+            created["active_checkpoints"] = json!(plan.run.active_checkpoints);
+            created["checkpoints"] = json!(plan.run.checkpoints);
+        }
         let pending = NativePending {
             call_id: call_id.into(),
             operation_name: operation_name.into(),

@@ -34,6 +34,7 @@ fn opencodex_configuration_selects_the_bridge_at_the_toml_root() {
         root.path(),
         "http://127.0.0.1:12345/v1",
         declared.model_catalog.as_ref(),
+        declared.native_stream_max_retries,
     )
     .unwrap();
     let encoded = std::fs::read_to_string(home.join("config.toml")).unwrap();

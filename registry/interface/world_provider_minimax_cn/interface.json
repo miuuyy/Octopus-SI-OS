@@ -3299,7 +3299,7 @@
             {
               "name": "preview_revision",
               "operation": "preview_revision",
-              "description": "Validate exact edits to an existing peer run and related descriptors without applying them. Any part of the run record may change, and every interface holding state in it reads the result under its own contract. Inspect every publication stage. Do not edit the in-flight caller through this operation.",
+              "description": "Validate exact edits to an existing peer run and related descriptors without applying them. Any part of the run record may change, and every interface holding state in it reads the result under its own contract. Inspect every publication stage. Do not edit the in-flight caller through this operation. Use authored.run_patch with the file.read content_hash and only the required RFC 6902 edits; writes may be empty. Patch results return a compact run summary and exact file hashes, without repeating the full run. A stale hash requires a fresh read.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3327,7 +3327,6 @@
                       },
                       "writes": {
                         "type": "array",
-                        "minItems": 1,
                         "items": {
                           "type": "object",
                           "additionalProperties": false,
@@ -3430,8 +3429,70 @@
                           },
                           "payload": {}
                         }
+                      },
+                      "run_patch": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "expected_before_hash",
+                          "patch"
+                        ],
+                        "description": "Patch the existing run without sending its full record. The complete candidate is validated and appended after dependency writes. Mutually exclusive with a full write of the target run.",
+                        "properties": {
+                          "expected_before_hash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                            "description": "Exact content_hash returned by the granted file.read of this run."
+                          },
+                          "patch": {
+                            "type": "array",
+                            "minItems": 1,
+                            "description": "RFC 6902 operations on the exact target run. The existing foreign-run validation preserves accepted work and provider continuity.",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "op",
+                                "path"
+                              ],
+                              "properties": {
+                                "op": {
+                                  "enum": [
+                                    "add",
+                                    "remove",
+                                    "replace",
+                                    "move",
+                                    "copy",
+                                    "test"
+                                  ]
+                                },
+                                "path": {
+                                  "type": "string"
+                                },
+                                "from": {
+                                  "type": "string"
+                                },
+                                "value": {}
+                              }
+                            }
+                          }
+                        }
                       }
-                    }
+                    },
+                    "anyOf": [
+                      {
+                        "required": [
+                          "run_patch"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "writes": {
+                            "minItems": 1
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               }
@@ -3439,7 +3500,7 @@
             {
               "name": "revise_run",
               "operation": "revise_run",
-              "description": "Apply checked, validated file edits to an existing peer run and its descriptor dependencies. Any part of the run record may change. Optional seed emits through its exact declared interface; without seed, publishes the authored waits. Do not edit the in-flight caller through this operation.",
+              "description": "Apply checked, validated file edits to an existing peer run and its descriptor dependencies. Any part of the run record may change. Optional seed emits through its exact declared interface; without seed, publishes the authored waits. Do not edit the in-flight caller through this operation. Use authored.run_patch with the file.read content_hash and only the required RFC 6902 edits; writes may be empty. Patch results return a compact run summary and exact file hashes, without repeating the full run. A stale hash requires a fresh read.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3467,7 +3528,6 @@
                       },
                       "writes": {
                         "type": "array",
-                        "minItems": 1,
                         "items": {
                           "type": "object",
                           "additionalProperties": false,
@@ -3570,8 +3630,70 @@
                           },
                           "payload": {}
                         }
+                      },
+                      "run_patch": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "expected_before_hash",
+                          "patch"
+                        ],
+                        "description": "Patch the existing run without sending its full record. The complete candidate is validated and appended after dependency writes. Mutually exclusive with a full write of the target run.",
+                        "properties": {
+                          "expected_before_hash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                            "description": "Exact content_hash returned by the granted file.read of this run."
+                          },
+                          "patch": {
+                            "type": "array",
+                            "minItems": 1,
+                            "description": "RFC 6902 operations on the exact target run. The existing foreign-run validation preserves accepted work and provider continuity.",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "op",
+                                "path"
+                              ],
+                              "properties": {
+                                "op": {
+                                  "enum": [
+                                    "add",
+                                    "remove",
+                                    "replace",
+                                    "move",
+                                    "copy",
+                                    "test"
+                                  ]
+                                },
+                                "path": {
+                                  "type": "string"
+                                },
+                                "from": {
+                                  "type": "string"
+                                },
+                                "value": {}
+                              }
+                            }
+                          }
+                        }
                       }
-                    }
+                    },
+                    "anyOf": [
+                      {
+                        "required": [
+                          "run_patch"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "writes": {
+                            "minItems": 1
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               }

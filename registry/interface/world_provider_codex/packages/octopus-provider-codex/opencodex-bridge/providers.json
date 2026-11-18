@@ -59,6 +59,7 @@
       "default_context_window": 700000,
       "source_name": "claude_cli",
       "registry_entry": "claude-cli",
+      "native_stream_max_retries": 0,
       "input_modalities": ["text", "image"],
       "name": "Claude Code",
       "developer": "Anthropic",

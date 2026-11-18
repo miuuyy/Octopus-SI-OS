@@ -238,7 +238,7 @@ fn native_publication_composition_validates_private_scope_and_stages_inline_cont
     assert_eq!(sidecar["authoring_profile"]["publication_evidence"], json!(plan.publication_evidence));
     assert_eq!(sidecar["authoring_profile"]["external_inputs"], entry["selection"]["external_inputs"]);
     let writes = composition_candidate_writes(&plan);
-    let exact = plan_authored_run_composition(&request.roots, &request.admitted_parent_record, AuthoredRunComposition {
+    let exact = plan_authored_run_composition(&request.roots, &request.admitted_parent_record, AuthoredRunComposition { run_patch: None,
         run_id:plan.run_id.clone(), writes, outgoing_bindings:Vec::new(), publication_read_refs:Vec::new(), seed:None,
     }, false).unwrap();
     assert!(exact.validation.safe_to_apply, "{:?}", exact.validation.stages);
@@ -578,7 +578,7 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
         json!({"id":"task.summary.received","package":"task.summary.received","class":"success"}),
     );
     let plan = plan_run_composition(&request).unwrap();
-    let mut authored = AuthoredRunComposition {
+    let mut authored = AuthoredRunComposition { run_patch: None,
         run_id: plan.run_id.clone(),
         writes: composition_candidate_writes(&plan),
         publication_read_refs: Vec::new(),
@@ -825,7 +825,7 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
     let root = temp.path().canonicalize().unwrap();
     let request = support::fixture(&root);
     let (affordances, metadata) = exact_affordances(&request);
-    let run = json!({"id":"parked","ee":"ee_existence","worker":"system_worker_template","trace":"parked-trace","status":"idle",
+    let mut run = json!({"id":"parked","ee":"ee_existence","worker":"system_worker_template","trace":"parked-trace","status":"idle",
         "checkpoints":[{"id":"wait","run":"parked","trace":"parked-trace","epoch":0,
             "interface_binding":octopus_runtime::AuthoredInterfaceBinding::all("system_worker_parent".into()),
             "artifact_bindings":[{"id":"role-system_worker_template"},{"id":"role-system_worker_parent"}]}],"active_checkpoints":["wait"]});
@@ -850,6 +850,7 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
             .unwrap()
             .is_empty()
     );
+    run["interface_state"] = json!({"system_worker_parent":{"retained":"x".repeat(159_000)}});
     let before = serde_json::to_vec(&run).unwrap();
     let mut extended = run.clone();
     let mut next = run["checkpoints"][0].clone();
@@ -884,6 +885,26 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
         "{}",
         result["validation"]["regressions"]
     );
+    let args = json!({"creation_key":"extend-wait-patch","authored":{"run_id":"parked","outgoing_bindings":[],"writes":[],
+        "run_patch":{"expected_before_hash":ContentHash::of_bytes(&before).to_hex(),"patch":json_patch::diff(&run, &extended)}}});
+    let NativeStep::Complete { result: preview } = affordances.plan_call(&metadata,
+        &request.admitted_parent_record, &request.admitted_parent_record, "patch-preview", "preview_revision", &args, None).unwrap()
+        else { panic!("patch preview mutated") };
+    assert_eq!(preview["ok"], true, "{preview}");
+    assert!(preview.get("run_contract").is_none());
+    assert_eq!(preview["run_summary"]["checkpoint_count"], 2);
+    assert_eq!(preview["authored"], args["authored"]);
+    assert!(preview.to_string().len() < 10_000);
+    assert_eq!(std::fs::read(&run_path).unwrap(), before);
+    for (pointer, value) in [("/authored/run_patch/expected_before_hash", json!("0".repeat(64))),
+        ("/authored/writes", authored["writes"].clone()),
+        ("/authored/run_patch/patch", json!([{"op":"replace","path":"/id","value":"other"}])),
+        ("/authored/run_id", json!(request.admitted_parent_record.id))] {
+        let mut invalid = args.clone(); *invalid.pointer_mut(pointer).unwrap() = value;
+        assert!(affordances.plan_call(&metadata, &request.admitted_parent_record, &request.admitted_parent_record,
+            "invalid-patch", "preview_revision", &invalid, None).is_err(), "{pointer}");
+        assert_eq!(std::fs::read(&run_path).unwrap(), before);
+    }
     let NativeStep::Effect {
         effect,
         pending,

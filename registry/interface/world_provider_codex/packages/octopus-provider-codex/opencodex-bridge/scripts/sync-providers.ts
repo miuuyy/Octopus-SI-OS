@@ -23,6 +23,7 @@ type ProviderSpec = {
   allow_private_network?: boolean;
   headers?: Record<string, string>;
   options?: Record<string, unknown>;
+  native_stream_max_retries?: number;
   key?: { env: string; label: string; header?: string; prefix?: string };
   base_url?: { env: string; label: string };
   model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
@@ -64,7 +65,6 @@ const EFFORT_DESCRIPTIONS: Record<Effort, string> = {
 };
 const THINKING_TOGGLE_DESCRIPTIONS: Partial<Record<Effort, string>> = { none: "Thinking off", high: "Thinking on" };
 const CODEX_ONLY_PRIVATE_CONFIG = ["provider_operations", "web_search", "client_metadata", "retained_tool_output"];
-const CODEX_NATIVE_SEARCH_TOOLS = ["web.search", "web.extract"];
 const CODEX_ONLY_OVERRIDES = [/^model_context_window=/, /^model_auto_compact_token_limit=/];
 const DEFAULT_CONTEXT_WINDOW = 400000;
 const LIFE_BIN = "interface://world_provider_codex/packages/octopus-provider-codex/life-bin/octopus-provider-opencodex-life";
@@ -254,7 +254,6 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   const config = out.interface_driver_config;
   const privateConfig = config.private_config;
   for (const key of CODEX_ONLY_PRIVATE_CONFIG) delete privateConfig[key];
-  privateConfig.model_hidden_tools = privateConfig.model_hidden_tools.filter((tool: string) => !CODEX_NATIVE_SEARCH_TOOLS.includes(tool));
   const preferred = spec.model ? rows[0] : rows.find((row) => row.slug === spec.default_model) ?? rows[0];
   const description = (row: ModelRow) => `${row.display_name} through ${spec.name}.`;
   privateConfig.model = preferred.slug;
@@ -266,6 +265,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
   privateConfig.opencodex = {
     schema_version: 1,
     adapter,
+    ...(spec.native_stream_max_retries !== undefined ? { native_stream_max_retries: spec.native_stream_max_retries } : {}),
     credential_owner_interface: spec.interface,
     ...(spec.registry_entry ? { registry_entry: spec.registry_entry } : {}),
     ...(spec.account ? { oauth_provider: spec.account.provider } : {}),
