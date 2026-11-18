@@ -1360,6 +1360,8 @@ impl CodexAppServerInterfaceDriver {
             "source_thread": refresh.source_thread, "source_turn": pending_turn_id(&refresh.pending),
             "result": refresh.completed_output,
         })).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))? });
+        self.inject_native_context(context.sink, &thread_id, additional,
+            retained.is_some()).await?;
         let request = ClientRequest::TurnStart {
             request_id: self.mint_request_id(),
             params: fresh_turn_start_params(
@@ -1369,7 +1371,6 @@ impl CodexAppServerInterfaceDriver {
                 current.reasoning_effort,
                 self.bound_service_tier()?,
                 current.reasoning_summary,
-                additional,
                 "provider_context_refresh",
             ),
         };

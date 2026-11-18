@@ -843,6 +843,11 @@ impl CodexAppServerInterfaceDriver {
         {
             self.inject_recovered_item(&sink, &recovered_rollout_evidence, &thread_id, &continuation.item).await?;
         }
+        self.inject_native_context(&sink, &thread_id, additional_context,
+            attempt > 1 || recovered_handoff_artifacts.iter().any(|artifact| {
+                serde_json::from_slice::<serde_json::Value>(&artifact.payload)
+                    .is_ok_and(|value| value["method"] == "thread/inject_items")
+            })).await?;
         let turn = ClientRequest::TurnStart {
             request_id: self.mint_request_id(),
             params: TurnStartParams {
@@ -854,7 +859,6 @@ impl CodexAppServerInterfaceDriver {
                     reasoning_effort.clone(),
                     self.bound_service_tier()?,
                     reasoning_summary,
-                    additional_context,
                     if resume_control_id.is_some() || cut_turn_continuation.is_some() {
                         TURN_TRIGGER_RESUME_INTERRUPTED_TASK
                     } else if recovered_tool_continuation.is_some() {

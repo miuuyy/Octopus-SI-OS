@@ -44,6 +44,7 @@ while IFS= read -r line; do
     *'"method":"thread/items/list"'*) printf '{"id":%s,"result":{"data":[],"nextCursor":null,"backwardsCursor":null}}\n' "$id" ;;
     *'"method":"thread/resume"'*) printf '{"id":%s,"result":%s}\n' "$id" "$4" ;;
     *'"method":"hooks/list"'*) printf '{"id":%s,"result":{"data":[]}}\n' "$id" ;;
+    *'"method":"thread/inject_items"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
     *'"method":"turn/start"'*)
       printf '{"id":%s,"result":{"turn":{"id":"turn-continued","items":[],"itemsView":"notLoaded","status":"inProgress","error":null}}}\n' "$id"
       printf '%s\n' '{"id":"server-tool-2","method":"item/tool/call","params":{"threadId":"thr-exact","turnId":"turn-continued","callId":"call-2","namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":"echo $$"}}}' ;;
@@ -201,14 +202,19 @@ done
     invoked.unwrap();
     assert!(!labels.iter().any(|label| label == TURN_INTERRUPTED_RESULT_LABEL), "{labels:?}");
     let requests = std::fs::read_to_string(&requests).unwrap();
-    assert!(!requests.contains("thread/inject_items"), "a cut turn has no live call to inject into");
+    let injection: serde_json::Value = serde_json::from_str(
+        requests.lines().find(|line| line.contains(r#""method":"thread/inject_items""#)).unwrap(),
+    ).unwrap();
+    assert!(injection["params"]["items"].as_array().unwrap().iter().all(|item| item["type"] == "message"),
+        "a cut turn continues with context messages, never a fabricated tool result");
     let start: serde_json::Value = serde_json::from_str(
         requests.lines().find(|line| line.contains(r#""method":"turn/start""#)).expect("the provider starts the continuation itself"),
     ).unwrap();
     assert_eq!(start["params"]["threadId"], "thr-exact");
     assert_eq!(start["params"]["input"], serde_json::json!([]));
     assert_eq!(start["params"]["turnTrigger"], TURN_TRIGGER_RESUME_INTERRUPTED_TASK);
-    let context = start["params"]["additionalContext"]["octopus_bound_context"]["value"].as_str().unwrap();
+    assert!(start["params"]["additionalContext"].is_null());
+    let context = injection["params"]["items"].to_string();
     if native { assert!(context.contains("create_run") && context.contains("created-run") && context.contains("seed_admitted"), "{context}"); }
     else { assert!(context.contains("coder.exec") && context.contains("SURVIVED") && context.contains("pid 4242"), "{context}"); }
     let call = call.expect("the continued turn reaches its next call");

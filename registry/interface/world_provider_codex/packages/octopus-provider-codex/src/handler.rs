@@ -298,6 +298,7 @@ pub(crate) use driver_turn::*;
 mod late_calls;
 pub(crate) use late_calls::*;
 mod thread_params;
+mod native_context;
 mod tool_schema;
 pub(crate) use thread_params::*;
 mod operation_catalog;

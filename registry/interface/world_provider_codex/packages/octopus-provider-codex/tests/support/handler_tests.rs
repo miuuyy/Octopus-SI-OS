@@ -4330,7 +4330,7 @@ while IFS= read -r _; do :; done
             validate_model_service_tier(&model, tier).unwrap();
             let params = fresh_turn_start_params(
                 "thread-1".into(), Vec::new(), model.model.clone(), Some(ReasoningEffort::XHigh),
-                Some(Some(tier.into())), ReasoningSummary::Detailed, BTreeMap::new(), TURN_TRIGGER_INPUT,
+                Some(Some(tier.into())), ReasoningSummary::Detailed, TURN_TRIGGER_INPUT,
             );
             let wire = serde_json::to_value(params).unwrap();
             assert_eq!(wire["model"], model.model);
@@ -4361,15 +4361,14 @@ while IFS= read -r _; do :; done
             Some(ReasoningEffort::XHigh),
             None,
             ReasoningSummary::Detailed,
-            native_turn_context(Some("context".repeat(200_000)), Some("grant".into()), None),
             TURN_TRIGGER_INPUT,
         );
 
         assert_eq!(params.input.len(), 1);
-        assert_eq!(params.additional_context.as_ref().unwrap()["octopus_bound_context"].value.len(), 1_400_000);
+        assert!(params.additional_context.is_none());
         let continuation = LifecycleContinuation::StartTurn {
             turn_input: serde_json::to_value(&params.input).unwrap(),
-            additional_context: params.additional_context.clone().unwrap().into_iter().collect(),
+            additional_context: native_turn_context(Some("context".repeat(200_000)), Some("grant".into()), None),
             source_artifact: ArtifactRef { id: octopus_descriptors::ArtifactId::new("input"), content: octopus_ledger::ContentHash::of_bytes(b"input") },
         };
         assert_eq!(serde_json::from_value::<LifecycleContinuation>(serde_json::to_value(&continuation).unwrap()).unwrap(), continuation);
@@ -4392,7 +4391,6 @@ while IFS= read -r _; do :; done
             Some(ReasoningEffort::XHigh),
             None,
             ReasoningSummary::Detailed,
-            BTreeMap::new(),
             TURN_TRIGGER_RESUME_INTERRUPTED_TASK,
         );
         assert!(resumed.input.is_empty());

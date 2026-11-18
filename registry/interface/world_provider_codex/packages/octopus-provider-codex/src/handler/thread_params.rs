@@ -88,7 +88,6 @@ pub(crate) fn fresh_turn_start_params(
     reasoning_effort: Option<ReasoningEffort>,
     service_tier: Option<Option<String>>,
     reasoning_summary: ReasoningSummary,
-    additional_context: BTreeMap<String, AdditionalContextEntry>,
     turn_trigger: &str,
 ) -> TurnStartParams {
     TurnStartParams {
@@ -98,8 +97,6 @@ pub(crate) fn fresh_turn_start_params(
         effort: reasoning_effort,
         service_tier,
         summary: Some(reasoning_summary),
-        additional_context: (!additional_context.is_empty())
-            .then(|| additional_context.into_iter().collect()),
         turn_trigger: Some(turn_trigger.to_string()),
         ..TurnStartParams::default()
     }

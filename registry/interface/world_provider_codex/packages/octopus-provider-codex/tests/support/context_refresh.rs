@@ -113,14 +113,20 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
                         })
                         .unwrap()
                     }
+                    "thread/inject_items" => {
+                        let params = request.params.as_ref().unwrap();
+                        assert_eq!(params["threadId"], "new-thread");
+                        let context = params["items"].to_string();
+                        assert!(context.contains("effect-performed-once"));
+                        assert!(context.contains("original operator task"));
+                        assert!(context.contains("freshly admitted grant"));
+                        serde_json::json!({})
+                    }
                     "turn/start" => {
                         let params = request.params.as_ref().unwrap();
                         assert_eq!(params["threadId"], "new-thread");
                         assert_eq!(params["input"], serde_json::json!([]));
-                        let context = params["additionalContext"].to_string();
-                        assert!(context.contains("effect-performed-once"));
-                        assert!(context.contains("original operator task"));
-                        assert!(context.contains("freshly admitted grant"));
+                        assert!(params["additionalContext"].is_null());
                         let mut turn = source_thread.turns[0].clone();
                         turn.id = "new-turn".into();
                         send_test_result(&mut socket, request.id, serde_json::json!({"turn":turn}))
@@ -524,6 +530,7 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
                 "thread/turns/list",
                 "thread/items/list",
                 "thread/start",
+                "thread/inject_items",
                 "turn/start"
             ]
         );

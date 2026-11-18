@@ -45,6 +45,7 @@ while IFS= read -r line; do
     *'"method":"thread/items/list"'*) printf '{"id":%s,"result":{"data":[],"nextCursor":null,"backwardsCursor":null}}\n' "$id" ;;
     *'"method":"thread/resume"'*) printf '{"id":%s,"result":%s}\n' "$id" "$3" ;;
     *'"method":"hooks/list"'*) printf '{"id":%s,"result":{"data":[]}}\n' "$id" ;;
+    *'"method":"thread/inject_items"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
     *'"method":"turn/start"'*'"input":[]'*'"toolOutput":{'*)
       printf '{"id":%s,"result":{"turn":{"id":"turn-2","items":[],"itemsView":"notLoaded","status":"inProgress","error":null}}}\n' "$id"
       printf '{"method":"item/started","params":{"threadId":"thr-exact","turnId":"turn-2","startedAtMs":10,"item":%s}}\n' "$4"
