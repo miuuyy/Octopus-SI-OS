@@ -269,7 +269,7 @@ function descriptor(spec: ProviderSpec, template: any, rows: ModelRow[], adapter
     credential_owner_interface: spec.interface,
     ...(spec.registry_entry ? { registry_entry: spec.registry_entry } : {}),
     ...(spec.account ? { oauth_provider: spec.account.provider } : {}),
-    ...(spec.model ? { model_env: spec.model.env } : {}),
+    ...(spec.model ? { model_env: spec.model.env, ...(spec.models ? { model_env_slug: spec.model.slug } : {}) } : {}),
     ...(spec.cli ? { bridge_env_names: spec.cli.env } : {}),
     allow_private_network: spec.local === true || spec.allow_private_network === true,
     ...(spec.options ? { options: clone(spec.options) } : {}),
@@ -350,7 +350,7 @@ function application(spec: ProviderSpec, logos: { logo?: string; logo_dark?: str
   const fields = [
     ...(spec.key ? [{ interface: spec.interface, pointer: "/interface_driver_config/transport/auth_env_key", label: spec.key.label, kind: "secret", required: true }] : []),
     ...(spec.base_url ? [{ interface: spec.interface, pointer: "/interface_driver_config/transport/base_url_env", label: spec.base_url.label, kind: "url", required: true }] : []),
-    ...(spec.model ? [{ interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/model_env", label: spec.model.label, kind: "text", required: true }] : []),
+    ...(spec.model ? [{ interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/model_env", label: spec.model.label, kind: "text", required: !spec.models }] : []),
     ...(spec.vertex ? [
       { interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/vertex/project_env", label: spec.vertex.project.label, kind: "text", required: true },
       { interface: spec.interface, pointer: "/interface_driver_config/private_config/opencodex/vertex/credentials_file_env", label: spec.vertex.credentials.label, kind: "text", required: true },
@@ -442,7 +442,7 @@ for (const provider of spec.providers) {
       }
     });
   }
-  if (provider.models && provider.model) throw new Error(`${provider.interface}: declare a model catalog or a model setup field, not both`);
+  if (provider.models?.some(row => row.slug === provider.model?.slug)) throw new Error(`${provider.interface}: setup alias collides with a static model`);
   if (provider.acp && (adapter !== "antigravity-acp" || provider.account?.provider !== "antigravity-acp" || !provider.models
       || !Array.isArray(provider.acp.residual_sources) || provider.acp.residual_sources.some((source) => typeof source?.name !== "string"))) {
     throw new Error(`${provider.interface}: an ACP provider is the antigravity-acp adapter on its own connected account, with an explicit model catalog and named residual sources`);
@@ -451,7 +451,7 @@ for (const provider of spec.providers) {
   if (provider.endpoint && entry) throw new Error(`${provider.interface}: a registry entry already names its endpoint`);
   const baseUrl = provider.base_url ? "" : seed?.baseUrl ?? provider.endpoint;
   if (!provider.base_url && !baseUrl) throw new Error(`${provider.interface}: no base URL`);
-  const rows = provider.model ? setupModel(provider) : provider.models ? declaredModels(provider) : registryModels(provider, seed);
+  const rows = provider.models ? [...declaredModels(provider), ...(provider.model ? setupModel(provider) : [])] : provider.model ? setupModel(provider) : registryModels(provider, seed);
   const folder = path.join(interfaceRoot, provider.interface);
   const logos: { logo?: string; logo_dark?: string } = {};
   if (provider.icon && provider.logo) throw new Error(`${provider.interface}: a logo comes either from an OpenCodex icon or from the interface folder`);

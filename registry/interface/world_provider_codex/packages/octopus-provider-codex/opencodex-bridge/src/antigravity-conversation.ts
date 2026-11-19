@@ -202,7 +202,7 @@ class Conversation {
     connection.onRequest = (method, params) => {
       if (method !== "session/request_permission") return undefined;
       const mcp = object(object(object(params.toolCall)?._meta)?.mcp);
-      const allowed = this.native === native && native.session === params.sessionId && mcp?.server === this.host.serverName
+      const allowed = this.native === native && !!native.endpoint && !native.finished && native.session === params.sessionId && mcp?.server === this.host.serverName
         && typeof mcp.tool === "string" && wireByName.has(mcp.tool);
       const once = allowed && Array.isArray(params.options) ? params.options.map(object).find(option => option?.kind === "allow_once") : undefined;
       return { outcome: once ? { outcome: "selected", optionId: once.optionId } : { outcome: "cancelled" } };

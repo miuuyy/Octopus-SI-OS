@@ -637,7 +637,8 @@ pub(crate) async fn prepare_deferred_provider_turn(
             source_session_carrier: source_session_carrier.clone(), rebased_session_carrier,
         };
         let (rebased, continuity) = rebase_deferred_provider_turn(ctx, descriptor, run, &deferred.turn, &release)?;
-        if codex_continuity_successor_is_settled(source_continuity.as_ref(), continuity.as_ref())? {
+        if matches!(crate::handler::codex_continuity_relation(source_continuity.as_ref(), continuity.as_ref())?,
+            crate::handler::CodexContinuityRelation::Settled) {
             persist_deferred_provider_turn_release(ctx, descriptor, run, &deferred.turn, &release)?;
             return Ok(DeferredTurnReadiness::Ready(rebased));
         }

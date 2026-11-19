@@ -14,7 +14,7 @@ use octopus_operator_chat_client::run_composition::{
     validate_registry_candidate, validate_run_authoring_source, validation_roots,
 };
 use octopus_operator_chat_client::{ExternalInputSeed, ExternalRelaySeed, ModelOutputSeed, PlannedClientWrite, SelectedToolSeed};
-use octopus_operator_chat_client::run_composition::current_run::{CurrentRunRequest, current_selection, plan_current_run_amendment_for_native};
+use octopus_operator_chat_client::run_composition::current_run::{CurrentRunPlan, CurrentRunRequest, current_selection, plan_current_run_amendment_for_native};
 use octopus_operator_chat_client::publication_selection::{
     PublicationSelectionEvidence, validate_evidence, validate_publication_snapshot_refs,
 };
@@ -27,6 +27,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const PEER_MESSAGE_LABEL: &str = "provider.peer.message";
+
+fn run_summary(run: &RunRecord) -> Value {
+    json!({"run_id":run.id, "ee_id":run.ee, "worker_interface_id":run.worker,
+        "checkpoint_count":run.checkpoints.len(), "active_checkpoint_count":run.active_checkpoints.len()})
+}
 
 fn validation_report(validation: &RegistryCandidateValidation) -> Value {
     let issues = validation.stages.last().into_iter().flat_map(|stage| stage.issues.iter()).collect::<BTreeSet<_>>();
@@ -403,6 +408,17 @@ pub enum NativeStep {
     },
 }
 
+fn current_run_preview(plan: CurrentRunPlan, preview: bool, dependencies: Vec<FileProof>, activation: Vec<FileProof>) -> Result<NativeStep, String> {
+    let candidate_hash = ContentHash::of_bytes(&serde_json::to_vec(&plan.amendment.after).map_err(|e| e.to_string())?).to_hex();
+    let future: RunRecord = serde_json::from_value(plan.amendment.after).map_err(|e| e.to_string())?;
+    Ok(NativeStep::Complete { result:json!({
+        "ok":plan.validation.safe_to_apply, "preview":preview, "installed":false, "run_id":future.id,
+        "amendment_key":plan.amendment.amendment_key, "run_summary":run_summary(&future), "future_contract_hash":candidate_hash,
+        "dependency_writes":dependencies, "activation_writes":activation, "bridge":plan.amendment.bridge,
+        "validation":validation_report(&plan.validation), "awaiting_activation":plan.awaiting_activation, "work_completed":false,
+    }) })
+}
+
 impl NativePending {
     fn publication_read_refs(&self) -> Option<&[ArtifactRef]> {
         match &self.state {
@@ -435,7 +451,9 @@ impl NativePending {
 
     fn advance_current_run(&self, stage: &CurrentRunStage, plan: &PendingCurrentRun, body: &Value, receipt: &Value) -> Result<NativeStep, String> {
         let mut next = plan.clone();
-        next.receipts.push(receipt.clone());
+        if !matches!(stage, CurrentRunStage::Readback) {
+            next.receipts.push(receipt.clone());
+        }
         match stage {
             CurrentRunStage::Dependencies => {
                 validate_file_receipt(&self.effect, body, &plan.dependency_files)?;
@@ -481,7 +499,10 @@ impl NativePending {
                 let issues = validation.stages.first().ok_or("current-run validation has no stage")?.issues.iter()
                     .filter(|issue| (issue.subject == "snapshot" || plan.checked_subjects.contains(&issue.subject)) && !plan.allowed_issues.contains(issue))
                     .cloned().collect::<Vec<_>>();
+                next.receipts.push(json!({"tool":self.effect.tool, "correlation_id":self.effect.correlation_id,
+                    "ok":true, "body":{"path":path, "content_hash":hash, "bytes":content.len()}}));
                 Ok(NativeStep::Complete { result:json!({
+                    "run_summary":run_summary(&record),
                     "ok":issues.is_empty(), "call_id":self.call_id, "operation":self.operation_name,
                     "run_id":self.source_run, "amendment_key":plan.amendment.amendment_key,
                     "installed":true, "readback_hash":hash, "receipts":next.receipts,
@@ -768,12 +789,8 @@ impl RunAffordances {
         let activation = batch(&plan.activation_writes, "activation")?;
         if let Some((effect, _)) = &activation { plan.amendment.bridge = current_run_bridge(effect, retained_tools[0].1.clone())?; }
         if preview || !plan.validation.safe_to_apply {
-            return Ok(NativeStep::Complete { result:json!({
-                "ok":plan.validation.safe_to_apply, "preview":preview, "installed":false, "run_id":current.id,
-                "amendment_key":plan.amendment.amendment_key, "future_run_contract":plan.amendment.after,
-                "dependency_writes":plan.dependency_writes, "activation_writes":plan.activation_writes,
-                "bridge":plan.amendment.bridge, "validation":validation_report(&plan.validation), "awaiting_activation":plan.awaiting_activation, "work_completed":false,
-            }) });
+            return current_run_preview(plan, preview, dependencies.map(|(_, files)|files).unwrap_or_default(),
+                activation.map(|(_, files)|files).unwrap_or_default());
         }
         let publication_read_refs = publication_read_refs(&plan.publication_evidence)?;
         let pending_plan = PendingCurrentRun {
@@ -1351,9 +1368,7 @@ impl RunAffordances {
                 "validation":validation_report(&plan.validation),"work_completed":false,
             });
             if plan.authored.run_patch.is_some() {
-                result["run_summary"] = json!({"run_id":plan.run.id,"ee_id":plan.run.ee,
-                    "worker_interface_id":plan.run.worker,"checkpoint_count":plan.run.checkpoints.len(),
-                    "active_checkpoint_count":plan.run.active_checkpoints.len()});
+                result["run_summary"] = run_summary(&plan.run);
                 result["files"] = json!(plan.writes.iter().map(|write| json!({"path":write.path,
                     "expected_before_hash":write.expected_before_hash,
                     "content_hash":ContentHash::of_bytes(write.content.as_bytes()).to_hex()})).collect::<Vec<_>>());

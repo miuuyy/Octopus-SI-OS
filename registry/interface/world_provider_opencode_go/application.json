@@ -26,7 +26,7 @@
         "pointer": "/interface_driver_config/private_config/opencodex/model_env",
         "label": "Model id, for example kimi-k2.7-code",
         "kind": "text",
-        "required": true
+        "required": false
       }
     ]
   }

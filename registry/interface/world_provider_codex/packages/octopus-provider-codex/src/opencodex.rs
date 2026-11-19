@@ -152,6 +152,8 @@ pub(crate) struct OpenCodexDescriptorConfig {
     #[serde(default)]
     pub model_env: Option<String>,
     #[serde(default)]
+    pub model_env_slug: Option<String>,
+    #[serde(default)]
     pub bridge_env_names: Vec<String>,
     #[serde(default)]
     pub model_catalog: Option<ModelsResponse>,
@@ -311,6 +313,13 @@ pub(crate) fn descriptor_config(
     {
         return Err("opencodex model_env is not a valid environment variable name".to_string());
     }
+    if let Some(alias) = &parsed.model_env_slug {
+        if !valid_text_atom(alias) || parsed.model_env.is_none()
+            || !parsed.model_catalog.as_ref().is_some_and(|catalog| catalog.models.iter().any(|model| &model.slug == alias))
+        {
+            return Err("opencodex model_env_slug requires a model_env and a matching catalog entry".into());
+        }
+    }
     let mut bridge_env = BTreeSet::new();
     for name in &parsed.bridge_env_names {
         if !valid_env_name(name) || !bridge_env.insert(name.as_str()) {
@@ -391,7 +400,7 @@ pub(crate) async fn connect_interface_driver(
             descriptor.id
         )
     })?;
-    let models = formed_models(envelope)?;
+    let mut models = formed_models(envelope)?;
     let selected_model = selected_model(descriptor)?;
     if !models.iter().any(|model| model == &selected_model) {
         return Err(format!(
@@ -399,7 +408,7 @@ pub(crate) async fn connect_interface_driver(
         ));
     }
     let private_values = PrivateValues::resolve(ctx, descriptor, transport, config)?;
-    let model_aliases = resolve_model_aliases(config, &models, &private_values)?;
+    let model_aliases = resolve_model_aliases(config, &mut models, &selected_model, &private_values)?;
     let base_url = resolve_base_url(transport, config.allow_private_network, &private_values)?;
     validate_static_headers(transport)?;
     let api_key = resolve_api_key(ctx, descriptor, transport, config, &private_values)?;
@@ -881,13 +890,20 @@ fn resolve_vertex(
 
 fn resolve_model_aliases(
     config: &OpenCodexDescriptorConfig,
-    models: &[String],
+    models: &mut Vec<String>,
+    selected_model: &str,
     private_values: &PrivateValues,
 ) -> Result<BTreeMap<String, String>, String> {
+    models.retain(|slug| Some(slug) != config.model_env_slug.as_ref() || slug == selected_model);
     let Some(name) = config.model_env.as_deref() else {
         return Ok(BTreeMap::new());
     };
-    let [declared] = models else {
+    let declared = if let Some(alias) = &config.model_env_slug {
+        if !models.contains(alias) { return Ok(BTreeMap::new()); }
+        alias
+    } else if let [single] = models.as_slice() {
+        single
+    } else {
         return Err(format!(
             "OpenCodex model_env '{name}' requires exactly one declared model slug"
         ));

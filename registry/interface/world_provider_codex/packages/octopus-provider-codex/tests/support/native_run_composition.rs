@@ -373,10 +373,23 @@ fn current_run_requires_complete_effects_and_exact_final_readback_with_original_
     installed["interface_state"][provider.as_str()]["capability_amendment"] = json!({"amendment_key":"amend","bridge":amendment.bridge,
         "delta":{"before":topology,"after":topology,"static_artifact_additions":[],"checkpoints":[],"interface_state":{}},"ordinary_patch":[],
         "effect":{"manifest_path":root.join("effect.json"),"manifest":"{}","payload":"{}"}});
+    installed["interface_state"][provider.as_str()]["large_private_fixture"] = json!("x".repeat(175_000));
     let content = serde_json::to_string(&installed).unwrap();
     std::fs::write(&composition.run_write.path,&content).unwrap();
     let proof = |name: &str| { let path=root.join(name);std::fs::write(&path,b"{}").unwrap();FileProof {path,before_hash:None,after_hash:ContentHash::of_bytes(b"{}").to_hex(),bytes:2} };
     let dependency = proof("dependency.json"); let activation = proof("activation.json");
+    let mut candidate = amendment.clone();
+    candidate.after = installed.clone();
+    let stage = CurrentRunPlan { amendment:candidate, dependency_writes:vec![], activation_writes:vec![],
+        validation:RegistryCandidateValidation { safe_to_apply:true, checked_subjects:vec![], stages:vec![], regressions:vec![] },
+        awaiting_activation:vec![], publication_evidence:vec![] };
+    let NativeStep::Complete { result:preview } = current_run_preview(stage, true, vec![dependency.clone()], vec![activation.clone()]).unwrap()
+        else { panic!("preview scheduled an effect") };
+    assert_eq!(preview["future_contract_hash"], ContentHash::of_bytes(content.as_bytes()).to_hex());
+    assert_eq!(preview["run_summary"]["checkpoint_count"], before["checkpoints"].as_array().unwrap().len());
+    assert_eq!(preview["dependency_writes"][0], json!(dependency));
+    assert_eq!(preview["activation_writes"][0], json!(activation));
+    assert!(preview.to_string().len() < 10_000);
     let context_path = request.roots.registry_root.join("artifact/role-system_worker_template/artifact.json");
     let context_bytes = std::fs::read(&context_path).unwrap();
     let context: Value = serde_json::from_slice(&context_bytes).unwrap();
@@ -432,6 +445,10 @@ fn current_run_requires_complete_effects_and_exact_final_readback_with_original_
     let restored:NativePending=serde_json::from_value(json!(final_pending)).unwrap();
     let NativeStep::Complete {result}=restored.advance(&final_receipt).unwrap() else {panic!("exact final readback did not complete");};
     assert_eq!(result["call_id"],"original-model-call");assert_eq!(result["installed"],true);assert_eq!(result["ok"],true,"{result}");
+    assert_eq!(result["run_summary"]["run_id"], composition.run_id);
+    assert_eq!(result["receipts"][2]["body"]["bytes"], content.len());
+    assert_eq!(result["receipts"][2]["body"]["content_hash"], result["readback_hash"]);
+    assert!(result.to_string().len() < 10_000);
     assert_eq!(result["receipts"].as_array().unwrap().len(),3);assert_eq!(result["work_completed"],false);
     let NativeStep::AmendmentEffect { pending:legacy_activation, .. } = legacy.advance(&receipt(&legacy,&dependency)).unwrap() else { panic!("legacy dependency settlement lost activation"); };
     assert_eq!(json!(legacy_activation)["state"]["phase"], "current_run");

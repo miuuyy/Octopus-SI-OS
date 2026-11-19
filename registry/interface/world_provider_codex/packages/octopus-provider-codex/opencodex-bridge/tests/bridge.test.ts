@@ -728,10 +728,13 @@ async function receive(message) {
     say("Agent execution error: trajectory converted to zero chat messages");
     process.stderr.write("E1117 01:02:03.004 12345 server.py:5737] Antigravity SDK error processing prompt for session " + session + "\n");
   } else if (text.includes("call-inspect") && !text.includes("TOOL RESULT")) {
-    for (const [id, server, tool] of [["exact_tool", "opencodex", "exact_tool"], ["unoffered", "opencodex", "unoffered"], ["other_server", "other", "exact_tool"]]) {
+    for (const [id, server, tool] of [["exact_tool", "opencodex", "exact_tool"], ["unoffered", "opencodex", "workspace_build"], ["other_server", "other", "exact_tool"]]) {
       send({ id, method: "session/request_permission", params: { sessionId: session,
         toolCall: { _meta: { mcp: { server, tool } } }, options: [{ kind: "allow_once", optionId: "yes" }] } });
     }
+    const unknown = await fetch(mcp.url, { method: "POST", headers: { "content-type": "application/json", authorization: mcp.headers[0].value },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "workspace_build" } }) }).then(r => r.json());
+    log({ unknown: unknown.error });
     update({ sessionUpdate: "usage_update", used: 41, size: 1048576 });
     const response = await fetch(mcp.url, { method: "POST", headers: { "content-type": "application/json", authorization: mcp.headers[0].value },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } }) });
@@ -764,7 +767,7 @@ test("Antigravity retains native context, delivers exact external results and di
   }), { PATH: "/usr/bin:/bin", OCTOPUS_TEST_SECRET: "private" }, directory);
   let bridge = await start();
   const write = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../../../../tool/file.write/tool.json"), "utf8"));
-  const granted = [exactTool, { type: "function", name: "file_write", description: write.description, parameters: write.args_schema }];
+  const granted = [exactTool, { ...exactTool, name: "formed_interfaces__workspace_build" }, { type: "function", name: "file_write", description: write.description, parameters: write.args_schema }];
   const turn = async (thread: string, input: unknown[], tools: unknown[] = granted) => {
     const response = await fetch(`${bridge.origin}/v1/responses`, { method: "POST", headers: { "Content-Type": "application/json", "thread-id": thread },
       body: JSON.stringify({ model: "gemini-4-hydrogen", stream: true, instructions: "The worker's role.", reasoning: { effort: "high" }, input, tools }) });
@@ -794,6 +797,8 @@ test("Antigravity retains native context, delivers exact external results and di
   expect(logs().filter(row => row.method === "session/set_config_option").map(row => row.value)).toContain("high");
   expect(logs().find(row => row.id === "exact_tool").outcome.outcome).toBe("selected");
   expect(logs().find(row => row.id === "unoffered").outcome.outcome).toBe("cancelled");
+  expect(logs().find(row => row.unknown).unknown).toEqual({ code: -32602, message:
+    'Unknown tool "workspace_build". Use the exact ToolName from tools/list.' });
   expect(logs().find(row => row.id === "other_server").outcome.outcome).toBe("cancelled");
   expect(logs().filter(row => row.method === "session/prompt")).toHaveLength(1);
   const attached = logs().find(row => row.returned).returned.content[0].resource;

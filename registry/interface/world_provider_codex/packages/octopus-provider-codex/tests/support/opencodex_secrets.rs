@@ -193,7 +193,7 @@ fn opencodex_task_copy_reads_setup_values_from_its_credential_owner() {
     );
     let values = PrivateValues::resolve(&ctx, &descriptor, &transport, &config).unwrap();
     assert_eq!(
-        resolve_model_aliases(&config, &["custom-model".to_string()], &values).unwrap(),
+        resolve_model_aliases(&config, &mut vec!["custom-model".to_string()], "custom-model", &values).unwrap(),
         BTreeMap::from([("custom-model".to_string(), "vendor/model-x".to_string())])
     );
     assert_eq!(
@@ -371,4 +371,29 @@ fn opencodex_vertex_authenticates_only_with_its_declared_credentials_file() {
     assert!(descriptor_config(&descriptor)
         .unwrap_err()
         .contains("cannot be combined"));
+}
+
+#[test]
+fn opencode_go_static_and_setup_alias_are_independent() {
+    let descriptor: InterfaceDescriptor = serde_json::from_str(include_str!(
+        "../../../../../world_provider_opencode_go/interface.json"
+    )).unwrap();
+    let mut config = descriptor_config(&descriptor).unwrap().unwrap();
+    assert_eq!(config.model_env.as_deref(), Some("OCTOPUS_PROVIDER_OPENCODE_GO_MODEL"));
+    let key = "OCTOPUS_TEST_GO_SYNTHETIC_ALIAS";
+    config.model_env = Some(key.into());
+    let alias = "opencode-go-model";
+    let all = ["hy4-flash-free", "glm-5.3-flash", "glm-5.3", "kimi-k3.1-pro", alias].map(String::from);
+    let missing = PrivateValues { owner: Some(BTreeMap::new()) };
+    let set = PrivateValues { owner: Some(BTreeMap::from([(key.into(), "custom-test".into())])) };
+    for selected in &all[..4] {
+        for values in [&missing, &set] {
+            let mut models = all.to_vec();
+            assert!(resolve_model_aliases(&config, &mut models, selected, values).unwrap().is_empty());
+            assert_eq!(models, all[..4]);
+        }
+    }
+    assert!(resolve_model_aliases(&config, &mut all.to_vec(), alias, &missing).is_err());
+    assert_eq!(resolve_model_aliases(&config, &mut all.to_vec(), alias, &set).unwrap(),
+               BTreeMap::from([(alias.into(), "custom-test".into())]));
 }

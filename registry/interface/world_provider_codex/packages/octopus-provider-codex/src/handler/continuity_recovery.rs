@@ -319,29 +319,44 @@ pub(crate) fn codex_continuity_successor_is_settled(
     source: Option<&CodexContinuityState>,
     rebased: Option<&CodexContinuityState>,
 ) -> Result<bool, String> {
+    match codex_continuity_relation(source, rebased)? {
+        CodexContinuityRelation::Settled => Ok(true),
+        CodexContinuityRelation::Pending => Ok(false),
+        CodexContinuityRelation::NonSuccessor => Err(
+            "deferred operator turn release is not a monotonic successor of its source continuity".into()
+        ),
+    }
+}
+
+pub(crate) enum CodexContinuityRelation {
+    NonSuccessor,
+    Pending,
+    Settled,
+}
+
+pub(crate) fn codex_continuity_relation(
+    source: Option<&CodexContinuityState>,
+    rebased: Option<&CodexContinuityState>,
+) -> Result<CodexContinuityRelation, String> {
     let rebased = rebased.ok_or_else(|| {
         "deferred operator turn release has no Codex continuity coordinates".to_string()
     })?;
-    let Some(source) = source else {
-        return Ok(!codex_continuity_waits_for_result(rebased)
-            && rebased.context_refresh.as_ref().is_none_or(|refresh| refresh.settled_replacement()));
-    };
-    if source.provider_interface != rebased.provider_interface
-        || source.run != rebased.run
-        || rebased.context_generation < source.context_generation
-        || ((source.thread_id != rebased.thread_id
+    if source.is_some_and(|source| {
+        let thread_changed = source.thread_id != rebased.thread_id
             || source.thread_shape_fingerprint != rebased.thread_shape_fingerprint
-            || source.static_context_fingerprint != rebased.static_context_fingerprint)
-            && !rebased.context_refresh.as_ref().is_some_and(|refresh| refresh.connects(source, rebased))
-            && !rebased.native_history_retirement.as_ref().is_some_and(|retirement| retirement.connects(source, rebased)))
-    {
-        return Err(
-            "deferred operator turn release is not a monotonic successor of its source continuity"
-                .to_string(),
-        );
+            || source.static_context_fingerprint != rebased.static_context_fingerprint;
+        source.provider_interface != rebased.provider_interface
+            || source.run != rebased.run
+            || rebased.context_generation < source.context_generation
+            || (thread_changed
+                && !rebased.context_refresh.as_ref().is_some_and(|refresh| refresh.connects(source, rebased))
+                && !rebased.native_history_retirement.as_ref().is_some_and(|retirement| retirement.connects(source, rebased)))
+    }) {
+        return Ok(CodexContinuityRelation::NonSuccessor);
     }
-    Ok(!codex_continuity_waits_for_result(rebased)
-        && rebased.context_refresh.as_ref().is_none_or(|refresh| refresh.settled_replacement()))
+    let settled = !codex_continuity_waits_for_result(rebased)
+        && rebased.context_refresh.as_ref().is_none_or(|refresh| refresh.settled_replacement());
+    Ok(if settled { CodexContinuityRelation::Settled } else { CodexContinuityRelation::Pending })
 }
 
 pub(crate) fn validate_durable_interruption_output_labels(

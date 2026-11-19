@@ -24,7 +24,10 @@ export function openToolEndpoint(serverName: string, tools: Row[], maxRequestByt
         case "tools/list": return result({ tools });
         case "tools/call": {
           const args = params?.arguments === undefined ? {} : object(params.arguments);
-          if (typeof params?.name !== "string" || !names.has(params.name) || !args) return error(-32602, "Invalid tool name or arguments.");
+          if (typeof params?.name !== "string" || !args) return error(-32602, "Invalid tool name or arguments.");
+          if (!names.has(params.name)) {
+            return error(-32602, `Unknown tool ${JSON.stringify(params.name.slice(0, 128))}. Use the exact ToolName from tools/list.`);
+          }
           server.timeout(request, 0);
           try { return result(await call(params.name, args, request.signal)); }
           catch (cause) { return error(-32603, cause instanceof Error ? cause.message : String(cause)); }

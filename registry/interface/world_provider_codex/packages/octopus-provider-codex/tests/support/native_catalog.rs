@@ -86,3 +86,56 @@ fn create_run_starts_a_task_from_title_and_text_alone() {
         assert!(validator.validate(&serde_json::json!({"title":"No assignment"})).is_err(), "{owner} create_run admits a task without an assignment");
     }
 }
+
+#[test]
+fn every_advertised_tool_schema_stays_below_the_provider_compaction_ceiling() {
+    const CEILING_BYTES: usize = 4_800;
+    fn read(path: &Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap_or_else(|error| panic!("{} is not JSON: {error}", path.display()))
+    }
+    fn folders(root: &Path) -> Vec<std::path::PathBuf> {
+        let mut folders: Vec<_> = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.is_dir()).collect();
+        folders.sort();
+        folders
+    }
+    let registry = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let mut schemas: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut catalogs = 0;
+    for interface in folders(&registry.join("interface")) {
+        let name = interface.file_name().unwrap().to_string_lossy().into_owned();
+        let descriptor = interface.join("interface.json");
+        if descriptor.is_file() {
+            let descriptor = read(&descriptor);
+            if let Some(operations) = descriptor.pointer("/interface_driver_config/private_config/run_affordance_profile/catalog/operations").and_then(|value| value.as_array()) {
+                catalogs += 1;
+                for entry in operations {
+                    schemas.push((format!("interface/{name} catalog operation {}", entry["name"]), entry["input_schema"].clone()));
+                }
+            }
+        }
+        let operations = interface.join("operations");
+        if operations.is_dir() {
+            let mut files: Vec<_> = std::fs::read_dir(&operations).unwrap().map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "json")).collect();
+            files.sort();
+            for file in files {
+                schemas.push((format!("interface/{name}/operations/{}", file.file_name().unwrap().to_string_lossy()), read(&file)["input_schema"].clone()));
+            }
+        }
+    }
+    let mut tools = 0;
+    for tool in folders(&registry.join("tool")) {
+        let descriptor = tool.join("tool.json");
+        if !descriptor.is_file() { continue; }
+        tools += 1;
+        schemas.push((format!("tool/{}", tool.file_name().unwrap().to_string_lossy()), read(&descriptor)["args_schema"].clone()));
+    }
+    assert!(catalogs >= 2 && tools > 0, "the registry walk found {catalogs} provider catalogs and {tools} tools");
+    let oversized: Vec<String> = schemas.iter()
+        .filter(|(_, schema)| schema.is_object())
+        .map(|(owner, schema)| (owner, serde_json::to_vec(schema).unwrap().len()))
+        .filter(|(_, bytes)| *bytes >= CEILING_BYTES)
+        .map(|(owner, bytes)| format!("{owner}: {bytes} bytes"))
+        .collect();
+    assert!(oversized.is_empty(), "tool schemas at or above {CEILING_BYTES} serialized bytes leave too little room below the native 5000-byte schema compaction threshold:\n{}", oversized.join("\n"));
+}

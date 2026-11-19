@@ -71,118 +71,7 @@
         "minItems": 1,
         "description": "RFC 6902 operations applied to exact current JSON bytes; json_format selects postimage encoding and omission preserves pretty JSON with one trailing newline.",
         "items": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "op": {
-                  "const": "add"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "value": {}
-              },
-              "required": [
-                "op",
-                "path",
-                "value"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "op": {
-                  "const": "remove"
-                },
-                "path": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "op",
-                "path"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "op": {
-                  "const": "replace"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "value": {}
-              },
-              "required": [
-                "op",
-                "path",
-                "value"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "op": {
-                  "const": "move"
-                },
-                "from": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "op",
-                "from",
-                "path"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "op": {
-                  "const": "copy"
-                },
-                "from": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "op",
-                "from",
-                "path"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "op": {
-                  "const": "test"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "value": {}
-              },
-              "required": [
-                "op",
-                "path",
-                "value"
-              ],
-              "additionalProperties": false
-            }
-          ]
+          "$ref": "#/$defs/patch_operation"
         }
       },
       "expected_before_hash": {
@@ -218,118 +107,7 @@
               "type": "array",
               "minItems": 1,
               "items": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "op": {
-                        "const": "add"
-                      },
-                      "path": {
-                        "type": "string"
-                      },
-                      "value": {}
-                    },
-                    "required": [
-                      "op",
-                      "path",
-                      "value"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "op": {
-                        "const": "remove"
-                      },
-                      "path": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "op",
-                      "path"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "op": {
-                        "const": "replace"
-                      },
-                      "path": {
-                        "type": "string"
-                      },
-                      "value": {}
-                    },
-                    "required": [
-                      "op",
-                      "path",
-                      "value"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "op": {
-                        "const": "move"
-                      },
-                      "from": {
-                        "type": "string"
-                      },
-                      "path": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "op",
-                      "from",
-                      "path"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "op": {
-                        "const": "copy"
-                      },
-                      "from": {
-                        "type": "string"
-                      },
-                      "path": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "op",
-                      "from",
-                      "path"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "op": {
-                        "const": "test"
-                      },
-                      "path": {
-                        "type": "string"
-                      },
-                      "value": {}
-                    },
-                    "required": [
-                      "op",
-                      "path",
-                      "value"
-                    ],
-                    "additionalProperties": false
-                  }
-                ]
+                "$ref": "#/$defs/patch_operation"
               }
             },
             "expected_before_hash": {
@@ -348,25 +126,7 @@
                   ]
                 },
                 {
-                  "type": "object",
-                  "properties": {
-                    "encoding": {
-                      "const": "zlib_base64"
-                    },
-                    "byte_count": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "data": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "encoding",
-                    "byte_count",
-                    "data"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/$defs/compressed_text"
                 }
               ]
             },
@@ -375,12 +135,7 @@
               "pattern": "^[0-9a-f]{64}$"
             },
             "json_format": {
-              "type": "string",
-              "enum": [
-                "pretty",
-                "compact"
-              ],
-              "description": "JSON patch postimage serialization, with one trailing newline. Omission means pretty JSON; compact uses canonical sorted keys."
+              "$ref": "#/$defs/json_format"
             }
           },
           "oneOf": [
@@ -443,12 +198,7 @@
         "const": true
       },
       "json_format": {
-        "type": "string",
-        "enum": [
-          "pretty",
-          "compact"
-        ],
-        "description": "JSON patch postimage serialization, with one trailing newline. Omission means pretty JSON; compact uses canonical sorted keys."
+        "$ref": "#/$defs/json_format"
       }
     },
     "oneOf": [
@@ -591,25 +341,7 @@
                           "type": "string"
                         },
                         {
-                          "type": "object",
-                          "properties": {
-                            "encoding": {
-                              "const": "zlib_base64"
-                            },
-                            "byte_count": {
-                              "type": "integer",
-                              "minimum": 0
-                            },
-                            "data": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "encoding",
-                            "byte_count",
-                            "data"
-                          ],
-                          "additionalProperties": false
+                          "$ref": "#/$defs/compressed_text"
                         }
                       ]
                     }
@@ -640,7 +372,152 @@
           }
         }
       }
-    ]
+    ],
+    "$defs": {
+      "patch_operation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "path": {
+                "type": "string"
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "remove"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "replace"
+              },
+              "path": {
+                "type": "string"
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "move"
+              },
+              "from": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "from",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "copy"
+              },
+              "from": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "from",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "test"
+              },
+              "path": {
+                "type": "string"
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "compressed_text": {
+        "type": "object",
+        "properties": {
+          "encoding": {
+            "const": "zlib_base64"
+          },
+          "byte_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "data": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "encoding",
+          "byte_count",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "json_format": {
+        "type": "string",
+        "enum": [
+          "pretty",
+          "compact"
+        ],
+        "description": "JSON patch postimage serialization, with one trailing newline. Omission means pretty JSON; compact uses canonical sorted keys."
+      }
+    }
   },
   "is_world_effect": true
 }
