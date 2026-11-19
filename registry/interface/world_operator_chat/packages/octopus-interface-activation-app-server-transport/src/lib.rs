@@ -12,7 +12,6 @@ use octopus_interface_transport::{
     InterfaceHostIoLimits, send_arrival,
 };
 use octopus_interfaces::{DeliveryVerdict, RefusedReason};
-use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 pub const TRANSPORT_REF: &str = "app_server_transport";
@@ -282,7 +281,7 @@ fn refused_frame(message: impl Into<String>) -> String {
 
 #[derive(Default)]
 struct InFlightHandIns {
-    entries: tokio::sync::Mutex<std::collections::HashMap<String, Arc<InFlightHandIn>>>,
+    entries: tokio::sync::Mutex<std::collections::HashMap<PathBuf, Arc<InFlightHandIn>>>,
 }
 
 struct InFlightHandIn {
@@ -323,7 +322,7 @@ async fn handle_wire_frame_with_inflight(
     in_flight: Arc<InFlightHandIns>,
     cancel: CancellationToken,
 ) -> Result<String, ()> {
-    let artifact = match octopus_interfaces::InterfaceArtifactFile::store_manifest_bounded(
+    let artifact = match octopus_interfaces::InterfaceArtifactFile::capture_activation_manifest_bounded(
         artifact_root,
         text.as_bytes(),
         host_io_limits.max_manifest_bytes,
@@ -332,26 +331,15 @@ async fn handle_wire_frame_with_inflight(
         Ok(artifact) => artifact,
         Err(error) => return Ok(refused_frame(error.to_string())),
     };
-    let payload_bytes = match artifact.read_payload_bytes_bounded(host_io_limits.max_payload_bytes)
-    {
-        Ok(payload_bytes) => payload_bytes,
-        Err(error) => return Ok(refused_frame(error.to_string())),
-    };
-    let mut digest = Sha256::new();
-    digest.update(u64::try_from(text.len()).unwrap_or(u64::MAX).to_be_bytes());
-    digest.update(text.as_bytes());
-    digest.update(
-        u64::try_from(payload_bytes.len())
-            .unwrap_or(u64::MAX)
-            .to_be_bytes(),
-    );
-    digest.update(&payload_bytes);
-    let key = format!("{:x}", digest.finalize());
+    let key = artifact.manifest_path().to_owned();
     let (entry, owns_hand_in) = {
         let mut entries = in_flight.entries.lock().await;
         if let Some(entry) = entries.get(&key) {
             (entry.clone(), false)
         } else {
+            if let Err(error) = artifact.persist_captured_manifest() {
+                return Ok(refused_frame(error.to_string()));
+            }
             let entry = Arc::new(InFlightHandIn::new());
             entries.insert(key.clone(), entry.clone());
             (entry, true)
@@ -364,7 +352,8 @@ async fn handle_wire_frame_with_inflight(
         let task_entry = entry.clone();
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            let result = match std::panic::AssertUnwindSafe(hand_in_captured_artifact(
+            let staged_manifest = artifact.manifest_path().to_path_buf();
+            let verdict = match std::panic::AssertUnwindSafe(hand_in_captured_artifact(
                 &tx,
                 &interface_id,
                 artifact,
@@ -379,8 +368,16 @@ async fn handle_wire_frame_with_inflight(
                     Err(())
                 }
             };
-            task_entry.complete(result).await;
             let mut entries = in_flight.entries.lock().await;
+            if matches!(&verdict, Ok(DeliveryVerdict::Admitted { .. })) {
+                if let Err(error) = std::fs::remove_file(staged_manifest) {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(interface = %interface_id, %error, "could not retire admitted activation manifest");
+                    }
+                }
+            }
+            let result = verdict.and_then(|verdict| serde_json::to_string(&verdict).map_err(|_| ()));
+            task_entry.complete(result).await;
             if entries
                 .get(&key)
                 .is_some_and(|current| Arc::ptr_eq(current, &task_entry))
@@ -397,7 +394,7 @@ async fn hand_in_captured_artifact(
     interface_id: &InterfaceId,
     artifact: octopus_interfaces::InterfaceArtifactFile,
     cancel: CancellationToken,
-) -> Result<String, ()> {
+) -> Result<DeliveryVerdict, ()> {
     let hand_in = async move {
         let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel();
         if send_arrival(tx, interface_id, artifact, Vec::new(), Some(verdict_tx))
@@ -406,8 +403,7 @@ async fn hand_in_captured_artifact(
         {
             return Err(());
         }
-        let verdict = verdict_rx.await.map_err(|_| ())?;
-        serde_json::to_string(&verdict).map_err(|_| ())
+        verdict_rx.await.map_err(|_| ())
     };
     tokio::select! {
         _ = cancel.cancelled() => Err(()),
@@ -983,6 +979,7 @@ mod tests {
                     .await
                     .is_err()
             );
+            assert!(arrival.artifact.manifest_path().is_file());
             arrival
                 .verdict_tx
                 .unwrap()
@@ -993,6 +990,10 @@ mod tests {
         let first = first.unwrap();
         let second = second.unwrap();
         assert_eq!(first, second);
+        assert!(root.path().read_dir().unwrap().all(|entry| {
+            !entry.unwrap().file_name().to_string_lossy().ends_with(".artifact.json")
+        }));
+        assert_eq!(std::fs::read(payload).unwrap(), b"same");
         assert_eq!(
             serde_json::from_str::<DeliveryVerdict>(&first).unwrap(),
             DeliveryVerdict::Admitted { seq: 9 }
@@ -1128,6 +1129,10 @@ mod tests {
             second_arrival.artifact.read_payload_bytes().unwrap(),
             b"second"
         );
+        let first_manifest = first_arrival.artifact.manifest_path().to_path_buf();
+        let second_manifest = second_arrival.artifact.manifest_path().to_path_buf();
+        assert_ne!(first_manifest, second_manifest);
+        let refused = DeliveryVerdict::refused(RefusedReason::NoBinding, serde_json::json!({}));
         first_arrival
             .verdict_tx
             .unwrap()
@@ -1136,7 +1141,7 @@ mod tests {
         second_arrival
             .verdict_tx
             .unwrap()
-            .send(DeliveryVerdict::Admitted { seq: 11 })
+            .send(refused.clone())
             .unwrap();
         assert_eq!(
             serde_json::from_str::<DeliveryVerdict>(&first.await.unwrap().unwrap()).unwrap(),
@@ -1144,8 +1149,11 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<DeliveryVerdict>(&second.await.unwrap().unwrap()).unwrap(),
-            DeliveryVerdict::Admitted { seq: 11 }
+            refused
         );
+        assert!(!first_manifest.exists());
+        assert!(second_manifest.is_file(), "refused capture is retained");
+        assert_eq!(std::fs::read(payload).unwrap(), b"second");
     }
 
     #[tokio::test]

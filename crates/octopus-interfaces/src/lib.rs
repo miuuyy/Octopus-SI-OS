@@ -667,7 +667,27 @@ impl InterfaceArtifactFile {
         maximum_manifest_bytes: u64,
         maximum_payload_bytes: u64,
     ) -> Result<Self, InterfaceArtifactFileError> {
-        let root = root.as_ref();
+        let artifact = Self::capture_incoming_manifest(root.as_ref(), manifest_bytes, maximum_manifest_bytes, maximum_payload_bytes, false)?;
+        artifact.persist_captured_manifest()?;
+        Ok(artifact)
+    }
+
+    pub fn capture_activation_manifest_bounded(
+        root: impl AsRef<Path>,
+        manifest_bytes: &[u8],
+        maximum_manifest_bytes: u64,
+        maximum_payload_bytes: u64,
+    ) -> Result<Self, InterfaceArtifactFileError> {
+        Self::capture_incoming_manifest(root.as_ref(), manifest_bytes, maximum_manifest_bytes, maximum_payload_bytes, true)
+    }
+
+    fn capture_incoming_manifest(
+        root: &Path,
+        manifest_bytes: &[u8],
+        maximum_manifest_bytes: u64,
+        maximum_payload_bytes: u64,
+        activation_capture: bool,
+    ) -> Result<Self, InterfaceArtifactFileError> {
         let provisional_path = root.join("incoming.artifact.json");
         let manifest_size = u64::try_from(manifest_bytes.len()).unwrap_or(u64::MAX);
         if manifest_size > maximum_manifest_bytes {
@@ -691,14 +711,26 @@ impl InterfaceArtifactFile {
         let manifest = parse_interface_artifact_manifest(manifest_bytes, &provisional_path)?;
         let payload_bytes = read_manifest_payload_bounded(&manifest, None, maximum_payload_bytes)?;
         validate_manifest_payload_hash_bytes(&manifest, &payload_bytes)?;
-        let manifest_hash = ContentHash::of_bytes(manifest_bytes);
+        let manifest_hash = if activation_capture && manifest.payload_content_hash.is_none() {
+            let mut capture = manifest_bytes.to_vec();
+            capture.extend_from_slice(ContentHash::of_bytes(&payload_bytes).as_bytes());
+            ContentHash::of_bytes(&capture)
+        } else {
+            ContentHash::of_bytes(manifest_bytes)
+        };
         let manifest_path = root.join(format!(
             "{}-{}.artifact.json",
             artifact_label_slug(&manifest.label),
             manifest_hash.to_hex()
         ));
-        write_manifest_atomic(&manifest_path, manifest_bytes)?;
         Self::from_captured_snapshot(manifest_path, manifest_bytes.to_vec(), payload_bytes)
+    }
+
+    pub fn persist_captured_manifest(&self) -> Result<(), InterfaceArtifactFileError> {
+        let snapshot = self.captured_snapshot.as_ref().ok_or_else(|| InterfaceArtifactFileError::UncapturedCarrier {
+            path: self.manifest_path.display().to_string(),
+        })?;
+        write_manifest_atomic(&self.manifest_path, &snapshot.manifest_bytes)
     }
 
     pub fn pin_manifest_into_blob(

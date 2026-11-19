@@ -1568,7 +1568,11 @@ fn has_explicit_resolved_path_entry(
     entries: &[ResolvedFileSystemEntry],
     path: &AbsolutePathBuf,
 ) -> bool {
-    entries.iter().any(|entry| &entry.path == path)
+    entries.iter().any(|entry| {
+        entry.access.can_write()
+            && (&entry.path == path
+                || normalize_effective_absolute_path(entry.path.clone()) == *path)
+    })
 }
 
 fn metadata_path_name(name: &OsStr) -> Option<&'static str> {

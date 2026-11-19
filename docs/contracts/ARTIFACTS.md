@@ -27,7 +27,9 @@ the manifest and payload bytes; admission pins both by content hash in the
 durable blob store before recording the movement. Later readers resolve the
 pinned bytes, not the original staging paths. The emitting interface owns its
 staging files and may reclaim them after admission and its own durable completion,
-provided no prepared or pending work still needs them.
+provided no prepared or pending work still needs them. The activation transport retains the staged manifest through the
+delivery verdict. Admission releases its private staging copy. Refusal retains
+the manifest, and the sender continues to own its original payload.
 
 This shape is the only coupling between an interface and the runtime. A
 terminal UI, a provider bridge, an HTTP poller, a microphone adapter, and the

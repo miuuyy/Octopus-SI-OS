@@ -74,8 +74,8 @@ is a non-event.
 `mark` is an id from `registry/mark/`. `artifact_label` says which artifact is
 the candidate. `verifier` is an id from `registry/verifier/`. `params` are
 ordinary JSON authored with the run - the variables of the check, such as
-`expected_text`, `lang`, or `timeout_ms`. The runtime does **not** understand
-or validate their schema; that is entirely the verifier's responsibility.
+`expected_text` or `lang`. The verifier validates its own params. The runtime
+also reads the optional `params.timeout_ms` process limit described below.
 
 ## The executable contract
 
@@ -103,8 +103,15 @@ It prints exactly one JSON verdict on stdout:
 {"passed": true, "details": {}}
 ```
 
-Non-JSON stdout, a non-zero exit, a missing `passed` field, or a timeout
-(`params.timeout_ms`, default 5000, maximum 60000) all fail closed as `failed`.
+Non-JSON stdout, a non-zero exit, a missing or non-boolean `passed` field,
+or exceeding a configured time limit all fail closed as `failed`.
+
+There is no implicit timeout or fixed maximum. A package that reaches outside
+the system may set `timeout_ms` in its descriptor. An unsigned integer
+`timeout_ms` in the merged params can supply a limit on its own or narrow the
+descriptor's limit; when both are set, the runtime uses the smaller value.
+The effective limit is at least 1 ms. With neither configured, the process
+runs until it returns a verdict, exits, or is cancelled.
 
 A Rust verifier is built as its own executable and named in the same `script`
 field. Python, shell, and JavaScript use the same stdin/stdout contract. A new

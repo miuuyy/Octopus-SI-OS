@@ -24,14 +24,21 @@ read from the record. See [Policy](contracts/POLICY.md).
 
 **Process authority decides what a process can physically touch.** Tools,
 verifiers, and interface processes start with a cleared environment. With the
-default `sandbox_mode: "enforced"`, they run inside a deny-by-default macOS
-sandbox (`sandbox-exec`). Each receives only the root
+default `sandbox_mode: "enforced"`, they run inside a deny-by-default OS sandbox:
+
+- **macOS:** Seatbelt (`sandbox-exec`) with a generated process profile.
+- **Linux:** AppArmor with the 4.0 policy ABI, systemd, and cgroup v2. The
+  privileged `octopus-process-authority.service` confines the child before it
+  executes and ties descendant cleanup to a lease. See
+  [Process isolation on Linux](linux.md) for setup and requirements.
+
+Each receives only the root
 slots, paths, executables, environment names, and network or local-IPC access
 its descriptor declares. A command declared by name is found through the
 declared `PATH` and runs only from its canonical file; the name it was found
 under and each symbolic link on the way get metadata access only, so the
 process can call it by that name without reading what sits around it. The
-launching code writes that sandbox profile to a
+macOS launcher writes its Seatbelt profile to a
 private file, and every profile denies writes to the pending profile files in
 its location, so a process with broad write authority still cannot rewrite
 them. A file tool whose path arrives in its arguments is
@@ -50,7 +57,9 @@ grant itself, and since the room is also the executor, a model cannot talk its
 way past it.
 
 In enforced mode, a platform with no backend that can enforce independent read,
-write, and execute roots refuses to start the process. The preview targets macOS.
+write, and execute roots refuses to start the process. Linux confinement requires a
+working process authority service; it does not silently fall back to an
+unconfined launch.
 
 ## What is recorded
 
