@@ -9,6 +9,7 @@ members = [
 exclude = [
     "registry/interface/world_provider_codex/packages/bin",
     "examples/mcp-identity-guard",
+    "third_party/pagable",
 ]
 [workspace.package]
 edition = "2021"
@@ -49,3 +50,6 @@ opt-level = 3
 [profile.test]
 incremental = false
 debug = 0
+
+[patch.crates-io]
+pagable = { path = "third_party/pagable" }
