@@ -32,11 +32,12 @@ function fakeLayout({ live = "live", staging = "staging", prev = null } = {}) {
 function fakeRuntime(successorPhases, failuresByInstance = []) {
   const home = tempRoot(), directory = path.join(home, "state", "runtime-instance");
   fs.mkdirSync(directory, { recursive: true });
-  const state = { started: 1, phase: "ready", requests: [] };
+  const state = { started: 1, phase: "ready", requests: [], onRequest: null };
   const server = net.createServer((socket) => {
     socket.once("data", (chunk) => {
       const { request } = JSON.parse(String(chunk));
       state.requests.push(request);
+      state.onRequest?.(request);
       socket.end(`${JSON.stringify({ outcome: "status", pid: 42, phase: state.phase, started_at_unix_ms: state.started, stopping: null,
         interface_failures: failuresByInstance[state.started - 1] ?? [] })}\n`);
       if (request === "restart") { state.phase = successorPhases[state.started - 1] ?? "ready"; state.started += 1; }
@@ -48,27 +49,42 @@ function fakeRuntime(successorPhases, failuresByInstance = []) {
 function fakeLedger(home) {
   const directory = path.join(home, "ledger"), blobs = path.join(directory, "blobs");
   fs.mkdirSync(blobs, { recursive: true });
+  const file = path.join(directory, "movements.jsonl"), inputs = new Map();
+  fs.writeFileSync(file, "");
   let seq = 0;
-  const blob = (value) => {
-    const name = crypto.createHash("sha256").update(`${seq}:${JSON.stringify(value)}`).digest("hex");
+  const content = (value) => {
+    const name = crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
     fs.writeFileSync(path.join(blobs, name), JSON.stringify(value));
-    return name;
+    return [...Buffer.from(name, "hex")];
   };
-  const row = (run, label, content, at, kind = "InterfaceArrival") => {
-    fs.appendFileSync(path.join(directory, "movements.jsonl"), `${JSON.stringify({ seq, kind, recorded_at_unix_ms: at,
-      from: { Interface: "provider" }, to: { Interface: "worker" }, artifact: { id: `${label}:${"0".repeat(64)}`, content },
-      invocation_metadata: { runtime: { run } } })}\n`);
+  const artifact = (label, ref) => ({ id: label + ":" + Buffer.from(ref).toString("hex"), content: ref });
+  const row = (run, artifact, at, provider, kind = "InterfaceArrival") => {
+    const [from, to] = kind === "InterfaceOutbound" ? ["worker", provider] : [provider, "worker"];
+    fs.appendFileSync(file, JSON.stringify({ seq, kind, recorded_at_unix_ms: at,
+      from: { Interface: from }, to: { Interface: to }, artifact,
+      invocation_metadata: { runtime: { run, interface: provider, worker: "worker" } } }) + "\n");
     return seq++;
   };
+  const providerEvent = (run, label, fields, at, provider) =>
+    row(run, artifact(label, content({ label, ...fields })), at, provider);
   return {
-    dispatch: (run, method, at = 100, options = {}) => {
-      const payload = { label: "provider.transport.dispatch", method };
-      const name = options.manifest ? blob({ label: "provider.transport.dispatch", payload_content_hash: blob(payload) }) : blob(payload);
-      return row(run, "provider.transport.dispatch", [...Buffer.from(name, "hex")], at, options.kind);
+    file,
+    movement: (kind, at = 100) => row("fixture", null, at, "provider", kind),
+    dispatch: (run, method, at = 100, { provider = "provider", manifest = false, kind } = {}) => {
+      const ref = artifact("operator.message", content({ run, seq }));
+      const input = { ref, seq: row(run, ref, at, provider, "InterfaceOutbound") };
+      inputs.set(run, input);
+      const label = "provider.transport.dispatch";
+      const payload = content({ label, method, provider_interface: provider, source_movement_seq: input.seq });
+      return row(run, artifact(label, manifest
+        ? content({ label, payload_content_hash: Buffer.from(payload).toString("hex") }) : payload), at, provider, kind);
     },
-    unreadableDispatch: (run, at = 100) => row(run, "provider.transport.dispatch", Array(32).fill(7), at),
-    close: (run, label, at = 100) => row(run, label, Array(32).fill(1), at),
-    raw: (text) => fs.appendFileSync(path.join(directory, "movements.jsonl"), `${text}\n`),
+    input: (run) => inputs.get(run),
+    unreadableDispatch: (run, at = 100) => row(run, artifact("provider.transport.dispatch", Array(32).fill(7)), at, "provider"),
+    event: providerEvent,
+    close: (run, label, at = 100, fields = { in_reply_to: inputs.get(run).ref }, provider = "provider") =>
+      providerEvent(run, label, { ...(label === "turn.error" ? { will_retry: false } : {}), ...fields }, at, provider),
+    raw: (text) => fs.appendFileSync(file, text),
   };
 }
 
@@ -110,34 +126,49 @@ async function main() {
   assert.deepEqual(blockingTurns(chats, ["a", "unrelated"]).map((chat) => chat.run_id), ["c"]);
 
   let home = tempRoot();
-  assert.deepEqual(await readLedgerTurns(home), []);
+  await assert.rejects(readLedgerTurns(home), /movement ledger unavailable.*ENOENT/);
   let ledger = fakeLedger(home);
+  ledger.movement("ArtifactMoved", 1);
+  ledger.movement({ MarkOutcomeAdmitted: "task.summary.received" }, 1);
   const openedAt = ledger.dispatch("service_open", "turn/start", 100, { manifest: true });
+  ledger.movement({ MarkOutcomeAdmitted: "tool.result.corresponds" });
+  ledger.movement("VerificationFailed");
+  ledger.movement("DeliveryRefused");
   ledger.dispatch("service_done", "turn/start");
   ledger.close("service_done", "turn.completed");
   ledger.dispatch("service_failed", "turn/start");
   ledger.close("service_failed", "turn.error");
   ledger.dispatch("service_interrupted", "turn/start");
+  const interrupted = ledger.input("service_interrupted");
   ledger.dispatch("service_interrupted", "turn/interrupt");
-  ledger.close("service_interrupted", "turn.interrupted.result");
+  ledger.close("service_interrupted", "turn.interrupted.result", 100, { source_movement_seq: interrupted.seq });
   ledger.dispatch("service_answered", "turn/start");
   ledger.close("service_answered", "interface.artifact.output");
   ledger.dispatch("only_interrupt", "turn/interrupt");
   ledger.dispatch("outbound_only", "turn/start", 100, { kind: "InterfaceOutbound" });
   ledger.dispatch("before_this_runtime", "turn/start", 10);
   ledger.dispatch("client_chat", "turn/start");
-  ledger.raw('{"truncated "provider.transport.dispatch:');
-  const unreadableAt = ledger.unreadableDispatch("sensor_unreadable");
   ledger.dispatch("service_reopened", "turn/start");
   ledger.close("service_reopened", "turn.completed");
   const reopenedAt = ledger.dispatch("service_reopened", "turn/start");
   assert.deepEqual(await readLedgerTurns(home, { sinceUnixMs: 50, skipRuns: ["client_chat"] }), [
     { run_id: "service_open", turn_open: true, turn_state: "working", source: "ledger", opened_movement_seq: openedAt },
-    { run_id: "sensor_unreadable", turn_open: true, turn_state: "working", source: "ledger", opened_movement_seq: unreadableAt },
     { run_id: "service_reopened", turn_open: true, turn_state: "working", source: "ledger", opened_movement_seq: reopenedAt },
   ]);
   assert.deepEqual((await readLedgerTurns(home)).map((turn) => turn.run_id).sort(),
-    ["before_this_runtime", "client_chat", "sensor_unreadable", "service_open", "service_reopened"]);
+    ["before_this_runtime", "client_chat", "service_open", "service_reopened"]);
+
+  for (const kind of [
+    "MarkOutcomeAdmitted", "UnknownMovement", {}, { Unexpected: "mark" },
+    { MarkOutcomeAdmitted: "" }, { MarkOutcomeAdmitted: null }, { MarkOutcomeAdmitted: 1 },
+    { MarkOutcomeAdmitted: ["mark"] }, { MarkOutcomeAdmitted: { id: "mark" } },
+    { MarkOutcomeAdmitted: "mark", extra: 1 }, { ArtifactMoved: null }, [{ MarkOutcomeAdmitted: "mark" }],
+  ]) {
+    const malformedHome = tempRoot();
+    fakeLedger(malformedHome).movement(kind, 1);
+    await assert.rejects(readLedgerTurns(malformedHome, { sinceUnixMs: 50 }),
+      /invalid or non-contiguous movement ledger row after sequence -1/);
+  }
 
   layout = fakeLayout();
   fakeProjectionBundle(layout, [{ run_id: "client_chat" }, { run_id: "client_idle" }],
@@ -146,8 +177,29 @@ async function main() {
   const inFlight = await readTurnsInFlight(layout.live, home, { sinceUnixMs: 50 });
   assert.deepEqual(inFlight.map((turn) => [turn.run_id, turn.source, turn.turn_open]), [
     ["client_chat", "client", true], ["client_idle", "client", false],
-    ["service_open", "ledger", true], ["sensor_unreadable", "ledger", true], ["service_reopened", "ledger", true]]);
-  assert.deepEqual(blockingTurns(inFlight, "client_chat").map((turn) => turn.run_id), ["service_open", "sensor_unreadable", "service_reopened"]);
+    ["service_open", "ledger", true], ["service_reopened", "ledger", true]]);
+  assert.deepEqual(blockingTurns(inFlight, "client_chat").map((turn) => turn.run_id), ["service_open", "service_reopened"]);
+
+  home = tempRoot();
+  ledger = fakeLedger(home);
+  ledger.dispatch("native", "turn/start");
+  const reply = ledger.input("native").ref;
+  ledger.event("native", "turn.started", { in_reply_to: reply, threadId: "thread", turn: { id: "current" } }, 100, "provider");
+  ledger.close("native", "turn.completed", 100, { in_reply_to: reply, threadId: "thread", turn: { id: "older" } });
+  await assert.rejects(readLedgerTurns(home), /ambiguous turn closure/);
+  ledger.close("native", "turn.completed", 100, { threadId: "thread", turn: { id: "current" } });
+  assert.deepEqual(await readLedgerTurns(home), []);
+  ledger.dispatch("native", "turn/start");
+  ledger.close("native", "interface.artifact.output", 100, { in_reply_to: reply });
+  await assert.rejects(readLedgerTurns(home), /ambiguous turn closure/);
+
+  home = tempRoot();
+  ledger = fakeLedger(home);
+  const dispatch = ledger.dispatch("provider_bound", "turn/start");
+  ledger.close("provider_bound", "turn.completed", 100, undefined, "another_provider");
+  assert.equal((await readLedgerTurns(home))[0].opened_movement_seq, dispatch);
+  ledger.close("provider_bound", "interface.artifact.output", 100, {});
+  await assert.rejects(readLedgerTurns(home), /ambiguous turn closure/);
 
   const failure = (name, error = "life exited") => ({ interface: name, error });
   assert.deepEqual(newInterfaceFailures({ interface_failures: [] }, { interface_failures: [] }), []);
@@ -213,6 +265,86 @@ async function main() {
   assert.equal(result.runtime.started_at_unix_ms, 2);
   assert.equal(buildInfo(layout.prev).revision, "live");
   await runtime.close();
+
+  for (const [damage, expected] of [
+    [() => {}, /ENOENT/],
+    [(home) => fs.mkdirSync(path.join(home, "ledger/movements.jsonl"), { recursive: true }), /not a regular file/],
+    ...(process.getuid?.() > 0 ? [[(home) => fs.chmodSync(fakeLedger(home).file, 0), /movement ledger unreadable.*EACCES/]] : []),
+    [(home) => fakeLedger(home).raw('{"seq":0'), /torn movement ledger/],
+    [(home) => fakeLedger(home).raw('{"seq":0\n'), /malformed movement ledger/],
+    [(home) => fakeLedger(home).movement({ MarkOutcomeAdmitted: "" }), /invalid or non-contiguous movement ledger/],
+    [(home) => {
+      const ledger = fakeLedger(home);
+      ledger.movement({ MarkOutcomeAdmitted: "tool.result.corresponds" });
+      ledger.raw('{"seq":2,"kind":"ArtifactMoved","recorded_at_unix_ms":100}\n');
+    }, /non-contiguous movement ledger row after sequence 0/],
+    [(home) => fakeLedger(home).unreadableDispatch("unreadable"), /unreadable provider.transport.dispatch/],
+    [(home) => {
+      const ledger = fakeLedger(home);
+      ledger.dispatch("service", "turn/start");
+      ledger.close("service", "turn.completed", 100, {});
+    }, /ambiguous turn closure/],
+  ]) {
+    layout = fakeLayout();
+    runtime = await fakeRuntime([]);
+    try {
+      fakeProjectionBundle(layout, [], []);
+      damage(runtime.home);
+      result = await restartRuntime(layout, runtime.home, { ...options, swap: true, force: true });
+      assert.equal(result.refused, "turn_evidence_untrusted");
+      assert.match(result.error, expected);
+      assert.deepEqual(runtime.state.requests, ["status"]);
+      assert.equal(buildInfo(layout.live).revision, "live");
+      assert.equal(buildInfo(layout.staging).revision, "staging");
+      assert.equal(fs.existsSync(layout.prev), false);
+    } finally { await runtime.close(); }
+  }
+
+  for (const [scenario, expected] of [
+    ["late", "turns_in_flight"], ["late_after_scan", "turn_frontier_changed"], ["changed", "runtime_changed"], ["unreachable", "runtime_unreachable"],
+  ]) {
+    layout = fakeLayout({ prev: "rollback-point" });
+    runtime = await fakeRuntime([]);
+    let closed = false;
+    try {
+      fakeProjectionBundle(layout, [], []);
+      const ledger = fakeLedger(runtime.home);
+      let observations = 0;
+      runtime.state.onRequest = (request) => {
+        if (request !== "status") return;
+        ++observations;
+        if (observations === 2 && scenario === "late") ledger.dispatch("late_work", "turn/start");
+        if (observations === 3 && scenario === "late_after_scan") ledger.dispatch("late_work", "turn/start");
+        if (observations === 3 && scenario === "changed") runtime.state.started += 1;
+      };
+      const readTurns = scenario === "unreachable" ? async (...args) => {
+        const turns = await readTurnsInFlight(...args);
+        await runtime.close();
+        closed = true;
+        return turns;
+      } : undefined;
+      result = await restartRuntime(layout, runtime.home, { ...options, swap: true, force: true, readTurns });
+      assert.equal(result.refused, expected);
+      assert.equal(runtime.state.requests.includes("restart"), false);
+      assert.equal(buildInfo(layout.live).revision, "live");
+      assert.equal(buildInfo(layout.staging).revision, "staging");
+      assert.equal(buildInfo(layout.prev).revision, "rollback-point");
+    } finally { if (!closed) await runtime.close(); }
+  }
+
+  layout = fakeLayout();
+  runtime = await fakeRuntime([]);
+  try {
+    fakeProjectionBundle(layout, [], []);
+    ledger = fakeLedger(runtime.home);
+    ledger.dispatch("finished", "turn/start");
+    ledger.close("finished", "turn.completed");
+    result = await restartRuntime(layout, runtime.home, { ...options, swap: true });
+    assert.equal(result.ok, true);
+    assert.deepEqual(runtime.state.requests, ["status", "status", "status", "restart", "status"]);
+    assert.equal(buildInfo(layout.live).revision, "staging");
+    assert.equal(buildInfo(layout.prev).revision, "live");
+  } finally { await runtime.close(); }
 
   layout = fakeLayout();
   runtime = await fakeRuntime(["starting", "ready"]);

@@ -305,7 +305,7 @@ node app/scripts/safe-self-update.cjs restart --swap --caller-run=<run id> --det
 | `packages status` | Installed packages compared with the live bundle's package library, and baseline registry files that differ from the bundle. Read-only. |
 | `packages sync` | Repairs every installed package whose source changed and that has no local changes, through the client's own `repairLocalPackages`. Packages with local changes or errors are listed, never forced. `world_operator_chat` is repaired only with `--with-chat-client`; relaunch the client afterwards. `--only=a,b` narrows the set. |
 | `swap` | `Octopus.app` → `Octopus.prev.app`, `Octopus.staging.app` → `Octopus.app`: two renames, the first undone if the second fails. |
-| `restart` | Refuses while any run has a turn in flight, except `--caller-run` and each run named by a repeatable `--allow-in-flight-run <run id>` (`--force` overrides the whole guard). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` in which no interface fails that was not already failing before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1, naming the regressed interfaces in `new_interface_failures`; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
+| `restart` | Refuses while any run has a turn in flight, except `--caller-run` and each run named by a repeatable `--allow-in-flight-run <run id>` (`--force` overrides already-observed open turns, not changed or untrusted evidence). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` in which no interface fails that was not already failing before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1, naming the regressed interfaces in `new_interface_failures`; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
 | `rollback` | `Octopus.app` → `Octopus.failed.app`, `Octopus.prev.app` → `Octopus.app`. Restart afterwards. |
 
 Every build ends with a notice of how much disk space the build output takes
@@ -333,9 +333,15 @@ What the tool relies on, and its limits:
   (`projection.operator.chats.status`). Every other run (a service, memory or
   sensor-triggered run without a chat surface) is folded from the movement
   ledger: a provider `turn/start` dispatch recorded since the running runtime
-  started opens a turn, and `turn.completed`, `turn.error`,
-  `turn.interrupted.result` or the run's output artifact closes it. A dispatch
-  whose payload cannot be read counts as an open turn.
+  started opens a turn. A completion, terminal error, interruption result or
+  output must match the provider and exact input or observed native turn; a
+  closing label alone does not establish quiet. A missing, unreadable or torn
+  ledger, unreadable dispatch, or unresolved ambiguous closure refuses the
+  restart. The updater checks the ready runtime generation and turn frontier
+  again before any automatic swap or restart. Retry after activity settles if
+  the ledger changes during inspection. These checks do not atomically stop new
+  admissions: coordinate a quiet window. Standalone `swap` is a low-level
+  bundle operation, not the guarded restart path.
 - Interface health is compared by identity. An interface that fails after the
   restart and did not fail before is a regression even when another interface
   recovered and the number of failures is unchanged.
