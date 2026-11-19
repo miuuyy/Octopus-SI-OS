@@ -1,0 +1,22 @@
+{
+  "id": "outcrawl.unsubscribe_resource",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "unsubscribe_resource"
+  },
+  "description": "Remove one remote MCP resource subscription.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "uri": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "uri"
+    ],
+    "additionalProperties": false
+  }
+}

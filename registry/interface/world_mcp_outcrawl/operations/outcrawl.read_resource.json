@@ -1,0 +1,23 @@
+{
+  "id": "outcrawl.read_resource",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.resource",
+  "handler_config": {
+    "operation": "read_resource"
+  },
+  "description": "Read one resource selected from the external MCP server's emitted resource catalog. The URI is accepted only as an explicit tool argument; catalog projection never fetches resource bodies eagerly. Success and refusal return as mcp.resource artifacts.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "uri": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Exact URI from a resource entry emitted by this bound MCP interface."
+      }
+    },
+    "required": [
+      "uri"
+    ],
+    "additionalProperties": false
+  }
+}

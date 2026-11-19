@@ -1,0 +1,13 @@
+{
+  "id": "outcrawl.close",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "close"
+  },
+  "description": "Close the bound remote MCP transport session.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "outcrawl.ping",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.result",
+  "handler_config": {
+    "operation": "ping"
+  },
+  "description": "Probe the bound remote MCP protocol endpoint.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

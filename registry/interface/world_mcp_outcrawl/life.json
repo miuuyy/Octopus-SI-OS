@@ -1,0 +1,64 @@
+{
+  "processes": [
+    {
+      "bin": "target/debug/octopus-mcp-client-life",
+      "io_limits": {
+        "max_control_frame_bytes": 1048576,
+        "max_stderr_bytes": 262144,
+        "max_manifest_bytes": 1048576,
+        "max_payload_bytes": 268435456
+      },
+      "args": [],
+      "inherit_env_from_interface": [
+        "/interface_driver_config/transport/auth_env_key"
+      ],
+      "authority": {
+        "read_root_slots": [],
+        "write_root_slots": [],
+        "executable_root_slots": [],
+        "read_paths": [],
+        "write_paths": [],
+        "executable_paths": [],
+        "executable_commands": [],
+        "read_env_paths": [],
+        "write_env_paths": [],
+        "executable_env_paths": [],
+        "allow_network": true,
+        "allow_local_ipc": false
+      },
+      "read_handles": []
+    },
+    {
+      "bin": "target/debug/octopus-mcp-operation-life",
+      "io_limits": {
+        "max_control_frame_bytes": 1048576,
+        "max_stderr_bytes": 262144,
+        "max_manifest_bytes": 1048576,
+        "max_payload_bytes": 268435456
+      },
+      "args": [],
+      "inherit_env_from_interface": [
+        "/interface_driver_config/transport/auth_env_key"
+      ],
+      "authority": {
+        "read_root_slots": [],
+        "write_root_slots": [],
+        "executable_root_slots": [],
+        "read_paths": [],
+        "write_paths": [],
+        "executable_paths": [],
+        "executable_commands": [],
+        "read_env_paths": [],
+        "write_env_paths": [],
+        "executable_env_paths": [],
+        "allow_network": true,
+        "allow_local_ipc": false
+      },
+      "read_handles": [
+        "ledger",
+        "ledger_index",
+        "blobs"
+      ]
+    }
+  ]
+}

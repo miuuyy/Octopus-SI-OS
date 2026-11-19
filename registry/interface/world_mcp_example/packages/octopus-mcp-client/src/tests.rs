@@ -579,7 +579,7 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         "unsubscribe_resource",
     ];
     let tool_filtered_operations: &[&str] = &["call_tool", "close", "list_tools", "status"];
-    let expected: [(&str, &str, Option<&str>, usize, &[&str]); 5] = [
+    let expected: [(&str, &str, Option<&str>, usize, &[&str]); 6] = [
         (
             "world_mcp_example",
             "mcp.example",
@@ -591,6 +591,13 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
             "world_mcp_firecrawl",
             "firecrawl",
             Some("artifact-application-mcp-firecrawl-context"),
+            21,
+            generic_operations,
+        ),
+        (
+            "world_mcp_outcrawl",
+            "outcrawl",
+            Some("artifact-application-mcp-outcrawl-context"),
             21,
             generic_operations,
         ),
@@ -726,7 +733,7 @@ fn every_remote_mcp_operation_is_interface_local_and_strictly_loadable() {
         }
         total += catalog.operations.len();
     }
-    assert_eq!(total, 55);
+    assert_eq!(total, 76);
 }
 
 #[test]

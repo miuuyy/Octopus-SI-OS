@@ -1,0 +1,29 @@
+{
+  "id": "outcrawl.poll_events",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.events",
+  "handler_config": {
+    "operation": "poll_events"
+  },
+  "description": "Replay or wait for remote MCP notifications and server requests after a durable package-owned cursor.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "after_cursor": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "max_events": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 256
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30000
+      }
+    },
+    "additionalProperties": false
+  }
+}

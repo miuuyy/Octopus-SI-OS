@@ -1,0 +1,41 @@
+{
+  "id": "outcrawl.call_tool",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.tool.result",
+  "handler_config": {
+    "operation": "call_tool"
+  },
+  "description": "Call any tool declared by the bound remote MCP server. Use the exact tool name and argument object from outcrawl.list_tools; the interface capability gate and server contract remain fail-closed.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "arguments": {
+        "type": "object"
+      },
+      "progress_token": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "number"
+          }
+        ]
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600000
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  }
+}

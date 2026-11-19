@@ -1,0 +1,27 @@
+{
+  "id": "outcrawl.oauth_complete",
+  "request_label": "mcp.operation.request",
+  "output_label": "mcp.oauth",
+  "handler_config": {
+    "operation": "oauth_complete"
+  },
+  "description": "Complete the pending MCP OAuth PKCE flow with the authorization code and state returned through an operator-facing World interface.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "minLength": 1
+      },
+      "state": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "code",
+      "state"
+    ],
+    "additionalProperties": false
+  }
+}
