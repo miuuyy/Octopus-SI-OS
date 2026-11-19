@@ -1,7 +1,5 @@
 use notify::Watcher;
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use octopus_app_server::{
     EmbeddedRuntime, InterfaceArtifactArrivalAdmissionError, InterfaceArtifactFile,
@@ -465,6 +463,39 @@ pub(crate) async fn run_daemon_on_dirs(
     run_admission_loop(embedded, writer, arrivals, emissions, run_changes, cancel).await
 }
 
+type RelayPaths = std::collections::BTreeSet<PathBuf>;
+
+#[derive(Default)]
+struct RelayCatchUpQueue {
+    paths: RelayPaths,
+    running: bool,
+    due: Option<tokio::time::Instant>,
+}
+
+impl RelayCatchUpQueue {
+    fn extend(&mut self, paths: RelayPaths) {
+        self.paths.extend(paths);
+    }
+
+    fn ready_at(&self) -> Option<tokio::time::Instant> {
+        (!self.running && !self.paths.is_empty()).then(|| self.due.unwrap_or_else(tokio::time::Instant::now))
+    }
+
+    fn start(&mut self) -> RelayPaths {
+        self.running = true;
+        self.due = None;
+        std::mem::take(&mut self.paths)
+    }
+
+    fn complete(&mut self, retry: Option<RelayPaths>, now: tokio::time::Instant) {
+        self.running = false;
+        if let Some(paths) = retry {
+            self.extend(paths);
+            self.due = Some(now + std::time::Duration::from_millis(250));
+        }
+    }
+}
+
 async fn run_admission_loop(
     embedded: std::sync::Arc<EmbeddedRuntime>,
     writer: crate::ledger_writer::LedgerWriter,
@@ -479,36 +510,59 @@ async fn run_admission_loop(
     }
 
     let mut inflight = tokio::task::JoinSet::new();
+    let mut relay = RelayCatchUpQueue::default();
+    let (relay_done, mut relay_results) = tokio::sync::mpsc::unbounded_channel();
     let mut result = loop {
+        let relay_due = relay.ready_at();
         tokio::select! {
-            biased;
             Some(completed) = inflight.join_next(), if !inflight.is_empty() => {
                 if let Err(error) = completed {
                     break Err(error);
                 }
             }
             _ = cancel.cancelled() => break Ok(()),
-            Some(change) = run_changes.recv() => {
-                let mut paths = std::collections::BTreeSet::new();
-                match change {
-                    Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => paths.extend(event.paths),
-                    Ok(_) => {},
-                    Err(error) => { eprintln!("run binding watcher failed: {error}"); continue; }
+            Some(retry) = relay_results.recv(), if relay.running => {
+                relay.complete(retry, tokio::time::Instant::now());
+            }
+            _ = async {
+                if let Some(due) = relay_due {
+                    tokio::time::sleep_until(due).await;
                 }
-                while let Ok(change) = run_changes.try_recv() {
-                    match change {
-                        Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => paths.extend(event.paths),
-                    Ok(_) => {},
-                        Err(error) => eprintln!("run binding watcher failed: {error}"),
-                    }
-                }
+            }, if relay_due.is_some() => {
+                let paths = relay.start();
                 let embedded = embedded.clone();
                 let writer = writer.clone();
+                let done = relay_done.clone();
                 inflight.spawn_local(async move {
-                    if let Err(error) = catch_up_changed_relay_bindings(&embedded, writer, paths).await {
-                        eprintln!("runtime relay catch-up refused: {error}");
-                    }
+                    let retry = match catch_up_changed_relay_bindings(&embedded, writer, &paths).await {
+                        Ok(()) => None,
+                        Err(error) => match error.downcast_ref::<octopus_app_server::spine_root::RegistrySnapshotError>() {
+                            Some(octopus_app_server::spine_root::RegistrySnapshotError::Unstable { .. }) => {
+                                eprintln!("runtime relay catch-up deferred; re-queuing changed paths: {error}");
+                                Some(paths)
+                            }
+                            _ => {
+                                eprintln!("runtime relay catch-up refused: {error}");
+                                None
+                            }
+                        },
+                    };
+                    let _ = done.send(retry);
                 });
+            }
+            Some(change) = run_changes.recv() => {
+                let mut paths = RelayPaths::new();
+                let mut collect = |change: notify::Result<notify::Event>| match change {
+                    Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => paths.extend(event.paths),
+                    Ok(_) => {},
+                    Err(error) => eprintln!("run binding watcher failed: {error}"),
+                };
+                collect(change);
+                for _ in 0..255 {
+                    let Ok(change) = run_changes.try_recv() else { break };
+                    collect(change);
+                }
+                relay.extend(paths);
             }
             next = async {
                 tokio::select! {
@@ -553,9 +607,9 @@ async fn run_admission_loop(
 async fn catch_up_changed_relay_bindings(
     embedded: &EmbeddedRuntime,
     mut writer: crate::ledger_writer::LedgerWriter,
-    paths: std::collections::BTreeSet<std::path::PathBuf>,
+    paths: &RelayPaths,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    embedded.reload_registry_snapshot_on_artifact_arrival()?;
+    embedded.reload_registry_snapshot_on_artifact_arrival().await?;
     let mut interfaces = std::collections::BTreeSet::new();
     for path in paths {
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -971,6 +1025,25 @@ mod tests {
     };
     use octopus_ledger::{ContentHash, MovementLog};
     use std::sync::Arc;
+
+    #[test]
+    fn relay_catch_up_requeues_unstable_batch_and_merges_new_paths() {
+        use std::time::Duration;
+        let mut queue = RelayCatchUpQueue::default();
+        let a = PathBuf::from("a.json");
+        let b = PathBuf::from("b.json");
+        queue.extend([a.clone()].into());
+        assert!(queue.ready_at().is_some());
+        let original = queue.start();
+        queue.extend([b.clone(), a.clone()].into());
+        assert!(queue.ready_at().is_none());
+        let now = tokio::time::Instant::now();
+        queue.complete(Some(original), now);
+        assert_eq!(queue.ready_at(), Some(now + Duration::from_millis(250)));
+        assert_eq!(queue.start(), [a, b].into());
+        queue.complete(None, now);
+        assert!(queue.ready_at().is_none());
+    }
 
     fn test_verifier_package_pin(verifier: &octopus_descriptors::VerifierId) -> octopus_ledger::VerifierPackagePin {
         let registry = repository_registry_root();

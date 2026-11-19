@@ -27,7 +27,7 @@ octopus-policy = { path = "../octopus-policy" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "time"] }
 
 octopus-ee = { path = "../octopus-ee" }
 octopus-verifiers = { path = "../octopus-verifiers" }

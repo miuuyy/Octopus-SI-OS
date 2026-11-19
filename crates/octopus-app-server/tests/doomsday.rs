@@ -130,7 +130,7 @@ async fn measure_round_trips(ee_count: usize, depth: usize) -> Duration {
         );
     }
     embedded
-        .reload_registry_snapshot_on_artifact_arrival()
+        .reload_registry_snapshot_on_artifact_arrival().await
         .unwrap();
     embedded.runtime.set_run_records_dir(runs.clone());
     let startup_ms = boot.elapsed().as_secs_f64() * 1_000.0;

@@ -109,7 +109,7 @@ struct RegistryFileObservation {
     observed: bool,
 }
 
-const REGISTRY_OBSERVATION_ATTEMPTS: usize = 4;
+const REGISTRY_OBSERVATION_ATTEMPTS: usize = 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RegistrySnapshotError {
@@ -123,34 +123,50 @@ impl From<String> for RegistrySnapshotError {
     fn from(error: String) -> Self { Self::Invalid(error) }
 }
 
-fn observe_stable_registry<T>(
+async fn observe_stable_registry<T, W: std::future::Future<Output = ()>>(
+    mut observe: impl FnMut() -> Result<Option<T>, RegistrySnapshotError>,
+    mut wait: impl FnMut(usize) -> W,
+) -> Result<T, RegistrySnapshotError> {
+    for attempt in 0..REGISTRY_OBSERVATION_ATTEMPTS {
+        if let Some(value) = observe()? {
+            return Ok(value);
+        }
+        if attempt + 1 < REGISTRY_OBSERVATION_ATTEMPTS {
+            wait(attempt).await;
+        }
+    }
+    Err(RegistrySnapshotError::Unstable { attempts: REGISTRY_OBSERVATION_ATTEMPTS })
+}
+
+fn registry_retry_delay(attempt: usize) -> std::time::Duration {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let base = (10u64 << attempt.min(5)).min(250);
+    let jitter = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()
+        .subsec_nanos() as u64 % (base / 4 + 1);
+    Duration::from_millis(base + jitter)
+}
+
+fn observe_registry_once<T>(
     current: Option<RegistryDescriptorFingerprint>,
     mut fingerprint: impl FnMut() -> std::io::Result<RegistryDescriptorFingerprint>,
     mut load: impl FnMut() -> Result<T, String>,
-) -> Result<Option<(RegistryDescriptorFingerprint, T)>, RegistrySnapshotError> {
-    for _ in 0..REGISTRY_OBSERVATION_ATTEMPTS {
-        let before = match fingerprint() {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(format!("registry descriptor fingerprint before load failed: {error}").into()),
-        };
-        let candidate = if current == Some(before) {
-            Ok(None)
-        } else {
-            load().map(Some)
-        };
-        let after = match fingerprint() {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(format!("registry descriptor fingerprint after load failed: {error}").into()),
-        };
-        if before != after {
-            continue;
-        }
-        return candidate.map(|snapshot| snapshot.map(|snapshot| (after, snapshot)))
-            .map_err(RegistrySnapshotError::Invalid);
+) -> Result<Option<Option<(RegistryDescriptorFingerprint, T)>>, RegistrySnapshotError> {
+    let before = match fingerprint() {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("registry descriptor fingerprint before load failed: {error}").into()),
+    };
+    let candidate = if current == Some(before) { Ok(None) } else { load().map(Some) };
+    let after = match fingerprint() {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("registry descriptor fingerprint after load failed: {error}").into()),
+    };
+    if before != after {
+        return Ok(None);
     }
-    Err(RegistrySnapshotError::Unstable { attempts: REGISTRY_OBSERVATION_ATTEMPTS })
+    candidate.map(|value| Some(value.map(|snapshot| (after, snapshot))))
+        .map_err(RegistrySnapshotError::Invalid)
 }
 
 const REGISTRY_DESCRIPTOR_KINDS: [&str; 7] = [
@@ -1651,22 +1667,31 @@ impl EmbeddedRuntime {
         Ok(())
     }
 
-    pub fn reload_registry_snapshot_on_artifact_arrival(&self) -> Result<(), RegistrySnapshotError> {
+    pub async fn reload_registry_snapshot_on_artifact_arrival(&self) -> Result<(), RegistrySnapshotError> {
+        observe_stable_registry(|| self.try_reload_registry_snapshot(), |attempt| {
+            tokio::time::sleep(registry_retry_delay(attempt))
+        }).await
+    }
+
+    fn try_reload_registry_snapshot(&self) -> Result<Option<()>, RegistrySnapshotError> {
         let mut current = self
             .registry_fingerprint
             .lock()
             .map_err(|_| "registry fingerprint lock is poisoned".to_string())?;
         let mut files = self.registry_files.lock()
             .map_err(|_| "registry file cache lock is poisoned".to_string())?;
-        if let Some((fingerprint, snapshot)) = observe_stable_registry(
+        let Some(candidate) = observe_registry_once(
             *current,
             || registry_descriptor_fingerprint(&self.registry_root, &self.ee_instances_root, &mut files),
             || LoadedRegistrySnapshot::load(&self.registry_root, &self.ee_instances_root),
-        )? {
+        )? else {
+            return Ok(None);
+        };
+        if let Some((fingerprint, snapshot)) = candidate {
             self.install_registry_snapshot(snapshot)?;
             *current = Some(fingerprint);
         }
-        Ok(())
+        Ok(Some(()))
     }
 }
 

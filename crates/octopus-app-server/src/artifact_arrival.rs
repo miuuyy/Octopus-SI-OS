@@ -179,7 +179,7 @@ pub async fn admit_interface_artifact_arrival(
     arrival_artifact_file: &InterfaceArtifactFile,
     arriving_interface: &InterfaceId,
 ) -> Result<InterfaceArtifactArrivalAdmissionOutcome, InterfaceArtifactArrivalAdmissionError> {
-    let arrival_artifact_file = prepare_interface_artifact_arrival(embedded, log, arrival_artifact_file, arriving_interface)?;
+    let arrival_artifact_file = prepare_interface_artifact_arrival(embedded, log, arrival_artifact_file, arriving_interface).await?;
     let mut arrival = InterfaceArtifactArrivalFromInterface::new(
         &embedded.runtime, log, blobs_arrival, embedded.arrival_dedup.clone(),
         arrival_trace_id(arriving_interface), arriving_interface.clone(),
@@ -203,7 +203,7 @@ pub async fn admit_retained_interface_artifact_arrival(
     arriving_interface: &InterfaceId,
     identity: &str,
 ) -> Result<octopus_ledger::ArtifactDelivery, InterfaceArtifactArrivalAdmissionError> {
-    let artifact = match prepare_interface_artifact_arrival(embedded, log, arrival_artifact_file, arriving_interface) {
+    let artifact = match prepare_interface_artifact_arrival(embedded, log, arrival_artifact_file, arriving_interface).await {
         Ok(artifact) => artifact,
         Err(error) if error.verdict().awaits_current_source() => {
             return Ok(octopus_ledger::ArtifactDelivery::Complete { verdict: error.verdict() });
@@ -216,7 +216,7 @@ pub async fn admit_retained_interface_artifact_arrival(
     ).arrive_retained_artifact(&artifact, identity).await.map_err(Into::into)
 }
 
-fn prepare_interface_artifact_arrival(
+async fn prepare_interface_artifact_arrival(
     embedded: &crate::EmbeddedRuntime,
     log: &mut (dyn MovementLog + Send),
     arrival_artifact_file: &InterfaceArtifactFile,
@@ -224,6 +224,7 @@ fn prepare_interface_artifact_arrival(
 ) -> Result<InterfaceArtifactFile, InterfaceArtifactArrivalAdmissionError> {
     embedded
         .reload_registry_snapshot_on_artifact_arrival()
+        .await
         .map_err(|e| {
             record_boundary_refusal(
                 log,
@@ -258,6 +259,7 @@ pub async fn admit_system_interface_emission(
 ) -> Result<SystemInterfaceEmissionOutcome, InterfaceArtifactArrivalAdmissionError> {
     embedded
         .reload_registry_snapshot_on_artifact_arrival()
+        .await
         .map_err(|e| {
             record_boundary_refusal(
                 log,
@@ -312,6 +314,7 @@ pub async fn admit_system_interface_reference_emission(
 ) -> Result<SystemInterfaceEmissionOutcome, InterfaceArtifactArrivalAdmissionError> {
     embedded
         .reload_registry_snapshot_on_artifact_arrival()
+        .await
         .map_err(|e| {
             record_boundary_refusal(
                 log,

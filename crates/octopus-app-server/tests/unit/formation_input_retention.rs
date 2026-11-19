@@ -172,18 +172,19 @@ fn registry_fingerprint_tracks_same_size_rewrites_with_preserved_mtime() {
     assert_eq!(previous, registry_descriptor_fingerprint(&registry, &instances, &mut files).unwrap());
 }
 
-#[test]
-fn registry_observation_requires_stability_and_propagates_read_failures() {
+#[tokio::test]
+async fn registry_observation_requires_stability_and_propagates_read_failures() {
     for (reads, expected, loads) in [
         (vec![1, 2, 2, 2], "ok", 2),
         (vec![1, 1], "malformed", 1),
-        ((1..=8).collect(), "after 4 attempts", 4),
+        ((1..=(2 * REGISTRY_OBSERVATION_ATTEMPTS as u128)).collect(), "unstable", REGISTRY_OBSERVATION_ATTEMPTS),
         (vec![0], "before load failed", 0),
         (vec![1, 0], "after load failed", 1),
         (vec![u128::MAX, 1, 2, 2, 2], "ok", 2),
         (vec![1, u128::MAX, 2, 2], "ok", 2),
         (vec![u128::MAX, 1, 1], "malformed", 1),
-        (vec![u128::MAX; 4], "after 4 attempts", 0),
+        (vec![u128::MAX; REGISTRY_OBSERVATION_ATTEMPTS], "unstable", 0),
+        (vec![u128::MAX, u128::MAX, u128::MAX, u128::MAX, 1, 2, 2, 2], "ok", 2),
     ] {
         let mut reads = reads.into_iter().map(|digest| match digest {
             0 => Err(std::io::Error::other("unreadable")),
@@ -194,20 +195,22 @@ fn registry_observation_requires_stability_and_propagates_read_failures() {
             }),
         });
         let mut count = 0;
+        let mut waits = Vec::new();
         let result = observe_stable_registry(
-            None,
-            || reads.next().unwrap(),
-            || {
+            || observe_registry_once(None, || reads.next().unwrap(), || {
                 count += 1;
                 (count != 1).then_some(count).ok_or("malformed".into())
-            },
-        );
+            }),
+            |attempt| { waits.push(attempt); std::future::ready(()) },
+        ).await;
+        assert_eq!(waits, (0..waits.len()).collect::<Vec<_>>());
+        if expected == "unstable" { assert_eq!(waits.len(), REGISTRY_OBSERVATION_ATTEMPTS - 1); }
         assert_eq!(count, loads);
         assert!(reads.next().is_none());
         assert!(match result {
             Ok(Some((f, candidate))) => expected == "ok" && (f.digest, candidate) == (2, 2),
             Err(error) => {
-                assert_eq!(matches!(error, RegistrySnapshotError::Unstable { .. }), expected == "after 4 attempts");
+                assert_eq!(matches!(error, RegistrySnapshotError::Unstable { .. }), expected == "unstable");
                 if let RegistrySnapshotError::Unstable { attempts } = &error {
                     let verdict = crate::InterfaceArtifactArrivalAdmissionError::RegistryUnstable { attempts: *attempts }.verdict();
                     assert!(matches!(verdict, octopus_ledger::DeliveryVerdict::Refused {
@@ -215,7 +218,9 @@ fn registry_observation_requires_stability_and_propagates_read_failures() {
                     }));
                     assert_eq!(serde_json::to_value(verdict).unwrap()["refused"]["reason"], "registry_unstable");
                 }
-                error.to_string().contains(expected)
+                if expected == "unstable" {
+                    error.to_string().contains(&format!("after {REGISTRY_OBSERVATION_ATTEMPTS} attempts"))
+                } else { error.to_string().contains(expected) }
             },
             Ok(None) => false,
         });
@@ -270,4 +275,24 @@ fn admission_guards_only_the_selected_ee_dependency_closure() {
     drop(guard);
     publisher.join().unwrap();
     assert_eq!(result.unwrap().unwrap().outcome, PublicationOutcome::Applied);
+}
+
+#[test]
+fn collection_entry_writes_do_not_change_kernel_registry_fingerprint() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = root.path().join("registry");
+    let instances = root.path().join("instances");
+    let collection = registry.join("artifact/notes");
+    let carrier = collection.join("artifact.json");
+    write(&carrier, json!({"id":"notes","label":"context.collection"}));
+    let mut files = RegistryFileCache::default();
+    let fingerprint = registry_descriptor_fingerprint(&registry, &instances, &mut files).unwrap();
+    let entry = collection.join("entries/note.json");
+    write(&entry, json!({"revision":1}));
+    write(&entry, json!({"revision":2}));
+    assert_eq!(fingerprint, registry_descriptor_fingerprint(&registry, &instances, &mut files).unwrap());
+    std::fs::remove_file(entry).unwrap();
+    assert_eq!(fingerprint, registry_descriptor_fingerprint(&registry, &instances, &mut files).unwrap());
+    write(&carrier, json!({"id":"notes","label":"context.collection","description":"changed"}));
+    assert_ne!(fingerprint, registry_descriptor_fingerprint(&registry, &instances, &mut files).unwrap());
 }

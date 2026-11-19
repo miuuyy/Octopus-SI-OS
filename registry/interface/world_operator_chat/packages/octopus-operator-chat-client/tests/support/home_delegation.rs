@@ -265,7 +265,7 @@ async fn home_accepts_independent_task_terminal_and_error_returns_through_real_a
         })
         .unwrap();
     embedded
-        .reload_registry_snapshot_on_artifact_arrival()
+        .reload_registry_snapshot_on_artifact_arrival().await
         .unwrap();
     for (task, _) in &tasks {
         let file = InterfaceArtifactFile::write(
@@ -404,7 +404,7 @@ async fn home_accepts_independent_task_terminal_and_error_returns_through_real_a
         .find(|cp| cp.outbound_interfaces().any(|id| id.as_str() == task_room))
         .unwrap();
     embedded
-        .reload_registry_snapshot_on_artifact_arrival()
+        .reload_registry_snapshot_on_artifact_arrival().await
         .unwrap();
     let widget_contract: Value = serde_json::from_slice(
         &std::fs::read(registry.join("artifact/artifact-home-widget-authoring/artifact.json"))

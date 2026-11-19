@@ -443,7 +443,7 @@ async fn worker_interface_delivers_executor_artifact_cross_run_to_the_planner_th
         serde_json::from_slice(&std::fs::read(&emitter_path).unwrap()).unwrap();
     emitter["checkpoints"][0]["epoch"] = serde_json::json!(1);
     write_run_record(&artifact_root, &embedded.runtime, &emitter);
-    embedded.reload_registry_snapshot_on_artifact_arrival().unwrap();
+    embedded.reload_registry_snapshot_on_artifact_arrival().await.unwrap();
     let fresh = octopus_app_server::InterfaceArtifactArrivalFromInterface::new(
         &embedded.runtime,
         &mut log,
