@@ -277,68 +277,26 @@ impl ProviderLedgerEvidenceIndex {
                 return Ok(false);
             }
         };
-        let Some(movements) = self.read_spotlight_rows(
-            &indexed_rows,
-            progress.watermark,
-            progress.durable_end_offset,
-        ) else {
-            return Ok(false);
+        let bounds = SpotlightBounds {
+            movements_path: self.movements_path.clone(),
+            ledger: self.ledger.clone(),
+            max_row_bytes: self.max_row_bytes,
+            byte_offset: self.byte_offset,
+            next_seq: self.next_seq,
+            watermark: progress.watermark,
+            durable_end_offset: progress.durable_end_offset,
         };
-        for movement in &movements {
-            self.note(movement)?;
+        if bounds.read(&indexed_rows, |_| Ok(()))?.is_none() {
+            return Ok(false);
+        }
+        if bounds.read(&indexed_rows, |movement| self.note(&movement))?.is_none() {
+            return Err("provider ledger spotlight rows changed while they were indexed".into());
         }
         self.byte_offset = progress.durable_end_offset;
         self.observed_len = self.observed_len.max(progress.durable_end_offset);
         self.next_seq = progress.watermark;
         self.tail = None;
         Ok(true)
-    }
-
-    pub(crate) fn read_spotlight_rows(
-        &self,
-        rows: &[octopus_ledger_index::IndexedMovementRowRange],
-        watermark: u64,
-        durable_end_offset: u64,
-    ) -> Option<Vec<Movement>> {
-        if rows.is_empty() {
-            return Some(Vec::new());
-        }
-        let mut file = std::fs::File::open(&self.movements_path).ok()?;
-        let mut movements = Vec::with_capacity(rows.len());
-        let mut previous_seq = None;
-        let mut previous_end = self.byte_offset;
-        for indexed in rows {
-            if indexed.seq < self.next_seq
-                || indexed.seq >= watermark
-                || indexed.start_offset < self.byte_offset
-                || indexed.end_offset > durable_end_offset
-                || indexed.end_offset <= indexed.start_offset
-                || previous_seq.is_some_and(|seq| indexed.seq <= seq)
-                || indexed.start_offset < previous_end
-            {
-                return None;
-            }
-            let row_len = indexed.end_offset.checked_sub(indexed.start_offset)?;
-            if row_len > self.max_row_bytes {
-                return None;
-            }
-            let row_len = usize::try_from(row_len).ok()?;
-            file.seek(std::io::SeekFrom::Start(indexed.start_offset))
-                .ok()?;
-            let mut row = vec![0_u8; row_len];
-            file.read_exact(&mut row).ok()?;
-            if row.last() != Some(&b'\n') {
-                return None;
-            }
-            let movement = self.ledger.decode(&row, indexed.seq).ok()?;
-            if movement.seq.0 != indexed.seq {
-                return None;
-            }
-            previous_seq = Some(indexed.seq);
-            previous_end = indexed.end_offset;
-            movements.push(movement);
-        }
-        Some(movements)
     }
 
     pub(crate) fn catch_up_full_tail(&mut self) -> Result<(), String> {
@@ -434,14 +392,13 @@ impl ProviderLedgerEvidenceIndex {
                 )
             })?
             .invocation()
-            .cloned()
             .ok_or_else(|| {
                 format!(
                     "provider exact-interface movement {} carries non-invocation metadata",
                     movement.seq.0
                 )
             })?;
-        let Some(runtime) = valid_interface_movement_runtime(movement, &metadata) else {
+        let Some(runtime) = valid_interface_movement_runtime(movement, metadata) else {
             return Err(format!(
                 "provider exact-interface movement {} carries mismatched runtime coordinates",
                 movement.seq.0
@@ -1156,5 +1113,63 @@ pub(crate) fn read_bounded_ledger_row(
         if newline.is_some() {
             return Ok(BoundedLedgerRow::Complete(row));
         }
+    }
+}
+
+struct SpotlightBounds {
+    movements_path: std::path::PathBuf,
+    ledger: std::sync::Arc<ledger_rows::LedgerRows>,
+    max_row_bytes: u64,
+    byte_offset: u64,
+    next_seq: u64,
+    watermark: u64,
+    durable_end_offset: u64,
+}
+
+impl SpotlightBounds {
+    fn read(
+        &self,
+        rows: &[octopus_ledger_index::IndexedMovementRowRange],
+        mut visit: impl FnMut(Movement) -> Result<(), String>,
+    ) -> Result<Option<()>, String> {
+        if rows.is_empty() {
+            return Ok(Some(()));
+        }
+        let Ok(mut file) = std::fs::File::open(&self.movements_path) else { return Ok(None); };
+        let mut previous_seq = None;
+        let mut previous_end = self.byte_offset;
+        let mut row = Vec::new();
+        for indexed in rows {
+            if indexed.seq < self.next_seq
+                || indexed.seq >= self.watermark
+                || indexed.start_offset < self.byte_offset
+                || indexed.end_offset > self.durable_end_offset
+                || indexed.end_offset <= indexed.start_offset
+                || previous_seq.is_some_and(|seq| indexed.seq <= seq)
+                || indexed.start_offset < previous_end
+            {
+                return Ok(None);
+            }
+            let row_len = indexed.end_offset - indexed.start_offset;
+            if row_len > self.max_row_bytes {
+                return Ok(None);
+            }
+            let Ok(row_len) = usize::try_from(row_len) else { return Ok(None); };
+            if file.seek(std::io::SeekFrom::Start(indexed.start_offset)).is_err() {
+                return Ok(None);
+            }
+            row.resize(row_len, 0);
+            if file.read_exact(&mut row).is_err() || row.last() != Some(&b'\n') {
+                return Ok(None);
+            }
+            let Ok(movement) = self.ledger.decode(&row, indexed.seq) else { return Ok(None); };
+            if movement.seq.0 != indexed.seq {
+                return Ok(None);
+            }
+            previous_seq = Some(indexed.seq);
+            previous_end = indexed.end_offset;
+            visit(movement)?;
+        }
+        Ok(Some(()))
     }
 }

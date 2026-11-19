@@ -151,6 +151,10 @@ Selected required arrivals keep complete grants and exact mark and replacement p
 other interfaces' grants are outside this projection. The projection accepts only its
 source and increasing original sequence numbers, and exposes retained-delivery queries,
 not kernel admission decisions. The kernel's complete arrival index is unchanged.
+Provider recovery checks indexed row ranges before applying them and decodes
+one movement at a time. Foreign run-edit candidates retain ledger sequence
+numbers until their call and result evidence is needed. The size of the scan
+therefore does not determine how many complete grants must be in memory.
 Other recovery readers validate their selected referenced grant content without copying
 unused authority into every historical movement.
 

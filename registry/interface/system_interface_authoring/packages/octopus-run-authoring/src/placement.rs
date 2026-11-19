@@ -37,7 +37,7 @@ pub(super) fn prove_move(
         let Some(movement) = reader.movement(sequence)? else { break; };
         sequence = sequence.checked_add(1).ok_or("placement evidence sequence overflow")?;
         if movement.seq.0 > after_seq && movement.kind == MovementKind::InterfaceOutbound && movement.artifact.is_some() {
-            candidates.push(movement);
+            candidates.push(movement.seq.0);
         }
     }
     let writes = foreign_edit::proven_writes(&mut reader, path, &candidates)?;

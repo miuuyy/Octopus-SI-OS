@@ -42,11 +42,16 @@ fn returned_to(movement: &Movement, owner: &InterfaceId) -> bool {
 pub(super) fn proven_writes(
     reader: &mut (impl CheckedRunEvidenceReader + ?Sized),
     path: &Path,
-    candidates: &[Movement],
+    candidates: &[u64],
 ) -> Result<Vec<ProvenWrite>, String> {
     let mut calls: BTreeMap<(InterfaceId, String), AdmittedCall> = BTreeMap::new();
     let mut writes = Vec::new();
-    for movement in candidates {
+    for &seq in candidates {
+        let movement = reader.admitted_movement(seq)?
+            .ok_or("a run-record write candidate left the durable ledger")?;
+        if movement.seq.0 != seq {
+            return Err("a run-record write candidate changed its ledger position".into());
+        }
         let (Endpoint::Interface(from), Endpoint::Interface(to)) = (&movement.from, &movement.to);
         let Some(reference) = movement.artifact.as_ref() else { continue; };
         let Ok((manifest, payload)) = reader.artifact(reference) else { continue; };
@@ -54,9 +59,10 @@ pub(super) fn proven_writes(
         if value.get("arguments").is_some() {
             let Ok(call) = serde_json::from_value::<octopus_tool_handlers::ToolCallArtifact>(value) else { continue; };
             let Some(correlation) = call.correlation_id.clone() else { continue; };
-            let Some(by) = admitted_under_grant(movement, &call.tool, to) else { continue; };
-            let admitted = AdmittedCall { movement: movement.clone(), label: manifest.label, call, by };
-            if calls.insert((to.clone(), correlation), admitted).is_some() {
+            let Some(by) = admitted_under_grant(&movement, &call.tool, to) else { continue; };
+            let key = (to.clone(), correlation);
+            let admitted = AdmittedCall { movement, label: manifest.label, call, by };
+            if calls.insert(key, admitted).is_some() {
                 return Err("a proven run-record write repeats its exact call correlation".into());
             }
             continue;
@@ -65,7 +71,7 @@ pub(super) fn proven_writes(
         let Some(correlation) = result.correlation_id.clone() else { continue; };
         let Some(admitted) = calls.remove(&(from.clone(), correlation)) else { continue; };
         if result.tool != admitted.call.tool || result.label != manifest.label
-            || admitted.movement.seq >= movement.seq || !returned_to(movement, to) {
+            || admitted.movement.seq >= movement.seq || !returned_to(&movement, to) {
             continue;
         }
         let Some(receipts) = applied_file_write_receipts(&result)? else { continue; };
@@ -90,7 +96,7 @@ pub(super) fn proven_writes(
                 result_label: result.label.clone(),
             },
             call: admitted.movement,
-            result: movement.clone(),
+            result: movement,
             write,
             before_hash,
             after_hash: evidence.after_hash.clone(),

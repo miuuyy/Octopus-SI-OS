@@ -376,7 +376,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
         let result_writer = writers.iter().find(|w| movement.from == Endpoint::Interface(w.door.clone()) && movement.to == Endpoint::Interface(w.owner.clone()));
         if source_writer.is_none() && result_writer.is_none() {
             if selected_install.is_none() && movement.artifact.is_some() {
-                foreign_candidates.push(movement);
+                foreign_candidates.push(movement.seq.0);
             }
             continue;
         }
@@ -407,7 +407,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 (arguments,Some(ordered),before)
             } else {
                 if runtime.run != original.id {
-                    if selected_install.is_none() { foreign_candidates.push(movement); }
+                    if selected_install.is_none() { foreign_candidates.push(movement.seq.0); }
                     continue;
                 }
                 let arguments: FileWriteCallArguments = serde_json::from_value(call.arguments).map_err(|e|e.to_string())?;
@@ -429,7 +429,7 @@ pub(crate) fn checked_run_file_chain_with_reader(
             if result.tool != writer.tool || result.label != writer.result_label { continue; }
             let correlation = result.correlation_id.clone().ok_or("checked run result has no immutable correlation")?;
             let Some(candidate) = calls.remove(&(writer.owner.clone(), correlation)) else {
-                if selected_install.is_none() { foreign_candidates.push(movement); }
+                if selected_install.is_none() { foreign_candidates.push(movement.seq.0); }
                 continue;
             };
             if candidate.writer != *writer { return Err("checked run result came from a different declared writer".into()); }
