@@ -176,7 +176,8 @@ CLI each provider starts carries an empty base prompt and
 text. What Codex adds that cannot be turned off is listed in the descriptor's
 `residual_ambient.residual_sources`. An answer no retry can change (401, 402,
 403, 404, a 429 with exhausted quota) ends the turn with the provider's reason;
-transient failures are retried by Codex within the descriptor's
+the bridge reports exhausted quota separately from temporary rate limits and carries
+provider-supplied retry timing. Codex retries transient failures within the descriptor's
 `private_config.opencodex.native_stream_max_retries` (default five). The Claude
 CLI descriptor declares zero: its request deadline ends the turn, without
 replaying the CLI through native stream retries. The CLI and bridge share the
@@ -239,9 +240,16 @@ exact existing run; stale
 hashes, a second full write of the same target and edits to the in-flight
 caller are refused. Dependency writes precede the patched run. Both forms
 validate the complete candidate, preserve accepted work and publish through
-ordinary granted file writes with exact readback. Patch previews and results
-return a compact summary and file hashes, keeping the complete record out of
-model context. Full-file peer previews still return the complete authored contract.
+ordinary granted file writes with exact readback. When creation selects tools by
+environment kind, the declared door roots follow the selected kinds. An explicit
+map supplies the exact root overrides.
+
+Peer previews return a summary and file counts. Small proof lists and validation
+reports fit in the default response. To inspect any part of the exact proposal,
+repeat the preview with the same creation key and `preview_read.pointer` under
+`/authored`, `/run_contract`, `/files` or `/validation`. Each page contains
+up to 4096 bytes of JSON text. Continue with its next byte offset and content
+hash. A change to the selected value invalidates the continuation.
 Current-run previews return a future-contract hash, counts and write proofs;
 successful amendments return the checked readback hash, counts and stage
 receipts. The readback validates the full record without returning its private
@@ -290,7 +298,7 @@ cron expression, a due time or a quiet period), after which it sends
 `cron.current_time`. A firing due while a pinning run is working is sent once
 when that run is idle; missed ticks are not replayed. An inactivity trigger
 restarts its quiet period on the artifact movements of the runs it selects by
-descriptor match, optionally within one EE subtree, one exact EE or a named set of runs, and fires once per quiet
+descriptor match, optionally within one EE subtree, one exact EE or a named set of runs, and can filter activity by artifact name and direction. It fires once per quiet
 period. A disabled clock folder that no run binds is a template; an Application
 Pack's `workspace_setup.triggers` arms templates at setup together with the task
 that pins them.

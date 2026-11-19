@@ -804,7 +804,7 @@
             {
               "name": "preview_run",
               "operation": "preview_run",
-              "description": "Optional dry run of create_run: prepare the same request and show its exact descriptor, policy and binding file edits without applying them. Useful for an authored graph or an unfamiliar selection; pass the same creation_key to create_run to apply it. The plan grants no authority. Every field means what it means in create_run.",
+              "description": "Validate a proposed new run without applying writes. Returns a compact summary. For exact details pass preview_read with a JSON pointer into /authored, /run_contract, /files or /validation. Each page carries JSON text. Continue with next_offset as offset and the returned content_hash. Reuse the same creation_key and proposal to apply.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -822,19 +822,13 @@
                     "$ref": "#/$defs/str"
                   },
                   "title": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Short task name shown in Tasks."
+                    "$ref": "#/$defs/str"
                   },
                   "text": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "The self-contained assignment: objective, constraints, what to use, deliverable, how to verify and how to report."
+                    "$ref": "#/$defs/str"
                   },
                   "ee_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Project EE for the task; omit for the default EE."
+                    "$ref": "#/$defs/str"
                   },
                   "worker_template_interface_id": {
                     "$ref": "#/$defs/str"
@@ -1119,6 +1113,25 @@
                           },
                           "payload": {}
                         }
+                      }
+                    }
+                  },
+                  "preview_read": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pointer"
+                    ],
+                    "properties": {
+                      "pointer": {
+                        "type": "string"
+                      },
+                      "offset": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "content_hash": {
+                        "type": "string"
                       }
                     }
                   }
@@ -1776,7 +1789,7 @@
             {
               "name": "preview_revision",
               "operation": "preview_revision",
-              "description": "Validate exact edits to an existing peer run and related descriptors without applying them. Any part of the run record may change, and every interface holding state in it reads the result under its own contract. Inspect every publication stage. Do not edit the in-flight caller through this operation. Use authored.run_patch with the file.read content_hash and only the required RFC 6902 edits; writes may be empty. Patch results return a compact run summary and exact file hashes, without repeating the full run. A stale hash requires a fresh read.",
+              "description": "Validate full-file or RFC 6902 edits to an existing peer run without applying writes. Returns a compact summary. For exact details pass preview_read with a JSON pointer into /authored, /run_contract, /files or /validation. Each page carries JSON text. Continue with next_offset as offset and the returned content_hash. Reuse the same creation_key and proposal to apply.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1958,6 +1971,25 @@
                         }
                       }
                     ]
+                  },
+                  "preview_read": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pointer"
+                    ],
+                    "properties": {
+                      "pointer": {
+                        "type": "string"
+                      },
+                      "offset": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "content_hash": {
+                        "type": "string"
+                      }
+                    }
                   }
                 },
                 "$defs": {

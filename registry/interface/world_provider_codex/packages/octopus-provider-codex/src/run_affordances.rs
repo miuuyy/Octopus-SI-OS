@@ -33,6 +33,78 @@ fn run_summary(run: &RunRecord) -> Value {
         "checkpoint_count":run.checkpoints.len(), "active_checkpoint_count":run.active_checkpoints.len()})
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewRead {
+    pointer: String,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    content_hash: Option<String>,
+}
+
+const PREVIEW_PAGE_BYTES: usize = 4096;
+
+fn preview_page(value: &Value, pointer: &str, read: &PreviewRead) -> Result<Value, String> {
+    let selected = value.pointer(pointer).ok_or("preview_read pointer does not exist")?;
+    let text = serde_json::to_string(selected).map_err(|error| error.to_string())?;
+    let hash = ContentHash::of_bytes(text.as_bytes()).to_hex();
+    if read.offset > 0 && read.content_hash.is_none() {
+        return Err("continuing a preview requires the preceding page's content_hash".into());
+    }
+    if read.content_hash.as_ref().is_some_and(|expected| expected != &hash) {
+        return Err("preview selection changed; read it again from offset zero".into());
+    }
+    if !text.is_char_boundary(read.offset) {
+        return Err("preview offset is outside the selected JSON or splits a UTF-8 character".into());
+    }
+    let mut end = text.len().min(read.offset.saturating_add(PREVIEW_PAGE_BYTES));
+    while !text.is_char_boundary(end) { end -= 1; }
+    Ok(json!({"json_text": &text[read.offset..end], "offset": read.offset,
+        "next_offset": (end < text.len()).then_some(end), "bytes": text.len(), "content_hash": hash}))
+}
+
+fn peer_preview(plan: &AuthoredRunCompositionPlan, creation_key: &str, preview: bool,
+    read: Option<&PreviewRead>) -> Result<Value, String> {
+    let files: Vec<_> = plan.writes.iter().map(|write| json!({"path":write.path,
+        "expected_before_hash":write.expected_before_hash, "bytes":write.content.len(),
+        "content_hash":ContentHash::of_bytes(write.content.as_bytes()).to_hex()})).collect();
+    let validation = validation_report(&plan.validation);
+    let mut result = json!({"ok":plan.validation.safe_to_apply,"preview":preview,"installed":false,
+        "seed_admitted":false,"run_summary":run_summary(&plan.run),
+        "file_count":files.len(),"work_completed":false});
+    if creation_key.len() <= PREVIEW_PAGE_BYTES {
+        result["creation_key"] = json!(creation_key);
+    } else {
+        result["creation_key_hash"] = json!(ContentHash::of_bytes(creation_key.as_bytes()).to_hex());
+    }
+    if let Some(read) = read {
+        let path = read.pointer.strip_prefix('/').ok_or("preview_read requires a JSON pointer")?;
+        let root = path.split('/').next().unwrap_or_default();
+        let value = match root {
+            "authored" => serde_json::to_value(&plan.authored).map_err(|e| e.to_string())?,
+            "run_contract" => serde_json::to_value(&plan.run).map_err(|e| e.to_string())?,
+            "files" => Value::Array(files),
+            "validation" => validation,
+            _ => return Err("preview_read selects /authored, /run_contract, /files or /validation".into()),
+        };
+        result["page"] = preview_page(&value, &path[root.len()..], read)?;
+    } else {
+        let files = Value::Array(files);
+        if serde_json::to_vec(&files).map_err(|e| e.to_string())?.len() <= PREVIEW_PAGE_BYTES {
+            result["files"] = files;
+        }
+        result["validation"] = if serde_json::to_vec(&validation).map_err(|e| e.to_string())?.len() <= PREVIEW_PAGE_BYTES {
+            validation
+        } else {
+            json!({"safe_to_apply":plan.validation.safe_to_apply, "checked_subject_count":plan.validation.checked_subjects.len(),
+                "issue_count":validation["issues"].as_array().map(Vec::len), "regression_count":plan.validation.regressions.len(),
+                "details_pointer":"/validation"})
+        };
+    }
+    Ok(result)
+}
+
 fn validation_report(validation: &RegistryCandidateValidation) -> Value {
     let issues = validation.stages.last().into_iter().flat_map(|stage| stage.issues.iter()).collect::<BTreeSet<_>>();
     json!({
@@ -210,6 +282,8 @@ pub struct CreateRunRequest {
     pub creation_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authored: Option<AuthoredRunComposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_read: Option<PreviewRead>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default)]
@@ -1047,12 +1121,16 @@ impl RunAffordances {
                     row.operation,
                     RunOperation::ReviseRun | RunOperation::PreviewRevision
                 );
+                let read = args.preview_read.take();
+                if read.is_some() && !preview {
+                    return Err("preview_read requires a preview operation".into());
+                }
                 if let Some(authored) = args.authored.take() {
                     if arguments
                         .as_object()
                         .ok_or("native authoring requires an object")?
                         .keys()
-                        .any(|key| key != "creation_key" && key != "authored")
+                        .any(|key| !matches!(key.as_str(), "creation_key" | "authored" | "preview_read"))
                     {
                         return Err("exact authored files cannot be combined with template selection arguments".into());
                     }
@@ -1073,6 +1151,7 @@ impl RunAffordances {
                         creation_key,
                         plan,
                         preview,
+                        read.as_ref(),
                     );
                 }
                 if revise {
@@ -1092,6 +1171,7 @@ impl RunAffordances {
                     creation_key,
                     plan,
                     preview,
+                    read.as_ref(),
                 )
             }
             RunOperation::InspectAuthoring => {
@@ -1215,13 +1295,16 @@ impl RunAffordances {
         require_readable_refs(metadata, &contexts)?;
         let publications = args.publications.unwrap_or_else(|| defaults.publications.clone());
         let selected_tools = args.tools.unwrap_or_else(|| defaults.tools.clone());
+        let selected_kinds = args.worker_environment_kinds.unwrap_or_else(|| defaults.worker_environment_kinds.clone());
         let door_host_slots = args.door_host_slots.unwrap_or_else(|| {
-            defaults
-                .door_host_slots
-                .iter()
-                .filter(|(door, _)| selected_tools.iter().any(|tool| &tool.interface == *door))
-                .map(|(door, slots)| (door.clone(), slots.clone()))
-                .collect()
+            let doors: BTreeSet<_> = if selected_tools.is_empty() {
+                defaults.tools.iter().filter(|tool| selected_kinds.contains(&tool.worker_environment_kind))
+                    .map(|tool| &tool.interface).collect()
+            } else {
+                selected_tools.iter().map(|tool| &tool.interface).collect()
+            };
+            defaults.door_host_slots.iter().filter(|(door, _)| doors.contains(door))
+                .map(|(door, slots)| (door.clone(), slots.clone())).collect()
         });
         for publication in &publications {
             require_readable_refs(metadata, std::slice::from_ref(&publication.source))?;
@@ -1275,9 +1358,7 @@ impl RunAffordances {
                 client_interface_id: args.client_interface_id,
                 output_selection: args.output_selection.or_else(|| defaults.output_selection.clone()),
             },
-            selected_worker_environment_kinds: args
-                .worker_environment_kinds
-                .unwrap_or_else(|| defaults.worker_environment_kinds.clone()),
+            selected_worker_environment_kinds: selected_kinds,
             selected_tools,
             door_host_slots,
             external_inputs: args.external_inputs.unwrap_or_else(|| defaults.external_inputs.clone()),
@@ -1302,6 +1383,7 @@ impl RunAffordances {
         creation_key: String,
         plan: RunCompositionPlan,
         preview: bool,
+        read: Option<&PreviewRead>,
     ) -> Result<NativeStep, String> {
         let roots = self
             .config
@@ -1343,6 +1425,7 @@ impl RunAffordances {
             creation_key,
             exact,
             preview,
+            read,
         )
     }
 
@@ -1355,6 +1438,7 @@ impl RunAffordances {
         creation_key: String,
         plan: AuthoredRunCompositionPlan,
         preview: bool,
+        read: Option<&PreviewRead>,
     ) -> Result<NativeStep, String> {
         let roots = self
             .config
@@ -1362,22 +1446,7 @@ impl RunAffordances {
             .as_ref()
             .ok_or("creation roots are absent")?;
         if preview || !plan.validation.safe_to_apply {
-            let mut result = json!({
-                "ok":plan.validation.safe_to_apply,"preview":preview,"installed":false,"seed_admitted":false,
-                "creation_key":creation_key,"authored":plan.authored,
-                "validation":validation_report(&plan.validation),"work_completed":false,
-            });
-            if plan.authored.run_patch.is_some() {
-                result["run_summary"] = run_summary(&plan.run);
-                result["files"] = json!(plan.writes.iter().map(|write| json!({"path":write.path,
-                    "expected_before_hash":write.expected_before_hash,
-                    "content_hash":ContentHash::of_bytes(write.content.as_bytes()).to_hex()})).collect::<Vec<_>>());
-            } else {
-                result["run_contract"] = json!(plan.run);
-            }
-            return Ok(NativeStep::Complete {
-                result,
-            });
+            return Ok(NativeStep::Complete { result: peer_preview(&plan, &creation_key, preview, read)? });
         }
         let writes = plan
             .writes

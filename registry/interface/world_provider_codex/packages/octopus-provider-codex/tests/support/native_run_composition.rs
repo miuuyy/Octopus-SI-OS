@@ -66,9 +66,12 @@ fn defaulted_door_slots_follow_the_selected_tools_while_explicit_slots_stay_exac
     let omitted = affordances.composition_request(&metadata, &request.admitted_parent_record, "defaulted",
         serde_json::from_value(json!({"text":"Use authored tools"})).unwrap()).unwrap();
     assert_eq!(omitted.door_host_slots, selected);
-    let narrowed = affordances.composition_request(&metadata, &request.admitted_parent_record, "narrowed",
-        serde_json::from_value(json!({"text":"No tools", "tools":[]})).unwrap()).unwrap();
-    assert!(narrowed.door_host_slots.is_empty());
+    let kind_only = affordances.composition_request(&metadata, &request.admitted_parent_record, "kind-only",
+        serde_json::from_value(json!({"text":"Use all tools in the kind", "tools":[], "worker_environment_kinds":[request.selected_tools[0].worker_environment_kind]})).unwrap()).unwrap();
+    assert_eq!(kind_only.door_host_slots, selected);
+    let host = affordances.composition_request(&metadata, &request.admitted_parent_record, "host-defaults",
+        serde_json::from_value(json!({"text":"Use host bindings", "tools":[], "door_host_slots":{}})).unwrap()).unwrap();
+    assert!(host.door_host_slots.is_empty());
     let explicit = affordances.composition_request(&metadata, &request.admitted_parent_record, "explicit",
         serde_json::from_value(json!({"text":"Exact slots", "tools":[], "door_host_slots":slots})).unwrap()).unwrap();
     assert_eq!(explicit.door_host_slots, slots);
@@ -289,9 +292,23 @@ fn native_publication_composition_validates_private_scope_and_stages_inline_cont
     let NativeStep::Complete { result: preview } = affordances.plan_call(&request.metadata, &request.admitted_parent_record,
         &request.admitted_parent_record, "public-preview", "preview_run", &args, None).unwrap() else { panic!("expected public preview"); };
     assert_eq!(preview["ok"], true, "{preview}");
-    assert_eq!(preview["authored"]["publication_read_refs"], json!(publication_read_refs(&reused.publication_evidence).unwrap()));
-    assert!(preview.get("publication_read_refs").is_none());
-    let authored_args = json!({"creation_key":"reuse", "authored":preview["authored"]});
+    assert!(preview.get("authored").is_none());
+    let mut inspection = args.clone();
+    inspection["preview_read"] = json!({"pointer":"/authored"});
+    let mut pages = String::new();
+    loop {
+        let NativeStep::Complete { result } = affordances.plan_call(&request.metadata, &request.admitted_parent_record,
+            &request.admitted_parent_record, "public-preview", "preview_run", &inspection, None).unwrap()
+            else { panic!("expected an authored page") };
+        let page = &result["page"];
+        pages.push_str(page["json_text"].as_str().unwrap());
+        if page["next_offset"].is_null() { break; }
+        inspection["preview_read"]["offset"] = page["next_offset"].clone();
+        inspection["preview_read"]["content_hash"] = page["content_hash"].clone();
+    }
+    let planned: Value = serde_json::from_str(&pages).unwrap();
+    assert_eq!(planned["publication_read_refs"], json!(publication_read_refs(&reused.publication_evidence).unwrap()));
+    let authored_args = json!({"creation_key":"reuse", "authored":planned});
     let descriptor: Value = serde_json::from_slice(&std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../interface.json")).unwrap()).unwrap();
     for name in ["preview_run", "create_run", "preview_revision", "revise_run"] {
         let schema = &descriptor["interface_driver_config"]["private_config"]["run_affordance_profile"]["catalog"]["operations"]
@@ -707,12 +724,12 @@ fn full_authored_run_preserves_wait_return_and_verification_then_checks_real_ord
         panic!("preview mutated")
     };
     assert_eq!(preview["ok"], true, "{}", preview["validation"]);
-    assert!(
-        preview["run_contract"]["checkpoints"]
-            .as_array()
-            .unwrap()
-            .contains(&json!(expected_wait))
-    );
+    assert!(preview.get("run_contract").is_none());
+    let mut inspection = args(&authored);
+    inspection["preview_read"] = json!({"pointer":format!("/run_contract/checkpoints/{}",run["checkpoints"].as_array().unwrap().len() - 1)});
+    let NativeStep::Complete { result } = affordances.plan_call(&metadata, &request.admitted_parent_record,
+        &request.admitted_parent_record, "preview-2", "preview_run", &inspection, None).unwrap() else { panic!("preview mutated") };
+    assert_eq!(serde_json::from_str::<Value>(result["page"]["json_text"].as_str().unwrap()).unwrap(), json!(expected_wait));
     let NativeStep::Effect {
         effect,
         pending,
@@ -861,12 +878,8 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
         panic!("preview mutated")
     };
     assert_eq!(result["ok"], true, "{}", result["validation"]);
-    assert!(
-        result["run_contract"]["interface_state"]
-            .as_object()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(result.get("run_contract").is_none());
+    assert_eq!(result["run_summary"]["run_id"], "parked");
     run["interface_state"] = json!({"system_worker_parent":{"retained":"x".repeat(159_000)}});
     let before = serde_json::to_vec(&run).unwrap();
     let mut extended = run.clone();
@@ -902,6 +915,8 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
         "{}",
         result["validation"]["regressions"]
     );
+    assert!(result.to_string().len() < 10_000);
+    assert!(result.get("authored").is_none() && result.get("run_contract").is_none());
     let args = json!({"creation_key":"extend-wait-patch","authored":{"run_id":"parked","outgoing_bindings":[],"writes":[],
         "run_patch":{"expected_before_hash":ContentHash::of_bytes(&before).to_hex(),"patch":json_patch::diff(&run, &extended)}}});
     let NativeStep::Complete { result: preview } = affordances.plan_call(&metadata,
@@ -910,8 +925,19 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
     assert_eq!(preview["ok"], true, "{preview}");
     assert!(preview.get("run_contract").is_none());
     assert_eq!(preview["run_summary"]["checkpoint_count"], 2);
-    assert_eq!(preview["authored"], args["authored"]);
+    assert!(preview.get("authored").is_none());
     assert!(preview.to_string().len() < 10_000);
+    let mut read = args.clone();
+    read["preview_read"] = json!({"pointer":"/run_contract/interface_state/system_worker_parent/retained"});
+    let NativeStep::Complete { result } = affordances.plan_call(&metadata, &request.admitted_parent_record,
+        &request.admitted_parent_record, "inspect-patch", "preview_revision", &read, None).unwrap()
+        else { panic!("expected preview page") };
+    assert_eq!(result["page"]["bytes"], 159_002);
+    assert_eq!(result["page"]["next_offset"], PREVIEW_PAGE_BYTES);
+    read["preview_read"]["offset"] = result["page"]["next_offset"].clone();
+    read["preview_read"]["content_hash"] = json!("0".repeat(64));
+    assert!(affordances.plan_call(&metadata, &request.admitted_parent_record, &request.admitted_parent_record,
+        "stale-page", "preview_revision", &read, None).unwrap_err().contains("changed"));
     assert_eq!(std::fs::read(&run_path).unwrap(), before);
     for (pointer, value) in [("/authored/run_patch/expected_before_hash", json!("0".repeat(64))),
         ("/authored/writes", authored["writes"].clone()),
