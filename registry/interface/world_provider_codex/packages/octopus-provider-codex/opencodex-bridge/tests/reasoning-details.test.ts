@@ -4,6 +4,7 @@ import { encodeNativeReplay } from "../src/native-replay.ts";
 import { createOpenAIChatAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/openai-chat.ts";
 import { buildResponseJSON, bridgeToResponsesSSE } from "../node_modules/@bitkyc08/opencodex/src/bridge.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
+import { decodeReasoningEnvelope } from "../node_modules/@bitkyc08/opencodex/src/responses/reasoning-envelope.ts";
 import { namespacedToolName } from "../node_modules/@bitkyc08/opencodex/src/types/tools.ts";
 import { createTranslatorBudget, type TranslatorBudget } from "../node_modules/@bitkyc08/opencodex/src/lib/translator-budget.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
@@ -37,6 +38,10 @@ function stream(events: unknown[], chunkSize = 37, done = true): Response {
   } }), { headers: { "content-type": "text/event-stream" } });
 }
 const frame = (delta: unknown, finish_reason: string | null = null) => ({ choices: [{ index: 0, delta, finish_reason }] });
+async function sseEvents(a: ProviderAdapter, b: TranslatorBudget, source: Response) {
+  const output = await bridgeToResponsesSSE(a.parseStream(source, b), scope.model, undefined, undefined, undefined, undefined, 2000, { translatorBudget: b }).text();
+  return output.split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]").map(line => JSON.parse(line.slice(6)));
+}
 async function roundTrip(details: unknown = nativeDetails, owner = scope.owner) {
   const b = budget(), a = adapter(b, owner);
   await build(a, b);
@@ -82,18 +87,55 @@ test("single-stream fragmented SSE round trips through the Responses SSE bridge"
     frame({ tool_calls: [{ index: 0, function: { arguments: '"same"}' } }] }, "tool_calls"),
   ], 3);
   const tee = spyOn(source.body!, "tee").mockImplementation(() => { throw new Error("No tee"); });
-  const output = await bridgeToResponsesSSE(a.parseStream(source, b), scope.model, undefined, undefined, undefined, undefined, 2000, { translatorBudget: b }).text();
-  const completed = output.split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]").map(line => JSON.parse(line.slice(6))).find(item => item.type === "response.completed").response;
+  const completed = (await sseEvents(a, b, source)).find(item => item.type === "response.completed").response;
+  const [commentary, functionCall, reasoning] = completed.output.slice(-3);
+  expect(commentary).toMatchObject({ type: "message", phase: "commentary" });
+  expect(functionCall).toMatchObject({ type: "function_call", status: "completed", call_id: "call_same" });
+  expect(reasoning.type).toBe("reasoning");
+  expect(decodeReasoningEnvelope(reasoning.encrypted_content)?.aft).toBe(functionCall.id);
   const replayBudget = budget(), wire = JSON.parse((await build(adapter(replayBudget), replayBudget, continued(completed))).body);
   expect(wire.messages.find((message: any) => message.role === "assistant")).toMatchObject({ content: "Read π 🐙.\n", reasoning_details: nativeDetails, tool_calls: [call()] });
   expect(tee).not.toHaveBeenCalled(); tee.mockRestore();
   expect(b.snapshot().currentBytes).toBeLessThanOrEqual(completed.output.reduce((bytes: number, item: unknown) => bytes + Buffer.byteLength(JSON.stringify(item)), 0));
 });
 
+test("Hy4-shaped text-only SSE retains its final answer and replays native reasoning", async () => {
+  const b = budget(), a = adapter(b);
+  await build(a, b, parsed(undefined, true, []));
+  const events = await sseEvents(a, b, stream([
+    frame({ role: "assistant", reasoning: "Look first.\n", reasoning_details: nativeDetails }),
+    frame({ content: "Finished." }),
+    frame({ role: "assistant", content: "" }),
+    frame({}, "stop"),
+  ]));
+  const completed = events.find(event => event.type === "response.completed").response;
+  const [message, reasoning] = completed.output.slice(-2);
+  expect(message).toMatchObject({ type: "message", phase: "final_answer", content: [{ type: "output_text", text: "Finished." }] });
+  expect(reasoning.type).toBe("reasoning");
+  expect(decodeReasoningEnvelope(reasoning.encrypted_content)?.aft).toBe(message.id);
+  const next = budget(), wire = JSON.parse((await build(adapter(next), next, continued(completed, []))).body);
+  expect(wire.messages.find((item: any) => item.role === "assistant")).toMatchObject({ content: "Finished.", reasoning_details: nativeDetails });
+});
+
+test("truncated SSE with native reasoning never labels partial text as a final answer", async () => {
+  const b = budget(), a = adapter(b);
+  await build(a, b, parsed(undefined, true, []));
+  const events = await sseEvents(a, b, stream([
+    frame({ role: "assistant", reasoning_details: nativeDetails }),
+    frame({ content: "Partial" }, "length"),
+  ]));
+  const incomplete = events.find(event => event.type === "response.incomplete");
+  expect(incomplete?.response.status).toBe("incomplete");
+  expect(incomplete.response.output.some((item: any) => item.type === "message")).toBe(true);
+  expect(incomplete.response.output.some((item: any) => item.phase === "final_answer")).toBe(false);
+  expect(events.some(event => event.type === "response.completed" || event.item?.phase === "final_answer")).toBe(false);
+});
+
 test("text-only signatures retain their assistant sequence and unsigned history remains intact", async () => {
   const b = budget(), a = adapter(b);
   await build(a, b);
   const response = buildResponseJSON(await a.parseResponse!(jsonResponse(nativeDetails, [], "Same text"), b), scope.model, { translatorBudget: b });
+  expect((response.output as any[]).find(item => item.type === "message")).toMatchObject({ phase: "final_answer" });
   const p = parsed([{ role: "assistant", content: "Same text" }, { role: "user", content: "Next" }, ...response.output as unknown[], { role: "user", content: "Next again" }]);
   const next = budget(), wire = JSON.parse((await build(adapter(next), next, p)).body);
   const messages = wire.messages.filter((message: any) => message.role === "assistant");

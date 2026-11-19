@@ -397,8 +397,6 @@ export function wrapReasoningDetailsAdapter(adapter: ProviderAdapter, scope: Nat
             }
             if (signature !== undefined) {
               signal?.throwIfAborted();
-              yield { type: "assistant_boundary" };
-              signal?.throwIfAborted();
               yield { type: "thinking_signature", signature, afterOutput: true };
             }
           } finally { reservation.release(); }
