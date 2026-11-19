@@ -35,9 +35,8 @@ states the expected one and fails when the host differs, and any other host is
 refused. `runtime-build-receipt.json` in the output records the target and what
 it carries. A Linux distribution holds the runtime, the registry and the
 provider executables, copied with ordinary file copies and left unsigned. It
-has no client file helper, no desktop helper and no bundled Codex, because
-those are built or pinned for macOS only; point `OCTOPUS_CODEX_BIN` at a Codex
-executable to use a provider that needs one. Process isolation on Linux is set
+includes the pinned Linux Codex transport and the Node-based package doctor.
+The native client file helper and desktop helper are macOS components. Process isolation on Linux is set
 up separately, see [Linux](linux.md).
 
 To use an existing desktop Home, select that exact directory:

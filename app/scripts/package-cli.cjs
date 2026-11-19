@@ -35,6 +35,11 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = n
     packager.copyRegistryBaseline(source, baseline, path.join(distribution, "system-baseline.json"));
     packager.copyRegistrySurface(source, packages);
     packager.copyLocalPackageDefinitions(path.join(distribution, "local-packages"), library);
+    require("esbuild").buildSync({
+      entryPoints: [path.join(appRoot, "electron/clientDoctor.cjs")],
+      outfile: path.join(stage, "client-doctor.cjs"),
+      bundle: true, platform: "node", target: "node24", format: "cjs",
+    });
     copyTree(path.join(repoRoot, "schemas"), path.join(stage, "schemas"), { recursive: true });
     copyTree(distribution, path.join(stage, "distribution"), { recursive: true });
     const ownership = packager.registryExecutableOwnership(packages);

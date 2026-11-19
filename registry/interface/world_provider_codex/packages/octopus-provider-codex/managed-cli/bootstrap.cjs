@@ -80,7 +80,7 @@ function releaseManifest(file = path.join(__dirname, "release.json")) {
     }
   }
   for (const [platform, asset] of Object.entries(manifest.platforms)) {
-    const entry = { "darwin-arm64": "codex-aarch64-apple-darwin", "darwin-x64": "codex-x86_64-apple-darwin" }[platform];
+    const entry = { "darwin-arm64": "codex-aarch64-apple-darwin", "darwin-x64": "codex-x86_64-apple-darwin", "linux-x64": "codex-x86_64-unknown-linux-musl", "linux-arm64": "codex-aarch64-unknown-linux-musl" }[platform];
     if (!entry || !fields(asset, ["archive_entry", "archive_bytes", "archive_sha256", "url", "companions"]) || asset.archive_entry !== entry
         || asset.url !== `https://github.com/openai/codex/releases/download/${manifest.tag}/${asset.archive_entry}.tar.gz`
         || !SHA256.test(asset.archive_sha256) || !Number.isSafeInteger(asset.archive_bytes)

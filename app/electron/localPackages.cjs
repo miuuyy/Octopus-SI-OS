@@ -2850,14 +2850,24 @@ async function copySnapshotFile(file, targetRoot) {
         || sha256Bytes(await fs.readFile(input.path)) !== input.sha256) throw new Error(`package configuration changed while copying '${input.path}'`);
     }
     const target = path.join(targetRoot, file.relative_path);
-    if (file.body === undefined) {
+    const clone = file.body === undefined && process.platform !== "linux";
+    if (clone) {
       const parent = await fs.open(path.dirname(target), fsSync.constants.O_RDONLY | fsSync.constants.O_DIRECTORY | fsSync.constants.O_NOFOLLOW);
       try { require("./nativeFiles.cjs").cloneFile(source.fd, parent.fd, path.basename(target)); }
       finally { await parent.close(); }
     }
-    const handle = await fs.open(target, file.body === undefined ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW : "wx", file.mode);
+    const handle = await fs.open(target, clone ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW : "wx", file.mode);
     try {
       if (file.body !== undefined) await handle.writeFile(file.body);
+      else if (!clone) {
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        for (let offset = 0; offset < stat.size;) {
+          const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
+          if (!bytesRead) throw new Error(`local package source was truncated while copying '${file.path}'`);
+          await handle.writeFile(buffer.subarray(0, bytesRead));
+          offset += bytesRead;
+        }
+      }
       const installed = await handle.stat();
       if (!installed.isFile() || installed.nlink !== 1 || installed.dev === stat.dev && installed.ino === stat.ino) {
         throw new Error(`local package copy is not isolated: ${target}`);

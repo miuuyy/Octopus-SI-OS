@@ -372,6 +372,15 @@ fn client_doctor_layout(installation_root: &Path) -> Result<Option<ClientDoctorL
             runner: ClientDoctorRunner::Electron(executable),
         }));
     }
+    let cli_script = installation_root.join("client-doctor.cjs");
+    if cli_script.is_file() {
+        return Ok(Some(ClientDoctorLayout {
+            script: cli_script,
+            source_registry_root: installation_root.join("local-packages/registry"),
+            library_root: installation_root.join("local-packages"),
+            runner: ClientDoctorRunner::Node,
+        }));
+    }
     if installation_root.join("local-packages/registry").is_dir() {
         return Err(format!(
             "packaged client doctor script is missing: {}",

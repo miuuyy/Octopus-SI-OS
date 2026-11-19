@@ -23,8 +23,9 @@ test("a Linux distribution is headless and a macOS one keeps every macOS part", 
   const all = (value) => ({ client_filesystem: value, desktop_native: value, managed_codex: value, code_signing: value });
   assert.deepEqual(resolveCliTarget({ platform: "darwin", architecture: "arm64" }).components, all(true));
   assert.deepEqual(resolveCliTarget({ platform: "darwin", architecture: "x64" }).components, all(true));
-  assert.deepEqual(resolveCliTarget({ platform: "linux", architecture: "x64" }).components, all(false));
-  assert.deepEqual(resolveCliTarget({ platform: "linux", architecture: "arm64" }).components, all(false));
+  for (const architecture of ["x64", "arm64"]) {
+    assert.deepEqual(resolveCliTarget({ platform: "linux", architecture }).components, { ...all(false), managed_codex: true });
+  }
 });
 
 test("an unsupported host, an unknown target and a cross build are refused by name", () => {
