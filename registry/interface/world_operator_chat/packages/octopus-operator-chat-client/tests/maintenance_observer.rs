@@ -890,6 +890,7 @@ mod movement_gate {
             );
             (self.file(door, &result.label, &json!(result)), door.into())
         }
+        #[track_caller]
         fn drive<'a, T: 'a>(
             &'a mut self,
             future: impl std::future::Future<Output = Result<T, String>> + 'a,
@@ -899,6 +900,7 @@ mod movement_gate {
                 Arrival(InterfaceActivationArrival),
                 Writer(usize, tokio::net::UnixStream),
             }
+            let caller = std::panic::Location::caller();
             let future = Box::pin(future);
             async move {
                 let (finish, mut done) = tokio::sync::oneshot::channel();
@@ -980,7 +982,7 @@ mod movement_gate {
                 result.unwrap()
                 })
                 .await
-                .unwrap()
+                .unwrap_or_else(|_| panic!("fixture drive timed out at {caller}"))
             }
         }
         fn delivered(&self, id: &str, label: &str) -> InterfaceArtifactFile {
@@ -1167,12 +1169,14 @@ mod movement_gate {
             let completed = async {
                 let mut terminal_seen = false;
                 loop {
-                    terminal_seen |= terminal_reader.read_new()?.iter().any(|row| {
-                        row.movement.from == Endpoint::Interface(outcome_interface.clone())
-                            && row.movement.artifact.as_ref().is_some_and(|artifact| {
-                                artifact.id.as_str().starts_with("interface.artifact.output:")
-                            })
-                    });
+                    for row in terminal_reader.read_new()? {
+                        if row.movement.from == Endpoint::Interface(outcome_interface.clone()) {
+                            let Some(artifact) = &row.movement.artifact else { return Err("observer output has no artifact".into()); };
+                            if artifact.id.as_str().starts_with("turn.error:") { return Err("observer returned turn.error instead of an outcome".into()); }
+                            terminal_seen |= artifact.id.as_str().starts_with("interface.artifact.output:");
+                        }
+                        terminal_reader.commit_through(&row)?;
+                    }
                     if terminal_seen && LedgerTailReader::open(&progress_ctx)?.next_seq() > source_sequence {
                         return Ok::<(),String>(());
                     }
@@ -1192,11 +1196,10 @@ mod movement_gate {
             ProviderSourceRecovery::Completed
         ));
         let requests = std::fs::read_to_string(root.join("requests.jsonl")).unwrap();
-        let turn: Value = requests
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .find(|value| value["method"] == "turn/start")
-            .unwrap();
+        let calls: Vec<Value> = requests.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let start = calls.iter().position(|call| call["method"] == "turn/start").unwrap();
+        assert!(calls[..start].iter().any(|call| call["method"] == "thread/inject_items"));
+        let turn = &calls[start];
         assert_eq!(turn["params"]["model"], request.model);
         assert_eq!(turn["params"]["effort"], request.reasoning_effort);
         assert!(

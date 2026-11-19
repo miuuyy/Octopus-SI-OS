@@ -2999,6 +2999,11 @@ text('sdk raw '+sdkRaw.text.length);
         ("browser.screenshot",json!({"format":"jpeg","quality":80,"full_page":true,"pixel_mode":"css"}),Value::Null),
         ("browser.screenshot",json!({"format":"png","pixel_mode":"css"}),Value::Null),
     ];
+    let chooser_ordinal = cases.iter().position(|(tool, _, _)| *tool == "browser.filechooser_wait").unwrap() as u64 + 1;
+    let delegate = room.rooms.lock().await.get(&formation.worker_environment_id).unwrap().delegate.clone();
+    let (release, held) = tokio::sync::oneshot::channel();
+    *delegate.registration_hold.lock().unwrap() = Some((chooser_ordinal, held));
+    let mut release_chooser = Some(release);
     let source = envelope(root,1000,"code_mode.run",json!({"script":script,"yield_time_ms":20}));
     let mut last_seq = admission.deliveries.lock().unwrap().last().unwrap().seq;
     admission.model_call(&source.artifact_file).await.unwrap();
@@ -3007,10 +3012,36 @@ text('sdk raw '+sdkRaw.text.length);
     assert_eq!(started["body"]["state"],"yielded","{started}");
     let cell = started["body"]["cell_id"].clone();
     let frontier_count = cases.len();
+    let wait = |cell: Value, sequence| async move {
+        let wait = envelope(root, sequence, "code_mode.wait", json!({"cell_id":cell,"yield_time_ms":20}));
+        admission.model_call(&wait.artifact_file).await.unwrap();
+        let value = admission.run(room, handoff, formation, kind, admission.next().await.unwrap()).await.unwrap();
+        assert_eq!(value["body"]["cell_id"], cell, "{value}");
+        assert!(value["body"]["error_text"].is_null(), "{value}");
+        value
+    };
+    let mut visible = vec![started];
+    let mut sequence = 1001;
+    let wait_limit = sequence + frontier_count as u64 + 64;
     let mut nested_frontiers = Vec::new();
     for (tool,mut arguments,value) in cases {
-        let calls:Vec<_> = admission.deliveries.lock().unwrap().iter().filter(|row|row.seq>last_seq && row.from.as_str()==DOOR && row.to.as_str()=="system_browser_test").cloned().collect();
-        assert_eq!(calls.len(),1,"expected one frontier for {tool}");
+        let new_calls = || admission.deliveries.lock().unwrap().iter().filter(|row|
+            row.seq > last_seq && row.from.as_str() == DOOR && row.to.as_str() == "system_browser_test"
+        ).cloned().collect::<Vec<_>>();
+        if tool == "browser.filechooser_wait" {
+            assert!(new_calls().is_empty(), "held chooser wait was already admitted");
+            release_chooser.take().unwrap().send(()).unwrap();
+        }
+        let calls = loop {
+            let calls = new_calls();
+            if !calls.is_empty() { break calls; }
+            assert!(sequence < wait_limit, "no admitted browser call for {tool}");
+            let frame = wait(cell.clone(), sequence).await;
+            sequence += 1;
+            assert_eq!(frame["body"]["state"], "yielded", "cell ended before {tool}: {frame}");
+            visible.push(frame);
+        };
+        assert_eq!(calls.len(), 1, "expected one new browser delivery for {tool}");
         let delivery = &calls[0]; last_seq = delivery.seq;
         let call:octopus_tool_handlers::ToolCallArtifact = serde_json::from_slice(&delivery.file.read_payload_bytes().unwrap()).unwrap();
         assert_eq!(call.tool,tool);
@@ -3058,38 +3089,47 @@ text('sdk raw '+sdkRaw.text.length);
         assert_eq!(receipt["body"]["output_retained"],true,"{receipt}");
         assert!(admission.door.lock().await.decode_record(input.0,&input.2,super::decode_code_mode_door_artifact,octopus_tool_door_runtime::ToolDoorArtifactDecodePurpose::Dispatch).is_err());
     }
-    let mut completed=false;
+    while visible.last().unwrap()["body"]["state"] != "completed" {
+        assert_eq!(visible.last().unwrap()["body"]["state"], "yielded", "unexpected terminal: {:?}", visible.last().unwrap()["body"]);
+        assert!(sequence < wait_limit, "SDK cell did not complete through Wait");
+        visible.push(wait(cell.clone(), sequence).await);
+        sequence += 1;
+    }
+    let mut observed_emissions = 0;
     let mut returned_media = Vec::new();
     let mut sdk_output:Vec<Value> = Vec::new();
-    for offset in 0..frontier_count + 32 {
-        let wait=envelope(root,1001 + offset as u64,"code_mode.wait",json!({"cell_id":cell,"yield_time_ms":20}));
-        admission.model_call(&wait.artifact_file).await.unwrap();
-        let input=admission.next().await.unwrap();
-        let value=admission.run(room,handoff,formation,kind,input).await.unwrap();
+    for (i, value) in visible.iter().enumerate() {
         if let Some(media) = value["body"]["media"].as_array() {
             returned_media.extend(media.iter().cloned());
         }
         sdk_output.extend(value["body"]["output"].as_array().unwrap().iter().cloned());
-        if value["body"]["state"]=="completed" {
-            assert!(offset + 1 >= frontier_count, "retained frontiers were skipped");
-            completed=true; break;
-        }
-        assert_eq!(value["body"]["state"],"yielded","{value}");
         let emissions = value["body"]["emissions"].as_array().unwrap();
-        if offset + 1 >= frontier_count {
-            assert!(emissions.is_empty(), "{value}");
-            assert_eq!(value["body"]["pending_tool_calls"], json!([]));
+        if emissions.is_empty() {
+            if value["body"]["state"] == "completed" {
+                assert_eq!(observed_emissions, frontier_count, "completed before all SDK calls were observed");
+                assert_eq!(value["body"]["pending_tool_calls"], json!([]));
+            } else {
+                assert_eq!(value["body"]["state"], "yielded", "{value}");
+                let pending = &value["body"]["pending_tool_calls"];
+                if pending != &json!([]) {
+                    let next = visible[i + 1..].iter().find_map(|v| v["body"]["emissions"].as_array()?.first())
+                        .expect("a pending SDK call was never emitted");
+                    assert_eq!(*pending, json!([next["tool_call_id"]]));
+                }
+            }
             continue;
         }
+        assert_eq!(value["body"]["state"], "yielded", "{value}");
         assert_eq!(emissions.len(), 1);
-        let expected = &nested_frontiers[offset + 1];
+        let expected = nested_frontiers.get(observed_emissions).expect("unexpected extra browser emission");
         for field in ["tool", "correlation_id", "delivery", "interface"] {
             assert_eq!(emissions[0][field], expected[field], "retained {field} changed");
         }
         assert_eq!(value["body"]["pending_tool_calls"], json!([emissions[0]["tool_call_id"]]));
+        observed_emissions += 1;
     }
-    assert!(completed,"SDK cell did not complete through its actual Wait");
-    assert!(sdk_output.iter().any(|value|value["text"]=="sdk raw 18000"));
+    assert_eq!(observed_emissions, frontier_count);
+    assert_eq!(sdk_output.iter().filter(|value|value["text"]=="sdk raw 18000").count(), 1);
     assert_eq!(returned_media.len(),2);
     assert_eq!(returned_media[0]["payload_base64"],encoded);
     let returned:octopus_interfaces::InterfaceArtifactManifest=serde_json::from_value(returned_media[0]["artifact"].clone()).unwrap();
@@ -3102,11 +3142,25 @@ text('sdk raw '+sdkRaw.text.length);
     let arrays = sdk_output.iter().filter_map(|row|row["text"].as_str())
         .filter_map(|text|serde_json::from_str::<Value>(text).ok()).find(|value|value.get("sdk_png").is_some()).unwrap();
     assert_eq!(arrays["sdk_png"],json!(png)); assert_eq!(arrays["sdk_jpeg"],json!(jpeg));
+    assert!(!admission.deliveries.lock().unwrap().iter().any(|row| row.seq > last_seq && row.from.as_str() == DOOR && row.to.as_str() == "system_browser_test"));
     let source=envelope(root,2000,"code_mode.run",json!({"script":"try { await sdkLocator.count(); throw new Error('stale context accepted'); } catch(error) { if (!error.message.includes('retained context identity')) throw error; text('stale context refused'); }","yield_time_ms":20}));
     admission.model_call(&source.artifact_file).await.unwrap();
     let input=admission.next().await.unwrap();
     let started=admission.run(room,handoff,formation,kind,input).await.unwrap();
-    let delivery=admission.deliveries.lock().unwrap().iter().rev().find(|row|row.from.as_str()==DOOR && row.to.as_str()=="system_browser_test").cloned().unwrap();
+    let mut frame = started.clone();
+    let mut sequence = 2001;
+    let delivery = loop {
+        assert_eq!(frame["body"]["state"], "yielded", "{frame}");
+        assert!(frame["body"]["output"].as_array().unwrap().is_empty());
+        let calls: Vec<_> = admission.deliveries.lock().unwrap().iter().filter(|row|
+            row.seq > last_seq && row.from.as_str() == DOOR && row.to.as_str() == "system_browser_test"
+        ).cloned().collect();
+        if let [call] = calls.as_slice() { break call.clone(); }
+        assert!(calls.is_empty(), "duplicate stale-context query");
+        assert!(sequence < 2033, "missing stale-context query");
+        frame = wait(started["body"]["cell_id"].clone(), sequence).await;
+        sequence += 1;
+    };
     let call:octopus_tool_handlers::ToolCallArtifact=serde_json::from_slice(&delivery.file.read_payload_bytes().unwrap()).unwrap();
     assert_eq!(call.tool,"browser.locator_query");
     let result=octopus_tool_handlers::ToolResultArtifact::success(&call.tool,call.correlation_id,json!({"result":call.tool,"target_id":"t","worker_environment_id":"fixture-browser-room","browser_context_id":"other-context","value":2}));
@@ -3114,7 +3168,7 @@ text('sdk raw '+sdkRaw.text.length);
     admission.arrive("system_browser_test",&file).await.unwrap();
     let input=admission.next().await.unwrap();
     admission.run(room,handoff,formation,kind,input).await.unwrap();
-    let settled=Box::pin(wait_until_completed(admission,room,handoff,formation,kind,root,&started["body"]["cell_id"],2001)).await;
+    let settled=Box::pin(wait_until_completed(admission,room,handoff,formation,kind,root,&started["body"]["cell_id"],sequence)).await;
     assert_eq!(settled.texts(),["stale context refused"]);
     assert!(!admission.deliveries.lock().unwrap().iter().any(|row|row.seq>delivery.seq && row.from.as_str()==DOOR && row.to.as_str()=="system_browser_test"));
 }

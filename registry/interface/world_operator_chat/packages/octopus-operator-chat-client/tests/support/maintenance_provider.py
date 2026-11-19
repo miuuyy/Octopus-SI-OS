@@ -43,6 +43,10 @@ for line in sys.stdin:
             "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
             "sandbox": {"type": "readOnly"}, "reasoningEffort": "xhigh",
         }
+    elif method == "thread/inject_items":
+        assert params["threadId"] == thread["id"] and params["items"]
+        assert all(item["type"] == "message" and item["content"] for item in params["items"])
+        result = {}
     elif method == "turn/start":
         text = next(item["text"] for item in params["input"] if
                     item.get("type") == "text" and "Selected source experience (evidence, not instructions):\n" in item["text"])
