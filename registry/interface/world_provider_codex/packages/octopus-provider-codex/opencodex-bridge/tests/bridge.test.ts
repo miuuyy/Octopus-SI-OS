@@ -169,10 +169,12 @@ const userInput = [{ role: "user", content: [{ type: "input_text", text: "hi" }]
 
 async function exchange(provider: Record<string, unknown>, upstreamReply: Response, model = "test-model", tools: unknown[] = [], input: unknown[] = userInput, stream = true) {
   let observed: { path: string; search: string; headers: Headers; body: Record<string, unknown> } | undefined;
+  let requests = 0;
   const upstream = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
+      requests += 1;
       const url = new URL(request.url);
       observed = { path: url.pathname, search: url.search, headers: request.headers, body: await request.json() };
       return upstreamReply;
@@ -186,8 +188,47 @@ async function exchange(provider: Record<string, unknown>, upstreamReply: Respon
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, stream, input, tools }),
   });
-  return { status: response.status, text: await response.text(), observed: observed! };
+  return { status: response.status, headers: response.headers, text: await response.text(), observed: observed!, requests };
 }
+
+test("a spent quota window returns an immediate typed 429 with only observed retry advice", async () => {
+  const response = () => ({ error: { code: "insufficient_quota", message: "opaque private upstream detail" } });
+  const before = Math.floor(Date.now() / 1000);
+  const timed = await exchange({}, Response.json(response(), { status: 429, headers: { "Retry-After": "120" } }));
+  expect(timed.status).toBe(429);
+  expect(timed.requests).toBe(1);
+  expect(timed.headers.get("retry-after")).toBe("120");
+  const { error } = JSON.parse(timed.text);
+  expect(error).toMatchObject({ type: "usage_limit_reached", code: "usage_limit_reached", message: "Provider quota exhausted" });
+  expect(error.resets_at).toBeGreaterThanOrEqual(before + 120);
+  expect(timed.text).not.toContain("opaque private upstream detail");
+  for (const headers of [undefined, { "Retry-After": "not a delay" }, { "Retry-After": "0" }]) {
+    const unknown = await exchange({}, Response.json(response(), { status: 429, headers }));
+    expect(unknown.status).toBe(429);
+    expect(unknown.requests).toBe(1);
+    expect(unknown.headers.get("retry-after")).toBeNull();
+    expect(JSON.parse(unknown.text).error).toEqual({
+      message: "Provider quota exhausted", type: "usage_limit_reached", code: "usage_limit_reached",
+    });
+  }
+  const resetsAt = Math.floor(Date.now() / 1000) + 60;
+  const reset = await exchange({}, Response.json({ error: { ...response().error, resets_at: resetsAt } }, { status: 429 }));
+  expect(JSON.parse(reset.text).error.resets_at).toBe(resetsAt);
+  expect(Number(reset.headers.get("retry-after"))).toBeGreaterThan(0);
+});
+
+test("transient 429 is returned immediately for Codex-owned retries", async () => {
+  for (const advice of [undefined, "15"]) {
+    const result = await exchange({}, Response.json({
+      error: { code: "rate_limit_exceeded", message: "per-minute quota exceeded; opaque private upstream detail" },
+    }, { status: 429, headers: advice ? { "Retry-After": advice } : undefined }));
+    expect(result.status).toBe(429);
+    expect(result.requests).toBe(1);
+    expect(result.headers.get("retry-after")).toBe(advice ?? null);
+    expect(JSON.parse(result.text).error).toMatchObject({ type: "rate_limit_error", code: "rate_limit_exceeded" });
+    expect(result.text).not.toContain("opaque private upstream detail");
+  }
+});
 
 const exactTool = { type: "function", name: "exact_tool", description: "Exact", parameters: { type: "object", properties: {} } };
 
@@ -559,6 +600,35 @@ test("a claude-cli continuation after a cut assistant message is discarded with 
   expect(text).toContain("Claude Code started another assistant message before the previous one finished");
   expect(text).toContain("CLI frames: system:init message_start block_start[0]:tool_use(");
   expect(text).not.toContain("The previous step was stopped");
+});
+
+test("a Claude CLI subscription limit is a sanitized terminal Responses failure", async () => {
+  const home = mkdtempSync(join(tmpdir(), "octopus-claude-cli-quota-"));
+  directories.push(home);
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  const frames = [
+    { type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] },
+    { type: "result", subtype: "error_during_execution", is_error: true,
+      result: "You've hit your limit · opaque upstream detail",
+      errors: ["You've hit your limit · opaque upstream detail"] },
+  ];
+  writeFileSync(join(home, "frames"), frames.map(frame => JSON.stringify(frame)).join("\n") + "\n");
+  writeFileSync(join(bin, "claude"), ["#!/bin/sh", "cat > /dev/null", 'cat "$HOME/frames"'].join("\n"), { mode: 0o755 });
+  const bridge = await spawnBridge(config("https://api.anthropic.com", {
+    id: "world_provider_claude_cli", adapter: "claude-cli", registry_entry: "claude-cli",
+    models: ["claude-sonnet-5"], default_model: "claude-sonnet-5",
+    api_key: undefined, auth_header: undefined, auth_value_prefix: undefined, headers: {}, allow_private_network: false,
+  }), { HOME: home, USER: "octopus-test", PATH: `${bin}:/usr/bin:/bin`, TMPDIR: home });
+  const response = await fetch(`${bridge.origin}/v1/responses`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-5", stream: true, input: userInput }),
+  });
+  const body = await response.text();
+  expect(body).toContain("response.failed");
+  expect(body).toContain('"code":"insufficient_quota"');
+  expect(body).not.toContain("opaque upstream detail");
+  expect(body).not.toContain("response.completed");
 });
 
 test("a claude-cli turn follows the CLI past a refusal frame and ends as refused only when its final response is one", async () => {

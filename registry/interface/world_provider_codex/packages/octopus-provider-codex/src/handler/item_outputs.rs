@@ -5,25 +5,82 @@ pub(crate) enum ProviderErrorOutput {
     Retrying(CodexTurnOutput),
 }
 
+const QUOTA_EXHAUSTED: &str = "provider_quota_exhausted";
+const RATE_LIMITED: &str = "provider_rate_limited";
+const OVERLOADED: &str = "provider_overloaded";
+
 pub(crate) fn provider_error_output(error: &octopus_appserver_proto::ErrorNotification) -> ProviderErrorOutput {
-    let authentication_failed =
-        provider_authentication_failed(&error.error.message, error.error.codex_error_info.as_ref());
-    if error.will_retry && !authentication_failed {
-        return ProviderErrorOutput::Retrying(CodexTurnOutput::client(TURN_RETRYING_LABEL, serde_json::json!({
-            "message": error.error.message,
-            "additional_details": error.error.additional_details,
-        })));
+    let output = provider_turn_error_output(&error.error, error.will_retry);
+    if output.label == TURN_RETRYING_LABEL {
+        ProviderErrorOutput::Retrying(output)
+    } else {
+        ProviderErrorOutput::Terminal(output)
     }
-    let mut value = serde_json::json!({
-        "message": error.error.message,
-        "will_retry": false,
-        "additional_details": error.error.additional_details,
-    });
-    if authentication_failed {
-        value["failure_code"] =
-            serde_json::Value::String(PROVIDER_AUTHENTICATION_FAILURE_CODE.to_string());
+}
+
+pub(crate) fn provider_turn_error_output(
+    error: &octopus_appserver_proto::TurnError,
+    retry_requested: bool,
+) -> CodexTurnOutput {
+    use octopus_appserver_proto::CodexErrorInfo::*;
+    let info = error.codex_error_info.as_ref();
+    let nested_status = match info {
+        Some(HttpConnectionFailed { http_status_code }
+        | ResponseStreamConnectionFailed { http_status_code }
+        | ResponseStreamDisconnected { http_status_code }
+        | ResponseTooManyFailedAttempts { http_status_code }) => *http_status_code,
+        _ => None,
+    };
+    let status = nested_status.or(error.http_status_code).filter(|status| (100..=599).contains(status));
+    let failure = match info {
+        Some(UsageLimitExceeded) => Some((QUOTA_EXHAUSTED, "Provider quota exhausted")),
+        Some(RateLimitExceeded) => Some((RATE_LIMITED, "Provider rate limit reached")),
+        Some(ServerOverloaded | PolicyCapacityUnavailable | FlexUnavailable) => {
+            Some((OVERLOADED, "Provider is overloaded"))
+        }
+        Some(Unauthorized) => Some((PROVIDER_AUTHENTICATION_FAILURE_CODE, "Provider authentication failed")),
+        _ if status == Some(429) => Some((RATE_LIMITED, "Provider rate limit reached")),
+        _ if status == Some(503) => Some((OVERLOADED, "Provider is overloaded")),
+        _ if status == Some(401) || (matches!(info, None | Some(Other))
+            && provider_authentication_failed(&error.message, None)) =>
+        {
+            Some((PROVIDER_AUTHENTICATION_FAILURE_CODE, "Provider authentication failed"))
+        }
+        _ => None,
+    };
+    let will_retry = retry_requested && !matches!(failure, Some((QUOTA_EXHAUSTED | PROVIDER_AUTHENTICATION_FAILURE_CODE, _)));
+    let mut value = if let Some((code, message)) = failure {
+        serde_json::json!({ "message": message, "will_retry": will_retry, "failure_code": code })
+    } else {
+        serde_json::json!({
+            "message": error.message,
+            "additional_details": error.additional_details,
+            "will_retry": will_retry,
+        })
+    };
+    if let Some(kind) = info.and_then(provider_error_info_name) {
+        value["error_info"] = serde_json::json!(kind);
     }
-    ProviderErrorOutput::Terminal(CodexTurnOutput::client(TURN_ERROR_LABEL, value))
+    if let Some(status) = status {
+        value["http_status_code"] = serde_json::json!(status);
+    }
+    if let Some(seconds) = error.retry_after_seconds.filter(|&seconds| seconds > 0) {
+        value["retry_after_seconds"] = serde_json::json!(seconds);
+    }
+    CodexTurnOutput::client(if will_retry { TURN_RETRYING_LABEL } else { TURN_ERROR_LABEL }, value)
+}
+
+fn provider_error_info_name(info: &octopus_appserver_proto::CodexErrorInfo) -> Option<String> {
+    let json = serde_json::to_value(info).ok()?;
+    let name = json.as_str().or_else(|| json.as_object()?.keys().next().map(String::as_str))?;
+    let mut normalized = String::new();
+    for c in name.chars() {
+        if c.is_ascii_uppercase() {
+            normalized.push('_');
+        }
+        normalized.push(c.to_ascii_lowercase());
+    }
+    Some(normalized)
 }
 
 pub(crate) fn provider_authentication_failed(

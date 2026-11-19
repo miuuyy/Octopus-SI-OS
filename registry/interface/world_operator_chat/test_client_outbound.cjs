@@ -1780,6 +1780,10 @@ test("provider account typed failures repair only explicit authentication eviden
     { code: "provider_account_auth_invalid", retryable: true, repairable: true },
   );
   assert.equal(authentication.message.includes("private upstream detail"), false);
+  for (const failure_code of ["provider_quota_exhausted", "provider_rate_limited", "provider_overloaded"]) {
+    const nonAuth = providerAccountTurnError({ failure_code, will_retry: false });
+    assert.notEqual(nonAuth?.repairable, true, failure_code);
+  }
 });
 
 test("author-only surface planning returns validated topology without committing or handing in", async (t) => {

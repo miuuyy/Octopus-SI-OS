@@ -11,7 +11,7 @@ const { operatorChatEventKind, operatorChatEventText, operatorChatProjectedRowId
 const { compareMovementOrder } = require('../electron/projection/movementRows.cjs');
 
 const repoRoot = path.resolve(__dirname, '../..');
-const protocol = { inputLabel: 'operator.message', terminalOutputLabel: 'interface.artifact.output', errorOutputLabel: 'interface.artifact.error',
+const protocol = { inputLabel: 'operator.message', terminalOutputLabel: 'interface.artifact.output', errorOutputLabel: 'turn.error', retryOutputLabel: 'turn.retrying',
   toolCallLabel: 'tool.call', hiddenActivityLabels: [] };
 
 function projectionStore(overrides = {}) {
@@ -465,6 +465,29 @@ test('turn state opens on input, pauses on interrupt, reopens on an acknowledged
   assert.deepEqual(states, ['open:waiting', 'open:working', 'closed:idle', 'open:working', 'closed:idle', 'open:waiting', 'open:working', 'closed:failed']);
   const messages = await project(rows.slice(5).filter(row => row.kind === 'InterfaceOutbound'), true);
   assert.deepEqual(messages.map(message => [message.event_kind, message.text, message.error]).at(-1), ['error', 'Provider transport closed', true]);
+});
+
+test('turn retry and terminal error projections retain typed provider evidence', async () => {
+  const rows = [
+    movement(1, 'turn.retrying', {
+      message: 'rate limited', failure_code: 'provider_rate_limited', error_info: 'rate_limit_exceeded',
+      http_status_code: 429, retry_after_seconds: 15, will_retry: true,
+    }),
+    movement(2, 'turn.error', {
+      message: 'quota exhausted', failure_code: 'provider_quota_exhausted', error_info: 'usage_limit_exceeded',
+      http_status_code: 429, retry_after_seconds: 0, will_retry: false,
+    }),
+  ];
+  for (const writable of [true, false]) {
+    const messages = await project(rows, writable);
+    assert.deepEqual(messages.map(({ event_kind, terminal, will_retry, event_data }) => [
+      event_kind, terminal, will_retry, event_data.failure_code, event_data.error_info,
+      event_data.http_status_code, event_data.retry_after_seconds,
+    ]), [
+      ['error', false, true, 'provider_rate_limited', 'rate_limit_exceeded', 429, 15],
+      ['error', true, false, 'provider_quota_exhausted', 'usage_limit_exceeded', 429, undefined],
+    ]);
+  }
 });
 
 test('a sealed stream without its seal row is not projected', async () => {

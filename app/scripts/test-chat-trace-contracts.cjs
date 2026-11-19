@@ -954,6 +954,21 @@ async function verifyTranscriptLayout() {
     await renderLedger([message("live", "reasoning_delta", "Scanning", { summary_index: 0, lifecycle: "streaming" })], true);
     assert.equal(query(".octopus-agent-activity-summary-value").textContent, "Thinking");
     assert.equal(query(".octopus-reasoning-detail").textContent, "Scanning", "active reasoning opens without a click");
+    const failure = (id, failure_code, error_info, retry_after_seconds, terminal) => ({
+      ...message(id, "error", "opaque private upstream detail", { failure_code, error_info, retry_after_seconds }),
+      terminal, error: true,
+    });
+    await render([failure("rate-retry", "provider_rate_limited", "rate_limit_exceeded", 15, false)], true);
+    assert.match(container.textContent, /Rate limit reached, retrying.*15s/);
+    assert.doesNotMatch(container.textContent, /opaque private upstream detail/);
+    const quota = failure("quota-error", "provider_quota_exhausted", "usage_limit_exceeded", undefined, true);
+    await render([], false, quota);
+    assert.match(container.textContent, /Provider quota exhausted/);
+    assert.doesNotMatch(container.textContent, /opaque private upstream detail|0s|retry delay/);
+    const rate = failure("rate-error", "provider_rate_limited", "response_too_many_failed_attempts", 30, true);
+    await render([], false, rate);
+    assert.match(container.textContent, /Provider rate limit exceeded[\s\S]*30s/);
+    assert.doesNotMatch(container.textContent, /opaque private upstream detail/);
     await render([], false);
     await render([message("pending", "event", "", { work_status: "submitting" })], true);
     assert.equal(query(".octopus-turn-activity").dataset.state, "starting");

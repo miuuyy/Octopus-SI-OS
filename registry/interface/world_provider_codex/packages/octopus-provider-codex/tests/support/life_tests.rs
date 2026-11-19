@@ -194,6 +194,8 @@
                                         message: "cancelled turn transport failed".to_string(),
                                         codex_error_info: None,
                                         additional_details: None,
+                                        http_status_code: None,
+                                        retry_after_seconds: None,
                                     },
                                     will_retry: false,
                                     thread_id: "thread-a".to_string(),
@@ -210,6 +212,7 @@
                             break;
                         };
                         let message = message.unwrap();
+                        if message.is_close() { break; }
                         let message: octopus_appserver_proto::JSONRPCMessage =
                             serde_json::from_str(&message.into_text().unwrap()).unwrap();
                         if let octopus_appserver_proto::JSONRPCMessage::Request(request) = message {
@@ -256,6 +259,68 @@
             descriptor.interface_driver_config.as_ref(),
         ));
         (driver, release_tx, method_rx, server)
+    }
+
+    #[tokio::test]
+    async fn failed_native_completion_emits_the_exact_terminal_provider_error() {
+        use crate::handler::{DrainStep, TurnContext, TurnDrain, TurnDrainOutcome, TurnSink};
+        use octopus_appserver_proto::ServerNotification;
+        let root = tempfile::tempdir().unwrap();
+        let (driver, _release, _methods, server) = interrupted_drain_driver(root.path(), &descriptor()).await;
+        let (emit, mut outputs) = ProviderOutputStream::channel();
+        let provider = InterfaceId::new("world_provider_codex");
+        let sink = TurnSink {
+            emit: &emit, output_root: root.path(), live_stream_root: root.path(),
+            provider_interface: &provider, run: "run-a", source_movement_seq: 7, attempt: 1,
+            context_output_labels: &BTreeSet::new(),
+            client_projection_output_labels: &BTreeSet::from(["turn.error".to_string()]),
+            live_stream_rules: &crate::live_stream::LiveStreamRules::from_private_config_or_disabled(&serde_json::Map::new()).unwrap(),
+            live_stream: std::sync::Mutex::new(None),
+            continuity: emit.continuity.clone(),
+        };
+        let control = CodexTurnControlBroker::new(Some(7));
+        let scope = crate::handler::TransportStateScope::Run("run-a".into());
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let source = bound("operator.message:fixture", json!({"text":"Write"}));
+        let barrier = ProviderHandoffBarrier::new();
+        let operations = BTreeMap::new();
+        let tools = BTreeMap::new();
+        let context = || TurnContext {
+            run_invocation: None, scope: &scope, sink: &sink, control: &control,
+            interface_operations: &operations, tool_names: &tools, source_artifact: &source.artifact,
+            handoff_barrier: &barrier, effect_gate: &gate, turn_interrupted: &interrupted,
+            lifecycle: None, lifecycle_prompt: None,
+        };
+        let error = json!({
+            "message":"private upstream response", "codexErrorInfo":"usageLimitExceeded",
+            "httpStatusCode":429, "retryAfterSeconds":120,
+        });
+        let notice: ServerNotification = serde_json::from_value(json!({
+            "method":"error","params":{"threadId":"thread-a","turnId":"turn-a","willRetry":false,"error":error}
+        })).unwrap();
+        let failed: ServerNotification = serde_json::from_value(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread-a","turn":{"id":"turn-a","items":[],"status":"failed","error":error}},
+        })).unwrap();
+        let mut drain = TurnDrain::default();
+        assert!(matches!(driver.drain_notification(context(), "thread-a", "turn-a", false, &mut drain, notice).await.unwrap(), DrainStep::Next));
+        assert!(outputs.try_recv().is_err(), "wait for native terminal status");
+        assert!(matches!(
+            driver.drain_notification(context(), "thread-a", "turn-a", false, &mut drain, failed).await.unwrap(),
+            DrainStep::Done(TurnDrainOutcome::Complete)
+        ));
+        let ProviderStreamEmission::Turn(terminal) = outputs.try_recv().unwrap() else { panic!("expected terminal artifact"); };
+        assert_eq!(terminal.artifact.read_manifest().unwrap().label, "turn.error");
+        let payload: serde_json::Value = serde_json::from_slice(&terminal.artifact.read_payload_bytes().unwrap()).unwrap();
+        assert_eq!(payload["failure_code"], "provider_quota_exhausted");
+        assert_eq!(payload["error_info"], "usage_limit_exceeded");
+        assert_eq!(payload["retry_after_seconds"], 120);
+        assert_eq!(payload["http_status_code"], 429);
+        assert!(!payload.to_string().contains("private upstream response"));
+        assert!(outputs.try_recv().is_err(), "no duplicate or raw failed completion");
+        Arc::try_unwrap(driver).ok().unwrap().shutdown().await.unwrap();
+        server.await.unwrap();
     }
 
     fn context(root: &Path, descriptor: &InterfaceDescriptor) -> InterfaceLiftContext {

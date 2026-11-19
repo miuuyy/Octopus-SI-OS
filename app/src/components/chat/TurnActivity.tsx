@@ -949,10 +949,37 @@ function ThinkingFallback({ active = true, label = "Thinking" }: { active?: bool
   );
 }
 
+function providerFailureKind(data: Record<string, unknown>) {
+  const info = data.error_info ?? data.errorInfo;
+  if (data.failure_code === "provider_quota_exhausted" || info === "usage_limit_exceeded" || info === "usageLimitExceeded") {
+    return "quota";
+  }
+  if (data.failure_code === "provider_overloaded" || info === "server_overloaded" || info === "serverOverloaded") {
+    return "overload";
+  }
+  const wire = record(info);
+  const disconnected = record(wire.responseStreamDisconnected ?? wire.response_stream_disconnected);
+  if (data.failure_code === "provider_rate_limited" || info === "rate_limit_exceeded" || info === "rateLimitExceeded"
+      || data.http_status_code === 429 || disconnected.httpStatusCode === 429 || disconnected.http_status_code === 429) return "rate";
+  return undefined;
+}
+
+function providerRetryAdvice(data: Record<string, unknown>) {
+  const seconds = data.retry_after_seconds;
+  return typeof seconds === "number" && Number.isSafeInteger(seconds) && seconds > 0
+    ? formatElapsed(seconds * 1000) : "";
+}
+
 export function TerminalErrorActivity({ message, renderActivity }: {
   message: ChatRenderMessage;
   renderActivity: Props["renderActivity"];
 }) {
+  const data = record(message.eventData);
+  const kind = providerFailureKind(data);
+  const title = kind === "quota" ? "Provider quota exhausted"
+    : kind === "rate" ? "Provider rate limit exceeded"
+    : kind === "overload" ? "Provider is overloaded" : "";
+  const retry = providerRetryAdvice(data);
   return (
     <aside className="octopus-turn-error">
       <div aria-hidden="true" className="octopus-turn-error-background" />
@@ -960,7 +987,13 @@ export function TerminalErrorActivity({ message, renderActivity }: {
         <Glyph aria-hidden="true" className="icon-sm shrink-0" name="warning" size={16} />
       </div>
       <div className="octopus-turn-error-content">
-        <div className="octopus-turn-error-copy">{renderActivity(message)}</div>
+        <div className="octopus-turn-error-copy">
+          {title ? <>
+            <strong>{title}</strong>
+            <div>{kind === "quota" ? "Check your provider’s plan or billing limits." : "Try again later."}
+              {retry ? ` Provider reported a ${retry} retry delay.` : ""}</div>
+          </> : renderActivity(message)}
+        </div>
       </div>
     </aside>
   );
@@ -970,17 +1003,14 @@ function RetryableErrorActivity({ message }: { message: ChatRenderMessage }) {
   const data = record(message.eventData);
   const attempt = indexedPositiveNumber(data.attempt ?? data.retry_attempt ?? data.retryAttempt);
   const maximum = indexedPositiveNumber(data.max_attempts ?? data.maxAttempts);
-  const errorInfo = data.error_info ?? data.errorInfo;
-  const disconnected = record(record(errorInfo).responseStreamDisconnected ?? record(errorInfo).response_stream_disconnected);
-  const overloaded = errorInfo === "serverOverloaded"
-    || errorInfo === "server_overloaded"
-    || disconnected.httpStatusCode === 429
-    || disconnected.http_status_code === 429;
+  const kind = providerFailureKind(data);
+  const retry = providerRetryAdvice(data);
   const progress = attempt && maximum ? `${attempt}/${maximum}` : "";
-  const label = overloaded
-    ? `Server is busy, reconnecting${progress ? ` ${progress}` : ""}`
-    : progress ? `Reconnecting ${progress}` : message.text || "Reconnecting";
-  const details = text(data.additional_details ?? data.additionalDetails);
+  const suffix = `${progress ? ` ${progress}` : ""}${retry ? ` (provider delay: ${retry})` : ""}`;
+  const label = kind === "rate" ? `Rate limit reached, retrying${suffix}`
+    : kind === "overload" ? `Server is busy, reconnecting${suffix}`
+    : progress ? `Reconnecting${suffix}` : `${message.text || "Reconnecting"}${suffix}`;
+  const details = kind ? "" : text(data.additional_details ?? data.additionalDetails);
   return (
     <ActivityDisclosure
       active={false}

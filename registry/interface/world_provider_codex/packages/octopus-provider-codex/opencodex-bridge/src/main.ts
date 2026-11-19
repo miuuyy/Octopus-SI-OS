@@ -10,6 +10,7 @@ import {
   bridgeToResponsesSSE,
   buildResponseJSON,
   formatErrorResponse,
+  formatUsageLimitReachedResponse,
 } from "../node_modules/@bitkyc08/opencodex/src/bridge.ts";
 import { PROVIDER_REGISTRY } from "../node_modules/@bitkyc08/opencodex/src/providers/registry.ts";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../node_modules/@bitkyc08/opencodex/src/providers/derive.ts";
@@ -28,6 +29,7 @@ import { isLocalUpstream } from "../node_modules/@bitkyc08/opencodex/src/lib/loc
 import { redactSecretString } from "../node_modules/@bitkyc08/opencodex/src/lib/redact.ts";
 import { parseGcpCredentialJson } from "../node_modules/@bitkyc08/opencodex/src/lib/gcp-adc.ts";
 import { googleVertexLocationConfigError } from "../node_modules/@bitkyc08/opencodex/src/providers/google-vertex-location.ts";
+import { formatClientRetryAfter } from "../node_modules/@bitkyc08/opencodex/src/lib/client-retry-after.ts";
 import { isQuotaExhaustedBody } from "../node_modules/@bitkyc08/opencodex/src/adapters/google-errors.ts";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
 import { buildWebSearchTool } from "../node_modules/@bitkyc08/opencodex/src/web-search/synthetic-tool.ts";
@@ -635,6 +637,20 @@ function deliver(
   })();
 }
 
+async function* cliLimitEvents(events: AsyncIterable<AdapterEvent>, adapter: string): AsyncGenerator<AdapterEvent> {
+  for await (const event of events) {
+    if (event.type === "error" && (event.status === 402 || event.code === "claude_subscription_cooldown"
+      || QUOTA_CODES.has(event.code ?? "")
+      || event.errorType === "insufficient_quota"
+      || (adapter === "claude-cli" && /^(?:you['’]ve hit your (?:usage )?limit|usage limit reached)\b/i.test(event.message.trim())))) {
+      yield { ...event, status: 429, errorType: "insufficient_quota", code: "insufficient_quota",
+        message: "Provider quota exhausted", retryable: false };
+    } else {
+      yield event;
+    }
+  }
+}
+
 function flattenRootSchemaAlternatives(parsed: OcxParsedRequest): void {
   for (const tool of parsed.context.tools ?? []) {
     const schema = tool.parameters;
@@ -670,26 +686,6 @@ function mergeBranchProperties(properties: Record<string, unknown>, branch: Reco
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function upstreamErrorReason(text: string, detail: string): string {
-  let body: unknown;
-  try { body = JSON.parse(text); } catch { return detail; }
-  const metadata = isObject(body) && isObject(body.error) && isObject(body.error.metadata) ? body.error.metadata : undefined;
-  const raw = typeof metadata?.raw === "string" ? metadata.raw.trim() : "";
-  let reason = raw || (isObject(body) && isObject(body.error) && typeof body.error.message === "string" ? body.error.message
-    : isObject(body) && typeof body.message === "string" ? body.message : detail);
-  for (let depth = 0; depth < 3; depth++) {
-    try {
-      const inner: unknown = JSON.parse(reason);
-      const message = isObject(inner) && isObject(inner.error) && typeof inner.error.message === "string" ? inner.error.message
-        : isObject(inner) && typeof inner.message === "string" ? inner.message : undefined;
-      if (!message || message === reason) break;
-      reason = message;
-    } catch { break; }
-  }
-  reason = redactSecretString(reason).slice(0, 600);
-  return raw && detail && detail !== reason ? `${detail}: ${reason}` : reason;
 }
 
 async function responsesRequest(request: Request, config: BridgeConfig): Promise<Response> {
@@ -752,8 +748,8 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
   }
   if (adapter.runTurn !== undefined) {
     return deliver(parsed, responseModel, guardEmptyCompletionEventStream({
-      firstEvents: turnEvents(adapter, parsed, budget, abort),
-      continuation: () => turnEvents(adapter, parsed, budget, abort),
+      firstEvents: cliLimitEvents(turnEvents(adapter, parsed, budget, abort), config.provider.adapter),
+      continuation: () => cliLimitEvents(turnEvents(adapter, parsed, budget, abort), config.provider.adapter),
     }), maps, budget, abort, stallTimeoutSec, cleanup);
   }
   const first = await upstreamAttempt(config, request, adapter, parsed, budget, abort);
@@ -777,7 +773,18 @@ async function responsesRequest(request: Request, config: BridgeConfig): Promise
         ? { ...parsed, context: { ...parsed.context, messages: [...parsed.context.messages, droppedOutput.note(dropped)] } }
         : parsed;
       const retried = await upstreamAttempt(config, request, adapter, retry, budget, abort);
-      if (retried instanceof Response) throw new Error(`retry of an empty completion failed upstream with ${retried.status}`);
+      if (retried instanceof Response) {
+        if (retried.status === 429) {
+          const { error } = await retried.json();
+          const quota = error?.code === "usage_limit_reached";
+          return listedEvents([{
+            type: "error", status: 429, errorType: quota ? "insufficient_quota" : "rate_limit_error",
+            code: quota ? "insufficient_quota" : "rate_limit_exceeded",
+            message: quota ? "Provider quota exhausted" : "Provider rate limit reached",
+          }]);
+        }
+        throw new Error(`retry of an empty completion failed upstream with ${retried.status}`);
+      }
       return watched(retried);
     },
   })), maps, budget, abort, stallTimeoutSec, cleanup);
@@ -809,43 +816,71 @@ async function* endDroppedOutput(events: AsyncIterable<AdapterEvent>): AsyncGene
   for await (const event of events) yield isDroppedOutput(event) ? droppedOutput.failure(event) : event;
 }
 
-const RATE_LIMIT_WAITS_MS = [10_000, 20_000, 30_000, 60_000, 60_000, 60_000, 60_000];
+const QUOTA_CODES = new Set([
+  "insufficient_quota", "usage_limit_reached", "usage_limit_exceeded",
+  "credit_balance_exhausted", "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
+]);
 
-function retryAfterMs(value: string | null): number | undefined {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const at = Date.parse(value);
-  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
+function retryAdvice(headers: Headers, now: number) {
+  const delay = Number(formatClientRetryAfter(headers.get("retry-after"), now));
+  return Number.isSafeInteger(delay) && delay > 0 && now + delay * 1000 <= 8.64e15 ? delay : null;
 }
 
-function abortableSleep(ms: number, signal: AbortSignal): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve(false);
-    const timer = setTimeout(() => { signal.removeEventListener("abort", stop); resolve(true); }, ms);
-    const stop = () => { clearTimeout(timer); resolve(false); };
-    signal.addEventListener("abort", stop, { once: true });
-  });
+function upstreamErrorReason(text: string, detail: string): string {
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { return redactSecretString(detail).slice(0, 600); }
+  const metadata = isObject(body) && isObject(body.error) && isObject(body.error.metadata) ? body.error.metadata : undefined;
+  const raw = typeof metadata?.raw === "string" ? metadata.raw.trim() : "";
+  let reason = raw || (isObject(body) && isObject(body.error) && typeof body.error.message === "string" ? body.error.message
+    : isObject(body) && typeof body.message === "string" ? body.message : detail);
+  for (let depth = 0; depth < 3; depth++) {
+    try {
+      const inner: unknown = JSON.parse(reason);
+      const message = isObject(inner) && isObject(inner.error) && typeof inner.error.message === "string" ? inner.error.message
+        : isObject(inner) && typeof inner.message === "string" ? inner.message : undefined;
+      if (!message || message === reason) break;
+      reason = message;
+    } catch { break; }
+  }
+  reason = redactSecretString(reason).slice(0, 600);
+  return raw && detail && detail !== reason ? redactSecretString(`${detail}: ${reason}`).slice(0, 600) : reason;
+}
+
+async function providerHttpError(upstream: Response, maxBytes: number, adapter: ProviderAdapter): Promise<Response> {
+  const status = upstream.status;
+  const now = Date.now();
+  const delay = retryAdvice(upstream.headers, now);
+  let body = "";
+  try { body = await boundedText(upstream, Math.min(maxBytes, 1024 * 1024)); } catch { /* no body evidence */ }
+  let error: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (isObject(parsed)) error = isObject(parsed.error) ? parsed.error : parsed;
+  } catch { /* a non-JSON error may still carry a quota phrase */ }
+  if (status === 402 || (status === 429 && (
+    QUOTA_CODES.has(String(error.code)) || QUOTA_CODES.has(String(error.type)) || isQuotaExhaustedBody(body)
+  ))) {
+    const reset = error.resets_at;
+    const resetMs = typeof reset === "number" && Number.isSafeInteger(reset) && reset * 1000 > now
+      && reset * 1000 <= 8.64e15 ? reset * 1000 : null;
+    const retryAfterSeconds = delay ?? (resetMs === null ? null : Math.ceil((resetMs - now) / 1000));
+    return formatUsageLimitReachedResponse("Provider quota exhausted", resetMs ?? (delay === null ? null : now + delay * 1000), retryAfterSeconds);
+  }
+  if (status === 429 || status === 401) {
+    const message = status === 429 ? "Provider rate limit reached" : "Provider authentication failed";
+    return formatErrorResponse(status, "upstream_error", message, { retryAfter: delay });
+  }
+  const reason = upstreamErrorReason(body, adapter.formatErrorBody?.(status, upstream.headers, body) ?? "");
+  if (status === 403 || status === 404) {
+    return formatErrorResponse(400, "upstream_error", `Provider HTTP ${status}: ${reason || upstream.statusText}`, {
+      code: `provider_http_${status}`, classified: true,
+    });
+  }
+  return formatErrorResponse(status, "upstream_error", reason || `Provider HTTP ${status}`, { retryAfter: delay });
 }
 
 async function upstreamAttempt(
-  config: BridgeConfig,
-  request: Request,
-  adapter: ProviderAdapter,
-  parsed: OcxParsedRequest,
-  budget: TranslatorBudget,
-  abort: AbortController,
-): Promise<Response | AsyncIterable<AdapterEvent>> {
-  for (let attempt = 0; ; attempt += 1) {
-    const result = await upstreamAttemptOnce(config, request, adapter, parsed, budget, abort);
-    if (!(result instanceof Response) || result.status !== 429 || attempt >= RATE_LIMIT_WAITS_MS.length) return result;
-    const wait = Math.min(retryAfterMs(result.headers.get("retry-after")) ?? RATE_LIMIT_WAITS_MS[attempt], 60_000);
-    console.error(`provider rate limit (429); waiting ${Math.round(wait / 1000)}s before attempt ${attempt + 2}`);
-    if (!(await abortableSleep(wait, abort.signal))) return result;
-  }
-}
-
-async function upstreamAttemptOnce(
   config: BridgeConfig,
   request: Request,
   adapter: ProviderAdapter,
@@ -888,23 +923,7 @@ async function upstreamAttemptOnce(
       : formatErrorResponse(400, "invalid_request_error", message);
   }
   built.releaseBodyObservation?.();
-  if (!upstream.ok) {
-    try {
-      const text = await boundedText(upstream, Math.min(config.limits.max_response_bytes, 1024 * 1024));
-      const detail = upstreamErrorReason(text, adapter.formatErrorBody?.(upstream.status, upstream.headers, text) ?? "") || `Provider error ${upstream.status}`;
-      if (unrecoverableProviderStatus(upstream.status, text)) {
-        return formatErrorResponse(400, "upstream_error", `Provider HTTP ${upstream.status}: ${detail}`, {
-          code: `provider_http_${upstream.status}`,
-          classified: true,
-        });
-      }
-      return formatErrorResponse(upstream.status, "upstream_error", detail, {
-        retryAfter: upstream.headers.get("retry-after"),
-      });
-    } catch (error) {
-      return formatErrorResponse(502, "upstream_error", error instanceof Error ? error.message : "provider error body was unreadable");
-    }
-  }
+  if (!upstream.ok) return providerHttpError(upstream, config.limits.max_response_bytes, adapter);
   const bounded = boundedStream(upstream, config.limits.max_response_bytes, abort);
   if (!parsed.stream && adapter.parseResponse) {
     try {
@@ -914,10 +933,6 @@ async function upstreamAttemptOnce(
     }
   }
   return adapter.parseStream(bounded, budget, built.tierLog);
-}
-
-function unrecoverableProviderStatus(status: number, body: string): boolean {
-  return status === 401 || status === 402 || status === 403 || status === 404 || (status === 429 && isQuotaExhaustedBody(body));
 }
 
 function transientCredentialFailure(error: unknown, signal: AbortSignal): boolean {

@@ -137,6 +137,11 @@ function operatorChatEventData(payload, eventKind, row) {
   delete projected._movement;
   delete projected._stream;
   if (eventKind === "compaction") delete projected.text;
+  if (eventKind === "error") {
+    const { http_status_code: status, retry_after_seconds: delay } = projected;
+    if (!Number.isInteger(status) || status < 100 || status > 599) delete projected.http_status_code;
+    if (!Number.isSafeInteger(delay) || delay <= 0) delete projected.retry_after_seconds;
+  }
   if (row?.__stream) {
     return {
       ...projected,

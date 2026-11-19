@@ -1107,6 +1107,8 @@ impl ThreadHistoryBuilder {
                 message: payload.message.clone(),
                 codex_error_info: payload.codex_error_info.clone().map(Into::into),
                 additional_details: None,
+                http_status_code: None,
+                retry_after_seconds: None,
             });
             tracking_changes.then(|| ThreadHistoryTurnChange::from_pending_turn(turn))
         } else {
@@ -3611,6 +3613,8 @@ mod tests {
                     }
                 ),
                 additional_details: None,
+                http_status_code: None,
+                retry_after_seconds: None,
             })
         );
     }

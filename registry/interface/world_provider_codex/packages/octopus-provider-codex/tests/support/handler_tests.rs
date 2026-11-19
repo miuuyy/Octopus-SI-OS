@@ -6265,6 +6265,8 @@ while IFS= read -r _; do :; done
             message: "upstream rejected the turn".to_string(),
             codex_error_info: None,
             additional_details: Some("request id 42".to_string()),
+            http_status_code: None,
+            retry_after_seconds: None,
         };
         assert!(terminal_turn_may_emit_reply(&TurnStatus::Completed, None).unwrap());
         assert!(!terminal_turn_may_emit_reply(&TurnStatus::Interrupted, None).unwrap());
@@ -6287,6 +6289,8 @@ while IFS= read -r _; do :; done
                 message: "expired credentials".to_string(),
                 codex_error_info: Some(octopus_appserver_proto::CodexErrorInfo::Unauthorized),
                 additional_details: None,
+                http_status_code: None,
+                retry_after_seconds: None,
             },
             will_retry: true,
             thread_id: "thread-1".to_string(),
@@ -6307,6 +6311,8 @@ while IFS= read -r _; do :; done
                 message: "temporary upstream overload".to_string(),
                 codex_error_info: None,
                 additional_details: None,
+                http_status_code: None,
+                retry_after_seconds: None,
             },
             will_retry: true,
             thread_id: "thread-1".to_string(),
@@ -6325,6 +6331,44 @@ while IFS= read -r _; do :; done
         assert!(!listed("/context_output_labels") && !listed("/session_snapshot_labels")
             && !listed("/run_affordance_profile/output_selection/return_labels"),
             "a retry neither enters the run's context nor returns to its creator");
+    }
+
+    #[test]
+    fn provider_limit_and_overload_error_artifacts_keep_only_typed_evidence() {
+        for (info, status, delay, requested, code, name, emitted_retry) in [
+            (serde_json::json!("usageLimitExceeded"), Some(429), Some(120), true,
+                "provider_quota_exhausted", "usage_limit_exceeded", false),
+            (serde_json::json!("usageLimitExceeded"), None, None, false,
+                "provider_quota_exhausted", "usage_limit_exceeded", false),
+            (serde_json::json!("rateLimitExceeded"), Some(429), Some(15), true,
+                "provider_rate_limited", "rate_limit_exceeded", true),
+            (serde_json::json!({"responseTooManyFailedAttempts":{"httpStatusCode":429}}), None, Some(0), false,
+                "provider_rate_limited", "response_too_many_failed_attempts", false),
+            (serde_json::json!("serverOverloaded"), None, None, true,
+                "provider_overloaded", "server_overloaded", true),
+        ] {
+            let notification = serde_json::from_value(serde_json::json!({
+                "error": {
+                    "message": "private fixture detail: Your access token could not be refreshed",
+                    "codexErrorInfo": info, "additionalDetails": "opaque private fixture detail",
+                    "httpStatusCode": status, "retryAfterSeconds": delay,
+                },
+                "threadId": "thread", "turnId": "turn", "willRetry": requested,
+            })).unwrap();
+            let output = match provider_error_output(&notification) {
+                ProviderErrorOutput::Retrying(output) if emitted_retry => output,
+                ProviderErrorOutput::Terminal(output) if !emitted_retry => output,
+                _ => panic!("unexpected provider retry disposition for {name}"),
+            };
+            assert_eq!(output.label, if emitted_retry { TURN_RETRYING_LABEL } else { TURN_ERROR_LABEL });
+            assert_eq!(output.value["will_retry"], emitted_retry);
+            assert_eq!(output.value["failure_code"], code);
+            assert_eq!(output.value["error_info"], name);
+            let expected_status = if name == "response_too_many_failed_attempts" { Some(429) } else { status };
+            assert_eq!(output.value.get("http_status_code").and_then(serde_json::Value::as_u64), expected_status);
+            assert_eq!(output.value.get("retry_after_seconds").and_then(serde_json::Value::as_u64), delay.filter(|&d| d > 0));
+            assert!(!output.value.to_string().contains("private fixture detail"));
+        }
     }
 
     #[test]

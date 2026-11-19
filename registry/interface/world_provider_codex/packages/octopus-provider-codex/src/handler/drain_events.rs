@@ -480,6 +480,16 @@ impl CodexAppServerInterfaceDriver {
                     ));
                 }
                 sink.clear_pending();
+                if turn.turn.status == TurnStatus::Failed {
+                    let error = terminal_error.take().or_else(|| {
+                        turn.turn.error.as_ref().map(|error| provider_turn_error_output(error, false))
+                    });
+                    if let Some(error) = error {
+                        control.finish();
+                        sink.send_terminal(error)?;
+                        return Ok(DrainStep::Done(TurnDrainOutcome::Complete));
+                    }
+                }
                 let completion = serialized_client_output(TURN_COMPLETED_LABEL, &turn)?;
                 if turn.turn.status == TurnStatus::Interrupted && terminal_error.is_none() {
                     sink.send_terminal(completion)?;

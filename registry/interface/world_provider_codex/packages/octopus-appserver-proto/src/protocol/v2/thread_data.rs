@@ -195,4 +195,10 @@ pub struct TurnError {
     pub codex_error_info: Option<CodexErrorInfo>,
     #[serde(default)]
     pub additional_details: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "http_status_code")]
+    #[ts(optional)]
+    pub http_status_code: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "retry_after_seconds")]
+    #[ts(optional)]
+    pub retry_after_seconds: Option<u64>,
 }
