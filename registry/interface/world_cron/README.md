@@ -55,6 +55,15 @@ For ordinary qualifying runs, every artifact movement with typed run provenance
 counts, regardless of label. A run qualifies when one of its checkpoint bindings
 names an interface whose descriptor matches every selector field. The optional
 `within_ee` narrows this scope to runs whose EE chain contains that EE.
+`exact_ee` narrows it to runs that live in exactly that EE, without its child
+EEs, and `run_ids` to the listed runs. The three fields combine: a run counts
+only when it passes every one that is given.
+
+A run that other runs report to stays active through their results, because an
+arrival from a peer is a movement of the receiving run. To watch whether one
+run's own model still answers, name it in `run_ids`, match its provider in
+`interface_match`, and match the interface its peers reach it through in
+`exclude_interface_match`; then only arrivals from the provider count.
 
 Runs that bind this trigger or have received an arrival from it are excluded,
 and so are runs that bind or were fed by an interface matching the optional

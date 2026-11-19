@@ -1432,7 +1432,7 @@ def run_cron(schedule, reminder):
 
 
 def validate_inactivity(value):
-    exact_keys(value, {"seconds", "interface_match", "exclude_interface_match", "within_ee"}, {"seconds", "interface_match"}, "schedule.inactivity")
+    exact_keys(value, {"seconds", "interface_match", "exclude_interface_match", "within_ee", "exact_ee", "run_ids"}, {"seconds", "interface_match"}, "schedule.inactivity")
     seconds = value["seconds"]
     if type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds < 0.001:
         raise ValueError("inactivity.seconds must be finite and at least 0.001")
@@ -1443,8 +1443,18 @@ def validate_inactivity(value):
         exact_keys(selector, {"interface_type", "role", "interface_driver_ref"}, set(), f"inactivity.{field}")
         if not selector or any(not isinstance(v, str) or not v for v in selector.values()):
             raise ValueError(f"inactivity.{field} requires non-empty descriptor fields")
-    if "within_ee" in value and (not isinstance(value["within_ee"], str) or REGISTRY_ID.fullmatch(value["within_ee"]) is None):
-        raise ValueError("inactivity.within_ee must be a registry-safe EE id")
+    for field in ("within_ee", "exact_ee"):
+        if field in value and (not isinstance(value[field], str) or REGISTRY_ID.fullmatch(value[field]) is None):
+            raise ValueError(f"inactivity.{field} must be a registry-safe EE id")
+    if "run_ids" in value:
+        run_ids = value["run_ids"]
+        if (
+            not isinstance(run_ids, list)
+            or not run_ids
+            or any(not isinstance(run_id, str) or REGISTRY_ID.fullmatch(run_id) is None for run_id in run_ids)
+            or len(set(run_ids)) != len(run_ids)
+        ):
+            raise ValueError("inactivity.run_ids must be a non-empty list of distinct registry-safe run ids")
 
 
 class RunActivity:
@@ -1501,6 +1511,8 @@ class RunActivity:
         selector = self.schedule["inactivity"]["interface_match"]
         exclusion = self.schedule["inactivity"].get("exclude_interface_match")
         within_ee = self.schedule["inactivity"].get("within_ee")
+        exact_ee = self.schedule["inactivity"].get("exact_ee")
+        run_ids = self.schedule["inactivity"].get("run_ids")
         for entry in os.scandir(slots["run_records_root"]):
             if not entry.name.endswith(".json"):
                 continue
@@ -1515,6 +1527,10 @@ class RunActivity:
                         if isinstance(binding, dict) and isinstance(binding.get("interface"), str):
                             interfaces.add(binding["interface"])
                 excluded = INTERFACE_ID in interfaces
+                if run_ids is not None and run["id"] not in run_ids:
+                    continue
+                if exact_ee is not None and run.get("ee") != exact_ee:
+                    continue
                 if within_ee is not None and within_ee not in self.ee_chain(run.get("ee"), seen):
                     continue
                 matched = False

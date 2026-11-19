@@ -147,6 +147,108 @@ class InactivityContract(unittest.TestCase):
         self.movement("run_b")
         self.assertEqual(trigger.tick(), due)
 
+    def place_runs(self, placement):
+        ees = self.root / "ees"
+        ees.mkdir()
+        for ee, parent in (("ee_root", None), ("ee_project", "ee_root"), ("ee_other", None)):
+            (ees / f"{ee}.json").write_text(json.dumps({"ee_id": ee, "parent_ee_id": parent}))
+        slots = json.loads(os.environ["OCTOPUS_ROOT_SLOTS_JSON"])
+        slots["ee_instances_root"] = str(ees)
+        os.environ["OCTOPUS_ROOT_SLOTS_JSON"] = json.dumps(slots)
+        for name, ee in placement.items():
+            (self.runs / f"{name}.json").write_text(json.dumps({"id": name, "ee": ee, "checkpoints": [{"interface_binding": {"interface": "world_user"}}]}))
+
+    def test_within_ee_counts_child_ee_runs_and_exact_ee_does_not(self):
+        self.place_runs({"run_a": "ee_root", "run_b": "ee_project", "run_c": "ee_other"})
+        self.config["schedule"]["inactivity"]["within_ee"] = "ee_root"
+        trigger = self.trigger()
+        self.movement("run_a")
+        due = trigger.tick()
+        self.advance(600)
+        self.movement("run_c")
+        self.assertEqual(trigger.tick(), due)
+        self.movement("run_b")
+        self.assertEqual(trigger.tick(), due + 600_000)
+
+        del self.config["schedule"]["inactivity"]["within_ee"]
+        self.config["schedule"]["inactivity"]["exact_ee"] = "ee_root"
+        trigger = self.trigger()
+        self.assertEqual(trigger.tick(), due)
+        self.advance(600)
+        self.movement("run_b")
+        self.movement("run_c")
+        self.assertEqual(trigger.tick(), due)
+        self.movement("run_a")
+        self.assertEqual(trigger.tick(), due + 1_200_000)
+
+    def test_run_ids_ignore_sibling_and_child_runs_even_within_their_ee(self):
+        self.place_runs({"run_a": "ee_root", "run_b": "ee_project", "run_c": "ee_root"})
+        self.config["schedule"]["inactivity"].update(within_ee="ee_root", run_ids=["run_a"])
+        trigger = self.trigger()
+        self.movement("run_b")
+        self.movement("run_c")
+        self.assertIsNone(trigger.tick())
+        self.movement("run_a")
+        due = trigger.tick()
+        self.advance(3599)
+        self.movement("run_b")
+        self.movement("run_c")
+        self.assertEqual(trigger.tick(), due)
+        self.assertEqual(self.emissions, [])
+        self.advance(1)
+        trigger.tick()
+        self.assertEqual([e["last_activity"]["run"] for e in self.emissions], ["run_a"])
+        self.advance(7200)
+        self.movement("run_b")
+        self.movement("run_c")
+        trigger.tick()
+        self.advance(7200)
+        trigger.tick()
+        self.assertEqual(len(self.emissions), 1)
+        self.movement("run_a")
+        self.assertEqual(trigger.tick(), self.clock // 1_000_000 + 3_600_000)
+
+    def test_a_listed_run_outside_the_other_scopes_is_not_watched(self):
+        self.place_runs({"run_a": "ee_other", "run_b": "ee_root"})
+        self.config["schedule"]["inactivity"].update(exact_ee="ee_root", run_ids=["run_a"])
+        trigger = self.trigger()
+        self.movement("run_a")
+        self.movement("run_b")
+        self.assertIsNone(trigger.tick())
+
+    def test_results_from_peers_do_not_keep_a_watched_run_active(self):
+        folder = self.interfaces / "system_peer_input"
+        folder.mkdir()
+        (folder / "interface.json").write_text(json.dumps({"id": "system_peer_input", "interface_type": "system", "role": "service"}))
+        (self.runs / "run_a.json").write_text(json.dumps({"id": "run_a", "checkpoints": [{"interface_binding": {"interface": item}} for item in ("world_user", "system_peer_input")]}))
+        self.config["schedule"]["inactivity"].update(run_ids=["run_a"], exclude_interface_match={"interface_type": "system", "role": "service"})
+        trigger = self.trigger()
+        source = self.movement("run_a", kind="InterfaceArrival", source="world_user")
+        due = trigger.tick()
+        self.advance(1800)
+        self.movement("run_a", "peer.result:1", "InterfaceArrival", "system_peer_input")
+        self.movement("run_a")
+        self.movement("run_b", kind="InterfaceArrival", source="world_user")
+        self.assertEqual(trigger.tick(), due)
+        self.advance(1800)
+        self.movement("run_a", "peer.result:2", "InterfaceArrival", "system_peer_input")
+        trigger.tick()
+        self.assertEqual(len(self.emissions), 1)
+        self.assertEqual(self.emissions[0]["last_activity"], {"run": "run_a", "seq": source, "recorded_at_unix_ms": due - 3_600_000})
+        self.advance(60)
+        self.movement("run_a", kind="InterfaceArrival", source="world_user")
+        self.assertEqual(trigger.tick(), self.clock // 1_000_000 + 3_600_000)
+
+    def test_scope_fields_are_validated(self):
+        for field, value in (("run_ids", []), ("run_ids", "run_a"), ("run_ids", ["run_a", "run_a"]), ("run_ids", ["Run A"]), ("run_ids", [7]), ("exact_ee", ""), ("exact_ee", "EE Root"), ("exact_ee", ["ee_root"])):
+            with self.subTest(field=field, value=value):
+                self.config["schedule"]["inactivity"][field] = value
+                with self.assertRaisesRegex(ValueError, field):
+                    self.schedule()
+                del self.config["schedule"]["inactivity"][field]
+        self.config["schedule"]["inactivity"].update(run_ids=["run_a", "run_b"], exact_ee="ee_root", within_ee="ee_root")
+        self.assertEqual(self.schedule()["inactivity"]["run_ids"], ["run_a", "run_b"])
+
     def test_a_run_this_trigger_fed_stays_excluded_after_its_binding_is_retired(self):
         record = self.runs / 'run_review.json'
         value = json.loads(record.read_text())
