@@ -1432,7 +1432,7 @@ def run_cron(schedule, reminder):
 
 
 def validate_inactivity(value):
-    exact_keys(value, {"seconds", "interface_match", "exclude_interface_match", "within_ee", "exact_ee", "run_ids"}, {"seconds", "interface_match"}, "schedule.inactivity")
+    exact_keys(value, {"seconds", "interface_match", "exclude_interface_match", "within_ee", "exact_ee", "run_ids", "artifact_names", "direction"}, {"seconds", "interface_match"}, "schedule.inactivity")
     seconds = value["seconds"]
     if type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds < 0.001:
         raise ValueError("inactivity.seconds must be finite and at least 0.001")
@@ -1443,6 +1443,17 @@ def validate_inactivity(value):
         exact_keys(selector, {"interface_type", "role", "interface_driver_ref"}, set(), f"inactivity.{field}")
         if not selector or any(not isinstance(v, str) or not v for v in selector.values()):
             raise ValueError(f"inactivity.{field} requires non-empty descriptor fields")
+    if "artifact_names" in value:
+        names = value["artifact_names"]
+        if (not isinstance(names, list) or not names
+                or any(not isinstance(name, str) or not name or name != name.strip()
+                       or any(char.isspace() or 0xD800 <= ord(char) <= 0xDFFF for char in name)
+                       or len(name.encode("utf-8")) > 256
+                       for name in names)
+                or len(set(names)) != len(names)):
+            raise ValueError("inactivity.artifact_names must contain distinct non-empty artifact names")
+    if "direction" in value and value["direction"] not in ("arrival", "outbound"):
+        raise ValueError("inactivity.direction must be arrival or outbound")
     for field in ("within_ee", "exact_ee"):
         if field in value and (not isinstance(value[field], str) or REGISTRY_ID.fullmatch(value[field]) is None):
             raise ValueError(f"inactivity.{field} must be a registry-safe EE id")
@@ -1558,6 +1569,9 @@ class RunActivity:
 
     def latest(self):
         selected, autonomous_excluded = self.selected_runs()
+        condition = self.schedule["inactivity"]
+        names = frozenset(condition.get("artifact_names", []))
+        direction = condition.get("direction")
         path = _ledger_path()
         try:
             descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -1594,13 +1608,26 @@ class RunActivity:
                 if not isinstance(run_id, str) or type(recorded) is not int or recorded < 0:
                     raise RuntimeError("inactivity movement has invalid run or time provenance")
                 activity = {"run": run_id, "seq": self.sequence, "recorded_at_unix_ms": recorded}
-                if movement.get("kind") == "InterfaceArrival":
-                    source = movement.get("from")
-                    condition = self.schedule["inactivity"]
-                    if source == {"Interface": INTERFACE_ID} or self.source_matches(source, condition.get("exclude_interface_match"), self.excluded_sources):
-                        self.excluded_runs.add(run_id)
-                    if self.source_matches(source, condition["interface_match"], self.input_sources):
+                kind = movement.get("kind")
+                source = movement.get("from")
+                arrival = kind == "InterfaceArrival"
+                if arrival and (source == {"Interface": INTERFACE_ID}
+                                or self.source_matches(source, condition.get("exclude_interface_match"), self.excluded_sources)):
+                    self.excluded_runs.add(run_id)
+                if (direction == "arrival" and not arrival) or (direction == "outbound" and kind != "InterfaceOutbound"):
+                    continue
+                if names:
+                    artifact = movement["artifact"]
+                    artifact_id = artifact.get("id") if isinstance(artifact, dict) else None
+                    name, sep, digest = artifact_id.rpartition(":") if isinstance(artifact_id, str) else ("", "", "")
+                    if not sep or not digest or name not in names:
+                        continue
+                if arrival:
+                    matches = self.source_matches(source, condition["interface_match"], self.input_sources)
+                    if matches:
                         self.latest_inputs_by_run[run_id] = activity
+                    elif direction == "arrival":
+                        continue
                 self.latest_by_run[run_id] = activity
             after = os.stat(path, follow_symlinks=False)
             if (after.st_dev, after.st_ino) != identity or after.st_size < info.st_size:

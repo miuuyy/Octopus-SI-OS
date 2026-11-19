@@ -239,6 +239,94 @@ class InactivityContract(unittest.TestCase):
         self.movement("run_a", kind="InterfaceArrival", source="world_user")
         self.assertEqual(trigger.tick(), self.clock // 1_000_000 + 3_600_000)
 
+    def test_arrival_artifact_filter_ignores_context_peer_and_outbound_noise(self):
+        self.config["schedule"]["inactivity"].update(
+            run_ids=["run_a"], direction="arrival",
+            artifact_names=["turn.agent_message", "turn.completed"])
+        trigger = self.trigger()
+        self.movement("run_a", "interface.context.updated:1", "InterfaceArrival")
+        self.assertIsNone(trigger.tick())
+        self.movement("run_a", "turn.agent_message:1", "InterfaceArrival")
+        due = trigger.tick()
+        self.advance(3599)
+        self.movement("run_a", "interface.context.updated:2", "InterfaceArrival")
+        self.movement("run_a", "turn.agent_message.extra:1", "InterfaceArrival")
+        self.movement("run_a", "turn.completed:", "InterfaceArrival")
+        self.movement("run_a", "turn.completed:1", "InterfaceArrival", "world_background")
+        self.movement("run_a", "turn.completed:1")
+        self.assertEqual(trigger.tick(), due)
+        self.advance(1)
+        trigger.tick()
+        self.assertEqual(len(self.emissions), 1)
+        self.advance(3600)
+        self.trigger().tick()
+        self.assertEqual(len(self.emissions), 1)
+        self.movement("run_a", "turn.completed:2", "InterfaceArrival")
+        self.assertEqual(trigger.tick(), self.clock // 1_000_000 + 3_600_000)
+
+    def test_unmatched_trigger_arrival_still_excludes_autonomous_activity(self):
+        record = self.runs / "run_review.json"
+        value = json.loads(record.read_text())
+        value["checkpoints"] = value["checkpoints"][:1]
+        record.write_text(json.dumps(value))
+        self.config["schedule"]["inactivity"]["artifact_names"] = ["turn.completed"]
+        self.movement("run_review", "cron.current_time:abc", "InterfaceArrival", "world_cron")
+        self.movement("run_review", "turn.completed:123")
+        self.assertIsNone(self.trigger().tick())
+        self.movement("run_a", "turn.completed:234")
+        self.assertIsNotNone(self.trigger().tick())
+
+    def test_outbound_activity_excludes_matching_arrivals_and_verification_rows(self):
+        self.config["schedule"]["inactivity"].update(
+            direction="outbound", artifact_names=["turn.completed"])
+        trigger = self.trigger()
+        self.movement("run_a", "turn.completed:1", "InterfaceArrival")
+        self.movement("run_a", "turn.completed:2", "VerificationFailed")
+        self.assertIsNone(trigger.tick())
+        seq = self.movement("run_a", "turn.completed:3")
+        trigger.tick()
+        self.advance(3600)
+        self.movement("run_a", "turn.completed:4", "InterfaceArrival")
+        trigger.tick()
+        self.assertEqual([e["last_activity"]["seq"] for e in self.emissions], [seq])
+
+    def test_filtered_lost_ack_remains_consumed_after_filter_edit(self):
+        condition = self.config["schedule"]["inactivity"]
+        condition.update(direction="arrival", artifact_names=["turn.agent_message"])
+        self.movement("run_a", "turn.completed:older", "InterfaceArrival")
+        first = self.movement("run_a", "turn.agent_message:1", "InterfaceArrival")
+        trigger = self.trigger()
+        trigger.tick()
+        self.advance(3600)
+
+        def lost_ack(*args):
+            self.admit(*args)
+            raise RuntimeError("lost acknowledgement")
+
+        with patch.object(self.module, "hand_artifact_with_evidence", lost_ack), self.assertRaisesRegex(RuntimeError, "lost acknowledgement"):
+            trigger.tick()
+        condition["artifact_names"] = ["turn.completed"]
+        recovered = self.trigger()
+        self.assertIsNone(recovered.tick())
+        self.assertEqual(recovered.state["consumed_seq"], first)
+        second = self.movement("run_a", "turn.completed:new", "InterfaceArrival")
+        recovered.tick()
+        self.advance(3600)
+        recovered.tick()
+        self.assertEqual([e["last_activity"]["seq"] for e in self.emissions], [first, second])
+
+    def test_movement_filters_are_validated(self):
+        for field, value in (("artifact_names", []), ("artifact_names", "turn.completed"),
+                             ("artifact_names", ["", 1]), ("artifact_names", ["x", "x"]),
+                             ("artifact_names", ["two words"]), ("artifact_names", ["🐙" * 65]),
+                             ("artifact_names", ["\ud800"]), ("direction", "incoming"),
+                             ("direction", None), ("direction", ["arrival"])):
+            with self.subTest(field=field, value=value):
+                self.config["schedule"]["inactivity"][field] = value
+                with self.assertRaisesRegex(ValueError, field):
+                    self.schedule()
+                del self.config["schedule"]["inactivity"][field]
+
     def test_scope_fields_are_validated(self):
         for field, value in (("run_ids", []), ("run_ids", "run_a"), ("run_ids", ["run_a", "run_a"]), ("run_ids", ["Run A"]), ("run_ids", [7]), ("exact_ee", ""), ("exact_ee", "EE Root"), ("exact_ee", ["ee_root"])):
             with self.subTest(field=field, value=value):

@@ -8,14 +8,24 @@ export function normalizeScheduledInterface(value: unknown): ScheduledInterfaceP
   const status = row.status === "armed" || row.status === "fired" || row.status === "disarmed" || row.status === "prepared" || row.status === "enabled" || row.status === "disabled" || row.status === "invalid" || row.status === "template" ? row.status : "invalid";
   if (!interfaceId) return null;
   const rawSchedule = objectValue(row.schedule);
-  const schedule = rawSchedule?.type === "interval" && positiveNumber(rawSchedule.interval_seconds)
+  const schedule: ScheduledInterfaceProjection["schedule"] = rawSchedule?.type === "interval" && positiveNumber(rawSchedule.interval_seconds)
     ? { type: "interval" as const, intervalSeconds: rawSchedule.interval_seconds as number }
     : rawSchedule?.type === "cron" && stringValue(rawSchedule.cron)
       ? { type: "cron" as const, cron: stringValue(rawSchedule.cron) }
       : rawSchedule?.type === "once" && Number.isFinite(Date.parse(stringValue(rawSchedule.due_at)))
         ? { type: "once" as const, dueAt: stringValue(rawSchedule.due_at) }
         : rawSchedule?.type === "inactivity" && positiveNumber(rawSchedule.seconds) && objectValue(rawSchedule.interface_match)
-          ? { type: "inactivity" as const, seconds: rawSchedule.seconds, interfaceMatch: rawSchedule.interface_match as Record<string, string>, excludeInterfaceMatch: objectValue(rawSchedule.exclude_interface_match) as Record<string, string> | null, withinEe: stringValue(rawSchedule.within_ee) }
+          ? {
+            type: "inactivity" as const,
+            seconds: rawSchedule.seconds,
+            interfaceMatch: rawSchedule.interface_match as Record<string, string>,
+            excludeInterfaceMatch: objectValue(rawSchedule.exclude_interface_match) as Record<string, string> | null,
+            withinEe: stringValue(rawSchedule.within_ee),
+            exactEe: stringValue(rawSchedule.exact_ee) || undefined,
+            runIds: Array.isArray(rawSchedule.run_ids) ? rawSchedule.run_ids as string[] : undefined,
+            artifactNames: Array.isArray(rawSchedule.artifact_names) ? rawSchedule.artifact_names as string[] : undefined,
+            direction: rawSchedule.direction === "arrival" || rawSchedule.direction === "outbound" ? rawSchedule.direction : undefined,
+          }
           : null;
   const rawEvent = objectValue(row.event_source);
   const eventSource = rawEvent ? { sources: stringArray(rawEvent.sources), targets: normalizeTargets(rawEvent.targets), condition: stringValue(rawEvent.condition), mailboxWatch: normalizeMailboxWatch(rawEvent.mailbox_watch) } : null;
@@ -161,7 +171,16 @@ export function draftFromScheduledInterface(task: ScheduledInterfaceProjection):
     type: task.schedule?.type ?? "interval",
     intervalSeconds: task.schedule?.type === "interval" ? task.schedule.intervalSeconds : 3600,
     inactivity: task.schedule?.type === "inactivity"
-      ? { seconds: task.schedule.seconds, interface_match: task.schedule.interfaceMatch, ...(task.schedule.excludeInterfaceMatch ? { exclude_interface_match: task.schedule.excludeInterfaceMatch } : {}), ...(task.schedule.withinEe ? { within_ee: task.schedule.withinEe } : {}) }
+      ? {
+        seconds: task.schedule.seconds,
+        interface_match: task.schedule.interfaceMatch,
+        ...(task.schedule.excludeInterfaceMatch ? { exclude_interface_match: task.schedule.excludeInterfaceMatch } : {}),
+        ...(task.schedule.withinEe ? { within_ee: task.schedule.withinEe } : {}),
+        ...(task.schedule.exactEe ? { exact_ee: task.schedule.exactEe } : {}),
+        ...(task.schedule.runIds ? { run_ids: task.schedule.runIds } : {}),
+        ...(task.schedule.artifactNames ? { artifact_names: task.schedule.artifactNames } : {}),
+        ...(task.schedule.direction ? { direction: task.schedule.direction } : {}),
+      }
       : { seconds: 3600, interface_match: { interface_type: "world", role: "user", interface_driver_ref: "app_server" }, exclude_interface_match: { interface_driver_ref: "cron_life" } },
     cron: task.schedule?.type === "cron" ? task.schedule.cron : "0 9 * * 1-5",
     dueAt: task.schedule?.type === "once" ? task.schedule.dueAt : "",

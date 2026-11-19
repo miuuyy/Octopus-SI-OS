@@ -442,3 +442,65 @@ test("setup arms each selected pack trigger once as a template copy bound into i
   assert.deepEqual(Object.keys(armed.config), ["schedule"]);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test("filtered inactivity keeps its scope through projection, edit, pause and resume", async (t) => {
+  const { validateCronSchedule } = require("../electron/projection/cronActivation.cjs");
+  const { mutateScheduledInterface } = require("../electron/projection/scheduled.cjs");
+  const { scheduledInterfacesProjection } = require("../electron/projection/scheduledInterfaces.cjs");
+  const { readRegularJsonDocument } = require("../electron/projection/jsonFiles.cjs");
+  const home = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "oct-cron-filter-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const registry = path.join(home, "registry");
+  const interfaceId = "world_cron_filter";
+  const directory = path.join(registry, "interface", interfaceId);
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, "activation.json");
+  const inactivity = {
+    seconds: 3600, interface_match: { role: "provider" }, within_ee: "ee_root",
+    exact_ee: "ee_project", run_ids: ["run_one", "run_two"],
+    artifact_names: ["turn.completed", "turn.agent_message"], direction: "arrival",
+  };
+  const schedule = { inactivity, timezone: "UTC", fire_on_start: false, reminder_env: "", reminder_default: "Check the watched run." };
+  for (const [field, value] of [
+    ["exact_ee", " ee_project"], ["within_ee", "ee_root\n"],
+    ["run_ids", []], ["run_ids", ["run_one", "run_one"]], ["run_ids", ["Run One"]],
+    ["artifact_names", "turn.completed"], ["artifact_names", ["x", "x"]],
+    ["artifact_names", ["two words"]], ["artifact_names", ["🐙".repeat(65)]],
+    ["artifact_names", ["\ud800"]], ["direction", ["arrival"]], ["direction", "inbound"],
+  ]) {
+    assert.throws(() => validateCronSchedule({ ...schedule, inactivity: { ...inactivity, [field]: value } }),
+      new RegExp("inactivity\\." + field));
+  }
+  fs.writeFileSync(file, JSON.stringify({ schema_version: 1, interface: interfaceId, activations: [
+    { activation_driver_ref: "cron_life", enabled: true, config: { schedule } },
+  ] }));
+  const activation = await readRegularJsonDocument(file, "activation");
+  const store = scheduledInterfacesProjection({
+    indexedArtifactLabelRows: async () => [], operatorOsScope: () => ({ client_runs: [] }), operatorChatRunIndex: async () => [],
+  });
+  const [row] = await store.scheduledInterfaceRows({
+    octopusHome: home, structureMemo: new Map(),
+    runRecords: [{ run_id: "run_observer", checkpoints: [{ status: "projected", interface: interfaceId }] }],
+    descriptors: { interface: [{ id: interfaceId, interface_driver_ref: "cron_life",
+      activation_sidecars: [{ ...activation.document, descriptor_path: file }] }] },
+  });
+  assert.equal(row.valid, true, row.error);
+  assert.deepEqual(row.schedule, { type: "inactivity", ...inactivity });
+  fixture([row]);
+  const view = await mount();
+  await click(rows(view.host)[0]);
+  await click(button(detail(view.host), "Open"));
+  await choose("Scope", "All work");
+  await click(button(dialog(), "Save"));
+  const request = global.scheduleFixture.writes.at(-1);
+  const { within_ee: _cleared, ...retained } = inactivity;
+  assert.deepEqual(request.draft.inactivity, retained);
+  let expectedDigest = activation.digest;
+  for (const action of [{ action: "update", draft: request.draft }, { action: "set_enabled", enabled: false }, { action: "set_enabled", enabled: true }]) {
+    const result = await mutateScheduledInterface(registry, home, { ...action, interfaceId, expectedDigest });
+    const saved = (await readRegularJsonDocument(file, "activation")).document.activations[0];
+    assert.deepEqual(saved.config.schedule.inactivity, retained);
+    assert.equal(saved.enabled, action.enabled ?? true);
+    expectedDigest = result.activationDigest;
+  }
+});

@@ -51,13 +51,25 @@ An inactivity condition for user-facing tasks is:
 }
 ```
 
-For ordinary qualifying runs, every artifact movement with typed run provenance
-counts, regardless of label. A run qualifies when one of its checkpoint bindings
+Without activity filters, every artifact movement with typed run provenance
+counts for ordinary qualifying runs, regardless of label. A run qualifies when one of its checkpoint bindings
 names an interface whose descriptor matches every selector field. The optional
 `within_ee` narrows this scope to runs whose EE chain contains that EE.
 `exact_ee` narrows it to runs that live in exactly that EE, without its child
 EEs, and `run_ids` to the listed runs. The three fields combine: a run counts
 only when it passes every one that is given.
+
+To count only progress of a specific kind, add optional `artifact_names` (an
+exact, non-empty list of distinct artifact names) and/or `direction`. The names
+filter uses the name portion of the ledger artifact identity, not its payload.
+`direction: "arrival"` counts only `InterfaceArrival` from sources matching
+`interface_match`; `direction: "outbound"` counts only `InterfaceOutbound`.
+The filters combine with the run scopes and exclusions above and below; with
+both omitted, behavior is unchanged. Exclusion discovery still observes trigger
+arrivals of other labels. For example, a provider liveness monitor can scope to
+one run, use a provider selector and `direction: "arrival"`, and list
+`turn.agent_message` and `turn.completed`. A non-matching arrival cannot seed,
+postpone or reopen a quiet episode. This measures quiet, not failure or health.
 
 A run that other runs report to stays active through their results, because an
 arrival from a peer is a movement of the receiving run. To watch whether one

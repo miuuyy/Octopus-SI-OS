@@ -77,6 +77,10 @@ export type ScheduledInterfaceProjection = {
     interfaceMatch: Record<string, string>;
     excludeInterfaceMatch: Record<string, string> | null;
     withinEe: string;
+    exactEe?: string;
+    runIds?: string[];
+    artifactNames?: string[];
+    direction?: "arrival" | "outbound";
   } | null;
   timezone: string;
   fireOnStart: boolean;

@@ -1498,7 +1498,16 @@ export type OctopusRuntimeTopologyProjection = {
 
 export type OctopusScheduledDraft = {
   type: "interval" | "cron" | "once" | "inactivity";
-  inactivity?: { seconds: number; interface_match: Record<string, string>; exclude_interface_match?: Record<string, string>; within_ee?: string };
+  inactivity?: {
+    seconds: number;
+    interface_match: Record<string, string>;
+    exclude_interface_match?: Record<string, string>;
+    within_ee?: string;
+    exact_ee?: string;
+    run_ids?: string[];
+    artifact_names?: string[];
+    direction?: "arrival" | "outbound";
+  };
   dueAt?: string;
   intervalSeconds?: number;
   cron?: string;

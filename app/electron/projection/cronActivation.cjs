@@ -3,7 +3,7 @@ module.exports = { activationDriverRef, cronScheduleFingerprint, parseCronActiva
 const { parseScheduledDueAt } = require("../scheduledTime.cjs");
 const crypto = require("node:crypto");
 const { stableJson } = require("./jsonFiles.cjs");
-const { exactObjectKeys, requiredSafeRegistryId, stringValue } = require("./values.cjs");
+const { exactObjectKeys, stringValue } = require("./values.cjs");
 
 function activationDriverRef(activation) {
   return stringValue(
@@ -54,8 +54,22 @@ function validateCronSchedule(schedule) {
   const hasInactivity = schedule.inactivity != null;
   if (Number(hasInterval) + Number(hasCron) + Number(hasDueAt) + Number(hasInactivity) !== 1) throw new Error("schedule must declare exactly one of interval_seconds, cron, due_at or inactivity");
   if (hasInactivity) {
-    exactObjectKeys(schedule.inactivity, ["seconds", "interface_match", "exclude_interface_match", "within_ee"], ["seconds", "interface_match"], "schedule.inactivity");
-    if (schedule.inactivity.within_ee !== undefined) requiredSafeRegistryId(schedule.inactivity.within_ee, "inactivity.within_ee");
+    exactObjectKeys(schedule.inactivity, ["seconds", "interface_match", "exclude_interface_match", "within_ee", "exact_ee", "run_ids", "artifact_names", "direction"], ["seconds", "interface_match"], "schedule.inactivity");
+    const { inactivity } = schedule;
+    for (const field of ["within_ee", "exact_ee"]) {
+      if (inactivity[field] !== undefined && !isInactivityScopeId(inactivity[field])) {
+        throw new Error("inactivity." + field + " must be a registry-safe EE id");
+      }
+    }
+    if (inactivity.run_ids !== undefined) validateDistinctList(inactivity.run_ids, isInactivityScopeId, "inactivity.run_ids");
+    if (inactivity.artifact_names !== undefined) {
+      validateDistinctList(inactivity.artifact_names,
+        (name) => typeof name === "string" && name.length > 0 && !/[\p{White_Space}\u001c-\u001f\p{Surrogate}]/u.test(name) && Buffer.byteLength(name) <= 256,
+        "inactivity.artifact_names");
+    }
+    if (inactivity.direction !== undefined && !["arrival", "outbound"].includes(inactivity.direction)) {
+      throw new Error("inactivity.direction must be arrival or outbound");
+    }
     if (typeof schedule.inactivity.seconds !== "number" || !Number.isFinite(schedule.inactivity.seconds) || schedule.inactivity.seconds < 0.001) throw new Error("inactivity.seconds must be finite and at least 0.001");
     for (const field of ["interface_match", "exclude_interface_match"]) {
       const selector = schedule.inactivity[field];
@@ -80,6 +94,16 @@ function validateCronSchedule(schedule) {
     } catch {
       throw new Error(`schedule.timezone is unknown: ${schedule.timezone}`);
     }
+  }
+}
+
+function isInactivityScopeId(value) {
+  return typeof value === "string" && /^[a-z0-9]/.test(value) && !/[^a-z0-9_-]/.test(value);
+}
+
+function validateDistinctList(values, accepts, label) {
+  if (!Array.isArray(values) || !values.length || !values.every(accepts) || new Set(values).size !== values.length) {
+    throw new Error(label + " must contain distinct valid values");
   }
 }
 
