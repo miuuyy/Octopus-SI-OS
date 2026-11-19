@@ -323,7 +323,7 @@ async function installLocalPackages(options) {
       packId: optionalId(options?.packId, "packId"),
       onProgress: options?.onProgress,
     });
-    await syncApplicationHosts(roots, library, operationId);
+    await syncApplicationHosts(roots, library, operationId, selected);
     return result;
   });
 }
@@ -350,7 +350,7 @@ async function removeLocalPackages(options) {
       expected,
       onProgress: options?.onProgress,
     });
-    await syncApplicationHosts(roots, library, operationId);
+    await syncApplicationHosts(roots, library, operationId, selected);
     return result;
   });
 }
@@ -379,7 +379,7 @@ async function repairLocalPackages(options) {
       expectedRepairs,
       onProgress: options?.onProgress,
     });
-    await syncApplicationHosts(roots, library, operationId);
+    await syncApplicationHosts(roots, library, operationId, selected);
     return result;
   });
 }
@@ -452,7 +452,7 @@ async function applyLocalApplicationPack(options) {
       packId,
       onProgress: options?.onProgress,
     });
-    await syncApplicationHosts(roots, library, operationId);
+    await syncApplicationHosts(roots, library, operationId, selected);
     return { ...result, action: "apply_application_pack", packId };
   });
 }
@@ -952,13 +952,13 @@ async function installedApplicationHosts(roots, library) {
       const baseline = receipt.members.find((candidate) => memberKey(candidate) === memberKey(member));
       if (!baseline) throw new Error(`Package owner '${memberKey(member)}' configuration contract changed; initialize a fresh Home`);
       assertCurrentConfiguration(member, baseline);
-      hosts.push(member);
+      hosts.push({ member, packageId: entry.manifest.id });
     }
   }
   return { installed, hosts };
 }
 
-async function syncApplicationHosts(roots, library, operationId) {
+async function syncApplicationHosts(roots, library, operationId, reviewed) {
   const { installed, hosts } = await installedApplicationHosts(roots, library);
   if (!hosts.length) return;
   const fields = Object.keys(APPLICATION_HOST_FIELDS);
@@ -986,8 +986,18 @@ async function syncApplicationHosts(roots, library, operationId) {
       if (installed.includes(entry)) for (const id of grant[field]) present[field].add(id);
     }
   }
+  const axes = { interface: "interfaces", tool: "tools", worker_environment_kind: "wek" };
+  const driverOwners = Object.fromEntries(fields.map(field => [field, new Map()]));
+  for (const entry of library.packages.filter(({ manifest }) => manifest.product_kind === "driver"
+    && manifest.members.some(m => m.primary && m.registry_kind === "worker_environment_kind"))) {
+    for (const member of entry.manifest.members) {
+      const field = axes[member.registry_kind];
+      if (field) driverOwners[field].set(member.owner, entry);
+    }
+  }
   const publisher = packagePublisher(roots);
-  for (const host of hosts) {
+  for (const { member: host, packageId } of hosts) {
+    const required = new Set(packageDependencyOrder(library, [packageId]));
     const source = (await readJsonDocument(path.join(memberPath(roots.sourceRegistryRoot, host), "policy.json"),
       `application host source policy ${host.owner}`)).value?.ceiling ?? {};
     const file = path.join(memberPath(roots.activeRegistryRoot, host), "policy.json");
@@ -1000,8 +1010,17 @@ async function syncApplicationHosts(roots, library, operationId) {
         throw new Error(`Application host '${host.owner}' has no ${field} ceiling`);
       }
       const baseline = new Set(Array.isArray(source[field]) ? source[field] : []);
-      const kept = current.filter((id) => !known[field].has(id) || present[field].has(id) || baseline.has(id));
-      const next = [...kept, ...[...present[field]].filter((id) => !kept.includes(id)).sort()];
+      const available = new Set(present[field]);
+      const absent = new Set();
+      for (const id of baseline) {
+        const driver = driverOwners[field].get(id);
+        if (!driver || required.has(driver)) continue;
+        if (!installed.includes(driver)) absent.add(id);
+        else if (reviewed.includes(driver)) available.add(id);
+      }
+      const kept = current.filter(id => available.has(id)
+        || (!absent.has(id) && (!known[field].has(id) || baseline.has(id))));
+      const next = [...kept, ...[...available].filter(id => !kept.includes(id)).sort()];
       if (next.length === current.length && next.every((id, index) => id === current[index])) continue;
       policy.ceiling[field] = next;
       changed = true;

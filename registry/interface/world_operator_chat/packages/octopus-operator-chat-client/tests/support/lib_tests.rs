@@ -445,6 +445,17 @@
             },
         };
         let plan = plan_operator_chat_topology(&request).expect("the real registry plans a chat");
+        for role in ["home", "task"] {
+            let mut web = request.clone();
+            web.worker_interface_id = Some(format!("system_worker_operator_{role}"));
+            web.client_surface_role = role.into();
+            if role == "home" { web.ee_id = Some("ee_existence".into()); }
+            web.selected_worker_environment_kinds = vec!["system_room".into(), "web_search".into()];
+            let plan = plan_operator_chat_topology(&web).expect("operator can select the installed search driver");
+            for tool in ["web.search", "web.extract"] {
+                assert!(plan.capability_tools.contains_key(tool), "{role}: missing {tool}");
+            }
+        }
         let mut cli_request = request.clone();
         cli_request.provider_interface_id = "world_provider_claude_cli".into();
         cli_request.worker_interface_id = Some("system_worker_operator_task".into());

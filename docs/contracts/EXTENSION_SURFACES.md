@@ -159,6 +159,10 @@ from the list. An entry authenticates in exactly one way:
 - `vertex` - a Google Cloud project and a credentials file, billed to that
   project.
 
+A provider may declare a static catalog together with an environment-backed
+model alias. Selecting a catalog model uses its own upstream id. Selecting the
+alias requires its configured id.
+
 An explicit `models` list supplies the catalog the model picker shows; keep
 model additions there and regenerate. Context windows default to 400,000 tokens,
 700,000 for Claude, never above a model's declared capacity.
@@ -237,11 +241,17 @@ caller are refused. Dependency writes precede the patched run. Both forms
 validate the complete candidate, preserve accepted work and publish through
 ordinary granted file writes with exact readback. Patch previews and results
 return a compact summary and file hashes, keeping the complete record out of
-model context. Full-file previews still return the complete authored contract.
+model context. Full-file peer previews still return the complete authored contract.
+Current-run previews return a future-contract hash, counts and write proofs;
+successful amendments return the checked readback hash, counts and stage
+receipts. The readback validates the full record without returning its private
+interface state.
 
 Explicitly selected Octopus `web.search` and `web.extract` remain visible on
 Codex and ChatGPT as well as the bridge providers. Codex's hosted search is
-independent of those granted tools.
+independent of those granted tools. The web driver defaults to the configured `custom` endpoint. Select
+`keenable` in a tool call to use the bundled keyless endpoint.
+`web.extract` with `include_raw_content: false` returns only normalized content.
 
 ## Add a channel or sensor
 
@@ -280,7 +290,7 @@ cron expression, a due time or a quiet period), after which it sends
 `cron.current_time`. A firing due while a pinning run is working is sent once
 when that run is idle; missed ticks are not replayed. An inactivity trigger
 restarts its quiet period on the artifact movements of the runs it selects by
-descriptor match, optionally within one EE subtree, and fires once per quiet
+descriptor match, optionally within one EE subtree, one exact EE or a named set of runs, and fires once per quiet
 period. A disabled clock folder that no run binds is a template; an Application
 Pack's `workspace_setup.triggers` arms templates at setup together with the task
 that pins them.
@@ -378,7 +388,10 @@ pin's ceiling holds it. Nobody keeps that list by hand: installing, removing or
 repairing a package writes the applications' interfaces, tools and room kinds
 into every worker pin its package marks `application_host`. Making an
 application available in a Project admits it within the EE chain and never
-widens a pin.
+widens a pin. For optional room drivers, a host opts in through its **source**
+ceiling: installation adds only the named driver members, removal drops them,
+and an unrelated installation does not restore a locally narrowed driver.
+The driver still has to be selected on the run.
 
 Connected tasks share the application's one interface: one life, one session,
 one set of credentials. A call's result reaches only the calling task, checked

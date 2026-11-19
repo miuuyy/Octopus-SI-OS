@@ -284,6 +284,10 @@ async fn execute_extract(call: &ToolCall) -> Result<Value, String> {
         ],
     )?;
     let urls = required_urls(object)?;
+    let include_raw_content = match object.get("include_raw_content") {
+        None => true,
+        Some(value) => value.as_bool().ok_or("include_raw_content must be a boolean")?,
+    };
     let max_chars = bounded_optional_u64(object, "max_chars", 1, 2_000_000)?
         .map(|value| usize::try_from(value).unwrap_or(usize::MAX));
     let catalog = parse_catalog(&call.handler_config, "web.extract")?;
@@ -292,7 +296,7 @@ async fn execute_extract(call: &ToolCall) -> Result<Value, String> {
     let documents = match mode {
         "batch" => {
             let parsed = request_json(&catalog, &provider_id, provider, object).await?;
-            extract_documents(&provider.response, &parsed, None, max_chars)?
+            extract_documents(&provider.response, &parsed, None, max_chars, include_raw_content)?
         }
         "per_url" => {
             let mut documents = Vec::new();
@@ -305,6 +309,7 @@ async fn execute_extract(call: &ToolCall) -> Result<Value, String> {
                         &parsed,
                         Some(url),
                         max_chars,
+                        include_raw_content,
                     )?),
                     Err(error) => documents.push(json!({
                         "url": url,
@@ -899,10 +904,11 @@ fn extract_documents(
     parsed: &Value,
     fallback_url: Option<&str>,
     max_chars: Option<usize>,
+    include_raw_content: bool,
 ) -> Result<Vec<Value>, String> {
     let mut documents = response_items(parsed, shape.items_path.as_deref())?
         .into_iter()
-        .map(|item| extract_document(shape, item, fallback_url, max_chars, None))
+        .map(|item| extract_document(shape, item, fallback_url, max_chars, include_raw_content, None))
         .collect::<Vec<_>>();
     for failure_path in &shape.failure_items_paths {
         let Some(Value::Array(items)) = value_by_dotted(parsed, failure_path) else {
@@ -914,6 +920,7 @@ fn extract_documents(
                 item,
                 fallback_url,
                 max_chars,
+                include_raw_content,
                 Some("extraction failed"),
             )
         }));
@@ -926,6 +933,7 @@ fn extract_document(
     item: &Value,
     fallback_url: Option<&str>,
     max_chars: Option<usize>,
+    include_raw_content: bool,
     fallback_error: Option<&str>,
 ) -> Value {
     let url = first_text(item, &shape.url_paths)
@@ -937,10 +945,14 @@ fn extract_document(
         first_text(item, &shape.content_paths).unwrap_or_default(),
         max_chars,
     );
-    let raw_content = bounded_text(
-        first_text(item, &shape.raw_content_paths).unwrap_or_else(|| content.clone()),
-        max_chars,
-    );
+    let raw_content = if include_raw_content {
+        bounded_text(
+            first_text(item, &shape.raw_content_paths).unwrap_or_default(),
+            max_chars,
+        )
+    } else {
+        String::new()
+    };
     let error = first_text(item, &shape.error_paths).or_else(|| fallback_error.map(str::to_string));
     let mut document = Map::new();
     document.insert("url".to_string(), json!(url));

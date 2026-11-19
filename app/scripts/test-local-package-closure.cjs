@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const {
   applyLocalApplicationPack,
   installLocalPackages,
+  removeLocalPackages,
   readLocalPackageCatalog,
   readLocalPackageSourcePackage,
 } = require("../electron/localPackages.cjs");
@@ -424,6 +425,24 @@ async function run(preparedExecutable) {
       taskPlan.authoringProfile.external_relays[0].required_verified_artifacts,
       taskPlan.authoringProfile.external_inputs[0].required_verified_artifacts,
     );
+    const web = "driver.web_search";
+    const pins = [home.worker_interface_id, task.worker_interface_id, "system_worker_computer_use"];
+    const policies = () => Promise.all(pins.map(async pin => JSON.parse(await fs.readFile(
+      path.join(activeRegistryRoot, "interface", pin, "policy.json"), "utf8"))));
+    const before = await policies();
+    assert.ok(before.every(pin => !pin.ceiling.tools.includes("web.search")));
+    await installLocalPackages({ ...roots, operationId: "search_install_001", packageIds: [web],
+      expectedSourceDigests: { [web]: catalog.packages.find(p => p.id === web).source_digest } });
+    const withDriver = await policies();
+    for (const { ceiling } of withDriver.slice(0, 2)) {
+      assert.ok(ceiling.interfaces.includes("system_web_search") && ceiling.wek.includes("web_search"));
+      assert.ok(["web.search", "web.extract"].every(tool => ceiling.tools.includes(tool)));
+    }
+    assert.deepEqual(withDriver[2], before[2], "installing a driver does not widen a pin outside its source ceiling");
+    const installed = (await readLocalPackageCatalog(roots)).packages.find(p => p.id === web);
+    await removeLocalPackages({ ...roots, operationId: "search_remove_001", packageIds: [web],
+      expectedInstalledDigests: { [web]: installed.installed_digest } });
+    assert.deepEqual(await policies(), before, "removing the optional driver restores the original ceilings");
     for (const owner of [
       ["interface", "world_operator_chat"],
       ["interface", "system_interface_authoring"],

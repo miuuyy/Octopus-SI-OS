@@ -198,7 +198,7 @@
           "title_paths": ["title"],
           "url_paths": ["url"],
           "content_paths": ["content"],
-          "raw_content_paths": ["content"],
+          "raw_content_paths": ["raw_content", "html"],
           "error_paths": ["error"],
           "failure_items_paths": []
         },

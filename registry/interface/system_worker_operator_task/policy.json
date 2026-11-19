@@ -3,6 +3,7 @@
   "ceiling": {
     "interfaces": [
       "system_browser",
+      "system_web_search",
       "system_code_mode",
       "system_interface_authoring",
       "system_room",
@@ -84,6 +85,8 @@
       "browser.type",
       "browser.wait",
       "browser.wait_complete",
+      "web.search",
+      "web.extract",
       "file.write",
       "file.delete",
       "browser.viewport_set",
@@ -160,6 +163,7 @@
     ],
     "wek": [
       "browser_session",
+      "web_search",
       "system_room",
       "code_mode",
       "desktop_session",

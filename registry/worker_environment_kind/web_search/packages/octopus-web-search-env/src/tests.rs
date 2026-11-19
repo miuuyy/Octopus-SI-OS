@@ -346,6 +346,17 @@ async fn web_search_failure_artifact_contains_digest_not_provider_body() {
 
 #[tokio::test]
 async fn web_extract_maps_batch_documents_inside_the_same_room_contract() {
+    let doc = batch_extract_document(None).await;
+    assert_eq!(doc["raw_content"], "<p>artifact-native content</p>");
+}
+
+#[tokio::test]
+async fn web_extract_omits_upstream_html_when_raw_content_is_disabled() {
+    let doc = batch_extract_document(Some(false)).await;
+    assert_eq!(doc["raw_content"], "");
+}
+
+async fn batch_extract_document(include_raw_content: Option<bool>) -> Value {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base_url = format!("http://{}/extract", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -371,11 +382,15 @@ async fn web_extract_maps_batch_documents_inside_the_same_room_contract() {
     let room = WebSearchRoom;
     let tools = vec!["web.extract".to_string()];
     let (formation, kind) = formation("web_search", &tools, "web.extract");
+    let mut arguments = json!({"urls": ["https://octopus.example/docs"], "max_chars": 1000});
+    if let Some(include) = include_raw_content {
+        arguments["include_raw_content"] = json!(include);
+    }
     let mut call = invocation(
         root.path(),
         1,
         "web.extract",
-        json!({"urls": ["https://octopus.example/docs"], "max_chars": 1000}),
+        arguments,
         &tools,
         &formation,
         &kind,
@@ -411,6 +426,21 @@ async fn web_extract_maps_batch_documents_inside_the_same_room_contract() {
         "artifact-native content"
     );
     assert!(server.join().unwrap().contains("octopus.example"));
+    extracted["body"]["documents"][0].clone()
+}
+
+#[tokio::test]
+async fn web_extract_rejects_non_boolean_raw_content_before_provider_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = vec!["web.extract".to_string()];
+    let (formation, kind) = formation("web_search", &tools, "web.extract");
+    let mut call = invocation(root.path(), 1, "web.extract",
+        json!({"urls":["https://octopus.example"], "include_raw_content":"false"}),
+        &tools, &formation, &kind);
+    call.descriptor.handler_config = json!({"operation":"extract", "providers":{}});
+    let extracted = response(received(WebSearchRoom.receive(call, &TestLifecycleSink).await));
+    assert_eq!(extracted["ok"], false);
+    assert_eq!(extracted["error"]["message"], "include_raw_content must be a boolean");
 }
 
 fn keenable_catalog(tool: &str, base_url: &str) -> Value {
@@ -513,7 +543,7 @@ async fn web_extract_keenable_provider_reads_one_page_per_url() {
         root.path(),
         1,
         "web.extract",
-        json!({"urls": ["https://octopus.example/docs"], "provider": "keenable", "max_chars": 1000}),
+        json!({"urls": ["https://octopus.example/docs"], "max_chars": 1000, "provider": "keenable"}),
         &tools,
         &formation,
         &kind,
@@ -523,6 +553,7 @@ async fn web_extract_keenable_provider_reads_one_page_per_url() {
     assert_eq!(extracted["ok"], true, "{extracted}");
     assert_eq!(extracted["body"]["document_count"], 1);
     assert_eq!(extracted["body"]["documents"][0]["title"], "Octopus");
+    assert_eq!(extracted["body"]["documents"][0]["raw_content"], "");
     assert_eq!(
         extracted["body"]["documents"][0]["content"],
         "# Octopus\n\nartifact-native content"
@@ -608,4 +639,22 @@ async fn web_search_rejects_a_zero_provider_max_limit() {
         .as_str()
         .unwrap()
         .contains("max_limit must be at least 1"));
+}
+
+#[tokio::test]
+async fn default_custom_without_endpoint_fails_closed() {
+    for (tool, args) in [
+        ("web.search", json!({"query": "example"})),
+        ("web.extract", json!({"urls": ["https://example.org"]})),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let tools = vec![tool.to_string()];
+        let (formation, kind) = formation("web_search", &tools, tool);
+        let mut call = invocation(root.path(), 1, tool, args, &tools, &formation, &kind);
+        call.descriptor.handler_config["providers"]["custom"]["base_url_env"] =
+            json!("OCTOPUS_TEST_UNCONFIGURED_CUSTOM_ENDPOINT");
+        let result = response(received(WebSearchRoom.receive(call, &TestLifecycleSink).await));
+        assert_eq!(result["ok"], false);
+        assert!(result["error"]["message"].as_str().unwrap().contains("has no base URL"));
+    }
 }
