@@ -26,6 +26,7 @@
       "models": {
         "reduce": "intersection",
         "default": [
+          "gemini-4-neon",
           "gemini-4-hydrogen",
           "gemini-4-argon",
           "gemini-4-carbon",
@@ -2357,6 +2358,37 @@
       },
       "model_catalog": [
         {
+          "model": "gemini-4-neon",
+          "display_name": "Gemini 4 Neon",
+          "description": "Gemini 4 Neon through Antigravity.",
+          "context_window": 1048576,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "high",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            }
+          ],
+          "show_in_picker": true
+        },
+        {
           "model": "gemini-4-hydrogen",
           "display_name": "Gemini 4 Hydrogen",
           "description": "Gemini 4 Hydrogen through Antigravity.",
@@ -2492,7 +2524,7 @@
         "max_limit": 100,
         "include_hidden": false
       },
-      "model": "gemini-4-hydrogen",
+      "model": "gemini-4-neon",
       "reasoning_effort": "high",
       "reasoning_summary": "auto",
       "private_thread_cold_start": "resume_compatible",
@@ -2636,6 +2668,49 @@
         "model_catalog": {
           "models": [
             {
+              "slug": "gemini-4-neon",
+              "display_name": "Gemini 4 Neon",
+              "description": "Gemini 4 Neon through Antigravity.",
+              "default_reasoning_level": "high",
+              "supported_reasoning_levels": [
+                {
+                  "effort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "effort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "effort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                }
+              ],
+              "shell_type": "shell_command",
+              "visibility": "list",
+              "supported_in_api": true,
+              "priority": 0,
+              "base_instructions": "",
+              "supports_reasoning_summaries": true,
+              "default_reasoning_summary": "auto",
+              "support_verbosity": false,
+              "truncation_policy": {
+                "mode": "tokens",
+                "limit": 10000
+              },
+              "supports_parallel_tool_calls": false,
+              "context_window": 400000,
+              "max_context_window": 1048576,
+              "effective_context_window_percent": 95,
+              "experimental_supported_tools": [],
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "supports_search_tool": false,
+              "use_responses_lite": false
+            },
+            {
               "slug": "gemini-4-hydrogen",
               "display_name": "Gemini 4 Hydrogen",
               "description": "Gemini 4 Hydrogen through Antigravity.",
@@ -2661,7 +2736,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 0,
+              "priority": 1,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -2704,7 +2779,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 1,
+              "priority": 2,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -2747,7 +2822,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 2,
+              "priority": 3,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",
@@ -2790,7 +2865,7 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
-              "priority": 3,
+              "priority": 4,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
               "default_reasoning_summary": "auto",

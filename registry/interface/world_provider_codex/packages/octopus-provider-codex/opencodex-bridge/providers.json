@@ -201,6 +201,7 @@
         ]
       },
       "models": [
+        {"slug": "gemini-4-neon", "display_name": "Gemini 4 Neon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "high"},
         {"slug": "gemini-4-hydrogen", "display_name": "Gemini 4 Hydrogen", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "high"},
         {"slug": "gemini-4-argon", "display_name": "Gemini 4 Argon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
         {"slug": "gemini-4-carbon", "display_name": "Gemini 4 Carbon", "context_window": 1048576, "input_modalities": ["text", "image"], "efforts": ["low", "medium", "high"], "default_effort": "medium"},
