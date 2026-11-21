@@ -156,6 +156,8 @@ fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, Box<dyn std:
 
 fn run_up() -> Result<(), Box<dyn std::error::Error>> {
     raise_open_file_limit()?;
+    #[cfg(unix)]
+    let restart_executable = restart_executable_path()?;
     let restart = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -164,6 +166,9 @@ fn run_up() -> Result<(), Box<dyn std::error::Error>> {
     drop(runtime);
     outcome?;
     if restart.load(std::sync::atomic::Ordering::SeqCst) {
+        #[cfg(unix)]
+        return start_again(&restart_executable);
+        #[cfg(not(unix))]
         return start_again();
     }
     Ok(())
@@ -201,14 +206,39 @@ fn raise_open_file_limit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(unix)]
-fn start_again() -> Result<(), Box<dyn std::error::Error>> {
+fn resolve_restart_executable(
+    configured_bin: Option<std::ffi::OsString>,
+    current_exe: impl FnOnce() -> std::io::Result<PathBuf>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(configured) = configured_bin {
+        if !configured.is_empty() {
+            let path = PathBuf::from(configured);
+            if !path.is_absolute() {
+                return Err(format!(
+                    "OCTOPUS_RUNTIME_BIN must be an absolute path: {}",
+                    path.display()
+                )
+                .into());
+            }
+            return Ok(path);
+        }
+    }
+    Ok(current_exe()?)
+}
+
+#[cfg(unix)]
+fn restart_executable_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    resolve_restart_executable(std::env::var_os("OCTOPUS_RUNTIME_BIN"), std::env::current_exe)
+}
+
+#[cfg(unix)]
+fn start_again(executable: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::unix::process::CommandExt;
-    let executable = std::env::current_exe()?;
     eprintln!(
         "octopus: stopped cleanly; starting again from {}",
         executable.display()
     );
-    let error = std::process::Command::new(&executable).arg("up").exec();
+    let error = std::process::Command::new(executable).arg("up").exec();
     Err(format!(
         "the stopped runtime could not start again from '{}': {error}",
         executable.display()
@@ -760,5 +790,43 @@ fn report_daemon_boot_event(boot: &mut boot_report::BootReport, event: daemon::D
             "state",
             format_args!("{durable_runs} durable run(s) · {ee_scopes} EE scope(s)"),
         ),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::resolve_restart_executable;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn restart_executable_prefers_absolute_runtime_bin() {
+        let resolved = resolve_restart_executable(
+            Some(OsString::from("/opt/octopus/current/bin/octopus")),
+            || Ok(PathBuf::from("/opt/octopus/releases/prev/bin/octopus")),
+        )
+        .expect("absolute OCTOPUS_RUNTIME_BIN should resolve");
+        assert_eq!(resolved, PathBuf::from("/opt/octopus/current/bin/octopus"));
+    }
+
+    #[test]
+    fn restart_executable_rejects_relative_runtime_bin() {
+        let error = resolve_restart_executable(
+            Some(OsString::from("bin/octopus")),
+            || Ok(PathBuf::from("/opt/octopus/current/bin/octopus")),
+        )
+        .expect_err("relative OCTOPUS_RUNTIME_BIN must fail closed");
+        assert!(error
+            .to_string()
+            .contains("OCTOPUS_RUNTIME_BIN must be an absolute path"));
+    }
+
+    #[test]
+    fn restart_executable_falls_back_to_initial_current_exe() {
+        let resolved = resolve_restart_executable(None, || {
+            Ok(PathBuf::from("/srv/octopus/runtime/bin/octopus"))
+        })
+        .expect("missing OCTOPUS_RUNTIME_BIN should use initial current_exe");
+        assert_eq!(resolved, PathBuf::from("/srv/octopus/runtime/bin/octopus"));
     }
 }

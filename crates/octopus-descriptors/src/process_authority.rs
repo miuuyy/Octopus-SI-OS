@@ -49,6 +49,8 @@ pub struct ProcessAuthoritySpec {
     pub read_paths: BTreeSet<String>,
     pub write_paths: BTreeSet<String>,
     pub executable_paths: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub optional_executable_paths: BTreeSet<String>,
     #[serde(default)]
     pub executable_root_subpaths: BTreeSet<ProcessRootSubpathSpec>,
     pub executable_commands: BTreeSet<String>,
@@ -189,6 +191,7 @@ impl ProcessAuthoritySpec {
             && self.read_paths.is_subset(&original.read_paths)
             && self.write_paths.is_subset(&original.write_paths)
             && self.executable_paths.is_subset(&original.executable_paths)
+            && self.optional_executable_paths.is_subset(&original.optional_executable_paths)
             && self.executable_root_subpaths.is_subset(&original.executable_root_subpaths)
             && self.executable_commands.is_subset(&original.executable_commands)
             && self.read_executable_relative_paths.iter()
@@ -260,10 +263,20 @@ impl ProcessAuthoritySpec {
             ("read_paths", &self.read_paths),
             ("write_paths", &self.write_paths),
             ("executable_paths", &self.executable_paths),
+            ("optional_executable_paths", &self.optional_executable_paths),
         ] {
             for value in values {
                 validate_declared_path(field, value)?;
             }
+        }
+        if !self
+            .executable_paths
+            .is_disjoint(&self.optional_executable_paths)
+        {
+            return Err(
+                "process authority repeats a path across executable_paths and optional_executable_paths"
+                    .to_string(),
+            );
         }
         for value in &self.executable_commands {
             validate_declared_executable("executable_commands", value)?;
@@ -490,5 +503,29 @@ mod tests {
             .validate()
             .unwrap_err()
             .contains("invalid relative subpath"));
+    }
+
+    #[test]
+    fn optional_executable_paths_validate_disjointness_and_narrowing() {
+        let original = ProcessAuthoritySpec {
+            optional_executable_paths: BTreeSet::from(["/usr/bin/open".to_string()]),
+            ..Default::default()
+        };
+        assert!(original.validate().is_ok());
+
+        let mut widened = original.clone();
+        widened
+            .optional_executable_paths
+            .insert("/usr/bin/xdg-open".to_string());
+        assert!(widened.validate().is_ok());
+        assert!(!widened.narrows(&original));
+        assert!(original.narrows(&widened));
+
+        let mut duplicate = original.clone();
+        duplicate.executable_paths.insert("/usr/bin/open".to_string());
+        assert!(duplicate
+            .validate()
+            .unwrap_err()
+            .contains("repeats a path across executable_paths and optional_executable_paths"));
     }
 }

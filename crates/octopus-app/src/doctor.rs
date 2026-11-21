@@ -238,7 +238,18 @@ fn diagnose_executable_runtime(
         let path = executable.working_directory.join(declared);
         std::fs::canonicalize(&path).map_err(|error| format!("declared executable path '{}' cannot be resolved: {error}", path.display()))
     });
-    for result in commands.chain(declared_paths) {
+    let optional_paths = process.authority.optional_executable_paths.iter().filter_map(|declared| {
+        let path = executable.working_directory.join(declared);
+        match std::fs::canonicalize(&path) {
+            Ok(canonical) => Some(Ok(canonical)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(Err(format!(
+                "declared optional executable path '{}' cannot be resolved: {error}",
+                path.display()
+            ))),
+        }
+    });
+    for result in commands.chain(declared_paths).chain(optional_paths) {
         match result {
             Ok(path) if path.is_dir() => {}
             Ok(path) => { paths.insert(path); }
@@ -804,6 +815,8 @@ mod tests {
         let mut life: serde_json::Value = serde_json::from_slice(&std::fs::read(&life_path).unwrap()).unwrap();
         life["processes"][0]["bin"] = serde_json::json!(active_bin);
         life["processes"][0]["authority"]["executable_paths"] = serde_json::json!([active_bin]);
+        life["processes"][0]["authority"]["optional_executable_paths"] =
+            serde_json::json!(["/missing/octopus-optional-launcher"]);
         std::fs::write(&life_path, life.to_string()).unwrap();
         let metadata = home.join("registry/interface").join(octopus_file_storage::publication::COORDINATION_DIRECTORY);
         std::fs::create_dir(&metadata).unwrap();

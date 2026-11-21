@@ -5,7 +5,7 @@ const { spawnSync } = require("node:child_process");
 const { copyTree, copyFile } = require("./package-copy.cjs");
 const { readGeneratedSourcePaths, assertDeclaredGeneratedOutput } = require("./generated-source-boundary.cjs");
 
-function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
+function createRuntimePackager({ repoRoot, appRoot, outputRoot, platform = process.platform }) {
   for (const [name, value] of Object.entries({ repoRoot, appRoot, outputRoot })) {
     if (typeof value !== "string" || !path.isAbsolute(value)) throw new Error(`${name} must be absolute`);
   }
@@ -106,6 +106,7 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot }) {
     "octopus-operator-chat-artifact",
     "octopus-operator-chat-topology",
     "octopus-secret-store",
+    ...(platform === "linux" ? ["octopus-linux-process-authority"] : []),
   ]);
 
   function collectBundledBinaries(source) {

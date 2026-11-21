@@ -35,6 +35,12 @@ test("CLI and desktop share exact owner executable materialization", () => {
     const manifest = path.join(appRoot, "distribution/system-baseline.json");
     put(manifest, { schema_version: 1, id: "test-baseline", registry_owners: [{ kind: "interface", id: "test_door" }] });
     const builder = createRuntimePackager({ repoRoot: root, appRoot, outputRoot });
+    for (const platform of ["linux", "darwin"]) {
+      const target = createRuntimePackager({ repoRoot: root, appRoot, outputRoot, platform });
+      const service = "octopus-linux-process-authority";
+      assert.equal(target.collectBundledBinaries(source).includes(service), platform === "linux");
+      assert.equal(target.sharedBinaries(new Set()).includes(service), platform === "linux");
+    }
     const registry = path.join(outputRoot, "local-packages/registry");
     builder.copyRegistrySurface(source, registry);
     builder.copyRegistryBaseline(source, path.join(outputRoot, "registry"), manifest);

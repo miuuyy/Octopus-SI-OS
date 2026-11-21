@@ -46,7 +46,8 @@ on Ubuntu:
 sudo apt-get install apparmor
 ```
 
-Build the service on the Linux machine from the same checkout as Octopus:
+The Linux CLI runtime distribution includes the service as
+`bin/octopus-linux-process-authority`. To build the service separately from source:
 
 ```sh
 cargo build --locked --release -p octopus-linux-process-authority

@@ -172,6 +172,12 @@ exit remains distinct from closure, including a PTY whose streams close while
 another group member is still running. Observation and cleanup failures remain
 visible and never become successful closure.
 
+Executable paths that vary by host can be declared in
+`optional_executable_paths`. Existing paths receive the same resolution and
+execution checks as required paths. An absent optional path grants no authority.
+Other inspection failures remain errors. Required and optional path sets are
+disjoint, and narrowing a declaration can only remove optional paths.
+
 ## Linux process authority
 
 The Linux backend enforces process authority through an AppArmor profile before exec.

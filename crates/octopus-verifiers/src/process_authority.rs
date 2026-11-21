@@ -489,6 +489,10 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             &self.executable_paths,
             &repository_root,
         )?);
+        executable.extend(resolve_optional_declared_paths(
+            &self.optional_executable_paths,
+            &repository_root,
+        )?);
         executable.extend(resolve_root_subpaths(
             "executable_root_subpaths",
             &self.executable_root_subpaths,
@@ -625,6 +629,34 @@ fn resolve_declared_paths(
             }
         })
         .collect()
+}
+
+fn resolve_optional_declared_paths(
+    declared: &BTreeSet<String>,
+    repository_root: &Path,
+) -> Result<BTreeSet<PathBuf>, String> {
+    let mut resolved = BTreeSet::new();
+    for raw in declared {
+        let path = Path::new(raw);
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            repository_root.join(path)
+        };
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => {
+                resolved.insert(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "optional process authority path '{}' cannot be inspected: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 fn resolve_root_subpaths(
@@ -2877,5 +2909,51 @@ mod search_path_link_tests {
         };
         assert!(run("octopus-linked-probe"));
         assert!(!run("octopus-neighbour"));
+    }
+
+    #[test]
+    fn optional_executable_paths_grant_existing_and_skip_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let existing = root.path().join("present-launcher");
+        std::fs::write(&existing, "#!/bin/sh\nexit 0\n").unwrap();
+        let missing = root.path().join("missing-launcher");
+
+        let spec = ProcessAuthoritySpec {
+            optional_executable_paths: BTreeSet::from([
+                existing.to_string_lossy().into_owned(),
+                missing.to_string_lossy().into_owned(),
+            ]),
+            ..Default::default()
+        };
+        let resolved = spec
+            .resolve(
+                root.path(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+            .expect("optional executable paths resolve cleanly when one path is absent");
+        let canonical_existing = std::fs::canonicalize(&existing).unwrap();
+        assert!(resolved.authority.executable.contains(&canonical_existing));
+        assert!(!resolved.authority.executable.contains(&missing));
+
+        let required_missing = ProcessAuthoritySpec {
+            executable_paths: BTreeSet::from([missing.to_string_lossy().into_owned()]),
+            ..Default::default()
+        };
+        assert!(required_missing
+            .resolve(
+                root.path(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+            .is_err());
     }
 }

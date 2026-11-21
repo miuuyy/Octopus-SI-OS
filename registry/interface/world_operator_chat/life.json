@@ -20,8 +20,10 @@
         "executable_root_slots": [],
         "read_paths": [],
         "write_paths": [],
-        "executable_paths": [
-          "/usr/bin/open"
+        "executable_paths": [],
+        "optional_executable_paths": [
+          "/usr/bin/open",
+          "/usr/bin/xdg-open"
         ],
         "executable_commands": [],
         "read_env_paths": [],
