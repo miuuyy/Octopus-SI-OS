@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Default)]
 pub struct VerifierCancellation {
@@ -442,9 +442,9 @@ fn run_package_process(
     payload_bytes: Vec<u8>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<VerificationVerdict, serde_json::Value> {
-    let scratch_dir = create_scratch_dir(&ctx.descriptor, &ctx.scratch_root, input)?;
+    let scratch_dir = create_scratch_dir(&ctx.descriptor, &ctx.scratch_root)?;
     let script_path = materialize_pinned_package(ctx)?;
-    let payload_path = scratch_dir.path.join("payload");
+    let payload_path = scratch_dir.path().join("payload");
     std::fs::write(&payload_path, &payload_bytes).map_err(|e| {
         serde_json::json!({
             "runner": "package_process",
@@ -485,7 +485,7 @@ fn run_package_process(
             &available_root_slots,
             &environment,
             [pinned_package_dir],
-            [scratch_dir.path.clone()],
+            [scratch_dir.path().to_path_buf()],
             [script_path.clone()],
             std::iter::empty(),
         )
@@ -502,7 +502,7 @@ fn run_package_process(
         .prepare(
             &script_path.to_string_lossy(),
             &[],
-            &scratch_dir.path,
+            scratch_dir.path(),
             environment.get("PATH").map(OsString::as_os_str),
             &ctx.scratch_root,
         )
@@ -518,7 +518,7 @@ fn run_package_process(
     let result = run_process_with_timeout(
         prepared,
         &environment,
-        &scratch_dir.path,
+        scratch_dir.path(),
         timeout,
         cancelled,
         Some(&request_bytes),
@@ -614,24 +614,23 @@ fn materialize_pinned_package(ctx: &PinnedVerifierPackage) -> Result<PathBuf, se
         .map_err(|error| failure("pinned verifier package root cannot be created", error.to_string()))?;
     let package_dir = root.join(octopus_ledger::ContentHash::of_bytes(&ctx.closure_bytes()).to_hex());
     if !pinned_package_matches(ctx, &package_dir) {
-        let staging = root.join(format!(".staging-{}-{}", std::process::id(), unique_nonce()));
-        write_pinned_package(ctx, &staging)
+        let staging = private_tempdir(&root, ".staging-")
+            .map_err(|error| failure("pinned verifier staging directory cannot be created", error.to_string()))?;
+        write_pinned_package(ctx, staging.path())
             .map_err(|error| failure("pinned verifier package cannot be materialized", error))?;
-        if std::fs::rename(&staging, &package_dir).is_err() {
-            if pinned_package_matches(ctx, &package_dir) {
-                let _ = std::fs::remove_dir_all(&staging);
-            } else {
-                let stale = root.join(format!(".stale-{}-{}", std::process::id(), unique_nonce()));
-                if package_dir.exists() {
-                    std::fs::rename(&package_dir, &stale).map_err(|error| {
-                        failure("mismatched pinned verifier package cannot be replaced", error.to_string())
-                    })?;
-                    let _ = std::fs::remove_dir_all(&stale);
-                }
-                std::fs::rename(&staging, &package_dir).map_err(|error| {
-                    failure("pinned verifier package cannot be installed", error.to_string())
+        if std::fs::rename(staging.path(), &package_dir).is_err()
+            && !pinned_package_matches(ctx, &package_dir)
+        {
+            let stale = private_tempdir(&root, ".stale-")
+                .map_err(|error| failure("pinned verifier retirement directory cannot be created", error.to_string()))?;
+            if package_dir.exists() {
+                std::fs::rename(&package_dir, stale.path().join("package")).map_err(|error| {
+                    failure("mismatched pinned verifier package cannot be replaced", error.to_string())
                 })?;
             }
+            std::fs::rename(staging.path(), &package_dir).map_err(|error| {
+                failure("pinned verifier package cannot be installed", error.to_string())
+            })?;
         }
         if !pinned_package_matches(ctx, &package_dir) {
             return Err(failure(
@@ -644,15 +643,7 @@ fn materialize_pinned_package(ctx: &PinnedVerifierPackage) -> Result<PathBuf, se
         .map_err(|error| failure("pinned verifier script cannot be canonicalized", error.to_string()))
 }
 
-fn unique_nonce() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
 fn write_pinned_package(ctx: &PinnedVerifierPackage, staging: &Path) -> Result<(), String> {
-    std::fs::create_dir(staging).map_err(|error| error.to_string())?;
     for (relative, file) in &ctx.files {
         let path = staging.join(relative);
         let parent = path.parent().ok_or_else(|| format!("pinned file '{relative}' has no parent"))?;
@@ -706,78 +697,33 @@ fn collect_materialized_files(
     Ok(())
 }
 
+fn private_tempdir(root: &Path, prefix: &str) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir_in(root)
+}
+
 fn create_scratch_dir(
     descriptor: &VerifierDescriptor,
     scratch_root: &Path,
-    input: &VerificationInput,
-) -> Result<ScratchDirectory, serde_json::Value> {
-    std::fs::create_dir_all(scratch_root).map_err(|error| {
-        serde_json::json!({
-            "runner": "package_process",
-            "verifier": descriptor.id.as_str(),
-            "error": "verifier scratch root cannot be created",
-            "source": error.to_string()
-        })
-    })?;
-    let root = std::fs::canonicalize(scratch_root).map_err(|error| {
-        serde_json::json!({
-            "runner": "package_process",
-            "verifier": descriptor.id.as_str(),
-            "error": "verifier scratch root cannot be canonicalized",
-            "source": error.to_string()
-        })
-    })?;
-    let safe_artifact_id: String = input
-        .artifact
-        .id
-        .as_str()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = root.join(format!(
-        "{}-{}-{}-{}",
-        descriptor.id.as_str(),
-        std::process::id(),
-        nonce,
-        safe_artifact_id
-    ));
-    std::fs::create_dir(&path).map_err(|error| {
-        serde_json::json!({
-            "runner": "package_process",
-            "verifier": descriptor.id.as_str(),
-            "error": "verifier scratch directory cannot be created",
-            "source": error.to_string()
-        })
-    })?;
-    let path = std::fs::canonicalize(&path).map_err(|error| {
-        serde_json::json!({
-            "runner": "package_process",
-            "verifier": descriptor.id.as_str(),
-            "error": "verifier scratch directory cannot be canonicalized",
-            "source": error.to_string()
-        })
-    })?;
-    Ok(ScratchDirectory { path })
-}
-
-struct ScratchDirectory {
-    path: PathBuf,
-}
-
-impl Drop for ScratchDirectory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
+) -> Result<tempfile::TempDir, serde_json::Value> {
+    let failure = |error: &str, source: std::io::Error| serde_json::json!({
+        "runner": "package_process",
+        "verifier": descriptor.id.as_str(),
+        "error": error,
+        "source": source.to_string(),
+    });
+    std::fs::create_dir_all(scratch_root)
+        .map_err(|error| failure("verifier scratch root cannot be created", error))?;
+    let root = std::fs::canonicalize(scratch_root)
+        .map_err(|error| failure("verifier scratch root cannot be canonicalized", error))?;
+    private_tempdir(&root, "verification-")
+        .map_err(|error| failure("verifier scratch directory cannot be created", error))
 }
 
 fn verifier_environment() -> Result<BTreeMap<String, OsString>, String> {
@@ -931,6 +877,31 @@ mod tests {
                 content: hash,
             },
         )
+    }
+
+    #[test]
+    fn concurrent_verifier_scratch_directories_are_private_and_independent() {
+        let root = tempfile::tempdir().unwrap();
+        let descriptor = package_ctx("check").descriptor;
+        let directories = std::thread::scope(|scope| {
+            let handles = (0..8).map(|_| scope.spawn(|| {
+                (0..16).map(|_| create_scratch_dir(&descriptor, root.path()).unwrap())
+                    .collect::<Vec<_>>()
+            })).collect::<Vec<_>>();
+            handles.into_iter().flat_map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
+        });
+        let paths = directories.iter().map(|dir| dir.path().to_path_buf()).collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(paths.len(), 128);
+        for (index, directory) in directories.iter().enumerate() {
+            std::fs::write(directory.path().join("payload"), index.to_string()).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(std::fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777, 0o700);
+            }
+        }
+        drop(directories);
+        assert!(paths.iter().all(|path| !path.exists()));
     }
 
     #[cfg(unix)]

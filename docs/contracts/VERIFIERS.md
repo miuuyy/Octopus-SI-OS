@@ -97,6 +97,10 @@ cancellation; only a package that reaches outside the system declares
 `timeout_ms`, and `params` may only narrow it. A slow machine is not a failed
 check.
 
+Each execution owns an atomically created private scratch directory. Concurrent
+checks never share writable payload paths, and allocation does not depend on
+wall-clock uniqueness. Scratch storage is released with its execution owner.
+
 ## 4. Verifiers are removable packages
 
 ```text

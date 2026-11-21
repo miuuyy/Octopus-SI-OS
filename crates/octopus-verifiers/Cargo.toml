@@ -11,6 +11,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+tempfile = "3.23.0"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,6 +26,3 @@ object = { version = "0.37.3", default-features = false, features = ["read", "st
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 object = { version = "0.37.3", default-features = false, features = ["read", "std"] }
-
-[dev-dependencies]
-tempfile = "3.23.0"
