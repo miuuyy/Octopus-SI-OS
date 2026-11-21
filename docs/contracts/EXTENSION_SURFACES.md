@@ -237,6 +237,12 @@ admitted transcript with its call ID and result in a fresh ACP session. The
 same recovery lets the bridge release an idle connection after its configured
 transport timeout while Octopus continues waiting for the tool. A retry
 of a recorded request returns its recorded response and call ID.
+Replayed assistant content is ordered typed JSON, including historical calls
+and their exact arguments, rather than prose that resembles a new tool call.
+Only an actual request to the declared MCP endpoint issues a tool call.
+Live ACP updates for the active session count as upstream progress even when
+they contain no text. These heartbeats are not retained as conversation content
+or replayed from the response cache; silence still reaches the stream deadline.
 
 The descriptor lists the server's residual instructions and MCP resource tools.
 The client endpoint publishes only its declared functions. A native execution

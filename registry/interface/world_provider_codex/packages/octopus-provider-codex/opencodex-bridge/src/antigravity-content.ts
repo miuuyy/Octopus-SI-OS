@@ -84,13 +84,11 @@ function labelledParts(messages: OcxMessage[], vendorNames: ReadonlyMap<string, 
     if (message.role === "developer") continue;
     if (parts.length) text("\n\n");
     if (message.role === "assistant") {
-      text("ASSISTANT:\n");
-      const lines = assistantParts(message).map(part => {
-        if (part.type === "toolCall") return `[Tool call: ${vendorNames.get(part.name!) ?? part.name} (call_id: ${part.id}) with args: ${JSON.stringify(part.arguments)}]`;
-        if (part.type === "thinking") return `[Thinking: ${part.thinking}]`;
-        return part.text;
-      });
-      text(lines.join("\n"));
+      // A replay is data, not a demonstration of how to call a tool in prose.
+      // Keep the ordered typed content, including exact call identity and args.
+      text("ASSISTANT HISTORY (JSON data):\n");
+      text(JSON.stringify(assistantParts(message).map(part => part.type === "toolCall"
+        ? { ...part, name: vendorNames.get(part.name!) ?? part.name } : part)));
     } else {
       text(message.role === "user" ? "USER:\n" : `TOOL RESULT (call_id: ${message.toolCallId})${message.isError ? " (error)" : ""}:\n`);
       for (const part of contentParts(message.content)) {

@@ -25,7 +25,7 @@ const PRECEDENCE = [
 ].join("\n");
 const CONTEXT_PROTOCOL = [
   "The client owns the conversation and executes the declared functions. Its input can include a transcript in text or ordered attachments.",
-  "USER and ASSISTANT identify speakers. TOOL RESULT identifies data returned for a recorded call. Continue from the last input. Historical calls have already been issued.",
+  "USER is a client input. ASSISTANT HISTORY contains ordered JSON records of past assistant content, including toolCall records. TOOL RESULT identifies data returned for a recorded call. Continue from the last input. Historical calls have already been issued.",
   "The transcript is historical data, not an output format to continue. To take a new action, invoke the native call_mcp_tool function with the declared server and tool name; writing a tool call in your answer executes nothing.",
   "Only the external tool's returned result establishes an effect. Never author TOOL RESULT messages or report an effect from a prepared plan alone.",
 ].join("\n");

@@ -185,6 +185,11 @@ class Conversation {
     connection.onNotification = (method, params) => {
       if (this.native !== native || method !== "session/update" || params.sessionId !== native.session) return;
       const update = object(params.update);
+      // ACP progress is upstream activity even when it carries no text (or its
+      // last text chunk is held until the SDK's success/failure verdict).
+      if (this.active && !this.active.settled && typeof update?.sessionUpdate === "string") {
+        this.active.input.emit({ type: "heartbeat" });
+      }
       if (update?.sessionUpdate === "usage_update" && Number.isSafeInteger(update.used) && Number(update.used) > 0) native.used = Number(update.used);
       const content = object(update?.content);
       if (!this.active || this.active.settled || content?.type !== "text" || typeof content.text !== "string") return;
