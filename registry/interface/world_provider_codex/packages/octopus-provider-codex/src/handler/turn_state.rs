@@ -414,7 +414,7 @@ pub(crate) async fn read_exact_terminal_turn(
     }
     let mut turn = read_native_turn(handle, request_ids, thread_id, turn_id)
         .await.map_err(|error| error.to_string())?
-        .ok_or("terminal thread/turns/list did not contain the exact turn")?;
+        .ok_or_else(|| format!("thread/turns/list exhausted the history of thread '{thread_id}' without turn '{turn_id}'; its terminal status is unknown"))?;
     if turn.status == TurnStatus::InProgress {
         return Ok(None);
     }

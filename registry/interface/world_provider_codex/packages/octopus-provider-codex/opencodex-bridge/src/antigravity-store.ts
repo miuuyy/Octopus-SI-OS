@@ -7,7 +7,7 @@ import { object, type Row } from "./antigravity-content.ts";
 export type Call = { id: string; name: string; arguments: Row };
 export type Chunk = Extract<AdapterEvent, { type: "thinking_delta" | "text_delta" }>;
 export type Done = Extract<AdapterEvent, { type: "done" }>;
-export type Reply = { chunks: Chunk[]; call?: Call; done: Done };
+export type Reply = { chunks: Chunk[]; call?: Call; done: Done; usageSource?: "acp_usage_update" };
 export type Head = { session: string; count: number; prefix: string; request: string };
 
 function checkedReply(text: string): Reply {
@@ -26,15 +26,38 @@ function checkedReply(text: string): Reply {
       || !Number.isSafeInteger(object(usage)?.outputTokens) || !Object.values(usage as Row).every(n => Number.isSafeInteger(n) && Number(n) >= 0)))) {
     throw new Error("Antigravity's retained response is invalid.");
   }
+  // Earlier checkpoints could store a prompt-wide sum or a reading from a previous
+  // exchange. Preserve the recorded answer and call identity when replaying them.
+  if (reply.usageSource === undefined) delete done.usage;
+  else if (reply.usageSource !== "acp_usage_update" || !Number.isSafeInteger(object(usage)?.contextTotalTokens)) {
+    throw new Error("Antigravity's retained context usage is invalid.");
+  }
   return reply as Reply;
 }
 
-export function replyEvents(reply: Reply): AdapterEvent[] {
+export function replyEvents(reply: Reply, replayInputTokens: number): AdapterEvent[] {
+  const reported = reply.done.usage;
+  const replyTokens = Math.ceil(Buffer.byteLength(JSON.stringify([reply.chunks, reply.call])) / 4);
+  const replayTokens = replayInputTokens + replyTokens;
+  const nativeTokens = reported?.contextTotalTokens;
+  const estimated = nativeTokens === undefined || replayTokens > nativeTokens;
+  // ACP may compact its own trajectory while the caller still retains the complete
+  // replay. Either history must fit when the process or tool catalog changes.
+  const usage = {
+    ...(reported ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+    contextTotalTokens: Math.max(nativeTokens ?? 0, replayTokens),
+    estimated,
+    rawUsage: {
+      context_estimated: estimated,
+      native_context_tokens: nativeTokens ?? null,
+      replay_estimated_tokens: replayTokens,
+    },
+  };
   const call = reply.call;
   return [...reply.chunks, ...(call ? [
     { type: "tool_call_start" as const, id: call.id, name: call.name },
     { type: "tool_call_delta" as const, arguments: JSON.stringify(call.arguments) }, { type: "tool_call_end" as const },
-  ] : []), reply.done];
+  ] : []), { ...reply.done, usage }];
 }
 
 export class ConversationStore {

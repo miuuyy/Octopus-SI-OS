@@ -794,8 +794,9 @@ async function receive(message) {
   log({ method, session, text });
   const update = (update) => send({ method: "session/update", params: { sessionId: session, update } });
   const say = (text) => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
-  if (text.includes("native-error")) {
-    say("Agent execution error: trajectory converted to zero chat messages");
+  const overflow = "The input token count exceeds the maximum number of tokens allowed (1048576); input token count: 1257138";
+  if (text.includes("native-error") || text.includes("native-overflow")) {
+    say(text.includes("native-overflow") ? overflow : "Agent execution error: trajectory converted to zero chat messages");
     process.stderr.write("E1117 01:02:03.004 12345 server.py:5737] Antigravity SDK error processing prompt for session " + session + "\n");
   } else if (text.includes("call-inspect") && !text.includes("TOOL RESULT")) {
     for (const [id, server, tool] of [["exact_tool", "opencodex", "exact_tool"], ["unoffered", "opencodex", "workspace_build"], ["other_server", "other", "exact_tool"]]) {
@@ -811,9 +812,10 @@ async function receive(message) {
     const returned = (await response.json()).result;
     log({ returned });
     say("Result received.");
-  } else say(text.includes("quote-error") ? "Agent execution error: trajectory converted to zero chat messages" : "Continued.");
-  update({ sessionUpdate: "usage_update", used: 128, size: 1048576 });
-  send({ id, result: { stopReason: "end_turn", usage: { totalTokens: 128, inputTokens: 100, cachedReadTokens: 20, outputTokens: 8, thoughtTokens: 2 } } });
+  } else say(text.includes("quote-overflow") ? overflow : text.includes("quote-error") ? "Agent execution error: trajectory converted to zero chat messages" : "Continued.");
+  if (!text.includes("no-checkpoint")) update({ sessionUpdate: "usage_update", used: 128, size: 1048576 });
+  const aggregate = text.includes("aggregate") || text.includes("no-checkpoint");
+  send({ id, result: { stopReason: "end_turn", usage: { totalTokens: aggregate ? 1500000 : 128, inputTokens: aggregate ? 1499972 : 100, cachedReadTokens: 20, outputTokens: 8, thoughtTokens: 2 } } });
 }
 const input = createInterface({ input: process.stdin });
 input.on("line", line => receive(JSON.parse(line)).catch(error => { process.stderr.write(String(error)); process.exit(1); }));
@@ -875,7 +877,7 @@ test("Antigravity retains native context, delivers exact external results and di
   expect(attached.mimeType).toBe("text/plain");
   expect(Buffer.from(attached.blob, "base64").toString()).toBe(result);
   const next = end(await turn("alpha", [...history, ...done.output, user("next")]));
-  expect(next.usage).toMatchObject({ total_tokens: 128, output_tokens: 8, input_tokens_details: { cached_tokens: 20 }, output_tokens_details: { reasoning_tokens: 2 } });
+  expect(next.usage).toMatchObject({ native_context_tokens: 128, output_tokens: 8, input_tokens_details: { cached_tokens: 20 }, output_tokens_details: { reasoning_tokens: 2 } });
   expect(logs().find(row => row.method === "session/resume").session).toBe(first.session);
   expect(logs().filter(row => row.method === "session/prompt").at(-1).text).toBe("USER:\nnext");
   const interrupted = end(await turn("beta", initial));
@@ -886,6 +888,32 @@ test("Antigravity retains native context, delivers exact external results and di
   expect(JSON.stringify(recovered.output)).toContain("Continued.");
   expect(logs().filter(row => row.method === "session/prompt").at(-1).text).toContain(`TOOL RESULT (call_id: ${pending.call_id}):\nadmitted result`);
   expect(end(await turn("beta", initial)).output.find((item: any) => item.type === "function_call").call_id).toBe(pending.call_id);
+  const longHistory = [user("retained history " + "a".repeat(400000))];
+  const long = end(await turn("replay-growth", longHistory));
+  expect(long.usage.native_context_tokens).toBe(128);
+  expect(long.usage.total_tokens).toBeGreaterThan(100000);
+  expect(long.usage.context_estimated).toBe(true);
+  const replayed = end(await turn("replay-growth", longHistory));
+  expect(replayed.usage).toEqual(long.usage);
+  const compacted = end(await turn("replay-growth", [user("short compacted summary")]));
+  expect(compacted.usage.total_tokens).toBeLessThan(10000);
+  const multi = end(await turn("aggregate", [user("aggregate")]));
+  expect(multi.usage).toMatchObject({ native_context_tokens: 128, output_tokens: 0 });
+  expect(multi.usage.total_tokens).toBeLessThan(1500000);
+  expect(end(await turn("unknown", [user("no-checkpoint")])).usage).toMatchObject({ context_estimated: true, native_context_tokens: null });
+  const unknownJson = await fetch(bridge.origin + "/v1/responses", { method: "POST", headers: {
+    "Content-Type": "application/json", "thread-id": "unknown-json" },
+    body: JSON.stringify({ model: "gemini-4-hydrogen", input: [user("no-checkpoint")], stream: false }) });
+  expect((await unknownJson.json()).usage).toMatchObject({ context_estimated: true, native_context_tokens: null });
+  const asking = [user("call-inspect no-checkpoint")];
+  const asked = end(await turn("stale", asking));
+  expect(asked.usage.native_context_tokens).toBe(41);
+  const waiting = asked.output.find((item: any) => item.type === "function_call");
+  const stale = end(await turn("stale", [...asking, ...asked.output, { type: "function_call_output", call_id: waiting.call_id, output: "result" }]));
+  expect(stale.usage).toMatchObject({ context_estimated: true, native_context_tokens: null });
+  const overflow = await turn("overflow", [user("native-overflow")]);
+  expect(overflow.find(e => e.type === "response.failed").response.error.code).toBe("context_length_exceeded");
+  expect(end(await turn("overflow-quoted", [user("quote-overflow")])).status).toBe("completed");
   const failed = await turn("alpha", [user("native-error")]);
   expect(failed.some(row => row.type === "response.completed" || row.type === "response.output_text.delta")).toBe(false);
   expect(JSON.stringify(failed.find(row => row.type === "response.failed"))).toContain("trajectory converted to zero chat messages");

@@ -47,8 +47,10 @@ type Native = {
 
 function usage(native: Native, turn?: Row): Done["usage"] {
   const occupancy = native.used;
-  if (!turn || native.offered > 0) {
-    if (occupancy === undefined) return undefined;
+  if (occupancy === undefined) return undefined;
+  // PromptResponse.usage sums every model call made inside one ACP prompt.
+  // Only a matching single-call breakdown can describe this Responses exchange.
+  if (!turn || native.offered > 0 || turn.totalTokens !== occupancy) {
     return { inputTokens: 0, outputTokens: 0, totalTokens: 0, contextTotalTokens: occupancy };
   }
   const tokens = (key: string) => {
@@ -60,7 +62,7 @@ function usage(native: Native, turn?: Row): Done["usage"] {
   const input = tokens("inputTokens") + cached + tokens("cachedWriteTokens");
   const output = tokens("outputTokens");
   return { inputTokens: input, outputTokens: output, totalTokens: tokens("totalTokens"), cachedInputTokens: cached,
-    reasoningOutputTokens: tokens("thoughtTokens"), ...(occupancy === undefined ? {} : { contextTotalTokens: occupancy }) };
+    reasoningOutputTokens: tokens("thoughtTokens"), contextTotalTokens: occupancy };
 }
 
 class Conversation {
@@ -239,7 +241,13 @@ class Conversation {
       native.connection.kill();
       await native.connection.closed;
       if (this.native !== native) return;
-      if (native.sdkError) throw new AcpFailure(this.active?.text || "Antigravity's agent failed during this turn.", "antigravity_execution_failed");
+      if (native.sdkError) {
+        const message = this.active?.text || "Antigravity's agent failed during this turn.";
+        if (/\binput token count(?:\s*\([\d,]+\))? exceeds the maximum number of tokens allowed\b/i.test(message)) {
+          throw new AcpFailure(message, "context_length_exceeded", 400);
+        }
+        throw new AcpFailure(message, "antigravity_execution_failed");
+      }
       if (result.stopReason === "cancelled") throw new AcpFailure("Antigravity cancelled the turn.", "aborted");
       if (result.stopReason === "refusal") throw new AcpFailure("Antigravity refused this request.", "antigravity_refusal", 400);
       if (result.stopReason !== "end_turn" && result.stopReason !== "max_tokens") throw new Error(`Antigravity stopped with '${String(result.stopReason)}'.`);
@@ -287,10 +295,13 @@ class Conversation {
     const history = conversationMessages(input.parsed.context.messages);
     const keys = history.map(messageKey);
     const configuration = digest([input.parsed.modelId, input.parsed.options.reasoning, input.systemPrompt, input.tools, [...input.wireByName], input.requireToolCall]);
+    // Use the same byte-based approximation as the caller's local history estimator.
+    // This covers the complete retained input, even when ACP resumes using only a delta.
+    const replayInputTokens = Math.ceil(Buffer.byteLength(JSON.stringify([input.systemPrompt, input.tools, history])) / 4);
     const request = digest([configuration, keys]);
     const replay = store.reply(request);
     if (replay) {
-      for (const event of replyEvents(replay)) input.emit(event);
+      for (const event of replyEvents(replay, replayInputTokens)) input.emit(event);
       return;
     }
     const step = this.dispatch(store, history, keys, configuration);
@@ -307,6 +318,8 @@ class Conversation {
       input.incoming.beforePhysicalSend?.();
       const native = step.kind === "tool" ? step.native : await this.connect(input, configuration, step.resume);
       this.checkAbort(input);
+      // Session setup and previous tool exchanges can report an earlier checkpoint.
+      native.used = undefined;
       if (step.kind === "tool") {
         const result = mcpResult(step.result);
         store.beginGeneration();
@@ -330,7 +343,7 @@ class Conversation {
       if ("done" in outcome && input.requireToolCall) throw new AcpFailure("Antigravity ended without the required tool call.", "antigravity_tool_call_required");
       const call = "call" in outcome ? outcome.call : undefined;
       const done: Done = "done" in outcome ? outcome.done : { type: "done", stopReason: "tool_use", usage: usage(native) };
-      const reply: Reply = { chunks: active.chunks, call, done };
+      const reply: Reply = { chunks: active.chunks, call, done, ...(done.usage ? { usageSource: "acp_usage_update" as const } : {}) };
       const text = active.chunks.flatMap(chunk => chunk.type === "text_delta" ? [chunk.text] : []).join("");
       const assistant: Extract<OcxMessage, { role: "assistant" }> = { role: "assistant", timestamp: 0, content: [] };
       if (text) assistant.content.push({ type: "text", text });
@@ -341,7 +354,7 @@ class Conversation {
         else keys.push(messageKey(assistant));
       }
       store.finish({ session: native.session, count: keys.length, prefix: digest(keys), request }, reply);
-      for (const event of replyEvents({ ...reply, chunks: [] })) input.emit(event);
+      for (const event of replyEvents(reply, replayInputTokens).filter(event => event.type !== "text_delta" && event.type !== "thinking_delta")) input.emit(event);
       if (!call || native.finished) await this.disconnect();
     } catch (error) {
       await this.disconnect();
