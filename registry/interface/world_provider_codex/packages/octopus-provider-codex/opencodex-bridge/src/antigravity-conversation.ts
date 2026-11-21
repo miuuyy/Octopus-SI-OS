@@ -3,7 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 import type { IncomingMeta } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
-import { acpPrompt, conversationMessages, digest, mcpResult, messageKey, object, type Row, type ToolResult } from "./antigravity-content.ts";
+import { acpPrompt, conversationMessages, digest, mcpResult, messageKey, object, replayEstimate, type Row, type ToolResult } from "./antigravity-content.ts";
 import { openToolEndpoint } from "./antigravity-mcp.ts";
 import { ConversationStore, replyEvents, type Call, type Chunk, type Done, type Reply } from "./antigravity-store.ts";
 
@@ -295,13 +295,11 @@ class Conversation {
     const history = conversationMessages(input.parsed.context.messages);
     const keys = history.map(messageKey);
     const configuration = digest([input.parsed.modelId, input.parsed.options.reasoning, input.systemPrompt, input.tools, [...input.wireByName], input.requireToolCall]);
-    // Use the same byte-based approximation as the caller's local history estimator.
-    // This covers the complete retained input, even when ACP resumes using only a delta.
-    const replayInputTokens = Math.ceil(Buffer.byteLength(JSON.stringify([input.systemPrompt, input.tools, history])) / 4);
+    const estimate = replayEstimate(input.systemPrompt, input.tools, history, input.wireByName);
     const request = digest([configuration, keys]);
     const replay = store.reply(request);
     if (replay) {
-      for (const event of replyEvents(replay, replayInputTokens)) input.emit(event);
+      for (const event of replyEvents(replay, estimate)) input.emit(event);
       return;
     }
     const step = this.dispatch(store, history, keys, configuration);
@@ -354,7 +352,7 @@ class Conversation {
         else keys.push(messageKey(assistant));
       }
       store.finish({ session: native.session, count: keys.length, prefix: digest(keys), request }, reply);
-      for (const event of replyEvents(reply, replayInputTokens).filter(event => event.type !== "text_delta" && event.type !== "thinking_delta")) input.emit(event);
+      for (const event of replyEvents(reply, estimate).filter(event => event.type !== "text_delta" && event.type !== "thinking_delta")) input.emit(event);
       if (!call || native.finished) await this.disconnect();
     } catch (error) {
       await this.disconnect();

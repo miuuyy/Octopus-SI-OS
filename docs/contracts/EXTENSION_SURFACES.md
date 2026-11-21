@@ -214,13 +214,17 @@ the current grant. Codex executes the call through its declared route.
 The admitted result answers that same MCP request. Large text travels as a
 `text/plain` document, including inside a function result.
 
-The bridge accounts for both the current ACP trajectory and the complete caller
-history required to reconstruct it. The context count uses the greater of the
-current exchange's `usage_update.used` and a UTF-8 bytes/4 estimate of the replay
-input and output. Responses usage exposes `context_estimated`,
-`native_context_tokens` and `replay_estimated_tokens` so their provenance remains
-visible. This lets the caller compact retained history even when ACP has already
-compacted its own trajectory. The ACP prompt total can span several model calls.
+The bridge accounts for both the current ACP trajectory and the caller history
+required to reconstruct it. The context count uses the greater of the current
+exchange's `usage_update.used` and a UTF-8 bytes/4 estimate of replay text,
+including instructions, tool schemas, text attachments and output. Images,
+audio and PDFs use the native counter; their base64 transport encoding is not
+text input. The replay estimate does not measure their token cost. Responses
+usage exposes `context_estimated`, `native_context_tokens`,
+`replay_text_estimated_tokens` and `replay_unmeasured_media` so the estimate's
+provenance and coverage remain visible. This lets the caller compact retained
+text even when ACP has already compacted its own trajectory. The ACP prompt
+total can span several model calls.
 Its breakdown is included only when it agrees with a tool-free exchange's
 occupancy. An SDK-confirmed input overflow becomes `context_length_exceeded`
 so the caller can enter its native compaction path.

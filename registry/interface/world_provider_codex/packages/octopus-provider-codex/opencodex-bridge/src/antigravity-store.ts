@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 import type { AdapterEvent } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
-import { object, type Row } from "./antigravity-content.ts";
+import { object, type ReplayEstimate, type Row } from "./antigravity-content.ts";
 
 export type Call = { id: string; name: string; arguments: Row };
 export type Chunk = Extract<AdapterEvent, { type: "thinking_delta" | "text_delta" }>;
@@ -33,10 +33,10 @@ function checkedReply(text: string): Reply {
   return reply as Reply;
 }
 
-export function replyEvents(reply: Reply, replayInputTokens: number): AdapterEvent[] {
+export function replyEvents(reply: Reply, estimate: ReplayEstimate): AdapterEvent[] {
   const reported = reply.done.usage;
   const replyTokens = Math.ceil(Buffer.byteLength(JSON.stringify([reply.chunks, reply.call])) / 4);
-  const replayTokens = replayInputTokens + replyTokens;
+  const replayTokens = estimate.textTokens + replyTokens;
   const nativeTokens = reported?.contextTotalTokens;
   const estimated = nativeTokens === undefined || replayTokens > nativeTokens;
   // ACP may compact its own trajectory while the caller still retains the complete
@@ -48,7 +48,8 @@ export function replyEvents(reply: Reply, replayInputTokens: number): AdapterEve
     rawUsage: {
       context_estimated: estimated,
       native_context_tokens: nativeTokens ?? null,
-      replay_estimated_tokens: replayTokens,
+      replay_text_estimated_tokens: replayTokens,
+      replay_unmeasured_media: estimate.unmeasuredMedia,
     },
   };
   const call = reply.call;

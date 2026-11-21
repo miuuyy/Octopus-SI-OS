@@ -106,6 +106,19 @@ function textBytes(parts: Part[]): number {
   return parts.reduce((total, part) => total + (part.type === "text" ? Buffer.byteLength(part.text) : 0), 0);
 }
 
+export type ReplayEstimate = { textTokens: number; unmeasuredMedia: number };
+
+export function replayEstimate(systemPrompt: string, tools: Row[], messages: OcxMessage[], vendorNames: ReadonlyMap<string, string>): ReplayEstimate {
+  let bytes = Buffer.byteLength(systemPrompt) + Buffer.byteLength(JSON.stringify(tools));
+  let unmeasuredMedia = 0;
+  for (const part of labelledParts(messages, vendorNames)) {
+    if (part.type === "text") bytes += Buffer.byteLength(part.text);
+    else if (part.mimeType.startsWith("text/") || part.mimeType === "application/json") bytes += Buffer.byteLength(part.data, "base64");
+    else unmeasuredMedia++;
+  }
+  return { textTokens: Math.ceil(bytes / 4), unmeasuredMedia };
+}
+
 export async function acpPrompt(messages: OcxMessage[], vendorNames: ReadonlyMap<string, string>, directory: string): Promise<Row[]> {
   const parts = labelledParts(messages, vendorNames);
   if (!parts.length) throw new Error("Antigravity needs a new input message.");

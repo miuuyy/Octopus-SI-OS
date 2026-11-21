@@ -791,7 +791,7 @@ async function receive(message) {
   if (method === "session/set_config_option") log({ method, ...params });
   if (method !== "session/prompt") return send({ id, result: {} });
   const text = params.prompt.map(p => p.resource?.text ?? p.text ?? "").join("");
-  log({ method, session, text });
+  log({ method, session, text, mediaBytes: params.prompt.filter(p => p.type === "image").map(p => Buffer.from(p.data, "base64").length) });
   const update = (update) => send({ method: "session/update", params: { sessionId: session, update } });
   const say = (text) => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
   const overflow = "The input token count exceeds the maximum number of tokens allowed (1048576); input token count: 1257138";
@@ -897,6 +897,12 @@ test("Antigravity retains native context, delivers exact external results and di
   expect(replayed.usage).toEqual(long.usage);
   const compacted = end(await turn("replay-growth", [user("short compacted summary")]));
   expect(compacted.usage.total_tokens).toBeLessThan(10000);
+  const image = end(await turn("media", [{ role: "user", content: [
+    { type: "input_image", image_url: "data:image/png;base64," + Buffer.alloc(300000).toString("base64") },
+  ] }], []));
+  expect(image.usage).toMatchObject({ native_context_tokens: 128, replay_unmeasured_media: 1 });
+  expect(image.usage.total_tokens).toBeLessThan(1000);
+  expect(logs().filter(row => row.method === "session/prompt").at(-1).mediaBytes).toEqual([300000]);
   const multi = end(await turn("aggregate", [user("aggregate")]));
   expect(multi.usage).toMatchObject({ native_context_tokens: 128, output_tokens: 0 });
   expect(multi.usage.total_tokens).toBeLessThan(1500000);
