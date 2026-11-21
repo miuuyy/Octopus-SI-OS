@@ -152,7 +152,12 @@ other interfaces' grants are outside this projection. The projection accepts onl
 source and increasing original sequence numbers, and exposes retained-delivery queries,
 not kernel admission decisions. The kernel's complete arrival index is unchanged.
 Provider recovery checks indexed row ranges before applying them and decodes
-one movement at a time. Foreign run-edit candidates retain ledger sequence
+one movement at a time. Its local evidence projection is prepared before the
+provider declares life readiness, so cold scanning remains inside the runtime's
+bounded waking phase. Handoff recovery that can await another interface follows
+readiness. Unindexed recovery hydrates complete grants only on this provider's
+arrival and outbound edges; other referenced content is still integrity-checked.
+Foreign run-edit candidates retain ledger sequence
 numbers until their call and result evidence is needed. The size of the scan
 therefore does not determine how many complete grants must be in memory.
 Other recovery readers validate their selected referenced grant content without copying

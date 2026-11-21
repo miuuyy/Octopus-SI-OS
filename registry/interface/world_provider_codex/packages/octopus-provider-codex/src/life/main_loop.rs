@@ -66,6 +66,9 @@ pub(crate) async fn codex_life(
     let control_gates = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
     let interrupted_effects = InterruptedEffectArbiter::new(ctx.clone());
     let mut deferred_turns = load_deferred_provider_turns(&ctx, &descriptor)?;
+    // Keep the local cold scan inside the lifecycle's bounded waking phase.
+    // Later handoff recovery may await writer lives, so it follows readiness.
+    handoff_session.prepare_recovery()?;
     ctx.signal_ready().await?;
     restore_consumed_provider_inputs(
         &ctx,

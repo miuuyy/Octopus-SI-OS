@@ -23,6 +23,12 @@ impl ProviderHandoffSession {
         })
     }
 
+    /// Prepare local recovery evidence before publishing life readiness. This
+    /// performs no authoring and does not wait for another interface to start.
+    pub fn prepare_recovery(&self) -> Result<(), String> {
+        self.index()?.catch_up()
+    }
+
     pub fn from_invocation(
         &self,
         ctx: &InterfaceLiftContext,
