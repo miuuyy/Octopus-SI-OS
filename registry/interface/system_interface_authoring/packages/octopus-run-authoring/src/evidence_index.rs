@@ -292,10 +292,10 @@ impl ProviderLedgerEvidenceIndex {
             watermark: progress.watermark,
             durable_end_offset: progress.durable_end_offset,
         };
-        if bounds.read(&indexed_rows, |_| Ok(()))?.is_none() {
+        if bounds.read(&indexed_rows, false, |_| Ok(()))?.is_none() {
             return Ok(false);
         }
-        if bounds.read(&indexed_rows, |movement| self.note(&movement))?.is_none() {
+        if bounds.read(&indexed_rows, true, |movement| self.note(&movement))?.is_none() {
             return Err("provider ledger spotlight rows changed while they were indexed".into());
         }
         self.byte_offset = progress.durable_end_offset;
@@ -1133,6 +1133,7 @@ impl SpotlightBounds {
     fn read(
         &self,
         rows: &[octopus_ledger_index::IndexedMovementRowRange],
+        materialize_grants: bool,
         mut visit: impl FnMut(Movement) -> Result<(), String>,
     ) -> Result<Option<()>, String> {
         if rows.is_empty() {
@@ -1165,7 +1166,7 @@ impl SpotlightBounds {
             if file.read_exact(&mut row).is_err() || row.last() != Some(&b'\n') {
                 return Ok(None);
             }
-            let Ok(movement) = self.ledger.decode(&row, indexed.seq) else { return Ok(None); };
+            let Ok(movement) = self.ledger.decode_with_grant_if(&row, indexed.seq, |_| materialize_grants) else { return Ok(None); };
             if movement.seq.0 != indexed.seq {
                 return Ok(None);
             }

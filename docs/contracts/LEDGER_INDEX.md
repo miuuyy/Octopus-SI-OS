@@ -151,7 +151,8 @@ Selected required arrivals keep complete grants and exact mark and replacement p
 other interfaces' grants are outside this projection. The projection accepts only its
 source and increasing original sequence numbers, and exposes retained-delivery queries,
 not kernel admission decisions. The kernel's complete arrival index is unchanged.
-Provider recovery checks indexed row ranges before applying them and decodes
+Provider recovery checks indexed row ranges and referenced content without
+materializing complete grants in that preliminary pass, then applies the rows and decodes
 one movement at a time. Its local evidence projection is prepared before the
 provider declares life readiness, so cold scanning remains inside the runtime's
 bounded waking phase. Handoff recovery that can await another interface follows
