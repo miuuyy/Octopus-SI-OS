@@ -225,10 +225,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux audio headers
+      - name: Install Linux audio headers and AppArmor parser
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libasound2-dev
+          sudo apt-get install --yes libasound2-dev apparmor
 
       - name: Compiler cache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -238,6 +238,13 @@ jobs:
 
       - name: Workspace check (fail-closed, no degraded compile)
         run: cargo check --workspace --all-targets --keep-going
+
+      - name: Linux AppArmor profiles and delegation labels
+        run: |
+          test -x /usr/sbin/apparmor_parser
+          test -f /etc/apparmor.d/abi/4.0
+          cargo test --locked -p octopus-linux-process-authority --bin octopus-linux-process-authority enforced_
+          cargo test --locked -p octopus-verifiers --lib process_authority::linux::tests::the_installed_parser_accepts_every_profile_shape -- --exact
 
   rust:
     runs-on: ubuntu-latest
@@ -275,7 +282,7 @@ jobs:
           cargo nextest run --locked -p octopus-policy -p octopus-ledger-index -p octopus-runtime -p octopus-operator-chat-client -p octopus-model-context-render -p octopus-file-storage --lib --test instructions --test gate_trace_properties -E 'package(octopus-policy) | package(octopus-ledger-index) | package(octopus-runtime) | binary(instructions) | (package(octopus-operator-chat-client) & (test(real_registry_home_plan_exports_authoring_and_exact_policy_requirements) | test(real_registry_self_improvement_ee_admits_the_default_task))) | (package(octopus-file-storage) & test(/^publication::tests::/))'
 
       - name: Interface executable freshness and receipt checks
-        run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_)'
+        run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_) | test(private_env)'
 
       - name: Ledger readers wake on changes, not on their own reads
         run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources)'
@@ -416,7 +423,7 @@ jobs:
         run: brew install tesseract
 
       - name: Interface executable freshness and receipt checks
-        run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_)'
+        run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_) | test(private_env)'
 
       - name: Package verifier, Home admission, provider recovery and voice contracts
         run: |

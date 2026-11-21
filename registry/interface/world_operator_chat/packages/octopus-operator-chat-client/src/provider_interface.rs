@@ -164,11 +164,16 @@ pub(crate) fn plan_provider_interface(
             writes,
         )?;
     } else {
+        let private_environment_root_slot = life_root_slots
+            .iter()
+            .any(|(slot, _)| *slot == "provider_secret_owner_root")
+            .then_some("provider_secret_owner_root");
         plan_interface_life_with_root_slot_access(
             interface_root,
             provider.interface.id.as_str(),
             &identity.model_interface_id,
             &life_root_slots,
+            private_environment_root_slot,
             writes,
         )?;
     }
@@ -322,7 +327,8 @@ pub(crate) fn configure_provider_owner_roots(
     }
     let owner_private_env = opencodex
         .get("model_env")
-        .is_some_and(|value| !value.is_null());
+        .is_some_and(|value| !value.is_null())
+        || opencodex.get("vertex").is_some_and(|value| !value.is_null());
     let transport = driver_config
         .transport
         .as_ref()

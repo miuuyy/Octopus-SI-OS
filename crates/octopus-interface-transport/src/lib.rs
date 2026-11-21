@@ -586,11 +586,14 @@ impl InterfaceActivationReconciler {
                 }
             };
             let fingerprint =
-                match interface_life::interface_private_environment_source_fingerprint(
+                match interface_life::interface_private_environment_source_fingerprint_with_owner(
                     &self
                         .octopus_home
                         .join("interfaces")
                         .join(interface.as_str()),
+                    interface.as_str(),
+                    &interface_root_slots,
+                    resolved.config.private_environment_root_slot.as_deref(),
                 )
                 .and_then(|private_environment| {
                     interface_lift_fingerprint(

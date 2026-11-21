@@ -41,10 +41,12 @@ fn opencodex_account_composition_grants_only_the_connected_owner_directory() {
         source,
         "account_task",
         &slots,
+        None,
         &mut writes,
     )
     .unwrap();
     let life: SpawnLifeConfig = serde_json::from_str(&writes[0].content).unwrap();
+    assert!(life.private_environment_root_slot.is_none());
     for process in life.processes {
         assert!(process
             .authority
@@ -83,4 +85,64 @@ fn opencodex_account_composition_grants_only_the_connected_owner_directory() {
     config.private_config["opencodex"]["credential_owner_interface"] =
         serde_json::json!("another_owner");
     assert!(configure(&mut config).err().unwrap().contains("must own"));
+}
+
+#[test]
+fn opencodex_vertex_composition_grants_secret_owner_root_and_private_env_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let interface_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../registry/interface");
+    let source = "world_provider_vertex";
+    let provider: InterfaceDescriptor = serde_json::from_slice(
+        &std::fs::read(interface_root.join(source).join("interface.json")).unwrap(),
+    )
+    .unwrap();
+    let mut config = provider.interface_driver_config.unwrap();
+    let private_root = root.path().join("interfaces");
+    let slots = configure_provider_owner_roots(
+        &mut config,
+        source,
+        "world_provider_vertex_task",
+        Some(&private_root),
+    )
+    .unwrap();
+    assert_eq!(slots, [("provider_secret_owner_root", false)]);
+    assert_eq!(
+        config.host_slots["provider_secret_owner_root"].path,
+        private_root.join(source)
+    );
+    assert!(config.host_slots["provider_secret_owner_root"]
+        .additional_paths
+        .is_empty());
+
+    let mut writes = Vec::new();
+    plan_interface_life_with_root_slot_access(
+        &interface_root,
+        source,
+        "world_provider_vertex_task",
+        &slots,
+        Some("provider_secret_owner_root"),
+        &mut writes,
+    )
+    .unwrap();
+    let life: SpawnLifeConfig = serde_json::from_str(&writes[0].content).unwrap();
+    assert_eq!(
+        life.private_environment_root_slot.as_deref(),
+        Some("provider_secret_owner_root")
+    );
+    assert!(!life.processes.is_empty());
+    for process in life.processes {
+        assert!(process
+            .authority
+            .read_root_slots
+            .contains("provider_secret_owner_root"));
+        assert!(!process
+            .authority
+            .write_root_slots
+            .contains("provider_secret_owner_root"));
+        assert!(process
+            .authority
+            .read_env_paths
+            .contains("OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE"));
+    }
 }

@@ -175,8 +175,7 @@ impl Host {
         let peer = &caller.credentials;
         let label = process_label(peer.pid)?;
         if label != "unconfined" && !label.ends_with(" (unconfined)") {
-            let profile = label
-                .strip_suffix(" (enforce)")
+            let profile = enforced_profile_name(&label)
                 .ok_or("caller is not in an enforced or unconfined profile")?;
             if !leases.values().any(|lease| {
                 lease.record.uid == peer.uid
@@ -591,6 +590,48 @@ fn validate_token(token: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn enforced_profile_name(label: &str) -> Option<&str> {
+    let name = label.strip_suffix(" (enforce)")?;
+    let name = name.strip_suffix("//&unconfined").unwrap_or(name);
+    if name.is_empty() || name.contains("//&") {
+        return None;
+    }
+    Some(name)
+}
+
 fn display(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enforced_profile_name;
+
+    #[test]
+    fn accepts_plain_and_unconfined_stacked_enforced_labels() {
+        let profile = format!("octopus-1001-{}", "a".repeat(64));
+        assert_eq!(
+            enforced_profile_name(&format!("{profile} (enforce)")),
+            Some(profile.as_str())
+        );
+        assert_eq!(
+            enforced_profile_name(&format!("{profile}//&unconfined (enforce)")),
+            Some(profile.as_str())
+        );
+    }
+
+    #[test]
+    fn rejects_non_enforced_and_multi_profile_stacked_labels() {
+        let profile = format!("octopus-1001-{}", "b".repeat(64));
+        assert_eq!(enforced_profile_name("unconfined"), None);
+        assert_eq!(enforced_profile_name(&format!("{profile} (complain)")), None);
+        assert_eq!(
+            enforced_profile_name(&format!("{profile}//&other (enforce)")),
+            None
+        );
+        assert_eq!(
+            enforced_profile_name(&format!("{profile}//&other//&unconfined (enforce)")),
+            None
+        );
+    }
 }

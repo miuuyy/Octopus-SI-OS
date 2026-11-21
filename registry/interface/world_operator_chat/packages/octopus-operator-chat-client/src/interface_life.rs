@@ -47,6 +47,7 @@ pub(crate) fn plan_interface_life_with_root_slot_access(
     source_interface_id: &str,
     target_interface_id: &str,
     root_slots: &[(&str, bool)],
+    private_environment_root_slot: Option<&str>,
     writes: &mut Vec<PlannedClientWrite>,
 ) -> Result<(), String> {
     let source = interface_root.join(source_interface_id).join("life.json");
@@ -70,6 +71,9 @@ pub(crate) fn plan_interface_life_with_root_slot_access(
         ));
     }
     import_owner_executables(&mut life, source_interface_id)?;
+    if let Some(slot) = private_environment_root_slot {
+        life.private_environment_root_slot = Some(slot.to_string());
+    }
     for process in &mut life.processes {
         for (root_slot, writable) in root_slots {
             process

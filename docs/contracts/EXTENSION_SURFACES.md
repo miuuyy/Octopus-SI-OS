@@ -90,6 +90,13 @@ resolved executable, such as an interpreter's standard library, declare
   byte of a caller wakes it with the caller still connected. World-listening
   lives never sleep.
 
+A life can declare `private_environment_root_slot` to read its declared
+private environment names from an explicitly bound owner in the same Home.
+Each process must hold read authority over that slot. Its own values and the
+owner's values must agree wherever both are present. Owner changes participate
+in the life fingerprint. Provider copies bind this slot to their configured
+credential owner, including Vertex project and credentials-file settings.
+
 An interface that listens for external arrivals adds `activation.json`:
 
 ```json

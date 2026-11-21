@@ -26,8 +26,6 @@ function checkedReply(text: string): Reply {
       || !Number.isSafeInteger(object(usage)?.outputTokens) || !Object.values(usage as Row).every(n => Number.isSafeInteger(n) && Number(n) >= 0)))) {
     throw new Error("Antigravity's retained response is invalid.");
   }
-  // Earlier checkpoints could store a prompt-wide sum or a reading from a previous
-  // exchange. Preserve the recorded answer and call identity when replaying them.
   if (reply.usageSource === undefined) delete done.usage;
   else if (reply.usageSource !== "acp_usage_update" || !Number.isSafeInteger(object(usage)?.contextTotalTokens)) {
     throw new Error("Antigravity's retained context usage is invalid.");

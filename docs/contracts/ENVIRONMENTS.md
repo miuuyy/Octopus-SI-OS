@@ -185,7 +185,9 @@ The platform service owns only profile loading, child attachment and profile
 release; it runs no tool command and changes no command's Unix credentials.
 Its peer pidfd and temporary ptrace hold bind attachment to the preparing
 process or its actual child without a recycled PID. A process already confined by Octopus can prepare another profile
-only with declared sandbox-delegation authority. Another user namespace cannot
+only with declared sandbox-delegation authority. AppArmor labels that stack
+that enforced profile with `unconfined` retain the same lease check. A stack
+containing another profile is refused. Another user namespace cannot
 reach that delegation. Exact file grants include the publication protocol's
 bounded metadata filenames, without granting adjacent files.
 Before exec, the native launcher prepares the exact ancestor and publication

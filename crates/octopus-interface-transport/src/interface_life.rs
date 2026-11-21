@@ -869,6 +869,8 @@ pub fn interfaces_mentioned_in_live_runs(
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpawnLifeConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_environment_root_slot: Option<String>,
     pub processes: Vec<SpawnLifeCommand>,
 }
 
@@ -1244,6 +1246,37 @@ pub(crate) fn interface_private_environment_source_fingerprint(
     })?;
     append_fingerprint_part(&mut material, "state", b"present");
     append_fingerprint_part(&mut material, "content", &bytes);
+    Ok(ContentHash::of_bytes(&material))
+}
+
+pub(crate) fn interface_private_environment_source_fingerprint_with_owner(
+    var_dir: &Path,
+    interface: &str,
+    root_slots: &BTreeMap<String, PathBuf>,
+    owner_slot: Option<&str>,
+) -> Result<ContentHash, String> {
+    let own = interface_private_environment_source_fingerprint(var_dir)?;
+    let Some((owner_dir, owner_interface)) =
+        resolve_private_environment_owner_dir(var_dir, interface, root_slots, owner_slot)?
+    else {
+        return Ok(own);
+    };
+    if owner_interface == interface {
+        return Ok(own);
+    }
+    let owner = interface_private_environment_source_fingerprint(&owner_dir)?;
+    let mut material = Vec::new();
+    append_fingerprint_part(&mut material, "own-private-environment", own.to_hex().as_bytes());
+    append_fingerprint_part(
+        &mut material,
+        "owner-private-environment-slot",
+        owner_slot.unwrap_or_default().as_bytes(),
+    );
+    append_fingerprint_part(
+        &mut material,
+        "owner-private-environment",
+        owner.to_hex().as_bytes(),
+    );
     Ok(ContentHash::of_bytes(&material))
 }
 
@@ -1892,6 +1925,15 @@ fn append_imported_life_dependency_fingerprints(
 fn parse_spawn_life_config(path: &Path, bytes: &[u8]) -> Result<SpawnLifeConfig, String> {
     let config: SpawnLifeConfig = serde_json::from_slice(bytes)
         .map_err(|e| format!("life sidecar '{}' is malformed: {e}", path.display()))?;
+    if let Some(slot) = &config.private_environment_root_slot {
+        if slot.is_empty() || slot.trim() != slot || slot.contains('\0') {
+            return Err(format!(
+                "life sidecar '{}' contains invalid private_environment_root_slot {:?}",
+                path.display(),
+                slot
+            ));
+        }
+    }
     if config.processes.is_empty() {
         return Err(format!(
             "life sidecar '{}' declares no processes",
@@ -1899,6 +1941,15 @@ fn parse_spawn_life_config(path: &Path, bytes: &[u8]) -> Result<SpawnLifeConfig,
         ));
     }
     for process in &config.processes {
+        if let Some(slot) = &config.private_environment_root_slot
+            && !process.authority.read_root_slots.contains(slot)
+            && !process.authority.write_root_slots.contains(slot)
+        {
+            return Err(format!(
+                "life sidecar '{}' process '{}' must declare read authority for private_environment_root_slot '{slot}'",
+                path.display(), process.bin,
+            ));
+        }
         if process.bin.trim().is_empty() {
             return Err(format!(
                 "life sidecar '{}' has empty process bin",
@@ -2397,8 +2448,125 @@ fn validate_private_environment_directory_metadata(
 fn read_interface_private_environment(
     ctx: &InterfaceLiftContext,
     declared_names: &BTreeSet<String>,
+    owner_slot: Option<&str>,
 ) -> Result<BTreeMap<String, String>, String> {
-    read_private_environment_document(&ctx.interface_var_dir(), ctx.interface.as_str(), declared_names)
+    let var_dir = ctx.interface_var_dir();
+    let mut values =
+        read_private_environment_document(&var_dir, ctx.interface.as_str(), declared_names)?;
+    let Some((owner_dir, owner_interface)) = resolve_private_environment_owner_dir(
+        &var_dir,
+        ctx.interface.as_str(),
+        &ctx.root_slots,
+        owner_slot,
+    )?
+    else {
+        return Ok(values);
+    };
+    if owner_interface == ctx.interface.as_str() {
+        return Ok(values);
+    }
+    let owner_values =
+        read_private_environment_document(&owner_dir, &owner_interface, declared_names)?;
+    let slot = owner_slot.unwrap_or_default();
+    for (name, owner_value) in owner_values {
+        match values.get(&name) {
+            Some(own_value) if own_value != &owner_value => {
+                return Err(format!(
+                    "interface '{}' environment name '{}' differs between interface and private environment root slot '{}'",
+                    ctx.interface.as_str(),
+                    name,
+                    slot
+                ));
+            }
+            Some(_) => {}
+            None => {
+                values.insert(name, owner_value);
+            }
+        }
+    }
+    Ok(values)
+}
+
+pub(crate) fn resolve_private_environment_owner_dir(
+    var_dir: &Path,
+    interface: &str,
+    root_slots: &BTreeMap<String, PathBuf>,
+    owner_slot: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, String> {
+    let Some(slot) = owner_slot else {
+        return Ok(None);
+    };
+    let owner_dir = root_slots.get(slot).ok_or_else(|| {
+        format!(
+            "interface '{}' private_environment_root_slot '{}' is unbound",
+            interface, slot
+        )
+    })?;
+    if !owner_dir.is_absolute() {
+        return Err(format!(
+            "interface '{}' private_environment_root_slot '{}' is not absolute: {}",
+            interface,
+            slot,
+            owner_dir.display()
+        ));
+    }
+    let owner_interface = owner_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && name.trim() == *name && !name.contains('/'))
+        .ok_or_else(|| {
+            format!(
+                "interface '{}' private_environment_root_slot '{}' path '{}' has no valid interface directory name",
+                interface,
+                slot,
+                owner_dir.display()
+            )
+        })?
+        .to_string();
+    let interfaces_root = var_dir.parent().ok_or_else(|| {
+        format!(
+            "interface '{}' private directory '{}' has no parent",
+            interface,
+            var_dir.display()
+        )
+    })?;
+    let owner_parent = owner_dir.parent().ok_or_else(|| {
+        format!(
+            "interface '{}' private_environment_root_slot '{}' path '{}' has no parent",
+            interface,
+            slot,
+            owner_dir.display()
+        )
+    })?;
+    let same_home = if interfaces_root.exists() && owner_parent.exists() {
+        let interfaces_root = std::fs::canonicalize(interfaces_root).map_err(|error| {
+            format!(
+                "interface '{}' private root '{}' cannot be canonicalized: {error}",
+                interface,
+                interfaces_root.display()
+            )
+        })?;
+        let owner_parent = std::fs::canonicalize(owner_parent).map_err(|error| {
+            format!(
+                "interface '{}' private_environment_root_slot '{}' parent '{}' cannot be canonicalized: {error}",
+                interface,
+                slot,
+                owner_parent.display()
+            )
+        })?;
+        interfaces_root == owner_parent
+    } else {
+        interfaces_root == owner_parent
+    };
+    if !same_home {
+        return Err(format!(
+            "interface '{}' private_environment_root_slot '{}' path '{}' is outside the selected Home interfaces directory",
+            interface,
+            slot,
+            owner_dir.display()
+        ));
+    }
+    Ok(Some((owner_dir.clone(), owner_interface)))
 }
 
 pub fn read_private_environment_document(
@@ -2700,6 +2868,7 @@ pub fn spawn_process_life(
         let private_environment = Arc::new(read_interface_private_environment(
             &ctx,
             &declared_private_environment_names,
+            config.private_environment_root_slot.as_deref(),
         )?);
         let missing = config
             .processes
@@ -4726,6 +4895,7 @@ mod tests {
         let single = spawn_process_life(
             ctx(root.path(), "world_required_env_single"),
             SpawnLifeConfig {
+                private_environment_root_slot: None,
                 processes: vec![missing.clone()],
             },
         )
@@ -4735,6 +4905,7 @@ mod tests {
         let multi = spawn_process_life(
             ctx(root.path(), "world_required_env_multi"),
             SpawnLifeConfig {
+                private_environment_root_slot: None,
                 processes: vec![available, missing],
             },
         )
@@ -5477,5 +5648,104 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("REQUIRED_READ_ROOT"));
+    }
+
+    #[test]
+    fn private_environment_owner_requires_declared_process_read_authority() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../registry/interface/world_provider_vertex/life.json");
+        let mut value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&source).unwrap(),
+        ).unwrap();
+        value["private_environment_root_slot"] = serde_json::json!("credential_owner");
+        let error = parse_spawn_life_config(&source, &serde_json::to_vec(&value).unwrap())
+            .unwrap_err();
+        assert!(error.contains("must declare read authority"));
+        for process in value["processes"].as_array_mut().unwrap() {
+            process["authority"]["read_root_slots"].as_array_mut().unwrap()
+                .push(serde_json::json!("credential_owner"));
+        }
+        assert!(parse_spawn_life_config(&source, &serde_json::to_vec(&value).unwrap()).is_ok());
+        value["private_environment_root_slot"] = serde_json::json!(" ");
+        assert!(parse_spawn_life_config(&source, &serde_json::to_vec(&value).unwrap())
+            .unwrap_err().contains("invalid private_environment_root_slot"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cloned_interface_resolves_private_env_and_read_env_paths_from_owner_root_slot() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(root.path(), "world_provider_vertex_clone");
+        let clone_dir = ctx.interface_var_dir();
+        let owner_dir = clone_dir.parent().unwrap().join("world_provider_vertex");
+        let slot = Some("provider_secret_owner_root");
+        ctx.root_slots.insert(slot.unwrap().to_string(), owner_dir.clone());
+        let write_env = |directory: &Path, values: serde_json::Value| {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let path = directory.join("environment.json");
+            std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "interface": directory.file_name().unwrap().to_str().unwrap(),
+                "values": values,
+            })).unwrap()).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        };
+        let credentials_file = root.path().join("vertex-sa.json");
+        std::fs::write(&credentials_file, r#"{"type":"service_account"}"#).unwrap();
+        let credentials_path = credentials_file.to_string_lossy().into_owned();
+        let mut values = serde_json::json!({
+            "OCTOPUS_PROVIDER_VERTEX_PROJECT": "demo-project",
+            "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE": credentials_path,
+            "UNDECLARED_SECRET": "not-exported",
+        });
+        write_env(&owner_dir, values.clone());
+        let declared = BTreeSet::from([
+            "OCTOPUS_PROVIDER_VERTEX_PROJECT".to_string(),
+            "OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE".to_string(),
+        ]);
+        assert!(read_interface_private_environment(&ctx, &declared, slot)
+            .unwrap_err().contains("undeclared name"));
+        values.as_object_mut().unwrap().remove("UNDECLARED_SECRET");
+        write_env(&owner_dir, values.clone());
+        let resolved = read_interface_private_environment(&ctx, &declared, slot).unwrap();
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved["OCTOPUS_PROVIDER_VERTEX_PROJECT"], "demo-project");
+        assert_eq!(resolved["OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE"], credentials_path);
+        let os_env = resolved.into_iter().map(|(k, v)| (k, v.into())).collect();
+        ProcessAuthoritySpec {
+            read_env_paths: BTreeSet::from(["OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE".to_string()]),
+            ..ProcessAuthoritySpec::default()
+        }.resolve(
+            root.path(), &ctx.root_slots, &os_env,
+            std::iter::empty::<PathBuf>(), std::iter::empty::<PathBuf>(),
+            std::iter::empty::<PathBuf>(), std::iter::empty::<PathBuf>(),
+        ).expect("read_env_paths resolves using owner private environment");
+
+        let fingerprint = || interface_private_environment_source_fingerprint_with_owner(
+            &clone_dir, ctx.interface.as_str(), &ctx.root_slots, slot,
+        ).unwrap();
+        let before = fingerprint();
+        values["OCTOPUS_PROVIDER_VERTEX_PROJECT"] = serde_json::json!("updated-project");
+        write_env(&owner_dir, values);
+        assert_ne!(before, fingerprint());
+
+        write_env(&clone_dir, serde_json::json!({
+            "OCTOPUS_PROVIDER_VERTEX_PROJECT": "conflicting-project",
+        }));
+        assert!(read_interface_private_environment(&ctx, &declared, slot)
+            .unwrap_err().contains("differs between interface and private environment root slot"));
+        std::fs::remove_file(clone_dir.join("environment.json")).unwrap();
+
+        let outside = root.path().join("other/interfaces/world_provider_vertex");
+        std::fs::create_dir_all(&outside).unwrap();
+        ctx.root_slots.insert(slot.unwrap().to_string(), outside);
+        assert!(read_interface_private_environment(&ctx, &declared, slot)
+            .unwrap_err().contains("outside the selected Home interfaces directory"));
+        ctx.root_slots.clear();
+        assert!(read_interface_private_environment(&ctx, &declared, slot)
+            .unwrap_err().contains("is unbound"));
     }
 }
