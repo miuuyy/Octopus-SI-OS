@@ -5,6 +5,55 @@ const SHARED_LEDGERS: usize = 8;
 
 static SHARED: OnceLock<Mutex<Vec<(PathBuf, Arc<LedgerRows>)>>> = OnceLock::new();
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cold_provider_index_materializes_only_its_own_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("movements.jsonl");
+        let metadata = dir.path().join("metadata");
+        std::fs::create_dir(&metadata).unwrap();
+        let mut content = String::new();
+        let mut hashes = Vec::new();
+        for seq in 0..25 {
+            let movement = Movement {
+                seq: octopus_ledger::Seq(seq), lamport: octopus_ledger::Lamport(seq + 1),
+                recorded_at_unix_ms: seq + 1, trace: octopus_ledger::TraceId(format!("trace-{seq}")),
+                kind: MovementKind::InterfaceOutbound,
+                from: Endpoint::Interface("source".into()),
+                to: Endpoint::Interface(if seq == 24 { "own".into() } else { format!("foreign-{seq}").into() }),
+                artifact: None,
+                invocation_metadata: Some(octopus_ledger::InvocationMetadata::new(octopus_ledger::GrantProjection {
+                    tools: vec![format!("tool-{seq}")], ..Default::default()
+                }).into()),
+            };
+            let row = octopus_ledger::encode_durable_movement_row(&movement, seq as usize, |_, bytes| {
+                let hash = ContentHash::of_bytes(bytes);
+                std::fs::write(metadata.join(hash.to_hex()), bytes).unwrap();
+                hashes.push(hash);
+                Ok(hash)
+            }).unwrap();
+            content.push_str(&row);
+            content.push('\n');
+        }
+        std::fs::write(&path, content).unwrap();
+        let mut index = ProviderLedgerEvidenceIndex::new("own".into(), path.clone(), 1_048_576);
+        index.catch_up().unwrap();
+        assert_eq!(index.next_seq, 25);
+        let grants = index.ledger.grants.lock().unwrap();
+        assert_eq!(grants.0.len(), 1);
+        assert_eq!(grants.0[hashes.last().unwrap()].1.tools, ["tool-24"]);
+        drop(grants);
+        // Unselected content remains integrity-checked, even though its full
+        // authority is not retained by this provider's recovery index.
+        std::fs::write(metadata.join(hashes[0].to_hex()), b"corrupt").unwrap();
+        let mut fresh = ProviderLedgerEvidenceIndex::new("own".into(), path, 1_048_576);
+        assert!(fresh.catch_up().is_err());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LedgerFile {
     device: u64,

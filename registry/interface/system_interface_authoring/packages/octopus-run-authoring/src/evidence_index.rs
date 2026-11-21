@@ -316,7 +316,7 @@ impl ProviderLedgerEvidenceIndex {
                 BoundedLedgerRow::Complete(row) => {
                     let movement = self
                         .ledger
-                        .decode(&row, self.next_seq)
+                        .decode_with_grant_if(&row, self.next_seq, |movement| self.owns_interface_movement(movement))
                         .map_err(|error| {
                         format!(
                             "provider ledger index encountered malformed movement at byte {}: {error}",
@@ -350,6 +350,14 @@ impl ProviderLedgerEvidenceIndex {
         }
     }
 
+    fn owns_interface_movement(&self, movement: &Movement) -> bool {
+        match (&movement.kind, &movement.from, &movement.to) {
+            (MovementKind::InterfaceArrival, Endpoint::Interface(interface), Endpoint::Interface(_))
+            | (MovementKind::InterfaceOutbound, Endpoint::Interface(_), Endpoint::Interface(interface)) => interface == &self.interface,
+            _ => false,
+        }
+    }
+
     pub(crate) fn note(&mut self, movement: &Movement) -> Result<(), String> {
         let Some(artifact) = movement.artifact.as_ref() else {
             if movement.kind == MovementKind::InterfaceArrival
@@ -368,18 +376,7 @@ impl ProviderLedgerEvidenceIndex {
             }
             return Ok(());
         }
-        let addressed_to_exact_interface = match (&movement.kind, &movement.from, &movement.to) {
-            (MovementKind::InterfaceArrival, Endpoint::Interface(interface), Endpoint::Interface(_)) => {
-                interface == &self.interface
-            }
-            (
-                MovementKind::InterfaceOutbound,
-                Endpoint::Interface(_),
-                Endpoint::Interface(interface),
-            ) => interface == &self.interface,
-            _ => false,
-        };
-        if !addressed_to_exact_interface {
+        if !self.owns_interface_movement(movement) {
             return Ok(());
         }
         let metadata = movement
