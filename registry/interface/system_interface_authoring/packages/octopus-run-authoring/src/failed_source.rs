@@ -328,6 +328,38 @@ impl ProviderHandoffSession {
 }
 
 impl ProviderOutputHandoff {
+    pub async fn refused_source_handoff(&self) -> Result<Option<Self>, String> {
+        if self.failed_source || !self.source_carries_context
+            || !matches!(self.delivery_mode, HandoffDeliveryMode::Rearm)
+        {
+            return Ok(None);
+        }
+        let state = self.state.lock().await;
+        let record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
+        let Some(pending) = persisted_pending_handoff(&record, &self.config.provider_interface)?
+            .filter(|pending| pending.source_movement_seq == self.source_movement_seq
+                && pending.terminal && !pending.source_without_context)
+        else { return Ok(None); };
+        for item in &pending.items {
+            if !self.pending_delivery_complete(&pending, item)? { return Ok(None); }
+        }
+        if !self.pending_source_fully_refused(&record, &pending)? { return Ok(None); }
+        let mut retained = state.clone();
+        validate_session_context_evidence(&mut retained.session_context, SessionContextEvidenceScope {
+            blobs_dir: &self.ctx.blobs_dir,
+            limits: self.ctx.required_host_io_limits()?,
+            run: &self.config.run,
+            provider: &self.config.provider_interface,
+            context_output_labels: &self.context_output_labels,
+            session_snapshot_labels: &self.session_snapshot_labels,
+        }, &self.session)?;
+        let mut failed = self.clone();
+        failed.failed_source = true;
+        failed.state = Arc::new(tokio::sync::Mutex::new(retained));
+        failed.validate_refused_source_handoff(&record, &pending)?;
+        Ok(Some(failed))
+    }
+
     pub(super) fn validate_refused_source_handoff(
         &self,
         record: &RunRecord,

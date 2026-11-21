@@ -174,6 +174,12 @@ movement, and sibling edges deliver regardless. The operator's branch never
 suffers for a tool room's failed check. A hand-in as a whole is refused only
 when it admits zero edges.
 
+A provider may close a fully refused output through its declared diagnostic
+route once the ledger proves the completed refusal. That closure preserves
+already admitted context and publishes its own matching context generation;
+the refused output never becomes admitted history. Unresolved delivery or
+unreadable context cannot supply that proof.
+
 ## The one way a model chooses an address
 
 Beside authored outbound bindings there is one way a model picks a

@@ -1,5 +1,37 @@
 use super::*;
 
+pub(crate) async fn close_refused_provider_handoff(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    run: &RunId,
+    turn: &QueuedTurn,
+    handoff: &ProviderOutputHandoff,
+    driver: &mut Option<Arc<CodexAppServerInterfaceDriver>>,
+    error: &str,
+) -> Result<bool, String> {
+    let Some(failed) = handoff.refused_source_handoff().await? else { return Ok(false); };
+    let error = match shutdown_driver(ctx, driver).await {
+        Ok(()) => error.to_owned(),
+        Err(shutdown_error) => format!("{error}; {shutdown_error}"),
+    };
+    let continuity = terminal_output_continuity(
+        descriptor, &turn.envelope, &failed.current_session_context_artifacts().await,
+        run, &failed.current_run_record_bytes().await, failed.deferred_context_generations().await,
+    ).map_err(|error| error.to_string())?;
+    let artifact = crate::handler::materialize_terminal_turn_error_payload(
+        &ctx.interface_var_dir().join("emitted"),
+        &format!("codex output was refused (movement seq {}): {error}", turn.seq),
+        continuity.as_ref(), serde_json::json!({"source_movement_seq": turn.seq}),
+    ).map_err(|error| error.to_string())?;
+    match failed.hand_failed_source(ProviderEmission {
+        artifact, route: ProviderEmissionRoute::ClientProjection,
+    }).await.map_err(|error| format!("refused Codex output could not be closed: {error:?}"))? {
+        ProviderHandoffOutcome::Admitted { .. } => Ok(true),
+        ProviderHandoffOutcome::TerminalFailure { failure_class, .. } =>
+            Err(format!("refused Codex output closure failed: {failure_class}")),
+    }
+}
+
 pub(crate) async fn record_invalid_provider_context(
     ctx: &InterfaceLiftContext,
     descriptor: &InterfaceDescriptor,

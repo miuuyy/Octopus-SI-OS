@@ -79,6 +79,10 @@ pub(crate) async fn drive_turn_with_retries_inner(
         Ok(recovered) => recovered,
         Err(error) if ctx.cancel.is_cancelled() => return Err(error),
         Err(error) => {
+            if close_refused_provider_handoff(ctx, descriptor, run, &turn, &handoff, driver, &error).await? {
+                control.finish();
+                return Ok(());
+            }
             fail_source_closed(ctx, descriptor, handoff_session, run, &turn, driver, error).await?;
             control.finish();
             return Ok(());
@@ -411,16 +415,24 @@ pub(crate) async fn drive_turn_with_retries_inner(
                     match forwarded {
                         Ok(forwarded) => (receive.await, Ok(forwarded)),
                         Err(error) => {
-                            handoff_barrier.finish(Err(error.clone()));
-                            return Err(error);
+                            (Err(InterfaceBoundaryError::FailedClosed(error.clone())), Err(error))
                         }
                     }
                 }
             }
         };
         handoff_barrier.finish(forwarded.as_ref().map(|_| ()).map_err(Clone::clone));
-        let forwarded = forwarded?;
         drop(live);
+        let forwarded = match forwarded {
+            Ok(forwarded) => forwarded,
+            Err(error) => {
+                if close_refused_provider_handoff(ctx, descriptor, run, &turn, &handoff, driver, &error).await? {
+                    control.finish();
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
 
         if resolving_interrupted_result {
             if interrupted_effects.reconciled_source(run, turn.seq).await? {

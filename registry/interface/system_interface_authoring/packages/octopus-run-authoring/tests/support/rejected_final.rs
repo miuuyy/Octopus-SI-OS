@@ -172,17 +172,45 @@ fn replacement_checked_write(f:&mut CompletedInputReplayFixture,authored:&Author
     let writer=declared_provider_run_writer(&record,&f.handoff.ctx.interface,&RunAuthoringProfile {file_write_tool:"write".into(),file_write_label:"tool.call".into(),file_write_result_label:"write.result".into()}).unwrap();
     let install=CheckedRunInstall {call:ConsentEvidenceRef {artifact:f.rows[f.rows.len()-2].artifact.clone().unwrap(),movement_seq:f.rows.len() as u64-2},
         result:ConsentEvidenceRef {artifact:f.rows.last().unwrap().artifact.clone().unwrap(),movement_seq:f.rows.len() as u64-1}};
-    checked_declared_run_install(&evidence,&f.handoff.run_path,&before,&install,vec![writer])?;
+    let writers = declared_writer_closure(&record, vec![writer])?;
+    let mut reader = FileCheckedRunReader::open(&evidence, Some(install.call.movement_seq - 1))?
+        .with_provider_context(&f.handoff.ctx);
+    while reader.next_seq < install.call.movement_seq {
+        reader.movement(reader.next_seq)?.ok_or("checked installation call is absent")?;
+    }
+    let transition = checked_run_install(&mut reader, &f.handoff.run_path, &install, &writers)?;
+    assert_eq!(transition.before, before);
+    validate_checked_owner_transition(&transition)?;
     Ok(())
 }
 
 #[tokio::test]
 async fn rejected_output_closes_through_its_failed_source_and_the_next_input_passes() {
+    close_rejected_source(false).await;
+}
+
+#[tokio::test]
+async fn refused_output_preserves_checked_context_and_closes_its_reserved_generation() {
+    close_rejected_source(true).await;
+}
+
+async fn close_rejected_source(preserve_context: bool) {
     tokio::time::timeout(Duration::from_secs(20), async {
     use octopus_ledger::{ArrivalFanoutMetadata, ArrivalFanoutScope, ArtifactDelivery, MovementMetadata, RefusedReason};
     type Sending<'a> = std::pin::Pin<Box<dyn std::future::Future<Output=Result<ProviderHandoffOutcome,String>> + 'a>>;
     let mut f = CompletedInputReplayFixture::with_required_final(true);
-    f.handoff.granted_interfaces = ["client", "room", "writer_room", "provider"].map(InterfaceId::new).into_iter().collect();
+    if preserve_context {
+        f.handoff.context_output_labels.extend(["answer".into(), "turn.error".into()]);
+        f.handoff.session_snapshot_labels.insert("turn.error".into());
+        f.handoff.granted_mark_outcomes.insert("tool.result.received".into());
+        let tool = f.handoff.config.checkpoints.iter_mut().find(|cp| cp.name == "tool").unwrap();
+        tool.outbound_interface_bindings = vec![AuthoredInterfaceBinding::all("result_room".into())];
+        tool.result_receiving.insert("read".into(), serde_json::from_value(serde_json::json!({
+                "mark":"tool.result.received", "artifact_label":"read.result",
+                "verifier":"result_correspondence", "params":{},
+            })).unwrap());
+    }
+    f.handoff.granted_interfaces = ["client", "room", "result_room", "writer_room", "provider"].map(InterfaceId::new).into_iter().collect();
     f.handoff.run_path = f.handoff.run_path.canonicalize().unwrap();
     let control = f._root.path().join("control");
     f.handoff.ctx.root_slots.insert("app_server_control_root".into(), control.clone());
@@ -206,6 +234,11 @@ async fn rejected_output_closes_through_its_failed_source_and_the_next_input_pas
     f.handoff.bound_topology.checkpoints = f.handoff.config.checkpoints.clone();
     let mut seed: serde_json::Value = serde_json::from_slice(&std::fs::read(&f.handoff.run_path).unwrap()).unwrap();
     seed["interface_state"]["provider"][RUN_AUTHORING_BINDING] = serde_json::to_value(&f.handoff.bound_topology).unwrap();
+    if preserve_context {
+        let tool = f.handoff.config.checkpoints.iter().find(|cp| cp.name == "tool").unwrap();
+        *seed["checkpoints"].as_array_mut().unwrap().iter_mut().find(|cp| cp["id"] == "tool").unwrap() =
+            materialize_checkpoint(tool, "tool", &f.handoff.config.run, &[]);
+    }
     *seed["checkpoints"].as_array_mut().unwrap().iter_mut().find(|cp| cp["id"] == "client").unwrap() =
         materialize_checkpoint(&client, "client", &f.handoff.config.run, &[]);
     seed["checkpoints"].as_array_mut().unwrap().push(materialize_checkpoint(&errors, "errors", &f.handoff.config.run, &[]));
@@ -218,13 +251,21 @@ async fn rejected_output_closes_through_its_failed_source_and_the_next_input_pas
     let input_file = f.input_file.clone();
     f.edge(&initial, &"input".into(), &input_file, "provider".into(), MovementKind::InterfaceOutbound);
     f.edge(&initial, &"alternate".into(), &input_file, "provider".into(), MovementKind::InterfaceOutbound);
-    let rejected_file = InterfaceArtifactFile::write(f.handoff.var_dir.join("answer"), "answer", br#"{"value":"rejected"}"#).unwrap();
-    let first = f.handoff.author_run(&initial, &[], &[PreparedHandoff {
-        identity:artifact_identity(&rejected_file,&f.handoff.var_dir).unwrap(),
-        output_checkpoint:f.handoff.config.checkpoints.iter().find(|cp| cp.name == "client").unwrap().clone(),verified_inputs:vec![],
+    let (label, payload, route) = if preserve_context {
+        ("tool.call", br#"{"label":"tool.call","tool":"read","arguments":{},"correlation_id":"refused-call"}"#.as_slice(), "tool")
+    } else { ("answer", br#"{"value":"rejected"}"#.as_slice(), "client") };
+    let rejected_file = InterfaceArtifactFile::write(f.handoff.var_dir.join("answer"), label, payload).unwrap();
+    let rejected_identity = artifact_identity(&rejected_file, &f.handoff.var_dir).unwrap();
+    let projected_context = if preserve_context { vec![f.input.id.clone(), rejected_identity.artifact.id.clone()] } else { Vec::new() };
+    let first = f.handoff.author_run(&initial, &projected_context, &[PreparedHandoff {
+        identity:rejected_identity,
+        output_checkpoint:f.handoff.config.checkpoints.iter().find(|cp| cp.name == route).unwrap().clone(),verified_inputs:vec![],
     }],true,None,false,true).unwrap();
+    assert_eq!(first.pending_handoff.deferred_publication, preserve_context);
     f.install(&first);
     f.handoff.state.lock().await.run_record_bytes = first.content.as_bytes().to_vec();
+    assert!(f.handoff.refused_source_handoff().await.unwrap().is_none(),
+        "an output without a proven refusal cannot be replaced");
     let h = f.handoff.clone();
     let rejection = h.hand_pending_items(&first.pending_handoff, first.content.as_bytes());
     let gate = async {
@@ -239,18 +280,37 @@ async fn rejected_output_closes_through_its_failed_source_and_the_next_input_pas
         f.rows.push(scope);
         metadata.delivery_scope_seq=Some(scope_seq);
         metadata.verification_failure=Some(serde_json::from_value(serde_json::json!({
-            "error":"verifier process timed out", "verifier":"tool_call_allowed", "mark":"tool.call.allowed", "artifact_label":"answer", "run":"run", "checkpoint":item.checkpoint.id
+            "error":"verifier scratch directory cannot be created", "verifier":"tool_call_allowed", "mark":"tool.call.allowed", "artifact_label":label, "run":"run", "checkpoint":item.checkpoint.id
         })).unwrap());
         arrival.invocation_metadata=Some(metadata.into()); arrival.seq.0=f.rows.len() as u64;arrival.lamport.0=arrival.seq.0;f.rows.push(arrival.clone());
+        f.save();
+        assert!(f.handoff.refused_source_handoff().await.unwrap().is_none(),
+            "an unfinished fan-out cannot close through the refusal path");
         arrival.kind=MovementKind::VerificationFailed;arrival.seq.0=f.rows.len() as u64;arrival.lamport.0=arrival.seq.0;f.rows.push(arrival);
         f.save();
         retained.reply.send(Ok(ArtifactDelivery::Complete {verdict:DeliveryVerdict::refused(RefusedReason::VerificationFailed,serde_json::json!({}))})).unwrap();
     };
     let (rejected, ()) = tokio::join!(rejection,gate); assert!(rejected.is_err());
     drop(h);
+    if preserve_context {
+        let mut invalid = f.handoff.clone();
+        let mut state = invalid.state.lock().await.clone();
+        state.session_context.artifacts[0].payload["body"] = serde_json::json!({"forged":true});
+        invalid.state = Arc::new(tokio::sync::Mutex::new(state));
+        assert!(invalid.refused_source_handoff().await.is_err(),
+            "a refusal cannot turn unproven context into a snapshot");
+    }
 
-    let mut failed = f.handoff.clone();
-    failed.failed_source = true;
+    let mut failed = if preserve_context {
+        f.handoff.refused_source_handoff().await.unwrap().expect("complete refusal proof")
+    } else {
+        let mut failed = f.handoff.clone();
+        failed.failed_source = true;
+        failed.source_carries_context = false;
+        failed.context_output_labels.clear();
+        failed.session_snapshot_labels.clear();
+        failed
+    };
     failed.session = ProviderHandoffSession::new(&failed.ctx).unwrap();
     {
         let mut state = failed.state.lock().await;
@@ -267,11 +327,27 @@ async fn rejected_output_closes_through_its_failed_source_and_the_next_input_pas
     assert!(pending.terminal && pending.source_without_context && pending.source_movement_seq == 0);
     assert_eq!(pending.items.iter().map(|item| item.artifact_label.as_str()).collect::<Vec<_>>(), vec!["turn.error"],
         "the failed source replaces the rejected output it could never deliver");
+    if preserve_context {
+        let record = RunRecord::from_bytes(&closed).unwrap();
+        let previous = RunRecord::from_bytes(first.content.as_bytes()).unwrap();
+        assert_eq!(optional_u64(&record.interface_state[&"provider".into()], "context_generation").unwrap(),
+            optional_u64(&previous.interface_state[&"provider".into()], "context_generation").unwrap() + 1);
+        let (file, _) = load_pending_artifact(&failed.var_dir, &pending.items[0]).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&file.read_payload_bytes().unwrap()).unwrap();
+        assert_eq!(payload["session_context"]["artifacts"][0]["source_artifact"]["id"], f.input.id.as_str());
+        assert!(!payload.to_string().contains(first.pending_handoff.items[0].artifact_id.as_str()),
+            "a refused output is never promoted to admitted model context");
+    }
 
     let mut next = f.handoff.clone();
     next.source_movement_seq = 1;
     next.session = ProviderHandoffSession::new(&next.ctx).unwrap();
     next.state.lock().await.run_record_bytes = closed.clone();
+    if preserve_context {
+        let mut state = next.state.lock().await;
+        next.restore_pending_context(&mut state, &RunRecord::from_bytes(&closed).unwrap(), &pending).unwrap();
+        assert!(state.session_context.artifacts.iter().any(|entry| entry.label == "turn.error"));
+    }
     let recovered = next.checked_failed_source_contexts(&closed, &[], None).unwrap();
     assert!(recovered[&0].0.artifacts.iter().any(|entry| entry.source_artifact == f.input),
         "the next input recovers what the failed source read, proven by the provider's own checked writes");
@@ -316,7 +392,30 @@ async fn write_then_admit<'a>(
     }
     f.save();
     retained.reply.send(Ok(ArtifactDelivery::Complete {verdict:DeliveryVerdict::Admitted {seq}})).unwrap();
-    assert!(matches!(sending.await.unwrap(),ProviderHandoffOutcome::Admitted {..}));
-    current
+    loop {
+        tokio::select! {
+            result = &mut sending => {
+                assert!(matches!(result.unwrap(), ProviderHandoffOutcome::Admitted { .. }));
+                return std::fs::read(&handoff.run_path).unwrap();
+            }
+            accepted = listener.accept() => {
+                let mut ws = tokio::select! {
+                    ws = tokio_tungstenite::accept_async(accepted.unwrap().0) => ws.unwrap(),
+                    result = &mut sending => panic!("publication ended before its write: {result:?}"),
+                };
+                tokio::select! {
+                    message = ws.next() => { message.unwrap().unwrap(); },
+                    result = &mut sending => panic!("publication ended before its request: {result:?}"),
+                }
+                let before = std::fs::read(&handoff.run_path).unwrap();
+                let AuthoringAttemptRecovery::InFlight(saved) = handoff.recover_authoring_attempt(
+                    &RunRecord::from_bytes(&before).unwrap(), &before,
+                ).unwrap() else { panic!("context publication attempt missing") };
+                let seq = f.rows.len() as u64;
+                replacement_checked_write(f, &saved.authored).unwrap();
+                ws.send(WsMessage::Text(serde_json::to_string(&DeliveryVerdict::Admitted { seq }).unwrap().into())).await.unwrap();
+            }
+        }
+    }
 }
 

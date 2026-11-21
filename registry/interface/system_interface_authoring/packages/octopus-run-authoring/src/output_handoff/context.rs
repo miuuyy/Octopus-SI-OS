@@ -39,10 +39,14 @@ impl ProviderOutputHandoff {
                     }
                     if let Some(pending) = persisted_pending_handoff(&record, &self.config.provider_interface)? {
                         if pending.source_without_context && pending.terminal {
-                            if candidates.insert(pending.source_movement_seq, Some(pending.clone()))
-                                .is_some_and(|previous| previous.as_ref() != Some(&pending)) {
-                                return Err("failed context source has conflicting terminal handoffs".into());
+                            let entry = candidates.entry(pending.source_movement_seq).or_insert(None);
+                            if let Some(previous) = entry.as_ref().filter(|previous| *previous != &pending) {
+                                if context_publication::is_publication_completion(&pending, previous) { continue; }
+                                if !context_publication::is_publication_completion(previous, &pending) {
+                                    return Err("failed context source has conflicting terminal handoffs".into());
+                                }
                             }
+                            *entry = Some(pending);
                         } else if pending.terminal
                             && !candidates.contains_key(&pending.source_movement_seq)
                             && self.unsubmitted_source_failure_before(&pending, self.source_movement_seq)? {
@@ -90,7 +94,8 @@ impl ProviderOutputHandoff {
                     if !transition.foreign && transition.writer.owner == config.provider_interface && next.as_ref().is_some_and(|next| {
                         next.source_movement_seq == sequence && next.terminal && next.source_without_context
                     }) {
-                        if pending.as_ref().is_some_and(|pending| Some(pending) != next.as_ref()) {
+                        if pending.as_ref().is_some_and(|pending| next.as_ref().is_none_or(|next|
+                            pending != next && !context_publication::is_publication_completion(pending, next))) {
                             return Err("checked failed context source changed its terminal handoff".into());
                         }
                         terminal.get_or_insert(position);

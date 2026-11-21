@@ -371,7 +371,8 @@ impl ProviderOutputHandoff {
                 template.role == RunAuthoringCheckpointRole::ResultInput && template.include_context
                     && checkpoint_record_matches_template(checkpoint, template, &record.id)
             }));
-        let context_generation = if (refresh_context || continuation.is_some()) && (!self.failed_source || settles_carried_result) {
+        let context_generation = if (refresh_context || continuation.is_some())
+            && (!self.failed_source || self.source_carries_context || settles_carried_result) {
             previous_context_generation.checked_add(context_generations).ok_or_else(|| {
                 format!(
                     "provider run '{}' context generation overflowed",

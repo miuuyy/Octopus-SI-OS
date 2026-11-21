@@ -1710,6 +1710,35 @@
     }
 
     #[test]
+    fn refused_output_error_preserves_native_continuity_at_the_closing_generation() {
+        let descriptor: InterfaceDescriptor = serde_json::from_slice(include_bytes!("../../../../interface.json")).unwrap();
+        let input = model_policy_input(serde_json::json!(["gpt-5.4"]));
+        let old = continuity("world_provider_codex", "run-model-policy", "thr-exact", 1750, None);
+        let prior: SessionContextArtifact = serde_json::from_value(session_artifact(
+            "accepted-message", "turn.agent_message",
+            serde_json::json!({"label":"turn.agent_message", CODEX_CONTINUITY_FIELD:old}), 219286,
+        )).unwrap();
+        let closed = terminal_output_continuity(
+            &descriptor, &input, std::slice::from_ref(&prior), &"run-model-policy".into(),
+            br#"{"id":"run-model-policy","interface_state":{"world_provider_codex":{"context_generation":1751}}}"#, 0,
+        ).unwrap().unwrap();
+        assert_eq!(closed.context_generation, 1752);
+        assert_eq!(closed.thread_id, old.thread_id);
+        assert!(!codex_continuity_waits_for_result(&closed));
+        let dir = tempfile::tempdir().unwrap();
+        let error = materialize_terminal_turn_error_payload(dir.path(), "output refused", Some(&closed),
+            serde_json::json!({"source_movement_seq":219250})).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&error.read_payload_bytes().unwrap()).unwrap();
+        let admitted: SessionContextArtifact = serde_json::from_value(session_artifact("closed-error", TURN_ERROR_LABEL, payload, 219596)).unwrap();
+        let recovered = recover_codex_continuity_from_current_session(
+            &[prior, admitted], std::slice::from_ref(&input.artifact), &descriptor.id,
+            "run-model-policy", &BTreeSet::from(["turn.agent_message".into(), TURN_ERROR_LABEL.into()]),
+        ).unwrap().unwrap();
+        validate_recovered_thread_coordinates(&recovered, &old.thread_shape_fingerprint, 1752, &old.static_context_fingerprint).unwrap();
+        assert!(validate_recovered_thread_coordinates(&old, &old.thread_shape_fingerprint, 1752, &old.static_context_fingerprint).is_err());
+    }
+
+    #[test]
     fn stale_or_unstructured_continuation_fails_closed() {
         let recovered = continuity("world_provider_codex", "run-a", "thr-exact", 7, None);
         assert!(
