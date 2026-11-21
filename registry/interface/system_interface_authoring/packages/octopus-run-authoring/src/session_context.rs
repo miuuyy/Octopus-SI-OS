@@ -805,17 +805,11 @@ pub(crate) fn reconcile_session_context_order(
 }
 
 pub(crate) fn merge_failed_source_context(
-    existing: &[SessionContextArtifact], recovered: &[SessionContextArtifact], source: u64,
+    existing: &[SessionContextArtifact], pinned: usize, recovered: &[SessionContextArtifact], source: u64,
     invocation_source: Option<u64>, rebase: &[ArtifactRef],
 ) -> Result<Vec<SessionContextArtifact>, String> {
-    let input_successor = invocation_source.filter(|sequence| *sequence != source).and_then(|sequence| {
-        existing.iter().position(|entry| entry.source_movement_seq == Some(sequence))
-            .and_then(|position| existing[position + 1..].iter().find(|entry| entry.source_movement_seq != Some(sequence)))
-            .map(|entry| entry.source_artifact.clone())
-    });
-    let (input, existing): (Vec<_>, Vec<_>) = existing.iter().cloned().partition(|entry| {
-        invocation_source.is_some_and(|sequence| sequence != source && entry.source_movement_seq == Some(sequence))
-    });
+    // The original source can already be covered by the published snapshot. Check
+    // the complete recovered evidence before excluding that immutable prefix.
     let source_ref = recovered.iter().find(|entry| entry.source_movement_seq == Some(source))
         .ok_or("recovered failed context has no exact original source entry")?.source_artifact.clone();
     let publications = recovered.iter().map(|entry| {
@@ -826,7 +820,34 @@ pub(crate) fn merge_failed_source_context(
         Ok((artifact_ref_key(&entry.source_artifact), BTreeSet::from([sequence])))
     }).collect::<Result<BTreeMap<_, _>, String>>()?;
     if publications.len() != recovered.len() { return Err("recovered failed history repeats an artifact".into()); }
-    let mut merged = recovered.to_vec();
+    let prefix = existing.get(..pinned).ok_or("failed context recovery lost its pinned prefix")?;
+    let positions = prefix.iter().enumerate().map(|(index, entry)| {
+        (artifact_ref_key(&entry.source_artifact), index)
+    }).collect::<BTreeMap<_, _>>();
+    if positions.len() != prefix.len() { return Err("pinned context repeats an artifact".into()); }
+    let mut last_pinned = None;
+    let mut merged = Vec::new();
+    for entry in recovered {
+        if let Some(index) = positions.get(&artifact_ref_key(&entry.source_artifact)).copied() {
+            if !session_context_entries_agree(&prefix[index], entry)
+                || last_pinned.is_some_and(|previous| previous >= index)
+            {
+                return Err("recovered failed history conflicts with the pinned snapshot prefix".into());
+            }
+            last_pinned = Some(index);
+        } else {
+            merged.push(entry.clone());
+        }
+    }
+    let existing = &existing[pinned..];
+    let input_successor = invocation_source.filter(|sequence| *sequence != source).and_then(|sequence| {
+        existing.iter().position(|entry| entry.source_movement_seq == Some(sequence))
+            .and_then(|position| existing[position + 1..].iter().find(|entry| entry.source_movement_seq != Some(sequence)))
+            .map(|entry| entry.source_artifact.clone())
+    });
+    let (input, existing): (Vec<_>, Vec<_>) = existing.iter().cloned().partition(|entry| {
+        invocation_source.is_some_and(|sequence| sequence != source && entry.source_movement_seq == Some(sequence))
+    });
     if !reconcile_session_context_order(&existing, &mut merged, &publications, &source_ref, true)? {
         merged = existing;
     }
@@ -842,7 +863,9 @@ pub(crate) fn merge_failed_source_context(
         merged.insert(input_position, entry);
         input_position += 1;
     }
-    Ok(merged)
+    let mut restored = prefix.to_vec();
+    restored.extend(merged);
+    Ok(restored)
 }
 
 pub(crate) fn unpublished_context_start(state: &HandoffState) -> Result<usize, String> {
