@@ -595,7 +595,13 @@ mod movement_gate {
                     &self.root.join("registry"), &ctx.interface,
                 ).unwrap().unwrap();
                 let [process] = launch.config.processes.as_slice() else { panic!("projection must declare one life process") };
-                assert_eq!(process.authority.write_root_slots, std::collections::BTreeSet::from(["interface_hand_in_root".into()]));
+                assert_eq!(
+                    process.authority.write_root_slots,
+                    std::collections::BTreeSet::from([
+                        "interface_hand_in_root".into(),
+                        "app_server_control_root".into(),
+                    ])
+                );
                 assert!(process.authority.allow_local_ipc);
                 assert!(!process.authority.allow_network);
                 let handles = serde_json::to_value(&process.read_handles).unwrap();

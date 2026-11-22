@@ -2513,7 +2513,15 @@ pub(crate) fn resolve_private_environment_owner_dir(
     let owner_interface = owner_dir
         .file_name()
         .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty() && name.trim() == *name && !name.contains('/'))
+        .filter(|name| {
+            !name.is_empty()
+                && name.trim() == *name
+                && *name != "."
+                && *name != ".."
+                && !name.contains('/')
+                && !name.contains('\\')
+                && !name.contains('\0')
+        })
         .ok_or_else(|| {
             format!(
                 "interface '{}' private_environment_root_slot '{}' path '{}' has no valid interface directory name",
@@ -2567,6 +2575,91 @@ pub(crate) fn resolve_private_environment_owner_dir(
         ));
     }
     Ok(Some((owner_dir.clone(), owner_interface)))
+}
+
+fn ensure_private_environment_owner_dir(
+    canonical_var_dir: &Path,
+    interface: &str,
+    root_slots: &BTreeMap<String, PathBuf>,
+    owner_slot: Option<&str>,
+) -> Result<(), String> {
+    let Some((_, owner_interface)) = resolve_private_environment_owner_dir(
+        canonical_var_dir,
+        interface,
+        root_slots,
+        owner_slot,
+    )?
+    else {
+        return Ok(());
+    };
+    if owner_interface == interface {
+        return Ok(());
+    }
+    let interfaces_root = canonical_var_dir.parent().ok_or_else(|| {
+        format!(
+            "interface '{}' private directory '{}' has no parent",
+            interface,
+            canonical_var_dir.display()
+        )
+    })?;
+    let owner_dir = interfaces_root.join(&owner_interface);
+    match std::fs::symlink_metadata(&owner_dir) {
+        Ok(metadata) => {
+            validate_private_environment_directory_metadata(&owner_dir, &metadata)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            let create_result = {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut builder = std::fs::DirBuilder::new();
+                builder.mode(0o700);
+                builder.create(&owner_dir)
+            };
+            #[cfg(not(unix))]
+            let create_result = std::fs::create_dir(&owner_dir);
+            match create_result {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(format!(
+                        "interface '{}' private environment owner dir '{}' cannot be created: {error}",
+                        interface,
+                        owner_dir.display()
+                    ));
+                }
+            }
+            let metadata = std::fs::symlink_metadata(&owner_dir).map_err(|error| {
+                format!(
+                    "interface '{}' private environment owner dir '{}' cannot be inspected: {error}",
+                    interface,
+                    owner_dir.display()
+                )
+            })?;
+            validate_private_environment_directory_metadata(&owner_dir, &metadata)?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "interface '{}' private environment owner dir '{}' cannot be inspected: {error}",
+                interface,
+                owner_dir.display()
+            ));
+        }
+    }
+    let canonical_owner = std::fs::canonicalize(&owner_dir).map_err(|error| {
+        format!(
+            "interface '{}' private environment owner dir '{}' cannot be canonicalized: {error}",
+            interface,
+            owner_dir.display()
+        )
+    })?;
+    if canonical_owner.parent() != Some(interfaces_root) {
+        return Err(format!(
+            "interface '{}' private environment owner dir '{}' escaped the selected Home interfaces directory",
+            interface,
+            owner_dir.display()
+        ));
+    }
+    Ok(())
 }
 
 pub fn read_private_environment_document(
@@ -2904,6 +2997,7 @@ pub fn spawn_process_life(
         let mut readiness = tokio::task::JoinSet::new();
         let process_cancel = ctx.cancel.child_token();
         let several_processes = config.processes.len() > 1;
+        let private_environment_root_slot = config.private_environment_root_slot.clone();
         for command in config.processes {
             let mut process_ctx = ctx.clone();
             process_ctx.cancel = process_cancel.clone();
@@ -2915,9 +3009,16 @@ pub fn spawn_process_life(
             });
             let ownership = ownership.clone();
             let environment = private_environment.clone();
+            let private_environment_root_slot = private_environment_root_slot.clone();
             processes.spawn(async move {
                 let _ownership = ownership;
-                spawn_process_command_life(process_ctx, command, environment).await
+                spawn_process_command_life(
+                    process_ctx,
+                    command,
+                    environment,
+                    private_environment_root_slot,
+                )
+                .await
             });
         }
         if processes.is_empty() {
@@ -2998,6 +3099,7 @@ fn spawn_process_command_life(
     ctx: InterfaceLiftContext,
     command_config: SpawnLifeCommand,
     private_environment: Arc<BTreeMap<String, String>>,
+    private_environment_root_slot: Option<String>,
 ) -> InterfaceLifeFuture {
     Box::pin(async move {
         let var_dir = ctx.interface_var_dir();
@@ -3019,6 +3121,12 @@ fn spawn_process_command_life(
                 var_dir.display()
             )
         })?;
+        ensure_private_environment_owner_dir(
+            &var_dir,
+            ctx.interface.as_str(),
+            &ctx.root_slots,
+            private_environment_root_slot.as_deref(),
+        )?;
         materialize_private_var_directories(&var_dir, &command_config.private_var_directories)?;
         let life_process_install_root = ctx.life_process_install_root()?;
         let (declared_program, executable_base) = resolve_executable_base(
@@ -5614,6 +5722,129 @@ mod tests {
     }
 
     #[test]
+    fn every_repository_life_local_ipc_socket_coordinate_slot_declares_write_authority() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let registry = repository.join("registry");
+        let interface_root = registry.join("interface");
+        let socket_slots = [
+            crate::APP_SERVER_CONTROL_ROOT_SLOT,
+            crate::INTERFACE_LOCAL_IPC_ROOT_SLOT,
+        ];
+        for entry in std::fs::read_dir(&interface_root).unwrap() {
+            let entry = entry.unwrap();
+            if !entry.file_type().unwrap().is_dir()
+                || !entry.path().join("interface.json").is_file()
+            {
+                continue;
+            }
+            let id = entry.file_name().into_string().unwrap();
+            let Some(resolved) = validate_spawn_life_config(&registry, &InterfaceId::new(&id))
+                .unwrap_or_else(|error| panic!("interface '{id}' life failed to resolve: {error}"))
+            else {
+                continue;
+            };
+            for process in &resolved.config.processes {
+                if !process.authority.allow_local_ipc {
+                    continue;
+                }
+                for slot in socket_slots {
+                    if process.coordinate_root_slots.contains(slot) {
+                        assert!(
+                            process.authority.write_root_slots.contains(slot),
+                            "interface '{id}' process '{}' declares allow_local_ipc and coordinate_root_slots '{slot}' without write_root_slots '{slot}' (required by Linux AppArmor pathname socket mediation)",
+                            process.bin
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_repository_life_codex_auth_env_resolves_when_auth_file_is_absent() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let registry = repository.join("registry");
+        let temp = tempfile::tempdir().unwrap();
+        let temp_root = std::fs::canonicalize(temp.path()).unwrap();
+        let run_records_root = temp_root.join("runs");
+        let hand_in_root = temp_root.join("hand-in");
+        let control_root = temp_root.join("control");
+        let interface_root = temp_root.join("registry-interface");
+        for dir in [&run_records_root, &hand_in_root, &control_root] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let codex_bin_dir = interface_root.join("world_provider_codex/packages/bin");
+        std::fs::create_dir_all(&codex_bin_dir).unwrap();
+        std::fs::write(codex_bin_dir.join("codex"), b"").unwrap();
+        std::fs::write(codex_bin_dir.join("codex-code-mode-host"), b"").unwrap();
+
+        let root_slots = BTreeMap::from([
+            ("run_records_root".to_string(), run_records_root),
+            ("interface_hand_in_root".to_string(), hand_in_root),
+            ("app_server_control_root".to_string(), control_root),
+            ("registry_interface_root".to_string(), interface_root),
+        ]);
+        let absent_auth = temp_root.join(".codex/auth.json");
+        let absent_lock = temp_root.join(".codex/auth.lock");
+        assert!(!absent_auth.exists());
+        let environment = BTreeMap::from([
+            (
+                "OCTOPUS_MACHINE_CODEX_AUTH_FILE".to_string(),
+                absent_auth.as_os_str().to_os_string(),
+            ),
+            (
+                "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE".to_string(),
+                absent_lock.as_os_str().to_os_string(),
+            ),
+        ]);
+
+        for id in [
+            "world_provider_realtime",
+            "world_provider_codex",
+            "world_provider_chatgpt",
+        ] {
+            let resolved_life = validate_spawn_life_config(&registry, &InterfaceId::new(id))
+                .unwrap_or_else(|error| panic!("interface '{id}' life failed to load: {error}"))
+                .unwrap_or_else(|| panic!("interface '{id}' has no life.json"));
+            for process in &resolved_life.config.processes {
+                let resolved = process
+                    .authority
+                    .resolve(
+                        &temp_root,
+                        &root_slots,
+                        &environment,
+                        std::iter::empty::<PathBuf>(),
+                        std::iter::empty::<PathBuf>(),
+                        std::iter::empty::<PathBuf>(),
+                        std::iter::empty::<PathBuf>(),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("interface '{id}' process '{}' failed to resolve with absent auth.json: {error}", process.bin)
+                    });
+                assert!(
+                    resolved.authority.readable().contains(&absent_auth),
+                    "interface '{id}' must retain read authority on absent auth.json"
+                );
+                assert!(
+                    resolved.authority.writable().contains(&absent_auth),
+                    "interface '{id}' must retain write authority on absent auth.json"
+                );
+                assert!(
+                    resolved.authority.writable().contains(&absent_lock),
+                    "interface '{id}' must retain write authority on absent auth.lock"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn optional_env_roots_grant_zero_authority_when_absent() {
         let root = tempfile::tempdir().unwrap();
         let optional = ProcessAuthoritySpec {
@@ -5648,6 +5879,109 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("REQUIRED_READ_ROOT"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_repository_life_keeps_macos_only_paths_and_commands_optional() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let registry = repository.join("registry");
+        let mut entries = std::fs::read_dir(registry.join("interface"))
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect::<Vec<_>>();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            if !entry.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let id = entry.file_name().into_string().unwrap();
+            let Some(resolved) = validate_spawn_life_config(&registry, &InterfaceId::new(&id))
+                .unwrap_or_else(|error| panic!("interface '{id}' life failed: {error}"))
+            else {
+                continue;
+            };
+            for process in &resolved.config.processes {
+                let auth = &process.authority;
+                for path in auth
+                    .read_paths
+                    .iter()
+                    .chain(&auth.write_paths)
+                    .chain(&auth.executable_paths)
+                {
+                    assert!(
+                        !path.starts_with("/System/Library")
+                            && !path.starts_with("/Library/")
+                            && !path.contains("octopus-desktop-native"),
+                        "interface '{id}' process '{}' declares macOS-only required path '{path}'; move it to an optional_* field",
+                        process.bin
+                    );
+                }
+                for subpath in &auth.executable_root_subpaths {
+                    assert!(
+                        !subpath.relative_path.contains("octopus-desktop-native"),
+                        "interface '{id}' process '{}' declares macOS-only required executable_root_subpaths '{}'",
+                        process.bin,
+                        subpath.relative_path
+                    );
+                }
+                assert!(
+                    !auth.executable_commands.contains("security"),
+                    "interface '{id}' process '{}' declares macOS-only required command 'security'; move it to optional_executable_commands",
+                    process.bin
+                );
+                for env_subpath in auth
+                    .read_env_subpaths
+                    .iter()
+                    .chain(&auth.write_env_subpaths)
+                    .chain(&auth.executable_env_subpaths)
+                {
+                    assert!(
+                        !env_subpath.relative_path.starts_with("Library/"),
+                        "interface '{id}' process '{}' declares macOS-only required env subpath '{}'; move it to optional_read_env_subpaths",
+                        process.bin,
+                        env_subpath.relative_path
+                    );
+                }
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let temp_root = std::fs::canonicalize(temp.path()).unwrap();
+        let kind_root = temp_root.join("kinds");
+        let prefs_root = temp_root.join("prefs");
+        let lock_root = temp_root.join("lock");
+        for dir in [&kind_root, &prefs_root, &lock_root] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let resolved_life =
+            validate_spawn_life_config(&registry, &InterfaceId::new("system_gui"))
+                .unwrap()
+                .expect("system_gui life.json");
+        let desktop_host = &resolved_life.config.processes[1];
+        let slots = BTreeMap::from([
+            (
+                "registry_worker_environment_kind_root".to_string(),
+                kind_root,
+            ),
+            ("desktop_app_preferences_root".to_string(), prefs_root),
+            ("desktop_device_lock_root".to_string(), lock_root),
+        ]);
+        desktop_host
+            .authority
+            .resolve(
+                &temp_root,
+                &slots,
+                &BTreeMap::new(),
+                std::iter::empty::<PathBuf>(),
+                std::iter::empty::<PathBuf>(),
+                std::iter::empty::<PathBuf>(),
+                std::iter::empty::<PathBuf>(),
+            )
+            .expect("system_gui octopus-desktop-host resolves cleanly without octopus-desktop-native");
     }
 
     #[test]
@@ -5747,5 +6081,110 @@ mod tests {
         ctx.root_slots.clear();
         assert!(read_interface_private_environment(&ctx, &declared, slot)
             .unwrap_err().contains("is unbound"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_environment_owner_dir_materializes_absent_owner_and_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut ctx = ctx(root.path(), "world_provider_opencode_go_clone");
+        let clone_dir = ctx.interface_var_dir();
+        std::fs::create_dir_all(&clone_dir).unwrap();
+        std::fs::set_permissions(&clone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let canonical_clone_dir = std::fs::canonicalize(&clone_dir).unwrap();
+        let owner_dir = clone_dir
+            .parent()
+            .unwrap()
+            .join("world_provider_opencode_go");
+        let slot = Some("provider_secret_owner_root");
+        ctx.root_slots
+            .insert(slot.unwrap().to_string(), owner_dir.clone());
+        assert!(!owner_dir.exists(), "owner directory starts absent before provider step");
+
+        let declared = BTreeSet::from(["OPENCODE_API_KEY".to_string()]);
+        let empty_env = read_interface_private_environment(&ctx, &declared, slot).unwrap();
+        assert!(empty_env.is_empty());
+        let before_fingerprint = interface_private_environment_source_fingerprint_with_owner(
+            &clone_dir,
+            ctx.interface.as_str(),
+            &ctx.root_slots,
+            slot,
+        )
+        .unwrap();
+
+        ensure_private_environment_owner_dir(
+            &canonical_clone_dir,
+            ctx.interface.as_str(),
+            &ctx.root_slots,
+            slot,
+        )
+        .expect("absent owner directory under Home interfaces is materialized with 0700");
+        let owner_meta = std::fs::symlink_metadata(&owner_dir).unwrap();
+        assert!(owner_meta.is_dir() && !owner_meta.file_type().is_symlink());
+        assert_eq!(owner_meta.permissions().mode() & 0o077, 0);
+
+        ProcessAuthoritySpec {
+            read_root_slots: BTreeSet::from([slot.unwrap().to_string()]),
+            ..ProcessAuthoritySpec::default()
+        }
+        .resolve(
+            root.path(),
+            &ctx.root_slots,
+            &BTreeMap::new(),
+            std::iter::empty::<PathBuf>(),
+            std::iter::empty::<PathBuf>(),
+            std::iter::empty::<PathBuf>(),
+            std::iter::empty::<PathBuf>(),
+        )
+        .expect("read_root_slots resolves cleanly once owner dir is materialized");
+
+        let env_path = owner_dir.join("environment.json");
+        std::fs::write(
+            &env_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "interface": "world_provider_opencode_go",
+                "values": { "OPENCODE_API_KEY": "test-key" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let after_fingerprint = interface_private_environment_source_fingerprint_with_owner(
+            &clone_dir,
+            ctx.interface.as_str(),
+            &ctx.root_slots,
+            slot,
+        )
+        .unwrap();
+        assert_ne!(before_fingerprint, after_fingerprint);
+        let loaded = read_interface_private_environment(&ctx, &declared, slot).unwrap();
+        assert_eq!(loaded.get("OPENCODE_API_KEY").map(String::as_str), Some("test-key"));
+
+        std::fs::set_permissions(&owner_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(ensure_private_environment_owner_dir(
+            &canonical_clone_dir,
+            ctx.interface.as_str(),
+            &ctx.root_slots,
+            slot,
+        )
+        .unwrap_err()
+        .contains("not owner-only"));
+        std::fs::set_permissions(&owner_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let outside_owner = root.path().join("outside/world_provider_opencode_go");
+        ctx.root_slots
+            .insert(slot.unwrap().to_string(), outside_owner.clone());
+        assert!(ensure_private_environment_owner_dir(
+            &canonical_clone_dir,
+            ctx.interface.as_str(),
+            &ctx.root_slots,
+            slot,
+        )
+        .unwrap_err()
+        .contains("outside the selected Home interfaces directory"));
+        assert!(!outside_owner.exists());
     }
 }

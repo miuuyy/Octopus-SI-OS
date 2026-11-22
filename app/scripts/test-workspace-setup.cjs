@@ -1995,10 +1995,19 @@ async function verifyCapabilityPreferenceSetup() {
   const browser = require("../../registry/worker_environment_kind/browser_session/packages/octopus-browser-session-env/native/setup-host.cjs");
   const desktop = require("../../registry/worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native/setup-preferences.cjs");
   const userHome = process.env.HOME;
+  const xdgStateHome = process.env.XDG_STATE_HOME;
   try {
-    process.env.HOME = root;
-    await fs.mkdir(path.join(root, "Library", "Application Support"), { recursive: true });
+    delete process.env.XDG_STATE_HOME;
     for (const fail of [false, true]) {
+      const userRoot = path.join(root, fail ? "user-rollback" : "user-complete");
+      await fs.mkdir(userRoot, { recursive: true });
+      process.env.HOME = userRoot;
+      if (process.platform === "darwin") {
+        await fs.mkdir(path.join(userRoot, "Library", "Application Support"), { recursive: true });
+      }
+      const expectedDeviceLock = process.platform === "darwin"
+        ? path.join(userRoot, "Library/Application Support/Octopus/desktop-device")
+        : path.join(userRoot, ".local/state/Octopus/desktop-device");
       const home = path.join(root, fail ? "rollback" : "complete"), registry = path.join(home, "registry");
       await createFixture(home, registry);
       const original = `${JSON.stringify({ host_manifest_version:1,root_refs:{ retained_root:root } })}\n`;
@@ -2028,7 +2037,7 @@ async function verifyCapabilityPreferenceSetup() {
           const plan=await desktop.planDesktopApplicationPreferences({...input,plannedWrites:[nullPreferences,...input.plannedWrites]});
           const host=JSON.parse(plan.writes[0].content);assert.equal(host.root_refs.browser_native_host_root,path.join(home,'client/browser-native-host'));
           assert.equal(host.root_refs.desktop_app_preferences_root,path.join(home,'client/desktop-app-preferences'));assert.equal(host.root_refs.retained_root,root);
-          assert.equal(host.root_refs.desktop_device_lock_root,path.join(root,'Library/Application Support/Octopus/desktop-device'));
+          assert.equal(host.root_refs.desktop_device_lock_root,expectedDeviceLock);
           return {...plan,writes:plan.writes.map(row=>({...row,expectedBeforeDigest:fail?'0'.repeat(64):row.expectedBeforeDigest})),rollback:async()=>{rollback.push('desktop');await plan.rollback();}};
         },
       };
@@ -2036,6 +2045,8 @@ async function verifyCapabilityPreferenceSetup() {
         await assert.rejects(initializeWorkspace(options),/invalid merged host manifest plan/);
         assert.deepEqual(rollback,['desktop','browser']);assert.equal(await fs.readFile(path.join(home,'host.json'),'utf8'),original);
         for (const name of ['browser-native-host','desktop-app-preferences']) await assert.rejects(fs.access(path.join(home,'client',name)), {code:'ENOENT'});
+        await assert.rejects(fs.access(expectedDeviceLock), {code:'ENOENT'});
+        if (process.platform !== "darwin") await assert.rejects(fs.access(path.join(userRoot, ".local")), {code:'ENOENT'});
         assert.equal((await fs.stat(path.join(home,'client','agents'))).isDirectory(),true,'shared Agent setup is preserved');
       }else{
         const outcome=await initializeWorkspace(options);assert.equal((await readWorkspaceSetupState(options)).status,'configured');
@@ -2045,8 +2056,19 @@ async function verifyCapabilityPreferenceSetup() {
         assert.ok(outcome.homeRunId);
       }
     }
+    const xdgBase = path.join(root, "xdg-state");
+    await fs.mkdir(xdgBase, { recursive: true });
+    const xdgLayout = await desktop.resolveDeviceLockLayout({ platform: "linux", env: { XDG_STATE_HOME: xdgBase }, homedir: root });
+    assert.equal(xdgLayout.deviceLock, path.join(xdgBase, "Octopus/desktop-device"));
+    const defaultLinuxLayout = await desktop.resolveDeviceLockLayout({ platform: "linux", env: {}, homedir: root });
+    assert.equal(defaultLinuxLayout.deviceLock, path.join(root, ".local/state/Octopus/desktop-device"));
     console.log('Capability preference setup: actual two helpers merge one host write, preserve original roots, and roll back both lifetimes before publication');
-  } finally {process.env.HOME = userHome; await fs.rm(root,{recursive:true,force:true});}
+  } finally {
+    process.env.HOME = userHome;
+    if (xdgStateHome === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = xdgStateHome;
+    await fs.rm(root,{recursive:true,force:true});
+  }
 }
 
 async function verifyRetiredConsentSetup() {

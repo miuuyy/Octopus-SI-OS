@@ -20,12 +20,38 @@ pub type Execution<'a> = Pin<Box<dyn Future<Output = Result<Value, String>> + Se
 mod host_connection_tests;
 
 pub trait DesktopExecutor: Send + Sync {
+    fn is_available(&self) -> bool {
+        true
+    }
     fn retained_process_id<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<u32, String>> + Send + 'a>> {
         Box::pin(async { Err("native presentation requires an existing retained process".into()) })
     }
     fn execute<'a>(&'a self, action: Value) -> Execution<'a>;
     fn shutdown<'a>(&'a self) -> Execution<'a> {
         Box::pin(async { Ok(json!({})) })
+    }
+}
+
+struct UnavailableNativeExecutor;
+
+impl DesktopExecutor for UnavailableNativeExecutor {
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn execute<'a>(&'a self, action: Value) -> Execution<'a> {
+        Box::pin(async move {
+            if action["type"] == "status" {
+                return Ok(json!({
+                    "permissions": {
+                        "screen_capture": false,
+                        "accessibility": false
+                    },
+                    "screens": []
+                }));
+            }
+            Err("desktop native helper is unavailable on this platform".into())
+        })
     }
 }
 
@@ -1410,7 +1436,11 @@ impl DesktopHost {
             .map_err(|_| "desktop control lock poisoned")?
             .control
             .clone();
-        let status = if control.mode == "stopped" { "stopped" } else {
+        let status = if !self.executor.is_available() {
+            "unavailable"
+        } else if control.mode == "stopped" {
+            "stopped"
+        } else {
             match self.application_preferences.as_deref()
                 .map(crate::app_authorization::computer_use_enabled).transpose()? {
                 None => "unavailable",
@@ -1503,7 +1533,10 @@ pub async fn run_desktop_host() -> Result<(), String> {
         Ok::<PathBuf, String>(path.clone())
     }).transpose()?;
     let device_lock = host.device_lock.resolve(&roots)?;
-    let native = resolve_member(kinds, &host.native_program)?;
+    #[cfg(target_os = "macos")]
+    let native = Some(resolve_member(kinds, &host.native_program)?);
+    #[cfg(not(target_os = "macos"))]
+    let native = resolve_optional_member(kinds, &host.native_program)?;
     let instructions = host.application_behavior.instruction_resource.read(kinds)?;
     let private = PathBuf::from(
         std::env::var("OCTOPUS_VAR_DIR").map_err(|_| "desktop host has no private directory")?,
@@ -1530,22 +1563,30 @@ pub async fn run_desktop_host() -> Result<(), String> {
     .map_err(|e| format!("desktop host bind failed: {e}"))?;
     let address = listener.local_addr().map_err(|_| "desktop native bound address unavailable")?;
     let device_file = Arc::new(open_device_file(&device_lock)?);
+    let executor: Arc<dyn DesktopExecutor> = match native {
+        Some(native) => Arc::new({
+            let executor = crate::native_client::NativeExecutor::new(
+                native,
+                config.max_response_bytes,
+                config.timeout(),
+            )
+            .with_device_file(device_file.clone())?
+            .with_application_behavior(host.application_behavior.clone())?
+            .with_application_instructions(instructions)?
+            .with_application_policy(host.application_policy.clone())?;
+            match host.native_sandbox_mode {
+                octopus_descriptors::ProcessSandboxMode::Enforced => executor.with_sandbox(
+                    resolve_member(kinds, &host.native_sandbox_profile)?,
+                    state.clone(),
+                )?,
+                octopus_descriptors::ProcessSandboxMode::Disabled => executor,
+            }
+        }),
+        None => Arc::new(UnavailableNativeExecutor),
+    };
     let host = Arc::new(
         DesktopHost::with_device_file(
-            Arc::new({
-                let executor = crate::native_client::NativeExecutor::new(
-                    native,
-                    config.max_response_bytes,
-                    config.timeout(),
-                ).with_device_file(device_file.clone())?.with_application_behavior(host.application_behavior.clone())?
-                    .with_application_instructions(instructions)?.with_application_policy(host.application_policy.clone())?;
-                match host.native_sandbox_mode {
-                    octopus_descriptors::ProcessSandboxMode::Enforced => executor.with_sandbox(
-                        resolve_member(kinds, &host.native_sandbox_profile)?, state.clone(),
-                    )?,
-                    octopus_descriptors::ProcessSandboxMode::Disabled => executor,
-                }
-            }),
+            executor,
             state,
             device_file,
         )?
@@ -1600,6 +1641,23 @@ fn resolve_member(root: &Path, member: &str) -> Result<PathBuf, String> {
         return Err("desktop native helper escapes its declared owner".into());
     }
     Ok(candidate)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn resolve_optional_member(root: &Path, member: &str) -> Result<Option<PathBuf>, String> {
+    let joined = resolve_new_member(root, member)?;
+    match std::fs::symlink_metadata(&joined) {
+        Ok(_) => resolve_member(root, member).map(Some),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(format!("desktop native helper unavailable: {error}")),
+    }
 }
 
 fn resolve_new_member(root: &Path, member: &str) -> Result<PathBuf, String> {
@@ -1783,3 +1841,59 @@ fn presentation_deadline(timeout: std::time::Duration) -> Result<u64, String> {
 }
 #[cfg(not(target_os = "macos"))]
 fn presentation_deadline(_: std::time::Duration) -> Result<u64, String> { Err("native presentation requires macOS".into()) }
+
+#[cfg(test)]
+mod unavailable_executor_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unavailable_native_executor_reports_unavailable_status_and_fails_closed_on_actions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = temp.path().join("state");
+        let host = DesktopHost::new(Arc::new(UnavailableNativeExecutor), state).expect("host");
+
+        let status_response = host
+            .handle(
+                Request {
+                    schema_version: protocol::VERSION,
+                    worker_environment_id: "env-linux".into(),
+                    request_id: "req-status".into(),
+                    tool: "gui.status".into(),
+                    action: json!({"type": "status"}),
+                },
+                false,
+            )
+            .await;
+        assert!(status_response.accepted, "status should succeed: {status_response:?}");
+        let evidence = status_response.evidence.expect("status evidence");
+        assert_eq!(evidence.status, "unavailable");
+        assert!(!evidence.permissions.screen_capture);
+        assert!(!evidence.permissions.accessibility);
+        assert!(evidence.screens.is_empty());
+
+        let pause_response = host
+            .handle(
+                Request {
+                    schema_version: protocol::VERSION,
+                    worker_environment_id: "env-linux".into(),
+                    request_id: "req-pause".into(),
+                    tool: "operator.desktop".into(),
+                    action: json!({"type": "pause_view"}),
+                },
+                true,
+            )
+            .await;
+        assert!(!pause_response.accepted);
+        assert!(
+            pause_response
+                .error
+                .as_ref()
+                .is_some_and(|e| e.message.contains("unavailable on this platform")),
+            "expected fail-closed error: {pause_response:?}"
+        );
+
+        let missing = resolve_optional_member(temp.path(), "native/bin/octopus-desktop-native")
+            .expect("missing helper returns None");
+        assert!(missing.is_none());
+    }
+}

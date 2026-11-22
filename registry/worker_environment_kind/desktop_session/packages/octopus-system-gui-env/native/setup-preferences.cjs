@@ -36,6 +36,59 @@ async function directoryState(directory, privateMode) {
   return stat;
 }
 
+async function existingAncestor(target) {
+  let cursor = target;
+  while (true) {
+    try {
+      await fs.lstat(cursor);
+      return cursor;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) throw error;
+      cursor = parent;
+    }
+  }
+}
+
+function intermediateDirectories(ancestor, target) {
+  const relative = path.relative(ancestor, target);
+  if (!relative || relative === '.') return [];
+  const segments = relative.split(path.sep);
+  if (segments.some(segment => !segment || segment === '.' || segment === '..')) {
+    throw new Error('Desktop preference setup requires a canonical state directory');
+  }
+  const directories = [];
+  let cursor = ancestor;
+  for (const segment of segments) {
+    cursor = path.join(cursor, segment);
+    directories.push(cursor);
+  }
+  return directories;
+}
+
+async function resolveDeviceLockLayout({ platform = process.platform, env = process.env, homedir = os.homedir() } = {}) {
+  if (platform === 'darwin') {
+    const userSupport = path.join(homedir, 'Library', 'Application Support');
+    const deviceLockParent = path.join(userSupport, 'Octopus');
+    const deviceLock = path.join(deviceLockParent, 'desktop-device');
+    return { anchor: userSupport, directories: [deviceLockParent, deviceLock], deviceLock };
+  }
+  const rawXdgState = env?.XDG_STATE_HOME;
+  const hasAbsoluteXdg = typeof rawXdgState === 'string' && rawXdgState.length > 0
+    && !rawXdgState.includes('\0') && path.isAbsolute(rawXdgState);
+  if (hasAbsoluteXdg) {
+    const normalized = path.normalize(rawXdgState);
+    const stateBase = normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+    const deviceLock = path.join(stateBase, 'Octopus', 'desktop-device');
+    const anchor = await existingAncestor(stateBase);
+    return { anchor, directories: intermediateDirectories(anchor, deviceLock), deviceLock };
+  }
+  const stateBase = path.join(homedir, '.local', 'state');
+  const deviceLock = path.join(stateBase, 'Octopus', 'desktop-device');
+  return { anchor: homedir, directories: intermediateDirectories(homedir, deviceLock), deviceLock };
+}
+
 async function readHost(hostPath) {
   const handle = await fs.open(hostPath, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -64,7 +117,13 @@ function hostValue(bytes) {
   return value;
 }
 
-async function planDesktopApplicationPreferences({ octopusHomeRoot, plannedWrites }) {
+async function planDesktopApplicationPreferences({
+  octopusHomeRoot,
+  plannedWrites,
+  platform = process.platform,
+  env = process.env,
+  homedir = os.homedir(),
+}) {
   const created = [];
   async function rollback() {
     for (const entry of [...created].reverse()) {
@@ -117,14 +176,12 @@ async function planDesktopApplicationPreferences({ octopusHomeRoot, plannedWrite
       }
     }
     host.root_refs[SLOT] = preferences;
-    const userSupport = path.join(os.homedir(), 'Library', 'Application Support');
-    await directoryState(userSupport, false);
-    const deviceLockParent = path.join(userSupport, 'Octopus');
-    const deviceLock = path.join(deviceLockParent, 'desktop-device');
+    const { anchor, directories, deviceLock } = await resolveDeviceLockLayout({ platform, env, homedir });
+    await directoryState(anchor, false);
     if (Object.hasOwn(host.root_refs, DEVICE_LOCK_SLOT) && host.root_refs[DEVICE_LOCK_SLOT] !== deviceLock) {
       throw new Error('The desktop device lock already has a different explicit root; setup cannot relocate it');
     }
-    for (const directory of [deviceLockParent, deviceLock]) {
+    for (const directory of directories) {
       try { await directoryState(directory, directory === deviceLock); }
       catch (error) {
         if (error.code !== 'ENOENT') throw error;
@@ -180,4 +237,10 @@ async function writeComputerUsePreference(root, enabled) {
   } finally { await fs.rm(temporary, { force: true }); }
 }
 
-module.exports = { planDesktopApplicationPreferences, needsDesktopApplicationPreferences, readComputerUsePreference, writeComputerUsePreference };
+module.exports = {
+  planDesktopApplicationPreferences,
+  needsDesktopApplicationPreferences,
+  readComputerUsePreference,
+  writeComputerUsePreference,
+  resolveDeviceLockLayout,
+};

@@ -1063,12 +1063,14 @@ fn validate_request(request: &RunCompositionRequest) -> Result<(), String> {
     }
     for (name, value) in [
         ("identity_seed", &request.identity_seed),
-        ("model", &request.model),
         ("seed.label", &request.seed.label),
     ] {
         if value.is_empty() || value.trim() != value || value.contains(['\r', '\n', '\0']) {
             return Err(format!("{name} must be a non-empty exact string"));
         }
+    }
+    if request.model.trim() != request.model || request.model.contains(['\r', '\n', '\0']) {
+        return Err("model must be an exact string".into());
     }
     if request.reasoning_effort.trim() != request.reasoning_effort
         || request.reasoning_effort.contains(['\r', '\n', '\0'])

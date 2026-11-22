@@ -27,7 +27,14 @@ type ProviderSpec = {
   key?: { env: string; label: string; header?: string; prefix?: string };
   base_url?: { env: string; label: string };
   model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
-  cli?: { commands: string[]; env: string[]; home_read: string[]; home_write: string[] };
+  cli?: {
+    commands: string[];
+    optional_commands?: string[];
+    env: string[];
+    home_read: string[];
+    optional_home_read?: string[];
+    home_write: string[];
+  };
   account?: { provider: string; client_module: string; disclosure: string[] };
   endpoint?: string;
   models?: Array<{ slug: string; display_name: string; context_window?: number; input_modalities?: string[]; efforts: Effort[]; default_effort?: Effort }>;
@@ -339,7 +346,16 @@ function life(spec: ProviderSpec, template: any) {
     if (spec.cli) {
       process.inherit_env = [...process.inherit_env, ...spec.cli.env.filter((name) => !process.inherit_env.includes(name))];
       authority.executable_commands = [...authority.executable_commands, ...spec.cli.commands];
+      if (spec.cli.optional_commands?.length) {
+        authority.optional_executable_commands = [...(authority.optional_executable_commands ?? []), ...spec.cli.optional_commands];
+      }
       authority.read_env_subpaths = [...authority.read_env_subpaths, ...spec.cli.home_read.map((relative_path) => ({ env: "HOME", relative_path }))];
+      if (spec.cli.optional_home_read?.length) {
+        authority.optional_read_env_subpaths = [
+          ...(authority.optional_read_env_subpaths ?? []),
+          ...spec.cli.optional_home_read.map((relative_path) => ({ env: "HOME", relative_path })),
+        ];
+      }
       authority.write_env_subpaths = [...(authority.write_env_subpaths ?? []), ...spec.cli.home_write.map((relative_path) => ({ env: "HOME", relative_path }))];
     }
   }

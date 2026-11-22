@@ -83,8 +83,10 @@
       "cli": {
         "commands": [
           "claude",
-          "security",
           "sh"
+        ],
+        "optional_commands": [
+          "security"
         ],
         "env": [
           "HOME",
@@ -94,7 +96,9 @@
         ],
         "home_read": [
           ".claude",
-          ".claude.json",
+          ".claude.json"
+        ],
+        "optional_home_read": [
           "Library/Keychains"
         ],
         "home_write": [
@@ -521,8 +525,8 @@
         "label": "OpenCode Go API key"
       },
       "models": [
-        {"context_window": 1048576, "default_effort": "none", "display_name": "Hy4 flash Free", "efforts": ["none", "high"], "input_modalities": ["image", "text"], "slug": "hy4-flash-free"},
         {"context_window": 1048576, "default_effort": "low", "display_name": "Beam Free", "efforts": ["low", "medium", "high", "xhigh", "max"], "input_modalities": ["text"], "slug": "beam-free"},
+        {"context_window": 1048576, "default_effort": "none", "display_name": "Hy4 flash Free", "efforts": ["none", "high"], "input_modalities": ["image", "text"], "slug": "hy4-flash-free"},
         {"context_window": 1000000, "default_effort": "low", "display_name": "GLM-5.3-Flash", "efforts": ["low", "high", "max"], "input_modalities": ["image", "text"], "slug": "glm-5.3-flash"},
         {"context_window": 1000000, "default_effort": "low", "display_name": "GLM-5.3", "efforts": ["low", "high", "max"], "input_modalities": ["text"], "slug": "glm-5.3"},
         {"context_window": 1048576, "default_effort": "max", "display_name": "Kimi K3.1 Pro", "efforts": ["low", "high", "max"], "input_modalities": ["image", "text"], "slug": "kimi-k3.1-pro"}

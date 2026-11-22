@@ -1327,6 +1327,39 @@ impl RunAffordances {
                 ids
             }
         };
+        let provider_interface_id = match args.provider_interface_id {
+            Some(provider) => {
+                exact_string(&provider, "provider_interface_id")?;
+                provider
+            }
+            None => defaults.provider_interface_id.clone(),
+        };
+        let same_provider = provider_interface_id == defaults.provider_interface_id;
+        let model = match args.model {
+            Some(model) => {
+                exact_string(&model, "model")?;
+                model
+            }
+            None if same_provider => defaults.model.clone(),
+            None => String::new(),
+        };
+        let same_model = same_provider && model == defaults.model;
+        let reasoning_effort = match args.reasoning_effort {
+            Some(effort) => {
+                exact_string(&effort, "reasoning_effort")?;
+                effort
+            }
+            None if same_model => defaults.reasoning_effort.clone(),
+            None => String::new(),
+        };
+        let service_tier = match args.service_tier {
+            Some(tier) => {
+                exact_string(&tier, "service_tier")?;
+                Some(tier)
+            }
+            None if same_provider => defaults.service_tier.clone(),
+            None => None,
+        };
         Ok(RunCompositionRequest {
             roots: self
                 .config
@@ -1340,14 +1373,10 @@ impl RunAffordances {
             worker_template_interface_id: args
                 .worker_template_interface_id
                 .unwrap_or_else(|| defaults.worker_template_interface_id.clone()),
-            provider_interface_id: args
-                .provider_interface_id
-                .unwrap_or_else(|| defaults.provider_interface_id.clone()),
-            model: args.model.unwrap_or_else(|| defaults.model.clone()),
-            reasoning_effort: args
-                .reasoning_effort
-                .unwrap_or_else(|| defaults.reasoning_effort.clone()),
-            service_tier: args.service_tier.or_else(|| defaults.service_tier.clone()),
+            provider_interface_id,
+            model,
+            reasoning_effort,
+            service_tier,
             authoring: defaults.authoring.clone(),
             communication: CompositionCommunication {
                 client_template_interface_id: args.client_interface_id.is_none()

@@ -30,9 +30,13 @@ export interface ProcessAuthoritySpec {
   executable_paths: string[];
   executable_root_slots: string[];
   executable_root_subpaths?: ProcessRootSubpathSpec[];
+  optional_executable_commands?: string[];
   optional_executable_paths?: string[];
   optional_executable_root_slots?: string[];
+  optional_executable_root_subpaths?: ProcessRootSubpathSpec[];
   optional_read_env_paths?: string[];
+  optional_read_env_subpaths?: ProcessEnvironmentSubpathSpec[];
+  optional_read_paths?: string[];
   optional_read_root_slots?: string[];
   optional_write_env_paths?: string[];
   optional_write_root_slots?: string[];

@@ -285,7 +285,7 @@ jobs:
           cargo nextest run --locked -p octopus-policy -p octopus-ledger-index -p octopus-runtime -p octopus-operator-chat-client -p octopus-model-context-render -p octopus-file-storage --lib --test instructions --test gate_trace_properties -E 'package(octopus-policy) | package(octopus-ledger-index) | package(octopus-runtime) | binary(instructions) | (package(octopus-operator-chat-client) & (test(real_registry_home_plan_exports_authoring_and_exact_policy_requirements) | test(real_registry_self_improvement_ee_admits_the_default_task))) | (package(octopus-file-storage) & test(/^publication::tests::/))'
 
       - name: Interface executable freshness and receipt checks
-        run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_) | test(private_env)'
+        run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_) | test(private_env) | test(every_repository_life_)'
 
       - name: Ledger readers wake on changes, not on their own reads
         run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources)'

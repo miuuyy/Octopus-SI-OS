@@ -41,7 +41,8 @@
           "registry_interface_root"
         ],
         "write_root_slots": [
-          "interface_hand_in_root"
+          "interface_hand_in_root",
+          "app_server_control_root"
         ],
         "executable_root_slots": [],
         "read_paths": [
@@ -67,7 +68,6 @@
         ],
         "executable_commands": [
           "claude",
-          "security",
           "sh"
         ],
         "read_env_paths": [],
@@ -81,14 +81,19 @@
           {
             "env": "HOME",
             "relative_path": ".claude.json"
-          },
+          }
+        ],
+        "allow_network": true,
+        "allow_local_ipc": true,
+        "optional_executable_commands": [
+          "security"
+        ],
+        "optional_read_env_subpaths": [
           {
             "env": "HOME",
             "relative_path": "Library/Keychains"
           }
         ],
-        "allow_network": true,
-        "allow_local_ipc": true,
         "write_env_subpaths": [
           {
             "env": "HOME",

@@ -2045,9 +2045,13 @@
         .expect("exact provider life parses");
         assert!(life.processes.iter().all(|process| {
             process
-                .authority
-                .read_env_paths
-                .contains("OCTOPUS_MACHINE_CODEX_AUTH_FILE")
+                .inherit_env
+                .iter()
+                .any(|name| name == "OCTOPUS_MACHINE_CODEX_AUTH_FILE")
+                && !process
+                    .authority
+                    .read_env_paths
+                    .contains("OCTOPUS_MACHINE_CODEX_AUTH_FILE")
                 && process
                     .authority
                     .write_env_paths

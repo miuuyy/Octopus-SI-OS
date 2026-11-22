@@ -26,8 +26,8 @@
       "models": {
         "reduce": "intersection",
         "default": [
-          "hy4-flash-free",
           "beam-free",
+          "hy4-flash-free",
           "glm-5.3-flash",
           "glm-5.3",
           "kimi-k3.1-pro",
@@ -2393,33 +2393,6 @@
       },
       "model_catalog": [
         {
-          "model": "hy4-flash-free",
-          "display_name": "Hy4 flash Free",
-          "description": "Hy4 flash Free through OpenCode Go.",
-          "context_window": 1048576,
-          "input_modalities": [
-            "image",
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
-          "supports_tools": true,
-          "supports_reasoning": true,
-          "default_reasoning_effort": "none",
-          "supported_reasoning_efforts": [
-            {
-              "effort": "none",
-              "description": "No reasoning"
-            },
-            {
-              "effort": "high",
-              "description": "Greater reasoning depth for complex problems"
-            }
-          ],
-          "show_in_picker": true
-        },
-        {
           "model": "beam-free",
           "display_name": "Beam Free",
           "description": "Beam Free through OpenCode Go.",
@@ -2453,6 +2426,33 @@
             {
               "effort": "max",
               "description": "Maximum reasoning depth for the hardest problems"
+            }
+          ],
+          "show_in_picker": true
+        },
+        {
+          "model": "hy4-flash-free",
+          "display_name": "Hy4 flash Free",
+          "description": "Hy4 flash Free through OpenCode Go.",
+          "context_window": 1048576,
+          "input_modalities": [
+            "image",
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": true,
+          "default_reasoning_effort": "none",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "none",
+              "description": "No reasoning"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
             }
           ],
           "show_in_picker": true
@@ -2594,8 +2594,8 @@
         "max_limit": 100,
         "include_hidden": false
       },
-      "model": "hy4-flash-free",
-      "reasoning_effort": "none",
+      "model": "beam-free",
+      "reasoning_effort": "low",
       "reasoning_summary": "auto",
       "private_thread_cold_start": "resume_compatible",
       "model_result_projection": {
@@ -2740,45 +2740,6 @@
         "model_catalog": {
           "models": [
             {
-              "slug": "hy4-flash-free",
-              "display_name": "Hy4 flash Free",
-              "description": "Hy4 flash Free through OpenCode Go.",
-              "default_reasoning_level": "none",
-              "supported_reasoning_levels": [
-                {
-                  "effort": "none",
-                  "description": "No reasoning"
-                },
-                {
-                  "effort": "high",
-                  "description": "Greater reasoning depth for complex problems"
-                }
-              ],
-              "shell_type": "shell_command",
-              "visibility": "list",
-              "supported_in_api": true,
-              "priority": 0,
-              "base_instructions": "",
-              "supports_reasoning_summaries": true,
-              "default_reasoning_summary": "auto",
-              "support_verbosity": false,
-              "truncation_policy": {
-                "mode": "tokens",
-                "limit": 10000
-              },
-              "supports_parallel_tool_calls": false,
-              "context_window": 400000,
-              "max_context_window": 1048576,
-              "effective_context_window_percent": 95,
-              "experimental_supported_tools": [],
-              "input_modalities": [
-                "image",
-                "text"
-              ],
-              "supports_search_tool": false,
-              "use_responses_lite": false
-            },
-            {
               "slug": "beam-free",
               "display_name": "Beam Free",
               "description": "Beam Free through OpenCode Go.",
@@ -2808,6 +2769,44 @@
               "shell_type": "shell_command",
               "visibility": "list",
               "supported_in_api": true,
+              "priority": 0,
+              "base_instructions": "",
+              "supports_reasoning_summaries": true,
+              "default_reasoning_summary": "auto",
+              "support_verbosity": false,
+              "truncation_policy": {
+                "mode": "tokens",
+                "limit": 10000
+              },
+              "supports_parallel_tool_calls": false,
+              "context_window": 400000,
+              "max_context_window": 1048576,
+              "effective_context_window_percent": 95,
+              "experimental_supported_tools": [],
+              "input_modalities": [
+                "text"
+              ],
+              "supports_search_tool": false,
+              "use_responses_lite": false
+            },
+            {
+              "slug": "hy4-flash-free",
+              "display_name": "Hy4 flash Free",
+              "description": "Hy4 flash Free through OpenCode Go.",
+              "default_reasoning_level": "none",
+              "supported_reasoning_levels": [
+                {
+                  "effort": "none",
+                  "description": "No reasoning"
+                },
+                {
+                  "effort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                }
+              ],
+              "shell_type": "shell_command",
+              "visibility": "list",
+              "supported_in_api": true,
               "priority": 1,
               "base_instructions": "",
               "supports_reasoning_summaries": true,
@@ -2823,6 +2822,7 @@
               "effective_context_window_percent": 95,
               "experimental_supported_tools": [],
               "input_modalities": [
+                "image",
                 "text"
               ],
               "supports_search_tool": false,

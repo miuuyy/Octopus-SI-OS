@@ -172,11 +172,14 @@ exit remains distinct from closure, including a PTY whose streams close while
 another group member is still running. Observation and cleanup failures remain
 visible and never become successful closure.
 
-Executable paths that vary by host can be declared in
-`optional_executable_paths`. Existing paths receive the same resolution and
-execution checks as required paths. An absent optional path grants no authority.
-Other inspection failures remain errors. Required and optional path sets are
-disjoint, and narrowing a declaration can only remove optional paths.
+Paths, root subpaths, commands, and environment subpaths that vary by host can
+be declared in `optional_read_paths`, `optional_executable_paths`,
+`optional_executable_root_subpaths`, `optional_executable_commands`, and
+`optional_read_env_subpaths`. Present entries receive the same resolution,
+boundary, and execution checks as required entries. An absent optional entry
+grants no authority. Other inspection failures remain errors. Required and
+optional sets are disjoint, and narrowing a declaration can only remove optional
+entries.
 
 ## Linux process authority
 

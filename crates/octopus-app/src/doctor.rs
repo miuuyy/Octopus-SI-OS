@@ -226,7 +226,9 @@ fn diagnose_executable_runtime(
     executable: &ResolvedSpawnLifeExecutable,
     cache: &mut BTreeMap<PathBuf, Result<(), String>>,
 ) -> Vec<String> {
-    use octopus_interface_transport::process_authority::{resolve_executable, validate_executable_runtime};
+    use octopus_interface_transport::process_authority::{
+        resolve_executable, resolve_optional_executable, validate_executable_runtime,
+    };
     let search_path = process.env.get("PATH").map(std::ffi::OsString::from)
         .or_else(|| process.inherit_env.contains("PATH").then(|| std::env::var_os("PATH")).flatten());
     let mut paths = BTreeSet::from([executable.executable.clone()]);
@@ -234,6 +236,21 @@ fn diagnose_executable_runtime(
     let commands = process.authority.executable_commands.iter().map(|command| {
         resolve_executable(command, &executable.working_directory, search_path.as_deref())
     });
+    let optional_commands = process
+        .authority
+        .optional_executable_commands
+        .iter()
+        .filter_map(|command| {
+            match resolve_optional_executable(
+                command,
+                &executable.working_directory,
+                search_path.as_deref(),
+            ) {
+                Ok(Some(path)) => Some(Ok(path)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            }
+        });
     let declared_paths = process.authority.executable_paths.iter().map(|declared| {
         let path = executable.working_directory.join(declared);
         std::fs::canonicalize(&path).map_err(|error| format!("declared executable path '{}' cannot be resolved: {error}", path.display()))
@@ -249,7 +266,11 @@ fn diagnose_executable_runtime(
             ))),
         }
     });
-    for result in commands.chain(declared_paths).chain(optional_paths) {
+    for result in commands
+        .chain(optional_commands)
+        .chain(declared_paths)
+        .chain(optional_paths)
+    {
         match result {
             Ok(path) if path.is_dir() => {}
             Ok(path) => { paths.insert(path); }

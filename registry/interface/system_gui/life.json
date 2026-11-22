@@ -68,12 +68,15 @@
         ],
         "executable_root_slots": [],
         "read_paths": [
-          "/System/Library",
           "/usr/lib"
+        ],
+        "optional_read_paths": [
+          "/System/Library"
         ],
         "write_paths": [],
         "executable_paths": [],
-        "executable_root_subpaths": [
+        "executable_root_subpaths": [],
+        "optional_executable_root_subpaths": [
           {
             "root_slot": "registry_worker_environment_kind_root",
             "relative_path": "desktop_session/packages/octopus-system-gui-env/native/bin/octopus-desktop-native"

@@ -47,13 +47,19 @@ pub struct ProcessAuthoritySpec {
     #[serde(default)]
     pub optional_executable_root_slots: BTreeSet<String>,
     pub read_paths: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub optional_read_paths: BTreeSet<String>,
     pub write_paths: BTreeSet<String>,
     pub executable_paths: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub optional_executable_paths: BTreeSet<String>,
     #[serde(default)]
     pub executable_root_subpaths: BTreeSet<ProcessRootSubpathSpec>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub optional_executable_root_subpaths: BTreeSet<ProcessRootSubpathSpec>,
     pub executable_commands: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub optional_executable_commands: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_executable_relative_paths: Vec<ProcessExecutableRelativePathSpec>,
     pub read_env_paths: BTreeSet<String>,
@@ -65,6 +71,8 @@ pub struct ProcessAuthoritySpec {
     pub optional_write_env_paths: BTreeSet<String>,
     #[serde(default)]
     pub read_env_subpaths: Vec<ProcessEnvironmentSubpathSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_read_env_subpaths: Vec<ProcessEnvironmentSubpathSpec>,
     #[serde(default)]
     pub write_env_subpaths: Vec<ProcessEnvironmentSubpathSpec>,
     #[serde(default)]
@@ -189,11 +197,16 @@ impl ProcessAuthoritySpec {
             && self.optional_write_root_slots.is_subset(&original.optional_write_root_slots)
             && self.optional_executable_root_slots.is_subset(&original.optional_executable_root_slots)
             && self.read_paths.is_subset(&original.read_paths)
+            && self.optional_read_paths.is_subset(&original.optional_read_paths)
             && self.write_paths.is_subset(&original.write_paths)
             && self.executable_paths.is_subset(&original.executable_paths)
             && self.optional_executable_paths.is_subset(&original.optional_executable_paths)
             && self.executable_root_subpaths.is_subset(&original.executable_root_subpaths)
+            && self
+                .optional_executable_root_subpaths
+                .is_subset(&original.optional_executable_root_subpaths)
             && self.executable_commands.is_subset(&original.executable_commands)
+            && self.optional_executable_commands.is_subset(&original.optional_executable_commands)
             && self.read_executable_relative_paths.iter()
                 .all(|path| original.read_executable_relative_paths.contains(path))
             && self.read_env_paths.is_subset(&original.read_env_paths)
@@ -202,6 +215,7 @@ impl ProcessAuthoritySpec {
             && self.optional_read_env_paths.is_subset(&original.optional_read_env_paths)
             && self.optional_write_env_paths.is_subset(&original.optional_write_env_paths)
             && subpaths(&self.read_env_subpaths, &original.read_env_subpaths)
+            && subpaths(&self.optional_read_env_subpaths, &original.optional_read_env_subpaths)
             && subpaths(&self.write_env_subpaths, &original.write_env_subpaths)
             && subpaths(&self.executable_env_subpaths, &original.executable_env_subpaths)
             && paths(&self.read_argument_paths, &original.read_argument_paths)
@@ -261,6 +275,7 @@ impl ProcessAuthoritySpec {
         }
         for (field, values) in [
             ("read_paths", &self.read_paths),
+            ("optional_read_paths", &self.optional_read_paths),
             ("write_paths", &self.write_paths),
             ("executable_paths", &self.executable_paths),
             ("optional_executable_paths", &self.optional_executable_paths),
@@ -268,6 +283,15 @@ impl ProcessAuthoritySpec {
             for value in values {
                 validate_declared_path(field, value)?;
             }
+        }
+        if !self
+            .read_paths
+            .is_disjoint(&self.optional_read_paths)
+        {
+            return Err(
+                "process authority repeats a path across read_paths and optional_read_paths"
+                    .to_string(),
+            );
         }
         if !self
             .executable_paths
@@ -280,6 +304,18 @@ impl ProcessAuthoritySpec {
         }
         for value in &self.executable_commands {
             validate_declared_executable("executable_commands", value)?;
+        }
+        for value in &self.optional_executable_commands {
+            validate_declared_executable("optional_executable_commands", value)?;
+        }
+        if !self
+            .executable_commands
+            .is_disjoint(&self.optional_executable_commands)
+        {
+            return Err(
+                "process authority repeats a command across executable_commands and optional_executable_commands"
+                    .to_string(),
+            );
         }
         for value in &self.read_executable_relative_paths {
             if !self.executable_commands.contains(&value.executable) {
@@ -294,6 +330,18 @@ impl ProcessAuthoritySpec {
         }
         for value in &self.executable_root_subpaths {
             value.validate("executable_root_subpaths")?;
+        }
+        for value in &self.optional_executable_root_subpaths {
+            value.validate("optional_executable_root_subpaths")?;
+        }
+        if !self
+            .executable_root_subpaths
+            .is_disjoint(&self.optional_executable_root_subpaths)
+        {
+            return Err(
+                "process authority repeats a subpath across executable_root_subpaths and optional_executable_root_subpaths"
+                    .to_string(),
+            );
         }
         for (field, values) in [
             ("read_env_paths", &self.read_env_paths),
@@ -326,12 +374,23 @@ impl ProcessAuthoritySpec {
         }
         for (field, values) in [
             ("read_env_subpaths", &self.read_env_subpaths),
+            ("optional_read_env_subpaths", &self.optional_read_env_subpaths),
             ("write_env_subpaths", &self.write_env_subpaths),
             ("executable_env_subpaths", &self.executable_env_subpaths),
         ] {
             for value in values {
                 value.validate(field)?;
             }
+        }
+        if self
+            .read_env_subpaths
+            .iter()
+            .any(|path| self.optional_read_env_subpaths.contains(path))
+        {
+            return Err(
+                "process authority repeats a subpath across read_env_subpaths and optional_read_env_subpaths"
+                    .to_string(),
+            );
         }
         for (field, values) in [
             ("read_argument_paths", &self.read_argument_paths),
@@ -527,5 +586,65 @@ mod tests {
             .validate()
             .unwrap_err()
             .contains("repeats a path across executable_paths and optional_executable_paths"));
+    }
+
+    #[test]
+    fn optional_platform_authority_fields_validate_disjointness_and_narrowing() {
+        let subpath = ProcessRootSubpathSpec {
+            root_slot: "registry_worker_environment_kind_root".to_string(),
+            relative_path: "desktop_session/native/bin/helper".to_string(),
+        };
+        let env_subpath = ProcessEnvironmentSubpathSpec {
+            env: "HOME".to_string(),
+            relative_path: "Library/Keychains".to_string(),
+        };
+        let original = ProcessAuthoritySpec {
+            optional_read_paths: BTreeSet::from(["/System/Library".to_string()]),
+            optional_executable_root_subpaths: BTreeSet::from([subpath.clone()]),
+            optional_executable_commands: BTreeSet::from(["security".to_string()]),
+            optional_read_env_subpaths: vec![env_subpath.clone()],
+            ..Default::default()
+        };
+        assert!(original.validate().is_ok());
+
+        let mut widened = original.clone();
+        widened
+            .optional_read_paths
+            .insert("/Library/Preferences".to_string());
+        assert!(widened.validate().is_ok());
+        assert!(!widened.narrows(&original));
+        assert!(original.narrows(&widened));
+
+        let mut dup_read = original.clone();
+        dup_read.read_paths.insert("/System/Library".to_string());
+        assert!(dup_read
+            .validate()
+            .unwrap_err()
+            .contains("repeats a path across read_paths and optional_read_paths"));
+
+        let mut dup_subpath = original.clone();
+        dup_subpath
+            .executable_root_subpaths
+            .insert(subpath.clone());
+        assert!(dup_subpath
+            .validate()
+            .unwrap_err()
+            .contains("repeats a subpath across executable_root_subpaths and optional_executable_root_subpaths"));
+
+        let mut dup_command = original.clone();
+        dup_command
+            .executable_commands
+            .insert("security".to_string());
+        assert!(dup_command
+            .validate()
+            .unwrap_err()
+            .contains("repeats a command across executable_commands and optional_executable_commands"));
+
+        let mut dup_env_subpath = original.clone();
+        dup_env_subpath.read_env_subpaths.push(env_subpath);
+        assert!(dup_env_subpath
+            .validate()
+            .unwrap_err()
+            .contains("repeats a subpath across read_env_subpaths and optional_read_env_subpaths"));
     }
 }

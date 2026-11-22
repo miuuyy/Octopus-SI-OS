@@ -151,6 +151,14 @@ impl ProcessAuthority {
             && self.executable.contains(root)
     }
 
+    pub fn readable(&self) -> &BTreeSet<PathBuf> {
+        &self.readable
+    }
+
+    pub fn writable(&self) -> &BTreeSet<PathBuf> {
+        &self.writable
+    }
+
     fn with_executable_links(mut self, links: BTreeSet<PathBuf>) -> Self {
         self.executable_links = links;
         self
@@ -396,6 +404,11 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
                     .iter()
                     .map(|binding| &binding.root_slot),
             )
+            .chain(
+                self.optional_executable_root_subpaths
+                    .iter()
+                    .map(|binding| &binding.root_slot),
+            )
             .cloned()
             .collect::<BTreeSet<_>>();
         let candidate_slots = self
@@ -484,6 +497,10 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
         let mut writable_exact = BTreeSet::new();
         let mut executable_exact = BTreeSet::new();
         readable.extend(resolve_declared_paths(&self.read_paths, &repository_root)?);
+        readable.extend(resolve_optional_declared_paths(
+            &self.optional_read_paths,
+            &repository_root,
+        )?);
         writable.extend(resolve_declared_paths(&self.write_paths, &repository_root)?);
         executable.extend(resolve_declared_paths(
             &self.executable_paths,
@@ -496,6 +513,11 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
         executable.extend(resolve_root_subpaths(
             "executable_root_subpaths",
             &self.executable_root_subpaths,
+            &root_slots,
+        )?);
+        executable.extend(resolve_optional_root_subpaths(
+            "optional_executable_root_subpaths",
+            &self.optional_executable_root_subpaths,
             &root_slots,
         )?);
         readable.extend(resolve_environment_paths(
@@ -526,6 +548,11 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             &self.read_env_subpaths,
             environment,
         )?);
+        readable.extend(resolve_optional_environment_subpaths(
+            "optional_read_env_subpaths",
+            &self.optional_read_env_subpaths,
+            environment,
+        )?);
         writable.extend(resolve_environment_subpaths(
             "write_env_subpaths",
             &self.write_env_subpaths,
@@ -541,6 +568,14 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
         for command in &self.executable_commands {
             executable.insert(resolve_executable(command, &repository_root, search_path)?);
             executable_links.extend(search_path_links(command, search_path)?);
+        }
+        for command in &self.optional_executable_commands {
+            if let Some(resolved) =
+                resolve_optional_executable(command, &repository_root, search_path)?
+            {
+                executable.insert(resolved);
+                executable_links.extend(search_path_links(command, search_path)?);
+            }
         }
         for binding in &self.read_executable_relative_paths {
             let command = resolve_executable(&binding.executable, &repository_root, search_path)?;
@@ -678,6 +713,49 @@ fn resolve_root_subpaths(
         .collect()
 }
 
+fn resolve_optional_root_subpaths(
+    field: &str,
+    declared: &BTreeSet<octopus_descriptors::ProcessRootSubpathSpec>,
+    root_slots: &BTreeMap<String, PathBuf>,
+) -> Result<BTreeSet<PathBuf>, String> {
+    let mut resolved = BTreeSet::new();
+    for binding in declared {
+        let root = root_slots.get(&binding.root_slot).ok_or_else(|| {
+            format!(
+                "process authority {field} requests unbound root slot '{}'",
+                binding.root_slot
+            )
+        })?;
+        let declared_candidate = root.join(&binding.relative_path);
+        match std::fs::symlink_metadata(&declared_candidate) {
+            Ok(_) => {
+                let candidate = normalize_existing_path(declared_candidate)?;
+                if candidate == *root || !candidate.starts_with(root) {
+                    return Err(format!(
+                        "process authority {field} subpath '{}' does not name a strict descendant of root slot '{}' ('{}')",
+                        candidate.display(),
+                        binding.root_slot,
+                        root.display()
+                    ));
+                }
+                resolved.insert(candidate);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(error) => {
+                return Err(format!(
+                    "process authority {field} subpath '{}' cannot be inspected: {error}",
+                    declared_candidate.display()
+                ));
+            }
+        }
+    }
+    Ok(resolved)
+}
+
 fn resolve_environment_paths(
     names: &BTreeSet<String>,
     environment: &BTreeMap<String, OsString>,
@@ -758,6 +836,63 @@ fn resolve_environment_subpaths(
                     declared_candidate.display()
                 )
             })?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "process authority {field} subpath '{}' is a symbolic link",
+                    declared_candidate.display()
+                ));
+            }
+            let candidate = normalize_existing_path(declared_candidate)?;
+            if candidate == root || !candidate.starts_with(&root) {
+                return Err(format!(
+                    "process authority {field} subpath '{}' does not name a strict descendant of environment root '{}'",
+                    candidate.display(),
+                    root.display()
+                ));
+            }
+            paths.insert(candidate);
+        }
+    }
+    Ok(paths)
+}
+
+fn resolve_optional_environment_subpaths(
+    field: &str,
+    declarations: &[ProcessEnvironmentSubpathSpec],
+    environment: &BTreeMap<String, OsString>,
+) -> Result<BTreeSet<PathBuf>, String> {
+    let mut paths = BTreeSet::new();
+    for declaration in declarations {
+        let Some(value) = environment.get(&declaration.env) else {
+            continue;
+        };
+        let roots = std::env::split_paths(value).collect::<Vec<_>>();
+        if roots.is_empty() {
+            return Err(format!(
+                "process authority {field} environment variable '{}' is empty",
+                declaration.env
+            ));
+        }
+        for root in roots {
+            let root = normalize_existing_path(root)?;
+            let declared_candidate = root.join(&declaration.relative_path);
+            let metadata = match std::fs::symlink_metadata(&declared_candidate) {
+                Ok(metadata) => metadata,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "process authority {field} subpath '{}' cannot be inspected: {error}",
+                        declared_candidate.display()
+                    ));
+                }
+            };
             if metadata.file_type().is_symlink() {
                 return Err(format!(
                     "process authority {field} subpath '{}' is a symbolic link",
@@ -1018,6 +1153,75 @@ pub fn resolve_executable(
         ));
     }
     Ok(executable)
+}
+
+pub fn resolve_optional_executable(
+    declared: &str,
+    cwd: &Path,
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, String> {
+    let declared = declared.trim();
+    if declared.is_empty() {
+        return Err("process executable is empty".to_string());
+    }
+    let path = Path::new(declared);
+    let candidate = if path.is_absolute() {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => path.to_path_buf(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "process executable '{}' cannot be inspected: {error}",
+                    path.display()
+                ));
+            }
+        }
+    } else if path.components().count() > 1 {
+        if path
+            .components()
+            .any(|component| component == Component::ParentDir)
+        {
+            return Err(format!(
+                "process executable '{}' contains a parent traversal",
+                declared
+            ));
+        }
+        let candidate = cwd.join(path);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(format!(
+                    "process executable '{}' cannot be inspected: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+    } else {
+        let search_path = search_path.map(OsString::from).ok_or_else(|| {
+            format!("process executable '{declared}' requires declared PATH resolution")
+        })?;
+        let Some(found) = std::env::split_paths(&search_path)
+            .map(|root| root.join(path))
+            .find(|candidate| executable_file(candidate))
+        else {
+            return Ok(None);
+        };
+        found
+    };
+    let executable = std::fs::canonicalize(&candidate).map_err(|error| {
+        format!(
+            "process executable '{}' cannot be canonicalized: {error}",
+            candidate.display()
+        )
+    })?;
+    if !executable_file(&executable) {
+        return Err(format!(
+            "process executable '{}' is not an executable regular file",
+            executable.display()
+        ));
+    }
+    Ok(Some(executable))
 }
 
 pub fn validate_executable_runtime(executable: &Path) -> Result<(), String> {
@@ -2955,5 +3159,143 @@ mod search_path_link_tests {
                 std::iter::empty(),
             )
             .is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod optional_platform_authority_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn optional_platform_fields_grant_present_entries_skip_absent_and_reject_escapes() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let base = std::fs::canonicalize(root.path()).expect("canonical root");
+        let kind_root = base.join("kinds");
+        let home_dir = base.join("home");
+        let bin_dir = base.join("bin");
+        let outside = base.join("outside");
+        for dir in [&kind_root, &home_dir, &bin_dir, &outside] {
+            std::fs::create_dir_all(dir).expect("create test dir");
+        }
+
+        let present_read = base.join("present-read");
+        std::fs::create_dir_all(&present_read).expect("present read");
+        let missing_read = base.join("missing-read");
+
+        let present_subpath = kind_root.join("helper/bin/native");
+        std::fs::create_dir_all(present_subpath.parent().unwrap()).expect("subpath parent");
+        std::fs::write(&present_subpath, "#!/bin/sh\nexit 0\n").expect("write helper");
+        std::fs::set_permissions(&present_subpath, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod helper");
+
+        let present_cmd = bin_dir.join("present-opt-cmd");
+        std::fs::write(&present_cmd, "#!/bin/sh\nexit 0\n").expect("write opt cmd");
+        std::fs::set_permissions(&present_cmd, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod opt cmd");
+
+        let present_env_sub = home_dir.join("Library/Keychains");
+        std::fs::create_dir_all(&present_env_sub).expect("create env subpath");
+
+        let spec = ProcessAuthoritySpec {
+            optional_read_paths: BTreeSet::from([
+                present_read.to_string_lossy().into_owned(),
+                missing_read.to_string_lossy().into_owned(),
+            ]),
+            optional_executable_root_subpaths: BTreeSet::from([
+                octopus_descriptors::ProcessRootSubpathSpec {
+                    root_slot: "kind_root".to_string(),
+                    relative_path: "helper/bin/native".to_string(),
+                },
+                octopus_descriptors::ProcessRootSubpathSpec {
+                    root_slot: "kind_root".to_string(),
+                    relative_path: "helper/bin/missing-native".to_string(),
+                },
+            ]),
+            optional_executable_commands: BTreeSet::from([
+                "present-opt-cmd".to_string(),
+                "absent-opt-cmd".to_string(),
+            ]),
+            optional_read_env_subpaths: vec![
+                ProcessEnvironmentSubpathSpec {
+                    env: "HOME".to_string(),
+                    relative_path: "Library/Keychains".to_string(),
+                },
+                ProcessEnvironmentSubpathSpec {
+                    env: "HOME".to_string(),
+                    relative_path: "Library/Missing".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let slots = BTreeMap::from([("kind_root".to_string(), kind_root.clone())]);
+        let env = BTreeMap::from([
+            ("HOME".to_string(), home_dir.as_os_str().to_os_string()),
+            ("PATH".to_string(), bin_dir.as_os_str().to_os_string()),
+        ]);
+        let resolved = spec
+            .resolve(
+                &base,
+                &slots,
+                &env,
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+            .expect("optional platform fields resolve cleanly");
+        assert!(resolved.authority.readable.contains(&present_read));
+        assert!(!resolved.authority.readable.contains(&missing_read));
+        assert!(resolved.authority.executable.contains(&present_subpath));
+        assert!(resolved.authority.executable.contains(&present_cmd));
+        assert!(resolved.authority.readable.contains(&present_env_sub));
+
+        let outside_bin = outside.join("escaped");
+        std::fs::write(&outside_bin, "#!/bin/sh\nexit 0\n").expect("write outside");
+        std::os::unix::fs::symlink(&outside_bin, kind_root.join("escape-link"))
+            .expect("symlink escape");
+        let escape_spec = ProcessAuthoritySpec {
+            optional_executable_root_subpaths: BTreeSet::from([
+                octopus_descriptors::ProcessRootSubpathSpec {
+                    root_slot: "kind_root".to_string(),
+                    relative_path: "escape-link".to_string(),
+                },
+            ]),
+            ..Default::default()
+        };
+        let error = escape_spec
+            .resolve(
+                &base,
+                &slots,
+                &env,
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+            .unwrap_err();
+        assert!(error.contains("strict descendant"), "unexpected error: {error}");
+
+        std::os::unix::fs::symlink(&outside, home_dir.join("symlink-subpath"))
+            .expect("symlink env subpath");
+        let env_symlink_spec = ProcessAuthoritySpec {
+            optional_read_env_subpaths: vec![ProcessEnvironmentSubpathSpec {
+                env: "HOME".to_string(),
+                relative_path: "symlink-subpath".to_string(),
+            }],
+            ..Default::default()
+        };
+        let error = env_symlink_spec
+            .resolve(
+                &base,
+                &slots,
+                &env,
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::empty(),
+            )
+            .unwrap_err();
+        assert!(error.contains("symbolic link"), "unexpected error: {error}");
     }
 }

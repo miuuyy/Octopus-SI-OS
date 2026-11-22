@@ -1022,3 +1022,29 @@ fn exact_runs_allow_no_provider_or_client_and_revision_may_change_the_record() {
     extended["id"] = json!("another");
     assert!(octopus_run_authoring::foreign_edit::validate(&before, &serde_json::to_vec(&extended).unwrap()).is_err());
 }
+
+#[test]
+fn native_creation_scopes_provider_model_effort_and_tier_defaults_to_matching_coordinates() {
+    let temp = tempfile::tempdir().unwrap();
+    let request = support::fixture(temp.path());
+    let (mut affordances, metadata) = exact_affordances(&request);
+    affordances.config.defaults = Some(serde_json::from_value(json!({
+        "worker_template_interface_id": request.worker_template_interface_id,
+        "provider_interface_id": request.provider_interface_id,
+        "model": request.model,
+        "reasoning_effort": request.reasoning_effort,
+        "service_tier": "priority",
+        "authoring": request.authoring,
+        "worker_environment_kinds": request.selected_worker_environment_kinds,
+        "tools": request.selected_tools,
+        "door_host_slots": request.door_host_slots,
+    })).unwrap());
+    let switched_model = affordances.composition_request(&metadata, &request.admitted_parent_record, "m", serde_json::from_value(json!({"text": "Switch", "model": "fixture-b"})).unwrap()).unwrap();
+    assert_eq!(switched_model.reasoning_effort, "");
+    assert_eq!(switched_model.service_tier.as_deref(), Some("priority"));
+    let switched_provider = affordances.composition_request(&metadata, &request.admitted_parent_record, "p", serde_json::from_value(json!({"text": "Switch", "provider_interface_id": "world_provider_other"})).unwrap()).unwrap();
+    assert_eq!(switched_provider.model, "");
+    assert_eq!(switched_provider.reasoning_effort, "");
+    assert_eq!(switched_provider.service_tier, None);
+    assert!(affordances.composition_request(&metadata, &request.admitted_parent_record, "e", serde_json::from_value(json!({"text": "Reject", "model": ""})).unwrap()).is_err());
+}

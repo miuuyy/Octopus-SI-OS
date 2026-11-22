@@ -1561,3 +1561,49 @@ fn another_run_re_forms_a_composed_runs_model_interface_from_another_provider_by
     assert!(plan_authored_run_composition(&request.roots, &caller, authored(&descriptor), true)
         .map(|plan| plan.validation.safe_to_apply) != Ok(true));
 }
+
+#[test]
+fn switched_provider_and_model_resolve_target_defaults_and_reject_unsupported_effort() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mut request = fixture(root);
+    let fixture_path = "registry/interface/world_provider_fixture/interface.json";
+    let mut primary: Value = serde_json::from_slice(&std::fs::read(root.join(fixture_path)).unwrap()).unwrap();
+    primary["interface_driver_config"]["private_config"]["model_catalog"] = json!([
+        {"model": "fixture-a", "default_reasoning_effort": "xhigh", "supported_reasoning_efforts": ["xhigh"]},
+        {"model": "fixture-b", "default_reasoning_effort": "low", "supported_reasoning_efforts": ["low", "high"]}
+    ]);
+    write(root, fixture_path, primary);
+    let mut secondary: Value = serde_json::from_slice(&std::fs::read(root.join(fixture_path)).unwrap()).unwrap();
+    secondary["id"] = json!("world_provider_other");
+    secondary["source_names"] = json!(["other"]);
+    secondary["interface_policy"]["variables"]["models"]["default"] = json!(["other-default"]);
+    secondary["interface_driver_config"]["private_config"]["model"] = json!("other-default");
+    secondary["interface_driver_config"]["private_config"]["reasoning_effort"] = json!("low");
+    secondary["interface_driver_config"]["private_config"]["model_catalog"] = json!([
+        {"model": "other-default", "default_reasoning_effort": "low", "supported_reasoning_efforts": ["low", "high"]}
+    ]);
+    write(root, "registry/interface/world_provider_other/interface.json", secondary);
+    std::fs::copy(root.join("registry/interface/world_provider_fixture/life.json"), root.join("registry/interface/world_provider_other/life.json")).unwrap();
+    for (file, pointer) in [
+        ("registry/ee_template/existence/ee_template.json", "/allowed_interfaces"),
+        ("ee/ee_existence.json", "/policy_narrowing/allowed_interfaces"),
+        ("registry/interface/system_worker_template/policy.json", "/ceiling/interfaces"),
+    ] {
+        let mut value: Value = serde_json::from_slice(&std::fs::read(root.join(file)).unwrap()).unwrap();
+        value.pointer_mut(pointer).unwrap().as_array_mut().unwrap().push(json!("world_provider_other"));
+        if file.ends_with("policy.json") {
+            value["ceiling"]["interface_policy"]["world_provider_fixture"]["models"] = json!(["fixture-a", "fixture-b"]);
+            value["ceiling"]["interface_policy"]["world_provider_other"] = json!({"models": ["other-default"]});
+        }
+        write(root, file, value);
+    }
+    request.model = "fixture-b".into();
+    request.reasoning_effort = String::new();
+    assert_eq!(plan_run_composition(&request).unwrap().reasoning_effort, "low");
+    request.provider_interface_id = "world_provider_other".into();
+    request.model = String::new();
+    let switched = plan_run_composition(&request).unwrap();
+    assert_eq!(switched.model, "other-default");
+    assert_eq!(switched.reasoning_effort, "low");
+}
