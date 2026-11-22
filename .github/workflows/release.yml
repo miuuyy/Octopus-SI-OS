@@ -17,10 +17,40 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 300
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Select native build toolchain (Swift 6.2+)
+        run: |
+          swift_ok() {
+            local dev_dir="${1:-}"
+            local ver
+            if [ -n "$dev_dir" ]; then
+              ver="$(DEVELOPER_DIR="$dev_dir" xcrun swift --version 2>/dev/null | sed -n 's/.*Swift version \([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
+            else
+              ver="$(xcrun swift --version 2>/dev/null | sed -n 's/.*Swift version \([0-9]*\.[0-9]*\).*/\1/p' | head -n1)"
+            fi
+            [ -n "$ver" ] && awk -v v="$ver" 'BEGIN { split(v, a, "."); maj=a[1]+0; min=a[2]+0; exit !((maj > 6) || (maj == 6 && min >= 2)) }'
+          }
+          if ! swift_ok ""; then
+            selected=""
+            for candidate in $(ls -d /Applications/Xcode_*.app /Applications/Xcode.app 2>/dev/null | sort -Vr || true); do
+              dev="$candidate/Contents/Developer"
+              [ -d "$dev" ] || continue
+              if swift_ok "$dev"; then
+                selected="$dev"
+                break
+              fi
+            done
+            if [ -z "$selected" ]; then
+              echo "No Xcode toolchain with Swift >= 6.2 found under /Applications" >&2
+              exit 1
+            fi
+            echo "DEVELOPER_DIR=$selected" >> "$GITHUB_ENV"
+            echo "Selected DEVELOPER_DIR=$selected"
+          fi
 
       - name: Verify the native build toolchain
         run: |

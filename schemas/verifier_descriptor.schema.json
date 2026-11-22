@@ -145,6 +145,13 @@
           },
           "uniqueItems": true
         },
+        "optional_executable_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
         "optional_executable_root_slots": {
           "default": [],
           "type": "array",

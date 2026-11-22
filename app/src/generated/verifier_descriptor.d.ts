@@ -13,7 +13,7 @@ export interface VerifierDescriptor {
   package: string;
   script: string;
   /**
-   * VERIFIERS.md §3 — the package declares how long its own check may run, so a twenty-line shell check and an out-of-system judge live under the same contract; `params.timeout_ms` may only narrow this ceiling.
+   * VERIFIERS.md §3 — a package that reaches outside the system declares how long its check may run; `params.timeout_ms` may only narrow it.
    */
   timeout_ms?: number | null;
 }
@@ -30,6 +30,7 @@ export interface ProcessAuthoritySpec {
   executable_paths: string[];
   executable_root_slots: string[];
   executable_root_subpaths?: ProcessRootSubpathSpec[];
+  optional_executable_paths?: string[];
   optional_executable_root_slots?: string[];
   optional_read_env_paths?: string[];
   optional_read_root_slots?: string[];

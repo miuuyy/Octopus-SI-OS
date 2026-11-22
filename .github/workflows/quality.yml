@@ -277,6 +277,9 @@ jobs:
         with:
           tool: nextest
 
+      - name: Committed schemas match the Rust types
+        run: cargo test --locked -p octopus-schemas --lib tests::committed_schemas_match_live_types -- --exact
+
       - name: Policy, ledger proof, runtime checkpoint, Home binding and file publication contracts
         run: |
           cargo nextest run --locked -p octopus-policy -p octopus-ledger-index -p octopus-runtime -p octopus-operator-chat-client -p octopus-model-context-render -p octopus-file-storage --lib --test instructions --test gate_trace_properties -E 'package(octopus-policy) | package(octopus-ledger-index) | package(octopus-runtime) | binary(instructions) | (package(octopus-operator-chat-client) & (test(real_registry_home_plan_exports_authoring_and_exact_policy_requirements) | test(real_registry_self_improvement_ee_admits_the_default_task))) | (package(octopus-file-storage) & test(/^publication::tests::/))'
