@@ -29,6 +29,7 @@ async function main() {
     await currentOperationRecovery(path.join(temporary, "current"));
     await refuseSecondUnfinishedOperation(path.join(temporary, "singleton"));
     await refuseCredentialStoreOnlyPlan(path.join(temporary, "provider-proof"));
+    await acceptCredentialConfiguredPlan(path.join(temporary, "provider-credential"));
     await recordProbeFailure(path.join(temporary, "probe-failure"));
     for (const step of STEPS) await resumeAfterCommittedFailure(path.join(temporary, `failure-${step}`), step);
     await refuseSealAfterProofDrift(path.join(temporary, "proof-drift"));
@@ -406,8 +407,21 @@ async function refuseCredentialStoreOnlyPlan(root) {
   plan.provider.required_state = "configured";
   await assert.rejects(
     store.begin({ operationId, plan }),
-    /required_state must be equal to constant/,
+    /required_state must be equal to one of the allowed values/,
   );
+}
+
+async function acceptCredentialConfiguredPlan(root) {
+  const ownerState = path.join(root, "owner-state.json");
+  const store = createClientSetupStore({ root: path.join(root, "setup-state"), owners: owners(ownerState) });
+  const operationId = "workspace_provider_cred_001";
+  const plan = setupPlan(operationId);
+  plan.provider = { interface_id: "world_provider_opencode_go", required_state: "credential_configured" };
+  await store.begin({ operationId, plan });
+  const completed = await store.resume(operationId);
+  assert.equal(completed.status, "complete");
+  assert.equal(completed.plan.provider.interface_id, "world_provider_opencode_go");
+  assert.equal(completed.plan.provider.required_state, "credential_configured");
 }
 
 async function recordProbeFailure(root) {

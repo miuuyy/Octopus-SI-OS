@@ -292,3 +292,49 @@ test("topology without ledger preserves structure without reading malformed hist
     }
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test("scoped EE and run invalidations preserve application catalog cache while registry edits refresh it", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "oct-scoped-catalog-cache-")));
+  const home = path.join(root, "home"), sourceRegistry = path.join(root, "source/registry"), localLibrary = path.join(root, "source/packages");
+  for (const directory of ["registry/interface/sample_app", "registry/tool", "state/ee_instances", "state/runs", "client/package-state", "ledger"]) {
+    await fs.mkdir(path.join(home, directory), { recursive: true });
+  }
+  await fs.mkdir(path.join(sourceRegistry, "interface"), { recursive: true });
+  await fs.mkdir(localLibrary, { recursive: true });
+  await fs.writeFile(path.join(home, "ledger/movements.jsonl"), "");
+  const manifest = {
+    schema_version: 3, id: "sample_app", name: "Sample", description: "Sample", category: "plugin",
+    developer: "Test", version: "1", logo: "logo.svg", interfaces: ["sample_app"], artifact_bindings: [], task_capabilities: { tools: [] },
+  };
+  await fs.writeFile(path.join(home, "registry/interface/sample_app/interface.json"), JSON.stringify({ id: "sample_app" }));
+  await fs.writeFile(path.join(home, "registry/interface/sample_app/application.json"), JSON.stringify(manifest));
+  await fs.writeFile(path.join(home, "registry/interface/sample_app/logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  const originalReaddir = fs.readdir;
+  let libraryScans = 0;
+  fs.readdir = (target, ...rest) => {
+    if (typeof target === "string" && path.resolve(target) === localLibrary) libraryScans += 1;
+    return originalReaddir(target, ...rest);
+  };
+  const store = require("../electron/projection.cjs").createProjectionContext({
+    resolveRepoRoot: () => root, octopusHome: () => home, sourceRegistry: () => path.join(home, "registry"),
+    localPackageRegistry: () => sourceRegistry, localPackageLibrary: () => localLibrary,
+  });
+  try {
+    const first = await store.readProjection({ contract_version: 1, method: "projection.operator.os.applications", params: {} });
+    assert.equal(first.applications.find((app) => app.id === "sample_app")?.version, "1");
+    store.closeProjectionWatchers();
+    const scans = libraryScans;
+    store.invalidateProjection(true, "structure", "state/ee_instances/workspace.json");
+    store.invalidateProjection(true, "structure", "state/runs/triggers.json");
+    await store.readProjection({ contract_version: 1, method: "projection.operator.os.applications", params: {} });
+    assert.equal(libraryScans, scans);
+    await fs.writeFile(path.join(home, "registry/interface/sample_app/application.json"), JSON.stringify({ ...manifest, version: "2" }));
+    store.invalidateProjection(true, "structure", "registry/interface/sample_app/application.json");
+    const refreshed = await store.readProjection({ contract_version: 1, method: "projection.operator.os.applications", params: {} });
+    assert.equal(refreshed.applications.find((app) => app.id === "sample_app")?.version, "2");
+  } finally {
+    store.close();
+    fs.readdir = originalReaddir;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

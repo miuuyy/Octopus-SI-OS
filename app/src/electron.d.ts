@@ -1928,7 +1928,7 @@ export type OctopusClientSetupPlan = {
   }>;
   provider: {
     interface_id: string;
-    required_state: "account_readable";
+    required_state: "account_readable" | "credential_configured";
   };
   workspace: {
     request_digest: string;

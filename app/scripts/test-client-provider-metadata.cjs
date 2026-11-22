@@ -199,3 +199,30 @@ test("catalogue uses declared data or owner modules independently of provider an
     assert.match((await failing.catalog([native]))[0].modelCatalogError, /offline/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test("credential_configured providers probe and store private environment keys without Codex sign-in", async () => {
+  const { providerSetupRequiredState } = require("../electron/clientProviderMetadata.cjs");
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-provider-cred-")));
+  try {
+    const reg = path.join(root, "registry"), home = path.join(root, "home");
+    const ifaceDir = path.join(reg, "interface/world_provider_keyed");
+    await fs.mkdir(ifaceDir, { recursive: true });
+    const descriptor = {
+      id: "world_provider_keyed", interface_type: "world", role: "provider",
+      interface_driver_config: { transport: { auth_env_key: "KEYED_API_KEY" }, private_config: { model: "m" } },
+    };
+    await fs.writeFile(path.join(ifaceDir, "interface.json"), JSON.stringify(descriptor));
+    assert.equal(providerSetupRequiredState(descriptor), "credential_configured");
+    const service = createClientProviderMetadata({
+      registryRoot: () => reg, sourceRegistryRoot: () => reg, octopusHome: () => home,
+      accountClient: () => assert.fail("must not touch Codex account"),
+      reference: (kind, id, data) => ({ kind, id, data }),
+    });
+    const plan = { provider: { interface_id: "world_provider_keyed", required_state: "credential_configured" } };
+    assert.equal(await service.setupOwner.probe(plan), null);
+    await service.setupOwner.apply(plan, { resolveValue: async () => "secret-token-value" });
+    const probed = await service.setupOwner.probe(plan);
+    assert.equal(probed[0].data.configured, true);
+    assert.equal(probed[0].data.auth_env_key, "KEYED_API_KEY");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

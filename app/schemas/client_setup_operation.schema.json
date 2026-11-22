@@ -89,7 +89,7 @@
           "required": ["interface_id", "required_state"],
           "properties": {
             "interface_id": { "$ref": "#/$defs/id" },
-              "required_state": { "const": "account_readable" }
+            "required_state": { "enum": ["account_readable", "credential_configured"] }
           },
           "additionalProperties": false
         },

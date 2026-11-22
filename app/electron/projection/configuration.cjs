@@ -20,6 +20,10 @@ function configurationProjection(store) {
   let packageCatalogGeneration = 1;
   let packageOwnerScope = null;
   let packageOwners = null;
+  let applicationCatalogBuild = null;
+  let applicationCatalogGeneration = 1;
+  let applicationOwnerScope = null;
+  let applicationOwners = null;
   const packageProjectionStates = new WeakMap();
 
   async function cachedPackageCatalog(repoRoot) {
@@ -67,6 +71,65 @@ function configurationProjection(store) {
       || packageOwnerScope !== store.fileProjectionScope(store.resolveRepoRoot())
       || path.resolve(store.resolveLocalPackageRegistry()) === path.join(store.octopusHome(), "registry")) return true;
     return packageOwners.has(`${segments[1]}/${segments[2]}`);
+  }
+
+  function applicationInputsChanged(filename) {
+    if (packageInputsChanged(filename)) return true;
+    const segments = String(filename).split(/[\\/]/).filter(Boolean);
+    if (segments[0] !== "registry" || segments[1] !== "interface") return false;
+    if (segments.length < 3 || !applicationOwners
+      || applicationOwnerScope !== store.fileProjectionScope(store.resolveRepoRoot())) return true;
+    return segments[3] === "application.json" || applicationOwners.has(segments[2]);
+  }
+
+  async function cachedApplicationPackageCatalog(configuration) {
+    const scope = store.fileProjectionScope(configuration.repoRoot);
+    for (;;) {
+      if (scope !== store.fileProjectionScope(configuration.repoRoot)) {
+        throw new Error("Projection Home changed during application package read");
+      }
+      let build = applicationCatalogBuild;
+      if (!build || build.scope !== scope) {
+        if (applicationOwnerScope !== scope) applicationOwners = null;
+        build = {
+          scope,
+          generation: applicationCatalogGeneration,
+          promise: (async () => {
+            const warnings = [];
+            const catalog = await readApplicationPackageCatalog(
+              configuration.registryRoot,
+              configuration.localPackageRegistryRoot,
+              warnings,
+            );
+            return { catalog, warnings };
+          })(),
+        };
+        applicationCatalogBuild = build;
+      }
+      try {
+        const result = await build.promise;
+        if (scope !== store.fileProjectionScope(configuration.repoRoot)) {
+          throw new Error("Projection Home changed during application package read");
+        }
+        applicationOwners = new Set([
+          ...arrayValue(result.catalog.active),
+          ...arrayValue(result.catalog.sources),
+        ].flatMap((entry) => arrayValue(entry.manifest?.interfaces)));
+        applicationOwnerScope = scope;
+        if (build.generation === applicationCatalogGeneration) {
+          return {
+            catalog: structuredClone(result.catalog),
+            warnings: [...result.warnings],
+          };
+        }
+      } catch (error) {
+        if (build.generation === applicationCatalogGeneration) {
+          if (applicationCatalogBuild === build) applicationCatalogBuild = null;
+          throw error;
+        }
+      }
+      if (applicationCatalogBuild === build) applicationCatalogBuild = null;
+    }
   }
 
   async function cachedConfigurationProjection(repoRoot) {
@@ -202,10 +265,9 @@ function configurationProjection(store) {
   }
 
   async function readPackageInventory(configuration) {
-    const applicationWarnings = [];
     const [packageRead, applicationRead] = await Promise.allSettled([
       cachedPackageCatalog(configuration.repoRoot),
-      readApplicationPackageCatalog(configuration.registryRoot, configuration.localPackageRegistryRoot, applicationWarnings),
+      cachedApplicationPackageCatalog(configuration),
     ]);
     if (packageRead.status === "rejected") throw packageRead.reason;
     const localPackages = packageRead.value;
@@ -219,7 +281,11 @@ function configurationProjection(store) {
       pack.setup_provider = providers.find((provider) => provider.id === id) ?? null;
     }
     if (applicationRead.status === "rejected") throw applicationRead.reason;
-    return { localPackages, applicationPackages: applicationRead.value, applicationWarnings };
+    return {
+      localPackages,
+      applicationPackages: applicationRead.value.catalog,
+      applicationWarnings: applicationRead.value.warnings,
+    };
   }
 
   async function withFileProjectionPackages(projection, includeLedger = false) {
@@ -330,6 +396,7 @@ function configurationProjection(store) {
   function invalidateConfigurationProjection(configurationChanged, policyChanged, filename) {
     if (configurationChanged) configurationProjectionGeneration += 1;
     if (configurationChanged && packageInputsChanged(filename)) packageCatalogGeneration += 1;
+    if (configurationChanged && applicationInputsChanged(filename)) applicationCatalogGeneration += 1;
     if (policyChanged) policyProjectionGeneration += 1;
   }
 
@@ -338,6 +405,9 @@ function configurationProjection(store) {
     packageCatalogBuild = null;
     packageOwners = null;
     packageOwnerScope = null;
+    applicationCatalogBuild = null;
+    applicationOwners = null;
+    applicationOwnerScope = null;
   }
 
   return { buildConfigurationProjection, buildFileProjection, cachedConfigurationProjection, cachedEePolicyProjection, closeConfigurationProjection, invalidateConfigurationProjection, withFileProjectionPackages };

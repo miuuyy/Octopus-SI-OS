@@ -1,5 +1,6 @@
 module.exports = { readApplicationPackageCatalog, readApplicationPackageSource, scanApplicationPackageRoot, snapshotApplicationPackageDirectory };
 
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const crypto = require("node:crypto");
 const path = require("node:path");
@@ -7,6 +8,28 @@ const { readOptionalRegularJsonDocument, readRegularJsonDocument, requirePlainDi
 const { readApplicationLogoAsset } = require("./privateConfiguration.cjs");
 const { parseApplicationManifest } = require("./sidecars.cjs");
 const { isPathInside, mapConcurrentOrdered, requiredSafeRegistryId, stringValue } = require("./values.cjs");
+
+const HASH_CHUNK_BYTES = 1024 * 1024;
+const APPLICATION_SNAPSHOT_CACHE_MAX = 1024;
+const applicationSnapshotCache = new Map();
+
+async function hashApplicationFile(entryPath) {
+  const handle = await fs.open(entryPath, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+  let size = 0;
+  try {
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      size += bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+  return { sha256: hash.digest("hex"), size };
+}
 
 async function readApplicationPackageCatalog(activeRegistryRoot, localRegistryRoot, warnings) {
   const [active, local] = await Promise.all([
@@ -124,13 +147,14 @@ async function readApplicationPackageSource(interfaceRootValue, applicationIdVal
   };
 }
 
-async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, sourceKind) {
+async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, sourceKind, options = {}) {
   const directory = path.join(interfaceRoot, interfaceId);
   const resolved = await fs.realpath(directory);
   if (!isPathInside(interfaceRoot, resolved)) {
     throw new Error(`${sourceKind} application interface '${interfaceId}' escapes its package source`);
   }
   await requirePlainDirectory(resolved, `${sourceKind} application interface ${interfaceId}`);
+  const inventory = [];
   const files = [];
   const directories = [""];
   const visit = async (current, relativeDirectory) => {
@@ -151,28 +175,70 @@ async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, s
       if (!stat.isFile()) {
         throw new Error(`${sourceKind} application package contains a non-file entry: ${entryPath}`);
       }
-      const before = stat;
-      const body = await fs.readFile(entryPath);
-      const after = await fs.lstat(entryPath);
-      if (
-        after.isSymbolicLink()
-        || !after.isFile()
-        || before.dev !== after.dev
-        || before.ino !== after.ino
-        || before.size !== after.size
-        || before.mtimeMs !== after.mtimeMs
-      ) {
-        throw new Error(`${sourceKind} application package changed while it was inspected: ${entryPath}`);
-      }
-      files.push({
-        relative_path: relativePath,
-        path: entryPath,
-        sha256: crypto.createHash("sha256").update(body).digest("hex"),
-        mode: before.mode & 0o777,
-        size: before.size,
-      });
+      inventory.push({ relative_path: relativePath, path: entryPath, stat });
     }
   };
   await visit(resolved, "");
-  return { interface_id: interfaceId, directory: resolved, directories, files };
+  const cacheKey = options.fresh ? "" : `${sourceKind}\0${resolved}`;
+  const fingerprint = crypto.createHash("sha256").update(stableJson({
+    directories,
+    files: inventory.map(({ relative_path, stat }) => ({
+      path: relative_path,
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mode: stat.mode,
+      mtime: stat.mtimeMs,
+      ctime: stat.ctimeMs,
+    })),
+  })).digest("hex");
+  const cached = cacheKey ? applicationSnapshotCache.get(cacheKey) : null;
+  if (cached?.fingerprint === fingerprint) {
+    applicationSnapshotCache.delete(cacheKey);
+    applicationSnapshotCache.set(cacheKey, cached);
+    return {
+      interface_id: interfaceId,
+      directory: resolved,
+      directories: [...cached.snapshot.directories],
+      files: cached.snapshot.files.map((file) => ({ ...file })),
+    };
+  }
+  for (const { relative_path: relativePath, path: entryPath, stat: before } of inventory) {
+    const content = await hashApplicationFile(entryPath);
+    const after = await fs.lstat(entryPath);
+    if (
+      after.isSymbolicLink()
+      || !after.isFile()
+      || content.size !== before.size
+      || before.dev !== after.dev
+      || before.ino !== after.ino
+      || before.size !== after.size
+      || before.mode !== after.mode
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error(`${sourceKind} application package changed while it was inspected: ${entryPath}`);
+    }
+    files.push({
+      relative_path: relativePath,
+      path: entryPath,
+      sha256: content.sha256,
+      mode: before.mode & 0o777,
+      size: before.size,
+    });
+  }
+  const snapshot = { interface_id: interfaceId, directory: resolved, directories, files };
+  if (cacheKey) {
+    if (applicationSnapshotCache.size >= APPLICATION_SNAPSHOT_CACHE_MAX) {
+      applicationSnapshotCache.delete(applicationSnapshotCache.keys().next().value);
+    }
+    applicationSnapshotCache.set(cacheKey, {
+      fingerprint,
+      snapshot: {
+        directories: [...directories],
+        files: files.map((file) => ({ ...file })),
+      },
+    });
+  }
+  return snapshot;
 }

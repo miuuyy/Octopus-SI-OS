@@ -5,7 +5,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { bundles, buildInfo, swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
-  packageAction, restartRuntime, parseArgs } = require("./safe-self-update.cjs");
+  packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions } = require("./safe-self-update.cjs");
 
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const roots = [];
@@ -382,6 +382,50 @@ async function main() {
   assert.equal(result.ok, true);
   assert.equal(result.revision, "staging");
   await runtime.close();
+
+  assert.deepEqual(resolveQuietWaitOptions(parseArgs(["restart", "--wait-quiet"]).options), { waitQuietMs: 300_000, quietWindowMs: 10_000 });
+  assert.deepEqual(resolveQuietWaitOptions(parseArgs(["restart", "--wait-quiet=45", "--quiet-for=5"]).options), { waitQuietMs: 45_000, quietWindowMs: 5_000 });
+  assert.throws(() => resolveQuietWaitOptions(parseArgs(["restart", "--quiet-for=5"]).options), /requires --wait-quiet/);
+  assert.throws(() => resolveQuietWaitOptions(parseArgs(["restart", "--wait-quiet=0"]).options), /between 1 and 3600/);
+
+  layout = fakeLayout();
+  runtime = await fakeRuntime([]);
+  try {
+    fakeProjectionBundle(layout, [], []);
+    ledger = fakeLedger(runtime.home);
+    ledger.dispatch("memory_observer", "turn/start", 5);
+    setTimeout(() => ledger.close("memory_observer", "turn.completed", 6), 40);
+    result = await restartRuntime(layout, runtime.home, { ...options, swap: true, waitQuietMs: 1000, quietWindowMs: 30, pollIntervalMs: 15 });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, "staging");
+    assert.ok(result.attempts >= 2);
+    assert.equal(buildInfo(layout.live).revision, "staging");
+  } finally { await runtime.close(); }
+
+  layout = fakeLayout();
+  runtime = await fakeRuntime([]);
+  try {
+    fakeProjectionBundle(layout, [], []);
+    ledger = fakeLedger(runtime.home);
+    ledger.dispatch("stuck_observer", "turn/start", 5);
+    result = await restartRuntime(layout, runtime.home, { ...options, swap: true, waitQuietMs: 80, quietWindowMs: 20, pollIntervalMs: 15 });
+    assert.equal(result.ok, false);
+    assert.equal(result.refused, "turns_in_flight");
+    assert.equal(result.timed_out, true);
+    assert.equal(buildInfo(layout.live).revision, "live");
+  } finally { await runtime.close(); }
+
+  layout = fakeLayout();
+  runtime = await fakeRuntime([]);
+  try {
+    fakeProjectionBundle(layout, [], []);
+    fakeLedger(runtime.home).raw('{"seq":0\n');
+    result = await restartRuntime(layout, runtime.home, { ...options, swap: true, waitQuietMs: 500, quietWindowMs: 20, pollIntervalMs: 15 });
+    assert.equal(result.ok, false);
+    assert.equal(result.refused, "turn_evidence_untrusted");
+    assert.equal(result.timed_out, undefined);
+    assert.equal(result.attempts, 1);
+  } finally { await runtime.close(); }
 
   layout = fakeLayout();
   await assert.rejects(restartRuntime(layout, tempRoot(), { ...options, swap: true, readTurns: idle }), /no runtime answers/);

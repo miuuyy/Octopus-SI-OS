@@ -382,3 +382,36 @@ test("CLI up forwards its explicit readiness deadline without starting a runtime
     assert.equal(JSON.parse(output).phase, "ready");
   }
 });
+
+test("CLI client commands fail closed upfront on an incomplete distribution and runtime commands forward cleanly", async () => {
+  const { createEnvironment, requireDistribution } = require("../cli/environment.cjs");
+  const { main } = require("../cli/index.cjs");
+  const root = await fs.realpath(await fs.mkdtemp("/tmp/oct-cli-dist-"));
+  try {
+    const missingEnv = createEnvironment({ home: path.join(root, "home"), userHome: root, repoRoot: root, env: {} });
+    assert.throws(() => requireDistribution(missingEnv), /build:cli.*--bundle/);
+    const fakeApp = path.join(root, "app/build/Octopus.app/Contents/Resources/app/local-packages");
+    await fs.mkdir(fakeApp, { recursive: true });
+    if (process.platform === "darwin") {
+      assert.throws(() => requireDistribution(missingEnv), /Octopus\.app/);
+    }
+    let stderr = "";
+    const code = await main(["tasks", "--home", path.join(root, "home"), "--bundle", path.join(root, "missing-dist")], {
+      stdin: { isTTY: false }, stdout: { write() {} }, stderr: { write: (text) => { stderr += text; } },
+    });
+    assert.equal(code, 1);
+    assert.match(stderr, /Terminal distribution is incomplete/);
+
+    const binDir = path.join(root, "dist/bin");
+    await fs.mkdir(binDir, { recursive: true });
+    const fakeBin = path.join(binDir, "octopus");
+    await fs.writeFile(fakeBin, `#!${process.execPath}\nconsole.log("ok:" + process.argv[2]);\n`, { mode: 0o700 });
+    const env = createEnvironment({ home: path.join(root, "home"), userHome: root, installationRoot: path.join(root, "dist"), env: {} });
+    const result = await env.doctor();
+    assert.equal(result.ok, true);
+    assert.equal(result.stdout.trim(), "ok:doctor");
+    env.close();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

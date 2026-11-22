@@ -294,7 +294,7 @@ node app/scripts/safe-self-update.cjs status
 node app/scripts/safe-self-update.cjs build      # into app/build/Octopus.staging.app
 node app/scripts/safe-self-update.cjs verify
 node app/scripts/safe-self-update.cjs packages status
-node app/scripts/safe-self-update.cjs restart --swap --caller-run=<run id> --detach --log=/private/tmp/self-update.log
+node app/scripts/safe-self-update.cjs restart --swap --wait-quiet --detach --log=/private/tmp/self-update.log
 ```
 
 | Command | What it does |
@@ -305,7 +305,7 @@ node app/scripts/safe-self-update.cjs restart --swap --caller-run=<run id> --det
 | `packages status` | Installed packages compared with the live bundle's package library, and baseline registry files that differ from the bundle. Read-only. |
 | `packages sync` | Repairs every installed package whose source changed and that has no local changes, through the client's own `repairLocalPackages`. Packages with local changes or errors are listed, never forced. `world_operator_chat` is repaired only with `--with-chat-client`; relaunch the client afterwards. `--only=a,b` narrows the set. |
 | `swap` | `Octopus.app` → `Octopus.prev.app`, `Octopus.staging.app` → `Octopus.app`: two renames, the first undone if the second fails. |
-| `restart` | Refuses while any run has a turn in flight, except `--caller-run` and each run named by a repeatable `--allow-in-flight-run <run id>` (`--force` overrides already-observed open turns, not changed or untrusted evidence). With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` in which no interface fails that was not already failing before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1, naming the regressed interfaces in `new_interface_failures`; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
+| `restart` | Refuses while any run has a turn in flight, except `--caller-run` and each run named by a repeatable `--allow-in-flight-run <run id>` (`--force` overrides already-observed open turns, not changed or untrusted evidence). `--wait-quiet[=<seconds>]` (default 300 s, bounded to 1–3600 s) waits for open turns—including post-turn background observers—and ledger writes to settle continuously for `--quiet-for=<seconds>` (default 10 s), still failing closed immediately on runtime changes or unreadable/corrupt ledgers and failing closed on timeout. With `--swap` it swaps after the guard passes. It then sends `restart` to the control socket and waits up to 300 s for a new instance in phase `ready` in which no interface fails that was not already failing before. Otherwise it restores `Octopus.prev.app`, restarts again and exits 1, naming the regressed interfaces in `new_interface_failures`; when no runtime answers after the rollback it exits 1 naming the restored bundle to start. |
 | `rollback` | `Octopus.app` → `Octopus.failed.app`, `Octopus.prev.app` → `Octopus.app`. Restart afterwards. |
 
 Every build ends with a notice of how much disk space the build output takes

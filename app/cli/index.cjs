@@ -31,7 +31,10 @@ const HELP = `Octopus — your agentic operating system, in the terminal
   octopus download <task> <attachment-id> <file>  Save an admitted attachment
   octopus setup                    Set up a new Home interactively
   octopus up                       Start or join the shared runtime
+  octopus down                     Stop the running shared runtime cleanly
+  octopus restart                  Restart the running shared runtime in place
   octopus status                   Inspect runtime and Home readiness
+  octopus doctor                   Verify the active registry, client packages, and probes
 
 Options:
   --home <path>                   The same Home used by the desktop client
@@ -110,7 +113,7 @@ async function main(argv = process.argv.slice(2), io = process) {
       ...(flags.access === undefined ? {} : { access: taskAccess(flags.access) }),
     };
     const words = [...parsed.positionals];
-    const known = new Set(["chat", "resume", "exec", "send", "watch", "tasks", "history", "inspect", "projects", "models", "answer", "stop", "rename", "archive", "restore", "delete", "export", "setup", "up", "status", "agent", "project", "download"]);
+    const known = new Set(["chat", "resume", "exec", "send", "watch", "tasks", "history", "inspect", "projects", "models", "answer", "stop", "rename", "archive", "restore", "delete", "export", "setup", "up", "down", "restart", "status", "doctor", "agent", "project", "download"]);
     const command = known.has(words[0]) ? words.shift() : "chat";
     const report = (value) => {
       if (json) io.stdout.write(`${JSON.stringify(value)}\n`);
@@ -121,6 +124,31 @@ async function main(argv = process.argv.slice(2), io = process) {
       report(await environment.start({ timeoutMs: parsed.timeoutMs > 0 ? parsed.timeoutMs : undefined,
         onProgress: (value) => progress(io, json, value.phase.replaceAll("_", " ")) }));
       return 0;
+    }
+    if (command === "down" || command === "restart" || command === "doctor") {
+      if (words.length) throw new Error(`${command} does not accept positional arguments. See --help.`);
+      const controller = new AbortController();
+      let interrupted = false;
+      signalHandler = () => { interrupted = true; controller.abort(); };
+      process.on("SIGINT", signalHandler);
+      try {
+        const result = await environment[command]({
+          signal: controller.signal,
+          ...(json ? {} : {
+            onStdout: (text) => io.stdout.write(safeText(text)),
+            onStderr: (text) => io.stderr.write(safeText(text)),
+          }),
+        });
+        if (json) report(result);
+        return result.exitCode;
+      } catch (error) {
+        if (interrupted && error?.code === "ABORT_ERR") {
+          if (json) report({ type: "error", code: "interrupted", message: error.message });
+          else progress(io, false, `Interrupted '${command}'.`);
+          return 130;
+        }
+        throw error;
+      }
     }
     let terminal;
     if (command === "chat" || command === "resume" || command === "setup") {
@@ -135,6 +163,7 @@ async function main(argv = process.argv.slice(2), io = process) {
         report(await environment.setup({
           ui, nonInteractive: flags["non-interactive"], packId: flags.pack,
           workspaceName: flags["workspace-name"], projectName: flags["project-name"],
+          providerId: flags.provider,
           model: flags.model, reasoningEffort: flags.effort, serviceTier: flags["service-tier"],
           signIn: flags["non-interactive"] ? flags["sign-in"] : true, recommended: [],
         }));
@@ -149,6 +178,7 @@ async function main(argv = process.argv.slice(2), io = process) {
         finally { ui.close(); }
       }
     }
+    environment.requireDistribution?.();
     const { createClient } = require("./client.cjs");
     client = createClient(environment);
     if (command === "chat" || command === "resume") {
@@ -377,7 +407,7 @@ function safeText(text) { return require("./presentation.cjs").safeText(text); }
 function commandHelp(words) {
   if (words[0] === "project") return `Octopus Projects\n\n  octopus project create "Project name" [--project <parent-id>] [--policy <id>]\n  octopus project policies [--project <parent-id>] [--json]\n  octopus project folders <project-id> <folder>... [--json]\n\nNew Projects use their parent's policy unless an allowed policy is selected.\nThe first folder is the Project's Primary folder; editing folders affects future tasks.\nUse 'octopus projects' to find existing Project IDs.\n`;
   if (words[0] === "agent") return `Octopus Agents\n\n  octopus agent create "Agent name" --project <id> --provider <id> --model <id> --effort <level> [--application <id>]...\n\nUse 'octopus projects --json' for Project IDs and 'octopus models --project <id> --json'\nfor the exact permitted provider, model, and reasoning choices.\nThe Agent uses that Project's configured Drivers and its default Applications;\n--application selects the Applications explicitly instead.\n`;
-  if (words[0] === "setup") return `Octopus setup\n\n  octopus setup [--home <path>]\n  octopus setup --home <path> --non-interactive --pack <id> --workspace-name <name>\n    --project-name <name> --model <id> --effort <level>\n\nInteractive setup lists installed choices and guides provider sign-in.\nNoninteractive setup requires existing provider sign-in. Configured Homes are preserved.\n`;
+  if (words[0] === "setup") return `Octopus setup\n\n  octopus setup [--home <path>]\n  octopus setup --home <path> --non-interactive --pack <id> --workspace-name <name>\n    --project-name <name> [--provider <id>] --model <id> --effort <level>\n\nInteractive setup lists installed choices and guides provider sign-in or credentials.\nNoninteractive setup requires existing provider sign-in or credentials (for API-key providers, via the provider's auth_env_key or saved private environment.json). Configured Homes are preserved.\n`;
   return HELP;
 }
 

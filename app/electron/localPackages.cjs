@@ -53,7 +53,7 @@ async function readLocalPackageCatalog(options) {
     for (const entry of library.packages) {
       try {
         const source = await snapshotPackageSource(roots, entry.manifest, sourceRead);
-        const state = await readPackageState(roots, entry.manifest, source);
+        const state = await readPackageState(roots, entry.manifest, source, { cacheActive: true });
         packages.push(packageCatalogRecord(entry, source, state));
       } catch (error) {
         packages.push({
@@ -1509,7 +1509,7 @@ function jsonPointerToken(value) {
   return value.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
-async function readPackageState(roots, manifest, source) {
+async function readPackageState(roots, manifest, source, options = {}) {
   const receiptResult = await readReceipt(roots, manifest.id);
   const activeMembers = [];
   let present = 0;
@@ -1521,7 +1521,9 @@ async function readPackageState(roots, manifest, source) {
     }
     await requirePlainDirectory(path.dirname(target), path.dirname(target));
     present += 1;
-    const snapshot = await snapshotDirectory(target);
+    const snapshot = await snapshotDirectory(target, {
+      cacheKey: options.cacheActive ? `active\0${roots.activeRegistryRoot}\0${memberKey(member)}` : "",
+    });
     validateMemberDataPaths(member, snapshot);
     await validateInstalledDescriptor(member, snapshot);
     const baseline = receiptResult?.members.find(candidate => memberKey(candidate) === memberKey(member));
@@ -1702,11 +1704,15 @@ async function snapshotDirectory(rootValue, options = {}) {
     }
   };
   await visit(root, "");
-  const fingerprint = hashJson({ directories, files: inventory.map((file) => ({
-    path: file.relative_path, size: file.stat.size, mode: file.stat.mode, mtime: file.stat.mtimeMs, ctime: file.stat.ctimeMs, inode: file.stat.ino,
+  const fingerprint = hashJson({ directories, excludedEntries, files: inventory.map((file) => ({
+    path: file.relative_path, dev: file.stat.dev, size: file.stat.size, mode: file.stat.mode, mtime: file.stat.mtimeMs, ctime: file.stat.ctimeMs, inode: file.stat.ino,
   })) });
   const cached = options.cacheKey ? sourceSnapshotCache.get(options.cacheKey) : null;
-  if (cached?.fingerprint === fingerprint) return cached.snapshot;
+  if (cached?.fingerprint === fingerprint) {
+    sourceSnapshotCache.delete(options.cacheKey);
+    sourceSnapshotCache.set(options.cacheKey, cached);
+    return cached.snapshot;
+  }
   for (const { path: absolute, relative_path: relative, stat } of inventory) {
     const handle = await fs.open(absolute, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
     let content;
@@ -1722,7 +1728,7 @@ async function snapshotDirectory(rootValue, options = {}) {
   const digest = snapshotDigest(files);
   const snapshot = { root, directories, files, digest, excludedEntries };
   if (options.cacheKey) {
-    if (sourceSnapshotCache.size >= 256) sourceSnapshotCache.delete(sourceSnapshotCache.keys().next().value);
+    if (sourceSnapshotCache.size >= 1024) sourceSnapshotCache.delete(sourceSnapshotCache.keys().next().value);
     sourceSnapshotCache.set(options.cacheKey, { fingerprint, snapshot });
   }
   return snapshot;

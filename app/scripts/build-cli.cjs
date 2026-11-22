@@ -26,11 +26,15 @@ async function buildCli({ runtime = false, target = null } = {}) {
   if (runtime) {
     const repoRoot = path.dirname(appRoot);
     const registry = path.join(repoRoot, "registry");
-    const packager = require("./runtime-package.cjs").createRuntimePackager({ repoRoot, appRoot, outputRoot: path.join(outdir, "runtime") });
+    const packager = require("./runtime-package.cjs").createRuntimePackager({ repoRoot, appRoot, outputRoot: path.join(outdir, "runtime"), platform: cli.platform });
     const provider = path.join(registry, "interface/world_provider_codex/packages/octopus-provider-codex");
     const bridge = path.join(provider, "opencodex-bridge");
-    run("npm", ["ci"], bridge);
-    run("npm", ["run", "build"], bridge);
+    if (packager.isOpenCodexBridgeCurrent(bridge, cli)) {
+      process.stdout.write(`Reusing current opencodex-bridge executable for ${cli.triple}\n`);
+    } else {
+      run("npm", ["ci"], bridge);
+      run("npm", ["run", "build"], bridge);
+    }
     if (cli.components.desktop_native) {
       const desktop = path.join(registry, "worker_environment_kind/desktop_session/packages/octopus-system-gui-env/native");
       require(path.join(desktop, "build.cjs")).buildDesktopNative(path.join(desktop, "bin/octopus-desktop-native"));

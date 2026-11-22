@@ -56,7 +56,7 @@ const managedCodexRoot = path.join(openCodexOwnerRoot, "managed-cli");
 const managedCodexDistribution = require(path.join(managedCodexRoot, "bootstrap.cjs"));
 const openCodexLifeBinary = "octopus-provider-opencodex-life";
 const inputIntakeLifeBinary = "octopus-input-intake-life";
-const { captureProviderSigningInputs, sealProviderSigningInputs, signClientResources, bundleManagedCodex, copyRegistrySurface, copyLocalPackageDefinitions, copyRegistryBaseline, collectBundledBinaries, sharedBinaries, materializeProviderLife, validateOpenCodexOwnerAssets, copyBundledBinaries, registryExecutableOwnership, rewriteBundledExecutablePaths, stripExecutables, transformExecutableCopies, validateBundledLayout } =
+const { captureProviderSigningInputs, sealProviderSigningInputs, signClientResources, bundleManagedCodex, copyRegistrySurface, copyLocalPackageDefinitions, copyRegistryBaseline, collectBundledBinaries, sharedBinaries, materializeProviderLife, isOpenCodexBridgeCurrent, validateOpenCodexOwnerAssets, copyBundledBinaries, registryExecutableOwnership, rewriteBundledExecutablePaths, stripExecutables, transformExecutableCopies, validateBundledLayout } =
   require("./runtime-package.cjs").createRuntimePackager({ repoRoot, appRoot, outputRoot: bundledAppRoot });
 
 for (const asset of [
@@ -213,6 +213,10 @@ function requireRebuiltTerminal() {
 }
 
 function buildOpenCodexBridge() {
+  if (isOpenCodexBridgeCurrent(openCodexBridgeRoot, { platform: process.platform, architecture: process.arch })) {
+    process.stdout.write(`Reusing current opencodex-bridge executable for ${process.platform}-${process.arch}\n`);
+    return;
+  }
   run("npm", ["ci"], openCodexBridgeRoot);
   run("npm", ["run", "build"], openCodexBridgeRoot);
 }

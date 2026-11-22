@@ -113,6 +113,10 @@ They use the same user-facing operations as interactive chat.
 
 ```sh
 ./octopus up
+./octopus status --json
+./octopus doctor
+./octopus restart
+./octopus down
 ./octopus projects --json
 ./octopus project create "Research" --json
 ./octopus project folders <project-id> ~/work/research --json
@@ -171,6 +175,12 @@ artifact references, coverage, and any uncertainty in the projection.
 `status --json` reports runtime and client readiness separately. An empty Home
 can have a running runtime before setup creates its client interface. Runtime
 startup logs are under the selected Home's `client/logs/runtime-terminal.log`.
+`down`, `restart`, and `doctor` forward to the selected runtime binary with the
+same `--home` and `--bundle` resolution; pass `--json` for structured output
+(`command`, `ok`, `exitCode`, `home`, `stdout`, `stderr`) while preserving the
+runtime exit code. Client commands require a complete distribution (`npm --prefix
+app run build:cli`, or an explicit `--bundle <path>` such as
+`app/build/Octopus.app`).
 
 The first terminal version omits voice, gesture controls, scheduled-task
 editing, graphical widgets, and extension downloads. Those configured

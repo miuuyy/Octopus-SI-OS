@@ -1,6 +1,12 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { modelServiceTiers, validateModelServiceTier } = require("./providerModelTiers.cjs");
+const {
+  readInterfaceEnvironmentDeclarations,
+  readInterfacePrivateEnvironmentDocument,
+  validInterfaceEnvironmentName,
+  writeInterfacePrivateValues,
+} = require("./projection/privateConfiguration.cjs");
 
 // Desktop account/catalog operations do not invoke a model or require a Home run.
 async function readProvider(registryRoot, id) {
@@ -12,6 +18,21 @@ async function readProvider(registryRoot, id) {
     throw new Error(`Interface '${id}' is not a provider.`);
   }
   return descriptor;
+}
+
+function providerSetupRequiredState(descriptor) {
+  return descriptor?.interface_driver_config?.private_config?.client_metadata !== undefined
+    ? "account_readable"
+    : "credential_configured";
+}
+
+function providerAuthEnvKey(descriptor) {
+  const key = descriptor?.interface_driver_config?.transport?.auth_env_key;
+  if (key === undefined || key === null || key === "") return null;
+  if (typeof key !== "string" || !validInterfaceEnvironmentName(key)) {
+    throw new Error(`Provider '${descriptor?.id ?? "unknown"}' declares an invalid auth_env_key.`);
+  }
+  return key;
 }
 
 async function loadClientMetadata(registryRoot, descriptor) {
@@ -38,7 +59,7 @@ async function loadClientMetadata(registryRoot, descriptor) {
   return client;
 }
 
-function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, accountClient, reference }) {
+function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopusHome, accountClient, reference }) {
   async function catalog(providers, selectedRegistryRoot = registryRoot) {
     const root = selectedRegistryRoot();
     const cache = new Map();
@@ -77,6 +98,78 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, accoun
     if (registryRoot() !== root) throw new Error("Provider account scope changed during setup.");
     return result;
   }
+  async function credentialScope(plan) {
+    const root = registryRoot();
+    const descriptor = await readProvider(root, plan.provider.interface_id);
+    if (providerSetupRequiredState(descriptor) !== "credential_configured") {
+      throw new Error(`Provider '${descriptor.id}' requires desktop account sign-in, not credential configuration.`);
+    }
+    const authEnvKey = providerAuthEnvKey(descriptor);
+    if (!authEnvKey) return { root, descriptor, authEnvKey: null, home: "", interfaceDir: "", declaredNames: new Set() };
+    const home = typeof octopusHome === "function" ? octopusHome() : "";
+    if (typeof home !== "string" || !home.trim() || !path.isAbsolute(home)) {
+      throw new Error(`Provider '${descriptor.id}' credential setup requires an absolute Octopus Home path.`);
+    }
+    const declarations = await readInterfaceEnvironmentDeclarations(
+      descriptor,
+      descriptor.id,
+      path.join(root, "interface", descriptor.id),
+    );
+    const declaredNames = new Set([...declarations.map((entry) => entry.name), authEnvKey]);
+    return { root, descriptor, authEnvKey, home, interfaceDir: path.join(home, "interfaces", descriptor.id), declaredNames };
+  }
+  async function probeCredential(plan) {
+    const { root, descriptor, authEnvKey, home, interfaceDir, declaredNames } = await credentialScope(plan);
+    if (!authEnvKey) {
+      if (registryRoot() !== root) throw new Error("Provider credential scope changed during setup.");
+      return [reference("provider_observation", descriptor.id, {
+        source: "descriptor.no_auth_required",
+        auth_required: false,
+        configured: true,
+      })];
+    }
+    const document = await readInterfacePrivateEnvironmentDocument(interfaceDir, descriptor.id, declaredNames);
+    if (registryRoot() !== root || octopusHome() !== home) {
+      throw new Error("Provider credential scope changed during setup.");
+    }
+    if (!document.values.has(authEnvKey)) return null;
+    return [reference("provider_observation", descriptor.id, {
+      source: "interface.private_environment",
+      auth_env_key: authEnvKey,
+      configured: true,
+      document_digest: document.digest,
+    })];
+  }
+  async function applyCredential(plan, options = {}) {
+    const { root, descriptor, authEnvKey, home, interfaceDir, declaredNames } = await credentialScope(plan);
+    if (!authEnvKey) {
+      if (registryRoot() !== root) throw new Error("Provider credential scope changed during setup.");
+      return;
+    }
+    const existing = await readInterfacePrivateEnvironmentDocument(interfaceDir, descriptor.id, declaredNames);
+    if (existing.values.has(authEnvKey)) {
+      if (registryRoot() !== root || octopusHome() !== home) {
+        throw new Error("Provider credential scope changed during setup.");
+      }
+      return;
+    }
+    const targetFile = path.join(interfaceDir, "environment.json");
+    const resolveValue = options?.resolveValue;
+    if (typeof resolveValue !== "function") {
+      throw new Error(
+        `Provider '${descriptor.id}' requires '${authEnvKey}'. Set ${authEnvKey} in the environment or configure ${targetFile} (mode 0600) and rerun setup.`,
+      );
+    }
+    const value = await resolveValue({ providerId: descriptor.id, authEnvKey, descriptor, targetFile });
+    if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
+      throw new Error(`Provider '${descriptor.id}' credential '${authEnvKey}' must be a non-empty value.`);
+    }
+    await fs.mkdir(path.join(home, "interfaces"), { recursive: true, mode: 0o700 });
+    await writeInterfacePrivateValues(interfaceDir, descriptor.id, declaredNames, { [authEnvKey]: value });
+    if (registryRoot() !== root || octopusHome() !== home) {
+      throw new Error("Provider credential scope changed during setup.");
+    }
+  }
   return {
     catalog,
     async setupCatalog(localPackages) {
@@ -100,8 +193,12 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, accoun
       return { ...localPackages, packs };
     },
     setupOwner: {
-      probe: (plan) => accountOperation(plan, "probeAccount"),
-      apply: (plan) => accountOperation(plan, "signIn"),
+      probe: (plan) => (plan?.provider?.required_state === "credential_configured"
+        ? probeCredential(plan)
+        : accountOperation(plan, "probeAccount")),
+      apply: (plan, options) => (plan?.provider?.required_state === "credential_configured"
+        ? applyCredential(plan, options)
+        : accountOperation(plan, "signIn")),
     },
     async models(request) {
       const id = request?.providerInterfaceId;
@@ -164,4 +261,10 @@ function validateProviderModelSelection(providers, request) {
   validateModelServiceTier(model, requestedTier);
 }
 
-module.exports = { createClientProviderMetadata, validateProviderModelSelection };
+module.exports = {
+  createClientProviderMetadata,
+  validateProviderModelSelection,
+  providerSetupRequiredState,
+  providerAuthEnvKey,
+  readProviderDescriptor: readProvider,
+};

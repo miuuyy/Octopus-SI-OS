@@ -26,16 +26,30 @@ async function runClientDoctor(options) {
   let checks = 0;
   for (const check of CHECKS) {
     checks += 1;
+    let installation = null;
     try {
-      const installation = await inspectInstallation({ ...roots, packageId: check.packageId, includeFileSnapshot: true });
+      installation = await inspectInstallation({ ...roots, packageId: check.packageId, includeFileSnapshot: true });
       await check.validate(installation, installation.file_snapshot, path.join(roots.activeRegistryRoot, "interface", check.packageId, "client.cjs"));
     } catch (error) {
-      findings.push(finding(
-        "client.package_owner_invalid",
-        check.id,
-        errorMessage(error),
-        `Inspect the installed '${check.packageId}' owner and correct its missing files or invalid client contract. Preserve local edits.`,
-      ));
+      if (
+        check.id === "operator_chat.client_owner"
+        && isUninstalledOperatorChat(installation)
+        && await isUnconfiguredHome(roots)
+      ) {
+        findings.push(finding(
+          "client.home_not_configured",
+          check.id,
+          `Home has not been initialized with setup yet, so '${check.packageId}' is not installed.`,
+          "Run 'octopus setup' (or complete onboarding in the desktop app) to configure this Home.",
+        ));
+      } else {
+        findings.push(finding(
+          "client.package_owner_invalid",
+          check.id,
+          errorMessage(error),
+          `Inspect the installed '${check.packageId}' owner and correct its missing files or invalid client contract. Preserve local edits.`,
+        ));
+      }
     }
   }
 
@@ -274,6 +288,37 @@ function addBinding(bound, artifactId, owner) {
   const bindings = bound.get(artifactId) ?? new Set();
   bindings.add(owner);
   bound.set(artifactId, bindings);
+}
+
+function isUninstalledOperatorChat(installation) {
+  return Boolean(
+    installation
+    && installation.available === true
+    && installation.installed !== true
+    && installation.materialized !== true
+    && installation.partially_materialized !== true
+    && installation.receipt_state === "missing"
+  );
+}
+
+async function isUnconfiguredHome(roots) {
+  const octopusHome = path.dirname(roots.activeRegistryRoot);
+  try {
+    const nonCoordination = (entries) => entries.some((entry) => entry.name !== ".octopus-publication");
+    if (nonCoordination(await directoryEntries(path.join(octopusHome, "client-state", "workspace", "receipts")))) return false;
+    if (nonCoordination(await directoryEntries(path.join(octopusHome, "client-state", "workspace", "transactions")))) return false;
+    const host = await readJsonIfPresent(path.join(octopusHome, "host.json"));
+    const runsRoot = typeof host?.root_refs?.run_records_root === "string" && path.isAbsolute(host.root_refs.run_records_root)
+      ? host.root_refs.run_records_root
+      : path.join(octopusHome, "state", "runs");
+    const runs = await directoryEntries(runsRoot);
+    if (runs.some((entry) => entry.isFile() && entry.name.endsWith(".json"))) return false;
+    const interfaces = await directoryEntries(path.join(roots.activeRegistryRoot, "interface"));
+    if (interfaces.some((entry) => entry.isDirectory() && entry.name.startsWith("world_operator_chat_"))) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function directoryEntries(root) {

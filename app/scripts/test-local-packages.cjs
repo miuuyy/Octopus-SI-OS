@@ -913,6 +913,27 @@ async function offeredWorkersHostApplications() {
   }
 }
 
+async function unconfiguredHomeDoctorFixture() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-doctor-unconfigured-")));
+  try {
+    const roots = rootsFor(root);
+    for (const dir of [path.join(roots.activeRegistryRoot, "interface"), path.join(roots.sourceRegistryRoot, "interface"), path.join(roots.libraryRoot, "packages"), path.join(roots.libraryRoot, "packs")]) {
+      await fs.mkdir(dir, { recursive: true });
+    }
+    const missingChat = async () => ({
+      id: "world_operator_chat", available: true, installed: false, materialized: false, partially_materialized: false,
+      receipt_state: "missing", file_snapshot: { members: [] },
+      member_states: [{ registry_kind: "interface", owner: "world_operator_chat", materialized: false }],
+    });
+    const unconfigured = await runClientDoctor({ roots, inspectInstallation: missingChat, inspectCatalog: async () => ({ errors: [], packages: [] }) });
+    assert.equal(unconfigured.findings[0].code, "client.home_not_configured");
+    assert.equal(unconfigured.passed, 0);
+    await writeJson(path.join(roots.octopusHomeRoot, "state/runs/run_home.json"), { id: "run_home", status: "idle", checkpoints: [], active_checkpoints: [] });
+    const configured = await runClientDoctor({ roots, inspectInstallation: missingChat, inspectCatalog: async () => ({ errors: [], packages: [] }) });
+    assert.equal(configured.findings[0].code, "client.package_owner_invalid");
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+}
+
 if (process.argv[2] === "--child") {
   crashChild(process.argv[3], process.argv[4]).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
@@ -923,6 +944,7 @@ if (process.argv[2] === "--child") {
     if (!process.argv[2]) await editableInstalledOwnerFixture();
     if (!process.argv[2]) await applicationHostFixture();
     if (!process.argv[2]) await offeredWorkersHostApplications();
+    if (!process.argv[2]) await unconfiguredHomeDoctorFixture();
     if (!process.argv[2]) await cloneIsolationFixture();
     if (!process.argv[2]) await require("./test-package-ownership.cjs").runPackageOwnership();
     if (!process.argv[2]) await require("./test-configuration-diagnostics.cjs").runConfigurationDiagnostics();

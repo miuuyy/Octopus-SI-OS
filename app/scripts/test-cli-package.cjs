@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
-const { createRuntimePackager } = require("./runtime-package.cjs");
+const { createRuntimePackager, stripArgsForPlatform, isOpenCodexBridgeCurrent } = require("./runtime-package.cjs");
 
 test("CLI and desktop share exact owner executable materialization", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-cli-package-"));
@@ -66,5 +66,8 @@ test("CLI and desktop share exact owner executable materialization", () => {
     assert.equal(fs.existsSync(path.join(source, "interface/test_door/packages/bin")), false);
     assert.equal(fs.existsSync(path.join(outputRoot, "registry/tool/test.run")), false);
     assert.throws(() => builder.materializeOwnerExecutable(registry, "interface", "../foreign", "test-life", owned), /invalid executable owner/);
+    assert.deepEqual(stripArgsForPlatform("linux"), ["--strip-unneeded"]);
+    assert.deepEqual(stripArgsForPlatform("darwin"), ["-x"]);
+    assert.equal(isOpenCodexBridgeCurrent(path.join(root, "absent-bridge"), { platform: "darwin", architecture: "arm64" }), false);
   } finally { fs.rmSync(root, { recursive: true }); }
 });

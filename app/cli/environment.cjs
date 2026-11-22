@@ -20,6 +20,8 @@ const privateEnvironments = new WeakMap();
 const starts = new Map();
 const PACKAGE_COMMAND = "npm --prefix app run build:cli (or node app/scripts/package-cli.cjs to package existing release binaries)";
 const execute = promisify(execFile);
+const RUNTIME_COMMANDS = new Set(["down", "restart", "doctor"]);
+const RUNTIME_COMMAND_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 
 function taskRetirementBarrier(environment) {
   const load = async () => {
@@ -81,7 +83,7 @@ function resolveEnvironment(options = {}) {
     PATH: [path.dirname(runtimeBinary), path.join(installationRoot, "bin"), merged.PATH ?? ""].join(path.delimiter),
   };
   const endpoint = normalizedEndpoint(options.endpoint ?? merged.OCTOPUS_APP_LISTEN ?? "", home, "world_operator_chat");
-  if (!endpoint.startsWith("unix://")) throw new Error("The local macOS terminal client requires a Unix runtime endpoint.");
+  if (!endpoint.startsWith("unix://")) throw new Error("The local terminal client requires a Unix runtime endpoint.");
   requireSocketLength(endpoint.slice(7));
   const result = {
     home, repoRoot, installationRoot, sourceRegistry, runtimeBinary, launchEnv, endpoint, packageRoots,
@@ -106,6 +108,10 @@ function createEnvironment(options = {}) {
     ...resolved,
     async status(request = {}) { return status(environment, request, () => statusProjection ??= projectionStore(environment)); },
     async start(request = {}) { return start(environment, request); },
+    async down(request = {}) { return runRuntimeCommand(environment, "down", request); },
+    async restart(request = {}) { return runRuntimeCommand(environment, "restart", request); },
+    async doctor(request = {}) { return runRuntimeCommand(environment, "doctor", request); },
+    requireDistribution() { return requireDistribution(environment); },
     async setup(request = {}) { return require("./setup.cjs").setupEnvironment(environment, request); },
     accountClient(request = {}) {
       if (request.openExternal !== undefined) {
@@ -113,7 +119,7 @@ function createEnvironment(options = {}) {
         signInHandler = request.openExternal;
       }
       if (!account) account = createChatgptSignIn({
-        codexBinary: () => { requireExecutable(environment.codexBinary, "managed Codex"); return environment.codexBinary; },
+        codexBinary: () => { requireExecutable(environment.codexBinary, "managed Codex", environment); return environment.codexBinary; },
         codexHome: () => environment.codexHome,
         version: () => require("../package.json").version,
         openExternal: async (url) => {
@@ -209,6 +215,83 @@ async function start(environment, options = {}) {
   return options.requireEndpoint === true ? waitForClient(environment, options) : status(environment, options);
 }
 
+async function runRuntimeCommand(environment, command, options = {}) {
+  if (!RUNTIME_COMMANDS.has(command)) throw new Error(`Unsupported runtime command '${command}'.`);
+  assertNotAborted(options.signal);
+  requireExecutable(environment.runtimeBinary, "release runtime", environment);
+  const baseEnv = privateEnvironments.get(environment)?.childEnv ?? { ...process.env, ...environment.launchEnv };
+  const childEnv = { ...baseEnv };
+  if (childEnv.OCTOPUS_NODE || process.env.OCTOPUS_NODE) {
+    const nodeDir = path.dirname(process.execPath);
+    const currentPath = childEnv.PATH ?? "";
+    if (!currentPath.split(path.delimiter).includes(nodeDir)) {
+      childEnv.PATH = currentPath ? `${nodeDir}${path.delimiter}${currentPath}` : nodeDir;
+    }
+  }
+  const onStdout = typeof options.onStdout === "function" ? options.onStdout : null;
+  const onStderr = typeof options.onStderr === "function" ? options.onStderr : null;
+  return new Promise((resolve, reject) => {
+    const child = spawn(environment.runtimeBinary, [command], {
+      cwd: environment.launchCwd,
+      env: childEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let truncated = false;
+    let settled = false;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const onAbort = () => { try { child.kill("SIGTERM"); } catch {} };
+    if (options.signal) options.signal.addEventListener("abort", onAbort, { once: true });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      onStdout?.(chunk);
+      const bytes = Buffer.byteLength(chunk);
+      if (stdoutBytes + bytes <= RUNTIME_COMMAND_OUTPUT_LIMIT_BYTES) {
+        stdout += chunk;
+        stdoutBytes += bytes;
+      } else truncated = true;
+    });
+    child.stderr.on("data", (chunk) => {
+      onStderr?.(chunk);
+      const bytes = Buffer.byteLength(chunk);
+      if (stderrBytes + bytes <= RUNTIME_COMMAND_OUTPUT_LIMIT_BYTES) {
+        stderr += chunk;
+        stderrBytes += bytes;
+      } else truncated = true;
+    });
+    child.once("error", (error) => finish(error));
+    child.once("close", (code, signal) => {
+      if (options.signal?.aborted) {
+        const error = new Error(`Terminal '${command}' cancelled.`);
+        error.code = "ABORT_ERR";
+        finish(error);
+        return;
+      }
+      const exitCode = typeof code === "number" ? code : 1;
+      finish(null, {
+        command,
+        ok: exitCode === 0 && !signal,
+        exitCode,
+        ...(signal ? { signal } : {}),
+        home: environment.home,
+        stdout,
+        stderr,
+        ...(truncated ? { truncated: true } : {}),
+      });
+    });
+  });
+}
+
 async function launchRuntime(environment, options) {
   const host = runtimeHost(environment);
   let observed = await host.probe();
@@ -216,7 +299,7 @@ async function launchRuntime(environment, options) {
   let child = null;
   let exit = null;
   if (observed.pid == null) {
-    requireExecutable(environment.runtimeBinary, "release runtime");
+    requireExecutable(environment.runtimeBinary, "release runtime", environment);
     requireDistribution(environment);
     const assertStopped = async () => {
         assertNotAborted(options.signal);
@@ -324,21 +407,46 @@ function readEnvironmentFile(file) {
   return parseEnv(fs.readFileSync(file, "utf8"));
 }
 
+function distributionHint(environment) {
+  if (environment?.repoRoot && environment.installationRoot === path.join(environment.repoRoot, "app", "build", "cli", "runtime")) {
+    const bundle = path.join(environment.repoRoot, "app", "build", "Octopus.app");
+    if (process.platform === "darwin" && fs.existsSync(path.join(bundle, "Contents", "Resources", "app", "local-packages"))) {
+      return `Build it with: ${PACKAGE_COMMAND}, or pass --bundle "${bundle}" to use the packaged desktop bundle.`;
+    }
+  }
+  return `Build it with: ${PACKAGE_COMMAND}, or pass --bundle <path> to select an existing compatible distribution.`;
+}
+
 function requireDistribution(environment) {
+  const repoInstallation = environment.installationRoot === environment.repoRoot;
+  const hint = distributionHint(environment);
   for (const root of [environment.sourceRegistry, environment.packageRoots.sourceRegistryRoot]) {
-    if (!fs.existsSync(path.join(root, ".octopus-source.json")) || !fs.existsSync(path.join(root, "interface"))) throw new Error(`Terminal distribution is incomplete at '${root}'. Build it with: ${PACKAGE_COMMAND}`);
+    if ((!repoInstallation && !fs.existsSync(path.join(root, ".octopus-source.json"))) || !fs.existsSync(path.join(root, "interface"))) {
+      throw new Error(`Terminal distribution is incomplete at '${root}'. ${hint}`);
+    }
   }
   for (const name of ["packages", "packs"]) {
-    if (!fs.existsSync(path.join(environment.packageRoots.libraryRoot, name))) throw new Error(`Terminal package library is incomplete. Build it with: ${PACKAGE_COMMAND}`);
+    if (!fs.existsSync(path.join(environment.packageRoots.libraryRoot, name))) {
+      throw new Error(`Terminal package library is incomplete at '${environment.packageRoots.libraryRoot}'. ${hint}`);
+    }
   }
 }
 
-function requireExecutable(file, label) {
+function environmentValue(environment, key) {
+  if (typeof key !== "string" || !key) return null;
+  const env = privateEnvironments.get(environment)?.childEnv ?? process.env;
+  const value = env?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function requireExecutable(file, label, environment = null) {
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile()) throw new Error("not a file");
     fs.accessSync(file, fs.constants.X_OK);
-  } catch { throw new Error(`The ${label} binary is unavailable at '${file}'. Build the terminal distribution with: ${PACKAGE_COMMAND}`); }
+  } catch {
+    throw new Error(`The ${label} binary is unavailable at '${file}'. ${distributionHint(environment)}`);
+  }
 }
 
 function bundleRoot(root) { return root.endsWith(".app") ? path.join(root, "Contents", "Resources", "app") : root; }
@@ -371,4 +479,4 @@ function positiveTimeout(value) {
 function assertNotAborted(signal) { if (signal?.aborted) { const error = new Error("Terminal operation cancelled; any shared runtime already started remains running."); error.code = "ABORT_ERR"; throw error; } }
 function runtimeError(message, environment) { const error = new Error(`${message} Runtime log: ${environment.logPath}`); error.logPath = environment.logPath; return error; }
 
-module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, projectionStore, requireDistribution };
+module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };

@@ -1,4 +1,16 @@
 #!/bin/sh
 set -eu
-octopus_checkout=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+octopus_source="$0"
+while [ -L "$octopus_source" ]; do
+  octopus_dir=$(CDPATH= cd -- "$(dirname -- "$octopus_source")" && pwd)
+  case "$octopus_source" in
+    -*) octopus_target=$(readlink "./$octopus_source") ;;
+    *) octopus_target=$(readlink "$octopus_source") ;;
+  esac
+  case "$octopus_target" in
+    /*) octopus_source="$octopus_target" ;;
+    *) octopus_source="$octopus_dir/$octopus_target" ;;
+  esac
+done
+octopus_checkout=$(CDPATH= cd -- "$(dirname -- "$octopus_source")" && pwd)
 exec "${OCTOPUS_NODE:-node}" "$octopus_checkout/app/cli/index.cjs" "$@"

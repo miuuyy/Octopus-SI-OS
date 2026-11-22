@@ -20,7 +20,7 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = n
       fs.mkdirSync(path.join(stage, "native", "build"), { recursive: true });
       copyFile(clientFilesystem, path.join(stage, "native", "build", path.basename(clientFilesystem)));
     }
-    const packager = createRuntimePackager({ repoRoot, appRoot, outputRoot: stage });
+    const packager = createRuntimePackager({ repoRoot, appRoot, outputRoot: stage, platform: cli.platform });
     const source = path.join(repoRoot, "registry");
     const baseline = path.join(stage, "registry");
     const library = path.join(stage, "local-packages");

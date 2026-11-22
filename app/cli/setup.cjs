@@ -4,14 +4,14 @@ const { createHash, randomUUID } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
 const { createClientSetupStore } = require("../electron/clientSetup.cjs");
 const { initializeWorkspace, readWorkspaceSetupState, workspaceInitializeRequestDigest } = require("../electron/workspaceSetup.cjs");
-const { applyLocalApplicationPack, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
+const { applyLocalApplicationPack, installLocalPackages, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
 const { createOperatorChatClientLoader } = require("../electron/operatorChatClientContract.cjs");
-const { createClientProviderMetadata, validateProviderModelSelection } = require("../electron/clientProviderMetadata.cjs");
+const { createClientProviderMetadata, validateProviderModelSelection, providerSetupRequiredState, readProviderDescriptor } = require("../electron/clientProviderMetadata.cjs");
 const { readProviderInterfaceDescriptors, mutateOctopusOsWorkspace, setupTriggerEntries, setupTriggerProof, armSetupTriggers, setupTriggerTaskPlanner } = require("../electron/projection.cjs");
 const { projectionReadRequest } = require("../electron/projectionReadContract.cjs");
 const { planClientAgentTemplate } = require("../electron/clientAgentCatalog.cjs");
 const { commitProjectionClientAuthoring } = require("../electron/clientWorkspaceAuthoring.cjs");
-const { taskRetirementBarrier, projectionStore, requireDistribution } = require("./environment.cjs");
+const { taskRetirementBarrier, projectionStore, requireDistribution, environmentValue } = require("./environment.cjs");
 
 const DIGEST = /^[a-f0-9]{64}$/;
 
@@ -19,21 +19,34 @@ async function setupEnvironment(environment, options = {}) {
   if (options.workspaceRoot !== undefined) throw new Error("Workspace paths belong to Project/Agent driver configuration. Setup does not accept workspaceRoot.");
   const progress = typeof options.onProgress === "function" ? options.onProgress : () => {};
   checkCancelled(options.signal);
-  await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
   requireDistribution(environment);
   const registryRoot = environment.packageRoots.activeRegistryRoot;
   const roots = { octopusHomeRoot: environment.home, registryRoot,
     publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) };
   const owners = createSetupOwners(environment, options);
-  const store = createClientSetupStore({ root: path.join(environment.home, "client", "setup-state"), owners });
+  const setupStateRoot = path.join(environment.home, "client", "setup-state");
+  const store = createClientSetupStore({ root: setupStateRoot, owners });
   try {
-    const workspace = await readWorkspaceSetupState(roots);
-    if (workspace.status === "degraded") throw new Error(`Workspace setup needs repair: ${workspace.errors.join("; ")}`);
-    const current = await store.readCurrent();
+    const workspaceLayoutPresent = (await Promise.all([
+      pathExists(path.join(environment.home, "state", "ee_instances")),
+      pathExists(path.join(registryRoot, "interface")),
+      pathExists(path.join(registryRoot, "tool")),
+    ])).every(Boolean);
+    const workspaceStatePresent = await pathExists(path.join(environment.home, "client-state", "workspace"));
+    let workspace = workspaceLayoutPresent || workspaceStatePresent
+      ? await readWorkspaceSetupState(roots)
+      : { status: "not_configured", receipt: null, errors: [] };
+    if (workspace.status === "degraded") {
+      await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+      workspace = await readWorkspaceSetupState(roots);
+      if (workspace.status === "degraded") throw new Error(`Workspace setup needs repair: ${workspace.errors.join("; ")}`);
+    }
+    const current = await pathExists(setupStateRoot) ? await store.readCurrent() : null;
     if (current?.status === "in_progress") {
       if (options.operationId && current.operationId !== options.operationId) throw new Error(`Setup '${current.operationId}' is in progress. Resume it before choosing another plan.`);
       if (workspace.status === "configured" && workspace.receipt.operation_id !== current.operationId) throw new Error("The unfinished setup and Home receipt belong to different operations.");
       assertSavedChoices(options, current.plan);
+      await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
       progress({ phase: "resuming_setup", operationId: current.operationId });
       await store.resume(current.operationId, { onProgress: progress });
       return finishSetup(environment, store, current.operationId, options);
@@ -42,7 +55,8 @@ async function setupEnvironment(environment, options = {}) {
       if (current && (current.operationId !== workspace.receipt.operation_id || current.plan.workspace.request_digest !== workspace.receipt.request_digest)) throw new Error("Completed client setup does not match Home's workspace receipt.");
       if (current) assertSavedChoices(options, current.plan);
       else if (hasNewChoices(options)) throw new Error("This Home is already configured. Existing setup choices cannot be replaced by setup.");
-      if (options.signIn) await ensureSignIn(environment, options);
+      if (options.signIn && (!current || current.plan.provider.required_state === "account_readable")) await ensureSignIn(environment, options);
+      await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
       return {
         status: "configured", changed: false, home: environment.home,
         workspace, setup: current,
@@ -52,9 +66,10 @@ async function setupEnvironment(environment, options = {}) {
     if (current) throw new Error("The completed client setup has no matching configured Home. Repair its evidence before continuing.");
     const catalog = await readLocalPackageCatalog(environment.packageRoots);
     const pack = await choosePack(catalog, options);
-    const choices = await collectChoices(environment, pack, options);
+    const choices = await collectChoices(environment, catalog, pack, options);
     const plan = compileSetupPlan(pack, choices);
     await verifySetupPlan(environment, plan);
+    await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
     progress({ phase: "setup_plan_ready", operationId: choices.operationId, pack: pack.name, workspace: choices.workspaceName });
     await store.begin({ operationId: choices.operationId, plan });
     await store.resume(choices.operationId, { onProgress: progress });
@@ -87,6 +102,7 @@ function createSetupOwners(environment, options = {}) {
   const getProjection = () => projection ??= projectionStore(environment);
   const metadata = createClientProviderMetadata({ registryRoot: () => registryRoot,
     sourceRegistryRoot: () => environment.packageRoots.sourceRegistryRoot,
+    octopusHome: () => environment.home,
     accountClient: () => environment.accountClient(), reference: setupReference });
 
   async function planSurface({ eeInstancesRoot, request }) {
@@ -145,6 +161,9 @@ function createSetupOwners(environment, options = {}) {
     if (state.status !== "configured" || state.receipt.operation_id !== context.operationId
       || state.receipt.request_digest !== plan.workspace.request_digest) return null;
     const references = [setupReference("workspace_receipt", context.operationId, state.receipt)];
+    if (plan.workspace.project_defaults.length) {
+      getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
+    }
     for (const entry of plan.workspace.project_defaults) {
       const context = await projectDefaultContext(getProjection(), entry, state.receipt);
       if (!context.proven) return null;
@@ -178,11 +197,24 @@ function createSetupOwners(environment, options = {}) {
       },
       async apply(plan, context) {
         checkCancelled(options.signal);
-        await verifySetupPlan(environment, plan);
+        const catalog = await verifySetupPlan(environment, plan);
+        const pack = catalog.packs.find((row) => row.id === plan.pack.id);
+        const packPackageIds = new Set(pack.components
+          .filter((row) => row.selection === "included" || plan.pack.selected_recommended.includes(row.package_id))
+          .map((row) => row.package_id));
+        const digestById = new Map(plan.packages.map((row) => [row.id, row.source_digest]));
         await applyLocalApplicationPack({ ...environment.packageRoots, operationId: context.operationId,
           packId: plan.pack.id, selectedRecommended: plan.pack.selected_recommended,
-          expectedSourceDigests: Object.fromEntries(plan.packages.map((row) => [row.id, row.source_digest])),
+          expectedSourceDigests: Object.fromEntries([...packPackageIds].map((id) => [id, digestById.get(id)])),
           assertMutable: loader.assertMutationAllowed, onProgress: options.onProgress });
+        const extraIds = plan.packages.filter((row) => !packPackageIds.has(row.id)).map((row) => row.id);
+        if (extraIds.length) {
+          const closureIds = packageClosureIds(catalog.packages, extraIds);
+          await installLocalPackages({ ...environment.packageRoots, operationId: context.operationId,
+            packageIds: closureIds,
+            expectedSourceDigests: Object.fromEntries(closureIds.map((id) => [id, digestById.get(id)])),
+            assertMutable: loader.assertMutationAllowed, packId: plan.pack.id, onProgress: options.onProgress });
+        }
         projection?.invalidate();
       },
     },
@@ -212,6 +244,9 @@ function createSetupOwners(environment, options = {}) {
           else if (state.status !== "configured" || state.receipt.operation_id !== context.operationId
             || state.receipt.request_digest !== plan.workspace.request_digest) throw new Error("Another setup already owns this Home, or workspace evidence is degraded.");
           const configured = await readWorkspaceSetupState(roots);
+          if (plan.workspace.project_defaults.length) {
+            getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
+          }
           for (const entry of plan.workspace.project_defaults) {
             const target = await projectDefaultContext(getProjection(), entry, configured.receipt);
             if (target.proven) continue;
@@ -226,7 +261,7 @@ function createSetupOwners(environment, options = {}) {
               commitClientAuthoring: (request) => commitProjectionClientAuthoring(environment.home, registryRoot, request,
                 { publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) }),
             });
-            getProjection().invalidate();
+            getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
           }
           const entries = await triggerEntries(plan);
           await armSetupTriggers(registryRoot, environment.home, entries, {
@@ -238,7 +273,7 @@ function createSetupOwners(environment, options = {}) {
               home: plan.workspace.request?.home,
             }),
           });
-          getProjection().invalidate();
+          getProjection().invalidate(true, "structure", "state/runs/triggers.json");
           if (!await setupTriggerProof(registryRoot, environment.home, entries)) throw new Error("Setup triggers were armed without read-back proof.");
         });
       },
@@ -247,6 +282,32 @@ function createSetupOwners(environment, options = {}) {
       probe: metadata.setupOwner.probe,
       async apply(plan) {
         checkCancelled(options.signal);
+        if (plan.provider.required_state === "credential_configured") {
+          await metadata.setupOwner.apply(plan, {
+            resolveValue: async ({ providerId, authEnvKey, targetFile }) => {
+              const fromEnv = environmentValue(environment, authEnvKey);
+              if (fromEnv) return fromEnv;
+              if (!options.nonInteractive && typeof options.ui?.ask === "function") {
+                const entered = await options.ui.ask({
+                  id: "provider_credential",
+                  prompt: `Enter ${authEnvKey} for ${providerId}`,
+                  defaultValue: "",
+                  secret: true,
+                });
+                checkCancelled(options.signal);
+                const trimmed = typeof entered === "string" ? entered.trim() : "";
+                if (trimmed) return trimmed;
+              }
+              throw new Error(
+                `Provider '${providerId}' requires '${authEnvKey}'. Set ${authEnvKey} in the environment or configure ${targetFile} (mode 0600) and rerun setup.`,
+              );
+            },
+          });
+          if (!await metadata.setupOwner.probe(plan)) {
+            throw new Error(`Provider '${plan.provider.interface_id}' credentials were configured without a readable private environment.`);
+          }
+          return;
+        }
         await ensureSignIn(environment, options);
         if (!await metadata.setupOwner.probe(plan)) throw new Error("ChatGPT sign-in completed without a readable account.");
       },
@@ -256,7 +317,6 @@ function createSetupOwners(environment, options = {}) {
 }
 
 async function projectDefaultContext(store, entry, receipt) {
-  store.invalidate();
   const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
   if (scope.status !== "ready" || scope.root_ee_id !== receipt.root_ee_id || scope.home_run_id !== receipt.home_run_id
     || scope.home_interface_id !== receipt.home_interface_id) throw new Error("Project defaults require the exact configured Home scope.");
@@ -301,7 +361,7 @@ async function choosePack(catalog, options) {
   return pack;
 }
 
-async function collectChoices(environment, pack, options) {
+async function collectChoices(environment, catalog, pack, options) {
   if (options.nonInteractive && !options.model) throw new Error("Noninteractive setup requires --model.");
   const recommended = uniqueStrings(options.recommended ?? [], "recommended packages");
   const recommendedIds = new Set(pack.components.filter((row) => row.selection === "recommended").map((row) => row.package_id));
@@ -316,11 +376,21 @@ async function collectChoices(environment, pack, options) {
   }
   if (!Array.isArray(projects) || projects.length > 24) throw new Error("Setup accepts up to 24 Projects.");
   projects = projects.map((row) => typeof row === "string" ? { name: row, goal: row } : row);
+  const providerId = options.providerId ?? pack.workspace_setup.home.provider_interface_id;
+  if (typeof providerId !== "string" || !/^[A-Za-z0-9_-]+$/.test(providerId)) throw new Error(`Invalid provider selection '${providerId}'.`);
+  const { extraPackages, providerPackage } = resolveProviderPackages(catalog, selected, providerId);
   const providers = await readProviderInterfaceDescriptors(environment.packageRoots.sourceRegistryRoot);
-  const provider = providers.find((row) => row.id === pack.workspace_setup.home.provider_interface_id);
-  if (!provider) throw new Error("The Application Pack's Home provider is absent from the source package registry.");
+  const provider = providers.find((row) => row.id === providerId);
+  if (!provider) {
+    throw new Error(providerId === pack.workspace_setup.home.provider_interface_id
+      ? "The Application Pack's Home provider is absent from the source package registry."
+      : `Provider '${providerId}' is absent from the source package registry.`);
+  }
+  const providerDescriptor = await readProviderDescriptor(environment.packageRoots.sourceRegistryRoot, providerId);
+  const requiredState = providerSetupRequiredState(providerDescriptor);
   const metadata = createClientProviderMetadata({ registryRoot: () => environment.packageRoots.sourceRegistryRoot,
     sourceRegistryRoot: () => environment.packageRoots.sourceRegistryRoot,
+    octopusHome: () => environment.home,
     accountClient: () => environment.accountClient(), reference: setupReference });
   const [discovered] = await metadata.catalog([provider]);
   if (discovered.modelCatalogError) throw new Error(discovered.modelCatalogError);
@@ -337,7 +407,7 @@ async function collectChoices(environment, pack, options) {
   const serviceTier = options.serviceTier;
   validateProviderModelSelection([discovered], { providerInterfaceId: provider.id, providerModel: model, reasoningEffort, serviceTier });
   return { operationId: options.operationId ?? randomUUID(), workspaceName, workspaceGoal: options.workspaceGoal ?? workspaceName,
-    projects, model, reasoningEffort, serviceTier, recommended, agentPresets: options.agentPresets };
+    projects, providerId, requiredState, extraPackages, providerPackage, model, reasoningEffort, serviceTier, recommended, agentPresets: options.agentPresets };
 }
 
 function compileSetupPlan(pack, choices) {
@@ -347,6 +417,10 @@ function compileSetupPlan(pack, choices) {
   const recipe = pack.workspace_setup.home;
   const taskRecipe = pack.workspace_setup.task;
   if (!taskRecipe) throw new Error("The Application Pack has no declared Task recipe.");
+  const providerId = choices.providerId ?? recipe.provider_interface_id;
+  const requiredState = choices.requiredState ?? "account_readable";
+  const extraPackages = choices.extraPackages ?? [];
+  const providerPackage = choices.providerPackage ?? null;
   const projects = choices.projects.map((row, index) => ({
     key: projectKeys[index], parentKey: row.parentKey ?? "root", templateName: "project",
     name: humanText(row.name, "Project name", 80), goal: humanText(row.goal ?? row.name, "Project goal", 240),
@@ -358,7 +432,8 @@ function compileSetupPlan(pack, choices) {
     if (!preset) throw new Error(`Agent preset '${id}' is not in this Application Pack.`);
     return !projects.length || !selected.some((row) => row.package_id === preset.component_package_id) ? [] : [{
       packId: pack.id, presetId: id, expectedPackManifestDigest: pack.manifest_digest,
-      projectKeys: [...projectKeys].sort(), providerInterfaceId: preset.provider_interface_id,
+      projectKeys: [...projectKeys].sort(),
+      providerInterfaceId: preset.provider_interface_id === recipe.provider_interface_id ? providerId : preset.provider_interface_id,
       providerModel: choices.model, reasoningEffort: choices.reasoningEffort,
       ...(choices.serviceTier ? { serviceTier: choices.serviceTier } : {}),
     }];
@@ -367,7 +442,7 @@ function compileSetupPlan(pack, choices) {
     action: "initialize_workspace",
     operationId: choices.operationId,
     root: { key: "root", templateName: "existence", name: humanText(choices.workspaceName, "Workspace name", 80), goal: humanText(choices.workspaceGoal, "Workspace goal", 240) },
-    home: { name: "Home", providerInterfaceId: recipe.provider_interface_id, providerModel: choices.model,
+    home: { name: "Home", providerInterfaceId: providerId, providerModel: choices.model,
       workerInterfaceId: recipe.worker_interface_id, reasoningEffort: choices.reasoningEffort,
       ...(choices.serviceTier ? { serviceTier: choices.serviceTier } : {}), doorHostSlots: structuredClone(recipe.door_host_slots ?? {}),
       contextArtifactBindings: recipe.context_artifact_bindings, selectedWorkerEnvironmentKinds: recipe.selected_worker_environment_kinds },
@@ -382,10 +457,24 @@ function compileSetupPlan(pack, choices) {
     return [{ package_id: component.package_id, product_kind: component.product_kind, product_id: component.product_id,
       default_for_new_tasks: entry.default_for_new_tasks, project_keys: [...projectKeys].sort() }];
   });
+  if (providerPackage && providerPackage.product_kind === "application"
+    && !defaults.some((entry) => entry.package_id === providerPackage.id)) {
+    defaults.push({
+      package_id: providerPackage.id, product_kind: providerPackage.product_kind,
+      product_id: providerPackage.product_id, default_for_new_tasks: true,
+      project_keys: [...projectKeys].sort(),
+    });
+  }
+  const plannedPackages = new Map(selected.map((row) => [row.package_id, { id: row.package_id, source_digest: row.source_digest, desired_state: "installed" }]));
+  for (const row of extraPackages) {
+    if (!plannedPackages.has(row.id)) {
+      plannedPackages.set(row.id, { id: row.id, source_digest: row.source_digest, desired_state: "installed" });
+    }
+  }
   return {
     pack: { id: pack.id, manifest_digest: pack.manifest_digest, selected_recommended: [...choices.recommended].sort() },
-    packages: selected.map((row) => ({ id: row.package_id, source_digest: row.source_digest, desired_state: "installed" })).sort(byId),
-    extensions: [], provider: { interface_id: recipe.provider_interface_id, required_state: "account_readable" },
+    packages: [...plannedPackages.values()].sort(byId),
+    extensions: [], provider: { interface_id: providerId, required_state: requiredState },
     workspace: { request_digest: workspaceInitializeRequestDigest(request), request,
       project_defaults: defaults.sort((a, b) => a.package_id.localeCompare(b.package_id)) },
   };
@@ -396,14 +485,65 @@ async function verifySetupPlan(environment, plan) {
   const pack = catalog.packs.find((row) => row.id === plan.pack.id);
   if (!pack || pack.manifest_digest !== plan.pack.manifest_digest) throw new Error("Application Pack changed after the setup choices were saved.");
   const request = plan.workspace.request;
+  const providerId = request.home.providerInterfaceId;
+  const selected = pack.components.filter((row) => row.selection === "included" || plan.pack.selected_recommended.includes(row.package_id));
+  const { extraPackages, providerPackage } = resolveProviderPackages(catalog, selected, providerId);
+  const providerDescriptor = await readProviderDescriptor(environment.packageRoots.sourceRegistryRoot, providerId);
+  const requiredState = providerSetupRequiredState(providerDescriptor);
   const expected = compileSetupPlan(pack, {
     operationId: request.operationId, workspaceName: request.root.name, workspaceGoal: request.root.goal,
     projects: request.projects.map((row) => ({ ...row, ...row.presentation })),
+    providerId, requiredState, extraPackages, providerPackage,
     model: request.home.providerModel, reasoningEffort: request.home.reasoningEffort, serviceTier: request.home.serviceTier,
     recommended: plan.pack.selected_recommended, agentPresets: (request.agentPresets ?? []).map((row) => row.presetId),
   });
   if (stableJson(plan) !== stableJson(expected)) throw new Error("Saved setup choices no longer match the Application Pack's recipe and source files.");
   return catalog;
+}
+
+function resolveProviderPackages(catalog, selectedComponents, providerId) {
+  const selectedIds = new Set(selectedComponents.map((row) => row.package_id));
+  const packagesById = new Map(catalog.packages.map((row) => [row.id, row]));
+  const owners = catalog.packages.filter((pkg) => (
+    Array.isArray(pkg.members) && pkg.members.some((member) => member.registry_kind === "interface" && member.owner === providerId)
+  ));
+  if (owners.length !== 1) {
+    throw new Error(`Provider '${providerId}' has no unique installable local package.`);
+  }
+  const providerPackage = owners[0];
+  if (selectedIds.has(providerPackage.id)) {
+    return { extraPackages: [], providerPackage };
+  }
+  const closureIds = packageClosureIds(catalog.packages, [providerPackage.id]);
+  const extraPackages = [];
+  for (const id of closureIds) {
+    const pkg = packagesById.get(id);
+    if (!pkg || !pkg.available || !DIGEST.test(pkg.source_digest)) {
+      throw new Error(`Package '${pkg?.display?.name ?? id}' is unavailable: ${pkg?.error || "its source proof is missing"}`);
+    }
+    if (!selectedIds.has(id)) extraPackages.push(pkg);
+  }
+  return { extraPackages, providerPackage };
+}
+
+function packageClosureIds(packages, rootIds) {
+  const byId = new Map(packages.map((row) => [row.id, row]));
+  const visited = new Set();
+  const visiting = new Set();
+  const ordered = [];
+  const visit = (id) => {
+    if (visiting.has(id)) throw new Error(`Local package dependency cycle at '${id}'.`);
+    if (visited.has(id)) return;
+    const pkg = byId.get(id);
+    if (!pkg) throw new Error(`Required local package '${id}' is unavailable.`);
+    visiting.add(id);
+    for (const dependency of pkg.required_packages ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+    ordered.push(id);
+  };
+  for (const id of rootIds) visit(id);
+  return ordered;
 }
 
 async function ensureSignIn(environment, options) {
@@ -456,10 +596,10 @@ async function choose(options, id, prompt, choices, value, defaultValue) {
   return value;
 }
 
-function hasNewChoices(options) { return ["packId", "workspaceName", "workspaceGoal", "projectName", "projects", "model", "reasoningEffort", "serviceTier", "agentPresets"].some((key) => options[key] !== undefined) || options.recommended?.length > 0; }
+function hasNewChoices(options) { return ["packId", "workspaceName", "workspaceGoal", "projectName", "projects", "providerId", "model", "reasoningEffort", "serviceTier", "agentPresets"].some((key) => options[key] !== undefined) || options.recommended?.length > 0; }
 function assertSavedChoices(options, plan) {
   const expected = { packId: plan.pack.id, workspaceName: plan.workspace.request.root.name,
-    workspaceGoal: plan.workspace.request.root.goal, model: plan.workspace.request.home.providerModel,
+    workspaceGoal: plan.workspace.request.root.goal, providerId: plan.workspace.request.home.providerInterfaceId, model: plan.workspace.request.home.providerModel,
     reasoningEffort: plan.workspace.request.home.reasoningEffort, serviceTier: plan.workspace.request.home.serviceTier };
   for (const [field, value] of Object.entries(expected)) {
     if (options[field] !== undefined && options[field] !== value) throw new Error(`Saved setup already chose ${field}. Rerun without replacement choices.`);
@@ -475,6 +615,7 @@ function assertSavedChoices(options, plan) {
 function humanText(value, name, max) { if (typeof value !== "string" || !value.trim() || value.trim() !== value || value.length > max || /[\x00-\x1f\x7f]/.test(value)) throw new Error(`${name} must be nonempty text of at most ${max} characters.`); return value; }
 function uniqueStrings(value, label) { if (!Array.isArray(value) || value.some((row) => typeof row !== "string" || !row) || new Set(value).size !== value.length) throw new Error(`${label} must be a list of unique names.`); return value; }
 function checkCancelled(signal) { if (signal?.aborted) { const error = new Error("Workspace setup cancelled. Rerun setup to resume its saved choices."); error.code = "ABORT_ERR"; throw error; } }
+async function pathExists(file) { try { await fs.lstat(file); return true; } catch (error) { if (error?.code === "ENOENT") return false; throw error; } }
 function byId(a, b) { return a.id.localeCompare(b.id); }
 function hash(value) { return createHash("sha256").update(value).digest("hex"); }
 function stableJson(value) { if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`; if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`; return JSON.stringify(value); }

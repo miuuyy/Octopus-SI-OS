@@ -13,7 +13,7 @@ const { createClientAttachmentStagingStore, stageClientAttachmentPaths } = requi
 const { submitClientInterfaceArtifact } = require("../electron/clientArtifacts.cjs");
 const { commitProjectionClientAuthoring } = require("../electron/clientWorkspaceAuthoring.cjs");
 const { mutateWorkspaceProject } = require("../electron/workspaceSetup.cjs");
-const { taskRetirementBarrier } = require("./environment.cjs");
+const { taskRetirementBarrier, requireDistribution } = require("./environment.cjs");
 const shared = require("../build/cli/shared.cjs");
 
 const execute = promisify(execFile);
@@ -41,10 +41,17 @@ function createClient(environment, dependencies = {}) {
       return result;
     },
   });
-  const loader = dependencies.loader ?? createOperatorChatClientLoader({
+  const rawLoader = dependencies.loader ?? createOperatorChatClientLoader({
     packageRoots: () => env.packageRoots,
     clientPath: () => path.join(registryRoot, "interface", "world_operator_chat", "client.cjs"),
   });
+  const loader = dependencies.loader ? rawLoader : {
+    ...rawLoader,
+    async load() {
+      requireDistribution(env);
+      return rawLoader.load();
+    },
+  };
   const metadata = dependencies.metadata ?? createClientProviderMetadata({
     sourceRegistryRoot: () => env.packageRoots.sourceRegistryRoot,
     registryRoot: () => registryRoot,
@@ -589,7 +596,8 @@ function exactChoice(rows, label) {
 }
 
 function select(rows, value, label, nameKey = "name") {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`Choose a ${label}.`);
+  const article = /^[aeiou]/i.test(label) ? "an" : "a";
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Choose ${article} ${label}.`);
   const exact = rows.find((row) => row.id === value);
   return exact || exactChoice(rows.filter((row) => row[nameKey] === value || row.id.startsWith(value)), label);
 }

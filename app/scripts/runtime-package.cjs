@@ -400,7 +400,8 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot, platform = proce
   }
 
   function stripExecutables(executables) {
-    transformExecutableCopies(executables, file => run("strip", ["-x", file], appRoot));
+    const args = stripArgsForPlatform(platform);
+    transformExecutableCopies(executables, file => run("strip", [...args, file], appRoot));
   }
 
   function transformExecutableCopies(executables, transform) {
@@ -547,6 +548,7 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot, platform = proce
     collectBundledBinaries,
     sharedBinaries,
     materializeProviderLife,
+    isOpenCodexBridgeCurrent,
     validateOpenCodexOwnerAssets,
     visitJson,
     walkJson,
@@ -564,4 +566,134 @@ function createRuntimePackager({ repoRoot, appRoot, outputRoot, platform = proce
   });
 }
 
-module.exports = { createRuntimePackager };
+function stripArgsForPlatform(platform = process.platform) {
+  return platform === "linux" ? ["--strip-unneeded"] : ["-x"];
+}
+
+const ELF_CLASS_64 = 2;
+const ELF_DATA_2LSB = 1;
+const ELF_MACHINE_X86_64 = 62;
+const ELF_MACHINE_AARCH64 = 183;
+const MACH_MAGIC_64 = 0xfeedfacf;
+const MACH_CPU_TYPE_X86_64 = 0x01000007;
+const MACH_CPU_TYPE_ARM64 = 0x0100000c;
+
+function matchesExecutableTarget(buffer, target) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 20 || !target) return false;
+  const { platform, architecture } = target;
+  if (platform === "linux") {
+    if (
+      buffer[0] !== 0x7f
+      || buffer[1] !== 0x45
+      || buffer[2] !== 0x4c
+      || buffer[3] !== 0x46
+      || buffer[4] !== ELF_CLASS_64
+      || buffer[5] !== ELF_DATA_2LSB
+    ) {
+      return false;
+    }
+    const machine = buffer.readUInt16LE(18);
+    if (architecture === "x64") return machine === ELF_MACHINE_X86_64;
+    if (architecture === "arm64") return machine === ELF_MACHINE_AARCH64;
+    return false;
+  }
+  if (platform === "darwin") {
+    if (buffer.readUInt32LE(0) !== MACH_MAGIC_64) return false;
+    const cpuType = buffer.readUInt32LE(4);
+    if (architecture === "arm64") return cpuType === MACH_CPU_TYPE_ARM64;
+    if (architecture === "x64") return cpuType === MACH_CPU_TYPE_X86_64;
+    return false;
+  }
+  return false;
+}
+
+function isOpenCodexBridgeCurrent(bridgeRoot, target = { platform: process.platform, architecture: process.arch }) {
+  try {
+    if (typeof bridgeRoot !== "string" || !bridgeRoot.length || !target) return false;
+    const resolvedRoot = path.resolve(bridgeRoot);
+    const bridge = path.join(resolvedRoot, "bin", "octopus-opencodex-bridge");
+    const receiptFile = path.join(resolvedRoot, "build-receipt.json");
+    const upstreamFile = path.join(resolvedRoot, "upstream.json");
+
+    const bridgeStat = fs.lstatSync(bridge);
+    if (!bridgeStat.isFile() || bridgeStat.isSymbolicLink() || (bridgeStat.mode & 0o111) === 0) return false;
+    for (const metaFile of [receiptFile, upstreamFile]) {
+      const stat = fs.lstatSync(metaFile);
+      if (!stat.isFile() || stat.isSymbolicLink()) return false;
+    }
+
+    const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    const upstream = JSON.parse(fs.readFileSync(upstreamFile, "utf8"));
+    if (
+      receipt?.schema_version !== 1
+      || receipt.executable !== "bin/octopus-opencodex-bridge"
+      || typeof receipt.executable_bytes !== "number"
+      || typeof receipt.executable_sha256 !== "string"
+      || !/^[0-9a-f]{64}$/.test(receipt.executable_sha256)
+      || !receipt.inputs
+      || typeof receipt.inputs !== "object"
+      || Array.isArray(receipt.inputs)
+      || typeof upstream?.npm_package !== "string"
+      || typeof upstream?.commit !== "string"
+      || !Array.isArray(upstream?.used_surfaces)
+      || JSON.stringify(receipt.upstream) !== JSON.stringify(upstream)
+    ) {
+      return false;
+    }
+
+    const bridgeBytes = fs.readFileSync(bridge);
+    if (bridgeBytes.length !== receipt.executable_bytes) return false;
+    if (!matchesExecutableTarget(bridgeBytes, target)) return false;
+    if (crypto.createHash("sha256").update(bridgeBytes).digest("hex") !== receipt.executable_sha256) return false;
+
+    const requiredInputs = [
+      "package.json",
+      "package-lock.json",
+      "upstream.json",
+      "scripts/prepare-upstream.mjs",
+      "src/main.ts",
+      ...(Array.isArray(upstream.patches) ? upstream.patches : []),
+    ];
+    for (const required of requiredInputs) {
+      if (!Object.prototype.hasOwnProperty.call(receipt.inputs, required)) return false;
+    }
+
+    for (const [name, expected] of Object.entries(receipt.inputs)) {
+      if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected)) return false;
+      const file = path.resolve(resolvedRoot, name);
+      if (!file.startsWith(resolvedRoot + path.sep)) return false;
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink()) return false;
+      const digest = crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+      if (digest !== expected) return false;
+    }
+
+    const srcRoot = path.join(resolvedRoot, "src");
+    const pending = [srcRoot];
+    for (let cursor = 0; cursor < pending.length; cursor++) {
+      const entries = fs.readdirSync(pending[cursor], { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) return false;
+        const candidate = path.join(pending[cursor], entry.name);
+        if (entry.isDirectory()) {
+          pending.push(candidate);
+          continue;
+        }
+        if (!entry.isFile() || !/\.(?:[cm]?[jt]s|[jt]sx|json)$/.test(entry.name)) continue;
+        const relative = path.relative(resolvedRoot, candidate).split(path.sep).join("/");
+        if (!Object.prototype.hasOwnProperty.call(receipt.inputs, relative)) return false;
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = {
+  createRuntimePackager,
+  stripArgsForPlatform,
+  matchesExecutableTarget,
+  isOpenCodexBridgeCurrent,
+};

@@ -211,7 +211,11 @@ async function validateInterfacePrivateDirectory(directory, create) {
     if (!create || error?.code !== "ENOENT") throw error;
     const parent = path.dirname(directory);
     await requirePlainDirectory(parent, `interface private root ${parent}`);
-    await fs.mkdir(directory, { mode: 0o700 });
+    try {
+      await fs.mkdir(directory, { mode: 0o700 });
+    } catch (mkdirError) {
+      if (mkdirError?.code !== "EEXIST") throw mkdirError;
+    }
     const stat = await fs.lstat(directory);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`interface private directory '${directory}' was not created safely`);
     validateOwnerOnlyStat(directory, stat, true);

@@ -155,6 +155,7 @@ const artifactIdentity = (artifact) => {
 };
 const ledgerPath = (home) => path.join(home, "ledger", "movements.jsonl");
 const fileStamp = (stat) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+const transientLedgerError = (message) => Object.assign(new Error(message), { transientLedgerChange: true });
 
 function ledgerStamp(home) {
   let stat;
@@ -270,7 +271,7 @@ async function readLedgerTurns(home, { sinceUnixMs = 0, skipRuns = [] } = {}) {
   try {
     file = await fs.promises.open(ledger, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const stat = await file.stat({ bigint: true });
-    if (fileStamp(stat) !== stamp) throw new Error("movement ledger changed before inspection");
+    if (fileStamp(stat) !== stamp) throw transientLedgerError("movement ledger changed before inspection");
     if (stat.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("movement ledger exceeds inspection range");
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "";
@@ -281,9 +282,16 @@ async function readLedgerTurns(home, { sinceUnixMs = 0, skipRuns = [] } = {}) {
       for (const line of lines) observe(line);
       if (pending.length > 16 * 1024 * 1024) throw new Error("movement ledger row exceeds inspection limit");
     }
-    if (decoder.decode() || pending) throw new Error("torn movement ledger row after sequence " + lastSeq);
-    if (ledgerStamp(home) !== stamp) throw new Error("movement ledger changed during inspection");
+    const trailing = decoder.decode();
+    if (ledgerStamp(home) !== stamp) throw transientLedgerError("movement ledger changed during inspection");
+    if (trailing || pending) throw new Error("torn movement ledger row after sequence " + lastSeq);
   } catch (error) {
+    if (error.transientLedgerChange) throw error;
+    if (!error.code) {
+      let changed = false;
+      try { changed = ledgerStamp(home) !== stamp; } catch {}
+      if (changed) throw transientLedgerError("movement ledger changed during inspection");
+    }
     if (error.code) throw new Error("movement ledger unreadable (" + error.code + ")");
     throw error;
   } finally {
@@ -452,9 +460,27 @@ async function verifyStaging(layout, home, { smoke = true, allowModifiedSource =
 
 const turnIdentity = (turn) => JSON.stringify([turn.run_id, turn.source, turn.opened_movement_seq]);
 
+const DEFAULT_WAIT_QUIET_MS = 300_000;
+const DEFAULT_QUIET_WINDOW_MS = 10_000;
+const DEFAULT_QUIET_POLL_MS = 2_000;
+
+function nonNegativeMs(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer in milliseconds`);
+  return value;
+}
+
+function positiveMs(value, label) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label} must be a positive integer in milliseconds`);
+  return value;
+}
+
 async function restartRuntime(layout, home, options = {}) {
   const { callerRun = null, allowInFlightRuns = [], dryRun = false, force = false, swap = false, rollback = true,
-    timeoutMs = 300_000, readTurns = readTurnsInFlight } = options;
+    timeoutMs = 300_000, waitQuietMs = 0, quietWindowMs = waitQuietMs > 0 ? DEFAULT_QUIET_WINDOW_MS : 0,
+    pollIntervalMs = DEFAULT_QUIET_POLL_MS, readTurns = readTurnsInFlight } = options;
+  const waitBudgetMs = nonNegativeMs(waitQuietMs, "waitQuietMs");
+  const settleMs = nonNegativeMs(quietWindowMs, "quietWindowMs");
+  const pollMs = positiveMs(pollIntervalMs, "pollIntervalMs");
   const before = await control(home, "status");
   if (before?.outcome !== "status") throw new Error(`no runtime answers for Home ${home} (${before?.error}); only a running runtime is restarted`);
   if (swap) requireBundle(layout.staging);
@@ -477,47 +503,100 @@ async function restartRuntime(layout, home, options = {}) {
   const inspect = async () => {
     const stamp = readTurns === readTurnsInFlight ? ledgerStamp(home) : null;
     const turns = await readTurns(layout.live, home, { sinceUnixMs: before.started_at_unix_ms });
-    if (stamp !== null && ledgerStamp(home) !== stamp) throw new Error("movement ledger changed during turn inspection");
+    if (stamp !== null && ledgerStamp(home) !== stamp) throw transientLedgerError("movement ledger changed during turn inspection");
     return { turns, stamp };
   };
   const allowed = [callerRun, ...allowInFlightRuns];
-  let blocking;
-  try {
-    const first = await inspect();
-    blocking = blockingTurns(first.turns, allowed);
-    if (blocking.length && !force) return refuse("turns_in_flight", { blocking });
-    const changedBefore = await checkRuntime();
-    if (changedBefore) return changedBefore;
-    const last = await inspect();
-    const seen = new Set(blockingTurns(first.turns, []).map(turnIdentity));
-    const newlyOpen = blockingTurns(last.turns, []).filter((turn) => !seen.has(turnIdentity(turn)));
-    blocking = blockingTurns(last.turns, allowed);
-    if (newlyOpen.length || (blocking.length && !force)) return refuse("turns_in_flight", { blocking: newlyOpen.length ? newlyOpen : blocking });
-    const changedAfter = await checkRuntime();
-    if (changedAfter) return changedAfter;
-    if (last.stamp !== null && (last.stamp !== first.stamp || ledgerStamp(home) !== last.stamp)) {
-      return refuse("turn_frontier_changed");
+  const inspectFrontier = async () => {
+    try {
+      const first = await inspect();
+      let blocking = blockingTurns(first.turns, allowed);
+      if (blocking.length && !force) return { ok: false, retryable: true, refusal: refuse("turns_in_flight", { blocking }) };
+      const changedBefore = await checkRuntime();
+      if (changedBefore) return { ok: false, retryable: false, refusal: changedBefore };
+      const last = await inspect();
+      const seen = new Set(blockingTurns(first.turns, []).map(turnIdentity));
+      const newlyOpen = blockingTurns(last.turns, []).filter((turn) => !seen.has(turnIdentity(turn)));
+      blocking = blockingTurns(last.turns, allowed);
+      if (newlyOpen.length || (blocking.length && !force)) {
+        return { ok: false, retryable: true, refusal: refuse("turns_in_flight", { blocking: newlyOpen.length ? newlyOpen : blocking }) };
+      }
+      const changedAfter = await checkRuntime();
+      if (changedAfter) return { ok: false, retryable: false, refusal: changedAfter };
+      if (last.stamp !== null && (last.stamp !== first.stamp || ledgerStamp(home) !== last.stamp)) {
+        return { ok: false, retryable: true, refusal: refuse("turn_frontier_changed") };
+      }
+      return { ok: true, blocking, stamp: last.stamp };
+    } catch (error) {
+      return {
+        ok: false,
+        retryable: error?.transientLedgerChange === true,
+        refusal: refuse("turn_evidence_untrusted", { error: error.message }),
+      };
     }
-  } catch (error) { return refuse("turn_evidence_untrusted", { error: error.message }); }
-  if (dryRun) return { ok: true, applied: false, blocking, plan, runtime: before };
+  };
+  let blocking;
+  let waitSummary = null;
+  if (waitBudgetMs === 0) {
+    const check = await inspectFrontier();
+    if (!check.ok) return check.refusal;
+    blocking = check.blocking;
+  } else {
+    const startedAt = Date.now(), deadline = startedAt + waitBudgetMs;
+    let attempts = 0, quietSince = null, quietStamp = null, lastRefusal = null;
+    for (;;) {
+      attempts += 1;
+      const check = await inspectFrontier();
+      if (!check.ok) {
+        quietSince = null;
+        quietStamp = null;
+        if (!check.retryable) return { ...check.refusal, waited_ms: Date.now() - startedAt, attempts };
+        lastRefusal = check.refusal;
+      } else if (settleMs === 0) {
+        blocking = check.blocking;
+        waitSummary = { waited_ms: Date.now() - startedAt, attempts };
+        break;
+      } else {
+        const now = Date.now();
+        if (quietSince === null || (check.stamp !== null && check.stamp !== quietStamp)) {
+          quietSince = now;
+          quietStamp = check.stamp;
+          lastRefusal = refuse("turn_frontier_changed", { error: "waiting for quiet window to settle" });
+        } else if (now - quietSince >= settleMs) {
+          blocking = check.blocking;
+          waitSummary = { waited_ms: now - startedAt, attempts };
+          break;
+        } else {
+          lastRefusal = refuse("turn_frontier_changed", { error: "waiting for quiet window to settle" });
+        }
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return { ...lastRefusal, timed_out: true, waited_ms: Date.now() - startedAt, attempts };
+      }
+      const untilSettle = quietSince !== null ? Math.max(1, settleMs - (Date.now() - quietSince)) : pollMs;
+      await delay(Math.min(pollMs, remaining, untilSettle));
+    }
+  }
+  if (dryRun) return { ok: true, applied: false, blocking, plan, runtime: before, ...(waitSummary ?? {}) };
   if (swap) swapBundles(layout);
   const healthy = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
     && Array.isArray(status.interface_failures) && newInterfaceFailures(before, status).length === 0;
   await control(home, "restart");
   const first = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms, timeoutMs);
-  if (first.ok) return { ok: true, applied: true, swapped: swap, previous: before, runtime: first.status, revision: buildInfo(layout.live)?.revision ?? null };
+  if (first.ok) return { ok: true, applied: true, swapped: swap, previous: before, runtime: first.status, revision: buildInfo(layout.live)?.revision ?? null, ...(waitSummary ?? {}) };
   const regressed = newInterfaceFailures(before, first.status);
-  if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, new_interface_failures: regressed, runtime: first.status };
+  if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, new_interface_failures: regressed, runtime: first.status, ...(waitSummary ?? {}) };
   rollbackBundles(layout);
   const current = await control(home, "status");
   if (current?.outcome !== "status") {
     return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: false, new_interface_failures: regressed, failed: first.status,
-      error: `no runtime answers for Home ${home} after the rollback; start it from ${layout.live}` };
+      error: `no runtime answers for Home ${home} after the rollback; start it from ${layout.live}`, ...(waitSummary ?? {}) };
   }
   await control(home, "restart");
   const second = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms
     && status.started_at_unix_ms !== current.started_at_unix_ms, timeoutMs);
-  return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: second.ok, new_interface_failures: regressed, failed: first.status, runtime: second.status };
+  return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: second.ok, new_interface_failures: regressed, failed: first.status, runtime: second.status, ...(waitSummary ?? {}) };
 }
 
 async function status(layout, home) {
@@ -538,12 +617,33 @@ const USAGE = `Usage: node app/scripts/safe-self-update.cjs <command> [options]
   verify [--no-smoke] [--allow-modified-source]
   packages status | packages sync [--dry-run] [--with-chat-client] [--only=a,b]
   swap [--dry-run]                Octopus.app -> Octopus.prev.app, staging -> Octopus.app
-  restart [--swap] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
+  restart [--swap] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--wait-quiet[=<seconds>]] [--quiet-for=<seconds>] [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
                                   refuses on untrusted turn evidence, a changing frontier, or a blocking turn
   rollback [--dry-run]            Octopus.prev.app -> Octopus.app
 Common: --home=<Octopus Home, default $OCTOPUS_HOME or ~/.octopus> --build-root=<dir>`;
 
 const REPEATABLE_VALUE_OPTIONS = new Set(["allow-in-flight-run"]);
+
+function parseSecondsOption(raw, name, { min, max }) {
+  if (typeof raw !== "string" || !raw.trim()) throw Object.assign(new Error(`--${name} requires seconds between ${min} and ${max}`), { usage: true });
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < min || seconds > max) {
+    throw Object.assign(new Error(`--${name} must be between ${min} and ${max} seconds`), { usage: true });
+  }
+  return Math.round(seconds * 1000);
+}
+
+function resolveQuietWaitOptions(options) {
+  let waitQuietMs = 0;
+  if (options.waitQuiet === true) waitQuietMs = DEFAULT_WAIT_QUIET_MS;
+  else if (options.waitQuiet !== undefined) waitQuietMs = parseSecondsOption(options.waitQuiet, "wait-quiet", { min: 1, max: 3600 });
+  let quietWindowMs = waitQuietMs > 0 ? DEFAULT_QUIET_WINDOW_MS : 0;
+  if (options.quietFor !== undefined) {
+    if (waitQuietMs === 0) throw Object.assign(new Error("--quiet-for requires --wait-quiet"), { usage: true });
+    quietWindowMs = parseSecondsOption(options.quietFor, "quiet-for", { min: 0, max: 300 });
+  }
+  return { waitQuietMs, quietWindowMs };
+}
 
 function parseArgs(argv) {
   const positional = [], options = {};
@@ -578,22 +678,28 @@ async function main(argv) {
   if (command === "swap") return swapBundles(layout, { dryRun });
   if (command === "rollback") return rollbackBundles(layout, { dryRun });
   if (command === "restart") {
+    const { waitQuietMs, quietWindowMs } = resolveQuietWaitOptions(options);
     if (options.detach === true && !dryRun) {
       if (typeof options.log !== "string") throw new Error("--detach requires --log=<file>");
       const log = fs.openSync(path.resolve(options.log), "a");
-      const child = spawn(process.execPath, [__filename, ...argv.filter((arg) => arg !== "--detach")], { detached: true, stdio: ["ignore", log, log] });
-      child.unref();
-      return { detached: true, pid: child.pid, log: path.resolve(options.log) };
+      try {
+        const child = spawn(process.execPath, [__filename, ...argv.filter((arg) => arg !== "--detach")], { detached: true, stdio: ["ignore", log, log] });
+        child.unref();
+        return { detached: true, pid: child.pid, log: path.resolve(options.log) };
+      } finally {
+        fs.closeSync(log);
+      }
     }
     return restartRuntime(layout, home, { callerRun: typeof options.callerRun === "string" ? options.callerRun : null, dryRun,
       allowInFlightRuns: Array.isArray(options.allowInFlightRun) ? options.allowInFlightRun : [],
-      force: options.force === true, swap: options.swap === true, rollback: options.noRollback !== true });
+      force: options.force === true, swap: options.swap === true, rollback: options.noRollback !== true,
+      waitQuietMs, quietWindowMs });
   }
   throw Object.assign(new Error(USAGE), { usage: true });
 }
 
 module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
-  newInterfaceFailures, packageAction, restartRuntime, parseArgs, main };
+  newInterfaceFailures, packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions, main };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {
