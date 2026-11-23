@@ -188,6 +188,39 @@ function environment(paths: ReturnType<typeof layout>, turn: string): Record<str
 
 type Pending = { method: string; resolve: (value: JsonRecord) => void; reject: (error: Error) => void };
 
+export function createAcpStderrScanner(handlers: {
+  onDiagnostic: (line: string) => void;
+  onAuthorizationUrl: (url: string) => void;
+}) {
+  let pendingLine = "";
+  let lastAuthorizationUrl = "";
+  const emitLine = (line: string) => {
+    handlers.onDiagnostic(line);
+    const url = AUTH_PROMPT.exec(line)?.[1];
+    if (url && url !== lastAuthorizationUrl) {
+      lastAuthorizationUrl = url;
+      handlers.onAuthorizationUrl(url);
+    }
+  };
+  return {
+    push(text: string): void {
+      pendingLine += text;
+      let newline: number;
+      while ((newline = pendingLine.indexOf("\n")) >= 0) {
+        emitLine(pendingLine.slice(0, newline));
+        pendingLine = pendingLine.slice(newline + 1);
+      }
+      if (pendingLine.length > STDERR_LIMIT) pendingLine = pendingLine.slice(-STDERR_LIMIT);
+    },
+    flush(): void {
+      if (!pendingLine) return;
+      const line = pendingLine;
+      pendingLine = "";
+      emitLine(line);
+    },
+  };
+}
+
 class AcpProcess {
   readonly child: ChildProcess;
   private nextId = 1;
@@ -209,20 +242,16 @@ class AcpProcess {
       this.child.once("error", () => resolve(null));
     });
     this.child.stdin?.on("error", () => this.kill());
-    let diagnosticLine = "";
+    const scanner = createAcpStderrScanner({
+      onDiagnostic: line => this.onDiagnostic(line),
+      onAuthorizationUrl: url => this.onAuthorizationUrl(url),
+    });
     this.child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
-      const url = AUTH_PROMPT.exec(this.stderr.slice(-2048) + text)?.[1];
       this.stderr = (this.stderr + text).slice(-STDERR_LIMIT);
-      diagnosticLine += text;
-      let newline: number;
-      while ((newline = diagnosticLine.indexOf("\n")) >= 0) {
-        this.onDiagnostic(diagnosticLine.slice(0, newline));
-        diagnosticLine = diagnosticLine.slice(newline + 1);
-      }
-      if (diagnosticLine.length > STDERR_LIMIT) diagnosticLine = diagnosticLine.slice(-STDERR_LIMIT);
-      if (url) this.onAuthorizationUrl(url);
+      scanner.push(text);
     });
+    this.child.stderr?.on("end", () => scanner.flush());
     void this.read();
     void this.closed.then(code => {
       const error = new AcpFailure(`Antigravity ACP server exited${code === null ? "" : ` with ${code}`}: ${this.diagnostic()}`, "antigravity_connection_closed", 502, true);

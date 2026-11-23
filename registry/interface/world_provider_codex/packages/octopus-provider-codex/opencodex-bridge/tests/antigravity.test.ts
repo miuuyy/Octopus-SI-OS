@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
 import type { AdapterEvent } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 import { acpPrompt } from "../src/antigravity-content.ts";
+import { createAcpStderrScanner } from "../src/antigravity-acp.ts";
 import { runAntigravityConversation, closeAntigravityConversations, type AcpConnection } from "../src/antigravity-conversation.ts";
 
 test("Antigravity replays typed assistant history without prose tool-call syntax", async () => {
@@ -78,4 +79,24 @@ test("Antigravity forwards live ACP progress without replaying heartbeats or exe
     await closeAntigravityConversations(directory);
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("Antigravity stderr scanner emits each authorization URL once across split chunks and trailing logs", () => {
+  const urls: string[] = [];
+  const diagnostics: string[] = [];
+  const scanner = createAcpStderrScanner({
+    onDiagnostic: line => diagnostics.push(line),
+    onAuthorizationUrl: url => urls.push(url),
+  });
+  scanner.push("Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/v2/auth?client_id=1");
+  expect(urls).toEqual([]);
+  scanner.push("&state=first\nwaiting for browser callback\n");
+  scanner.push("still waiting\nOpen the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=first\n");
+  scanner.push("Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=second");
+  scanner.flush();
+  expect(urls).toEqual([
+    "https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=first",
+    "https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=second",
+  ]);
+  expect(diagnostics).toHaveLength(5);
 });
