@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import http.server
 import importlib.util
 import json
@@ -6,12 +8,14 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from world_watch import ProbeError, Watcher, build_probe, validate_config
+from world_watch import ProbeError, Watcher, WebhookServer, build_probe, validate_config
 
 
 def load_boundary_with_env(env):
@@ -340,6 +344,75 @@ class WorldWatchContractTests(unittest.TestCase):
                 os.environ.pop("OCTOPUS_ROOT_SLOTS_JSON", None)
             else:
                 os.environ["OCTOPUS_ROOT_SLOTS_JSON"] = saved_slots
+
+    def test_webhook_hmac_validation_queuing_and_delivery(self):
+        secret_path = self.var_dir / "hook.secret"
+        secret_path.write_text("top-secret-key\n", encoding="utf-8")
+        os.chmod(secret_path, 0o600)
+        cfg = validate_config(
+            {
+                "enabled": True,
+                "source": {
+                    "kind": "webhook",
+                    "bind": "127.0.0.1",
+                    "port": 0,
+                    "path": "/events",
+                    "methods": ["POST"],
+                    "auth": {
+                        "type": "hmac_sha256",
+                        "header": "X-Hub-Signature-256",
+                        "prefix": "sha256=",
+                        "token_file": "hook.secret",
+                    },
+                },
+                "extract": {"format": "json", "json_pointer": "/event"},
+                "trigger": {"mode": "always"},
+                "hold_while_working": False,
+                "max_response_bytes": 1024,
+            }
+        )
+        watcher = Watcher(cfg, self.boundary)
+        wake = threading.Event()
+        server = WebhookServer(cfg, watcher, self.boundary, wake_event=wake)
+        server.start()
+        base_url = f"http://127.0.0.1:{server.port}"
+        try:
+            def post(path, body, sig=None):
+                headers = {"Content-Type": "application/json"}
+                if sig is not None:
+                    headers["X-Hub-Signature-256"] = sig
+                req = urllib.request.Request(base_url + path, data=body, headers=headers, method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        return resp.status, json.loads(resp.read().decode("utf-8"))
+                except urllib.error.HTTPError as err:
+                    body_out = json.loads(err.read().decode("utf-8"))
+                    err.close()
+                    return err.code, body_out
+
+            status, _ = post("/wrong", b'{"event":"x"}')
+            self.assertEqual(status, 404)
+            status, _ = post("/events", b'{"event":"x"}', sig="sha256=deadbeef")
+            self.assertEqual(status, 401)
+            status, _ = post("/events", b"x" * 2000, sig="sha256=00")
+            self.assertEqual(status, 413)
+
+            for ev in ("build.done", "deploy.done"):
+                payload = json.dumps({"event": ev}).encode("utf-8")
+                sig = "sha256=" + hmac.new(b"top-secret-key", payload, hashlib.sha256).hexdigest()
+                status, body = post("/events", payload, sig=sig)
+                self.assertEqual(status, 202)
+                self.assertTrue(body["triggered"])
+                self.assertEqual(body["reason"], "push")
+
+            self.assertTrue(wake.is_set())
+            self.assertEqual(watcher.deliver(), "delivered")
+            self.assertEqual([d["value"] for d in self.runtime.delivered], ["build.done", "deploy.done"])
+            self.assertTrue(all(d["reason"] == "push" and d["untrusted_external_data"] for d in self.runtime.delivered))
+            self.assertEqual(list(Path(self.boundary.PAYLOADS_DIR).iterdir()), [])
+        finally:
+            server.stop()
+            watcher.close()
 
 
 if __name__ == "__main__":

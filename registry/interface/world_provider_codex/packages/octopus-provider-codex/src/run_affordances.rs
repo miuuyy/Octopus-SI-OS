@@ -1210,21 +1210,25 @@ impl RunAffordances {
                     .ok_or("inspect_authoring requires declared roots")?;
                 let inspected = validate_registry_candidate(&validation_roots(roots), &[])?;
                 let interfaces = crate::run_observation::inspect_interface_topology(roots);
-                let ee_instances = crate::run_observation::inspect_ee_tree(roots);
-                Ok(NativeStep::Complete {
-                    result: json!({
-                        "roots":roots,"defaults":self.config.defaults,
-                        "current_selection":current_selection(roots, parent_record, &runtime.interface)?,
-                        "interfaces":interfaces,
-                        "ee_instances":ee_instances,
-                        "installed":inspected.stages[0],
-                        "selection_contract":"Installed entries are candidates. Each run is validated against its own worker ceiling, EE chain and exact authored bindings; creation does not inherit the initiator grant.",
-                        "exact_contract":{"argument":"authored","run_id":"exact new run id (existing id for revise_run)",
-                            "writes":"ordered exact path/content/expected_before_hash entries including complete run JSON",
-                            "outgoing_bindings":"explicit interface/artifact_label/artifact_bindings for checked caller connections",
-                            "seed":"optional exact interface_id/label/payload; omitted means publish waits without immediate emission"},
-                    }),
-                })
+                let (ee_instances, ee_instances_total, ee_instances_truncated) =
+                    crate::run_observation::inspect_ee_tree(roots, runtime.ee.as_str());
+                let mut result = json!({
+                    "roots":roots,"defaults":self.config.defaults,
+                    "current_selection":current_selection(roots, parent_record, &runtime.interface)?,
+                    "interfaces":interfaces,
+                    "ee_instances":ee_instances,
+                    "ee_instances_total":ee_instances_total,
+                    "installed":inspected.stages[0],
+                    "selection_contract":"Installed entries are candidates. Each run is validated against its own worker ceiling, EE chain and exact authored bindings; creation does not inherit the initiator grant.",
+                    "exact_contract":{"argument":"authored","run_id":"exact new run id (existing id for revise_run)",
+                        "writes":"ordered exact path/content/expected_before_hash entries including complete run JSON",
+                        "outgoing_bindings":"explicit interface/artifact_label/artifact_bindings for checked caller connections",
+                        "seed":"optional exact interface_id/label/payload; omitted means publish waits without immediate emission"},
+                });
+                if ee_instances_truncated {
+                    result["ee_instances_truncated"] = json!(true);
+                }
+                Ok(NativeStep::Complete { result })
             }
             RunOperation::SendMessage | RunOperation::FollowupTask | RunOperation::Interrupt => {
                 let args: PeerRequest =

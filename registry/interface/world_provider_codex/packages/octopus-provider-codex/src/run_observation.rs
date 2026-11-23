@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 const MAX_TAIL_MOVEMENTS_PER_RUN: usize = 512;
 const MAX_OTHER_RUNS: usize = 64;
+const MAX_EE_INSTANCES: usize = 48;
 const MAX_DESCRIPTOR_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ERROR_BLOB_BYTES: u64 = 256 * 1024;
 const MAX_EXCERPT_CHARS: usize = 300;
@@ -101,7 +102,7 @@ pub(crate) fn inspect_interface_topology(roots: &CompositionRoots) -> Value {
     })
 }
 
-pub(crate) fn inspect_ee_tree(roots: &CompositionRoots) -> Vec<Value> {
+pub(crate) fn inspect_ee_tree(roots: &CompositionRoots, current_ee: &str) -> (Vec<Value>, usize, bool) {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(&roots.ee_instances_root)
         .ok()
         .into_iter()
@@ -112,7 +113,7 @@ pub(crate) fn inspect_ee_tree(roots: &CompositionRoots) -> Vec<Value> {
         .collect();
     entries.sort();
 
-    let mut instances = Vec::new();
+    let mut by_id: BTreeMap<String, (Option<String>, Value)> = BTreeMap::new();
     for path in entries {
         let Some(value) = read_json_bounded(&path, MAX_DESCRIPTOR_BYTES) else {
             continue;
@@ -131,15 +132,55 @@ pub(crate) fn inspect_ee_tree(roots: &CompositionRoots) -> Vec<Value> {
             .and_then(Value::as_str)
             .map(|text| clip_single_line(text, MAX_GOAL_CHARS))
             .unwrap_or_default();
-        instances.push(json!({
-            "ee_id": ee_id,
-            "name": name,
-            "template_name": template_name,
-            "parent_ee_id": parent_ee_id,
-            "goal": goal,
-        }));
+        by_id.insert(
+            ee_id.to_string(),
+            (
+                parent_ee_id.map(ToOwned::to_owned),
+                json!({
+                    "ee_id": ee_id,
+                    "name": name,
+                    "template_name": template_name,
+                    "parent_ee_id": parent_ee_id,
+                    "goal": goal,
+                }),
+            ),
+        );
     }
-    instances
+
+    let total = by_id.len();
+    if total <= MAX_EE_INSTANCES {
+        let all = by_id.into_values().map(|(_, row)| row).collect();
+        return (all, total, false);
+    }
+
+    let mut selected = BTreeSet::new();
+    let mut cursor = Some(current_ee.to_string());
+    let mut hops = 0usize;
+    while let Some(id) = cursor {
+        if hops > 64 || !selected.insert(id.clone()) {
+            break;
+        }
+        hops += 1;
+        cursor = by_id.get(&id).and_then(|(parent, _)| parent.clone());
+    }
+    for (id, (parent, _)) in &by_id {
+        if parent.as_deref() == Some(current_ee) {
+            selected.insert(id.clone());
+        }
+    }
+    for id in by_id.keys() {
+        if selected.len() >= MAX_EE_INSTANCES {
+            break;
+        }
+        selected.insert(id.clone());
+    }
+
+    let instances: Vec<Value> = selected
+        .into_iter()
+        .filter_map(|id| by_id.remove(&id).map(|(_, row)| row))
+        .collect();
+    let truncated = instances.len() < total;
+    (instances, total, truncated)
 }
 
 pub(crate) struct ObservedRuns {
@@ -1199,9 +1240,26 @@ mod tests {
         assert_eq!(custom["copy_of"], json!("world_watch"));
         assert_eq!(custom["bound_runs"], json!(["run_task1"]));
 
-        let ees_out = inspect_ee_tree(&roots);
+        let (ees_out, ee_total, ee_truncated) = inspect_ee_tree(&roots, "ee_root");
         assert_eq!(ees_out.len(), 1);
+        assert_eq!(ee_total, 1);
+        assert!(!ee_truncated);
         assert_eq!(ees_out[0]["ee_id"], json!("ee_root"));
+
+        write_json(&ees.join("ee_mid.json"), &json!({"ee_id":"ee_mid","name":"Mid","template_name":"project","parent_ee_id":"ee_root","goal":"Mid goal"}));
+        write_json(&ees.join("ee_child.json"), &json!({"ee_id":"ee_child","name":"Child","template_name":"project","parent_ee_id":"ee_mid","goal":"Child goal"}));
+        for idx in 0..60 {
+            let id = format!("ee_other_{idx:03}");
+            write_json(&ees.join(format!("{id}.json")), &json!({"ee_id":id,"name":id,"template_name":"project","parent_ee_id":"ee_root","goal":"Other"}));
+        }
+        let (capped, total, truncated) = inspect_ee_tree(&roots, "ee_mid");
+        assert_eq!(total, 63);
+        assert!(truncated);
+        assert_eq!(capped.len(), MAX_EE_INSTANCES);
+        let ids: BTreeSet<&str> = capped.iter().filter_map(|row| row["ee_id"].as_str()).collect();
+        assert!(ids.contains("ee_root"));
+        assert!(ids.contains("ee_mid"));
+        assert!(ids.contains("ee_child"));
     }
 
     #[test]

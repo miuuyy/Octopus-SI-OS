@@ -1,11 +1,17 @@
-"""JSON-configured read-only World sensor: HTTP and local file probes,
-deterministic extraction and trigger evaluation, durable SQLite outbox."""
+"""JSON-configured read-only World sensor: HTTP/file polling and local webhook
+push, deterministic extraction and trigger evaluation, durable SQLite outbox."""
 import datetime as dt
+import hashlib
+import hmac
+import http.server
+import ipaddress
 import json
 import math
 import os
 import re
+import socket
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -21,8 +27,10 @@ FORBIDDEN_STATIC_HEADERS = frozenset({"authorization", "proxy-authorization"})
 MAX_STATE_BYTES = 16 * 1024 * 1024
 MAX_VALUE_JSON_BYTES = 32 * 1024
 MAX_EXCERPT_CHARS = 4096
+MAX_PENDING_NOTICES = 64
 DEFAULT_MAX_RESPONSE_BYTES = 262144
 DEFAULT_TIMEOUT_SECONDS = 15
+DEFAULT_WEBHOOK_POLL_SECONDS = 60
 HOLD_RETRY_SECONDS = 1.0
 
 
@@ -162,6 +170,92 @@ def _validate_file_source(raw):
     return {"kind": "file", "path": path, "missing_ok": missing_ok}
 
 
+def _validate_webhook_source(raw):
+    _require_keys(
+        raw,
+        {"kind", "port"},
+        {"bind", "path", "methods", "auth"},
+        "probe.source",
+    )
+    bind = raw.get("bind", "127.0.0.1")
+    if not isinstance(bind, str) or not bind:
+        raise ValueError("probe.source.bind must be an IP address string")
+    try:
+        ipaddress.ip_address(bind)
+    except ValueError:
+        raise ValueError("probe.source.bind must be a valid IP address") from None
+    port = raw["port"]
+    if isinstance(port, bool) or not isinstance(port, int) or port < 0 or port > 65535 or (0 < port < 1024):
+        raise ValueError("probe.source.port must be 0 or an unprivileged integer port between 1024 and 65535")
+    path = raw.get("path", "/")
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/")
+        or len(path.encode("utf-8")) > 256
+        or any(ch in path for ch in ("?", "#", " ", "\t", "\r", "\n"))
+    ):
+        raise ValueError("probe.source.path must start with '/' and contain no query, fragment, or whitespace")
+    methods_raw = raw.get("methods", ["POST"])
+    if (
+        not isinstance(methods_raw, list)
+        or not methods_raw
+        or any(m not in {"POST", "PUT", "GET"} for m in methods_raw)
+        or len(set(methods_raw)) != len(methods_raw)
+    ):
+        raise ValueError("probe.source.methods must be a non-empty list of unique methods from POST, PUT, GET")
+    auth = None
+    if "auth" in raw and raw["auth"] is not None:
+        auth_raw = _require_keys(
+            raw["auth"],
+            {"type"},
+            {"header", "prefix", "token_file", "env"},
+            "probe.source.auth",
+        )
+        auth_type = auth_raw["type"]
+        if auth_type not in {"bearer", "header", "hmac_sha256"}:
+            raise ValueError("probe.source.auth.type must be 'bearer', 'header', or 'hmac_sha256'")
+        has_file = "token_file" in auth_raw
+        has_env = "env" in auth_raw
+        if has_file == has_env:
+            raise ValueError("probe.source.auth must specify exactly one of token_file or env")
+        auth = {"type": auth_type}
+        if auth_type in {"header", "hmac_sha256"}:
+            header_name = auth_raw.get("header")
+            if not isinstance(header_name, str) or HEADER_NAME_PATTERN.fullmatch(header_name) is None:
+                raise ValueError("probe.source.auth.header must be a valid HTTP header name")
+            auth["header"] = header_name
+            default_prefix = "sha256=" if auth_type == "hmac_sha256" else ""
+            prefix = auth_raw.get("prefix", default_prefix)
+            if not isinstance(prefix, str) or len(prefix.encode("utf-8")) > 64 or "\r" in prefix or "\n" in prefix:
+                raise ValueError("probe.source.auth.prefix must be a short single-line string")
+            auth["prefix"] = prefix
+        else:
+            if "header" in auth_raw or "prefix" in auth_raw:
+                raise ValueError("probe.source.auth.header/prefix are not allowed for bearer auth")
+        if has_file:
+            token_file = auth_raw["token_file"]
+            if (
+                not isinstance(token_file, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", token_file) is None
+                or token_file in {".", ".."}
+            ):
+                raise ValueError("probe.source.auth.token_file must be a single filename inside OCTOPUS_VAR_DIR")
+            auth["token_file"] = token_file
+        if has_env:
+            env_name = auth_raw["env"]
+            if not isinstance(env_name, str) or ENV_NAME_PATTERN.fullmatch(env_name) is None:
+                raise ValueError("probe.source.auth.env must be a valid environment variable name")
+            auth["env"] = env_name
+    return {
+        "kind": "webhook",
+        "bind": bind,
+        "port": port,
+        "path": path,
+        "methods": list(methods_raw),
+        "auth": auth,
+    }
+
+
 def _validate_extract(raw):
     if not isinstance(raw, dict):
         raise ValueError("probe.extract must be a JSON object")
@@ -292,18 +386,28 @@ def _validate_trigger(raw):
 
 
 def validate_config(raw):
-    _require_keys(
-        raw,
-        {"enabled", "poll_seconds", "source", "trigger"},
-        {"extract", "hold_while_working", "label", "note", "max_response_bytes", "timeout_seconds"},
-        "probe config",
-    )
+    if not isinstance(raw, dict):
+        raise ValueError("probe config must be a JSON object")
+    source_raw = raw.get("source")
+    kind = source_raw.get("kind") if isinstance(source_raw, dict) else None
+    required_top = {"enabled", "source", "trigger"} if kind == "webhook" else {"enabled", "poll_seconds", "source", "trigger"}
+    optional_top = {"poll_seconds", "extract", "hold_while_working", "label", "note", "max_response_bytes", "timeout_seconds"}
+    _require_keys(raw, required_top, optional_top, "probe config")
     enabled = _require_bool(raw["enabled"], "probe.enabled")
-    poll_seconds = _require_int_range(raw["poll_seconds"], "probe.poll_seconds", 5, 86400)
-    source_raw = raw["source"]
-    if not isinstance(source_raw, dict) or source_raw.get("kind") not in {"http", "file"}:
-        raise ValueError("probe.source.kind must be 'http' or 'file'")
-    source = _validate_http_source(source_raw) if source_raw["kind"] == "http" else _validate_file_source(source_raw)
+    poll_seconds = _require_int_range(
+        raw.get("poll_seconds", DEFAULT_WEBHOOK_POLL_SECONDS),
+        "probe.poll_seconds",
+        5,
+        86400,
+    )
+    if kind not in {"http", "file", "webhook"}:
+        raise ValueError("probe.source.kind must be 'http', 'file', or 'webhook'")
+    if kind == "http":
+        source = _validate_http_source(source_raw)
+    elif kind == "file":
+        source = _validate_file_source(source_raw)
+    else:
+        source = _validate_webhook_source(source_raw)
     extract = _validate_extract(raw.get("extract", {"format": "text"}))
     trigger = _validate_trigger(raw["trigger"])
     hold_while_working = _require_bool(raw.get("hold_while_working", True), "probe.hold_while_working")
@@ -607,35 +711,208 @@ class FileProbe:
 
 
 def build_probe(config, boundary):
-    if config["source"]["kind"] == "http":
+    kind = config["source"]["kind"]
+    if kind == "http":
         return HttpProbe(config, boundary)
-    return FileProbe(config, boundary)
+    if kind == "file":
+        return FileProbe(config, boundary)
+    raise ValueError("webhook source uses WebhookServer, not a polling probe")
 
 
 def _source_identity(config):
     source = config["source"]
     if source["kind"] == "http":
         return {"kind": "http", "url": source["url"], "method": source["method"]}
-    return {"kind": "file", "path": source["path"]}
+    if source["kind"] == "file":
+        return {"kind": "file", "path": source["path"]}
+    return {"kind": "webhook", "bind": source["bind"], "port": source["port"], "path": source["path"]}
 
 
 def _public_source_descriptor(config):
     source = config["source"]
     if source["kind"] == "http":
         return {"kind": "http", "url": source["url"], "method": source["method"]}
-    return {"kind": "file", "path": source["path"]}
+    if source["kind"] == "file":
+        return {"kind": "file", "path": source["path"]}
+    return {"kind": "webhook", "bind": source["bind"], "port": source["port"], "path": source["path"]}
+
+
+def _load_webhook_secret(auth, boundary):
+    if "token_file" in auth:
+        try:
+            return boundary.read_private_token(auth["token_file"])
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            raise ProbeError("auth_unavailable", str(error)) from None
+    token = os.environ.get(auth["env"], "").strip()
+    if not token or any(ord(ch) < 33 or ord(ch) > 126 for ch in token):
+        raise ProbeError("auth_unavailable", f"environment variable {auth['env']} is missing or invalid")
+    return token
+
+
+def verify_webhook_auth(auth, headers, raw_body, boundary):
+    if auth is None:
+        return True
+    secret = _load_webhook_secret(auth, boundary)
+    auth_type = auth["type"]
+    if auth_type == "bearer":
+        supplied = headers.get("Authorization") or ""
+        return hmac.compare_digest(supplied, f"Bearer {secret}")
+    if auth_type == "header":
+        supplied = headers.get(auth["header"]) or ""
+        return hmac.compare_digest(supplied, f"{auth['prefix']}{secret}")
+    if auth_type == "hmac_sha256":
+        supplied = headers.get(auth["header"]) or ""
+        prefix = auth["prefix"]
+        if not supplied.startswith(prefix):
+            return False
+        supplied_hex = supplied[len(prefix):].lower()
+        expected_hex = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(supplied_hex, expected_hex)
+    return False
+
+
+class _WebhookThreadingServer(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    request_queue_size = 16
+
+
+class WebhookServer:
+    def __init__(self, config, watcher, boundary, wake_event=None):
+        self.c = config
+        self.watcher = watcher
+        self.b = boundary
+        self.wake_event = wake_event
+        source = config["source"]
+        bind_ip = ipaddress.ip_address(source["bind"])
+        server_cls = type(
+            "_BoundWebhookServer",
+            (_WebhookThreadingServer,),
+            {"address_family": socket.AF_INET6 if bind_ip.version == 6 else socket.AF_INET},
+        )
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(owner.c["timeout_seconds"])
+
+            def log_message(self, *_args):
+                return
+
+            def _send_json(self, code, payload):
+                raw = canonical(payload)
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def _handle(self, method):
+                src = owner.c["source"]
+                req_path = urllib.parse.urlsplit(self.path).path
+                if req_path != src["path"]:
+                    self._send_json(404, {"accepted": False, "error": "not_found"})
+                    return
+                if method not in src["methods"]:
+                    self._send_json(405, {"accepted": False, "error": "method_not_allowed"})
+                    return
+                limit = owner.c["max_response_bytes"]
+                if method == "GET":
+                    raw_body = b""
+                else:
+                    length_hdr = self.headers.get("Content-Length")
+                    if length_hdr is None:
+                        self._send_json(411, {"accepted": False, "error": "length_required"})
+                        return
+                    try:
+                        length = int(length_hdr)
+                    except ValueError:
+                        self._send_json(400, {"accepted": False, "error": "invalid_content_length"})
+                        return
+                    if length < 0:
+                        self._send_json(400, {"accepted": False, "error": "invalid_content_length"})
+                        return
+                    if length > limit:
+                        self._send_json(413, {"accepted": False, "error": "payload_too_large"})
+                        return
+                    raw_body = self.rfile.read(length) if length > 0 else b""
+                    if len(raw_body) != length:
+                        self._send_json(400, {"accepted": False, "error": "truncated_body"})
+                        return
+                try:
+                    if not verify_webhook_auth(src["auth"], self.headers, raw_body, owner.b):
+                        self._send_json(401, {"accepted": False, "error": "unauthorized"})
+                        return
+                except ProbeError as error:
+                    self._send_json(503, {"accepted": False, "error": error.code})
+                    return
+                observation = {
+                    "kind": "webhook",
+                    "status_code": None,
+                    "method": method,
+                    "path": req_path,
+                    "exists": True,
+                    "not_modified": False,
+                    "body": raw_body,
+                    "etag": None,
+                    "last_modified": None,
+                }
+                try:
+                    staged, reason = owner.watcher.ingest_push(observation)
+                except ProbeError as error:
+                    status = 429 if error.code == "queue_full" else 400
+                    self._send_json(status, {"accepted": False, "error": error.code})
+                    return
+                if staged:
+                    if owner.wake_event is not None:
+                        owner.wake_event.set()
+                    self._send_json(202, {"accepted": True, "triggered": True, "reason": reason})
+                else:
+                    self._send_json(200, {"accepted": True, "triggered": False})
+
+            def do_POST(self):
+                self._handle("POST")
+
+            def do_PUT(self):
+                self._handle("PUT")
+
+            def do_GET(self):
+                self._handle("GET")
+
+        self.server = server_cls((source["bind"], source["port"]), Handler)
+        self.thread = None
+
+    @property
+    def port(self):
+        return self.server.server_address[1]
+
+    def start(self):
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.25}, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=5.0)
+            self.thread = None
 
 
 class Watcher:
     def __init__(self, config, boundary):
         self.c = config
         self.b = boundary
+        self.lock = threading.RLock()
         boundary.private_directory(boundary.VAR_DIR)
         boundary.private_directory(boundary.PAYLOADS_DIR)
         self.path = Path(boundary.VAR_DIR) / "watch.sqlite3"
         if os.path.lexists(self.path):
             boundary.stable_read(self.path, 128 * 1024 * 1024, "watch database", private=True)
-        self.db = sqlite3.connect(str(self.path))
+        self.db = sqlite3.connect(str(self.path), check_same_thread=False)
         os.chmod(self.path, 0o600)
         self.db.execute("PRAGMA journal_mode=DELETE")
         self.db.execute("PRAGMA synchronous=FULL")
@@ -644,29 +921,42 @@ class Watcher:
         self.health = self.read("health") or {"last_success_at": None, "failures": 0}
 
     def close(self):
-        self.db.close()
+        with self.lock:
+            self.db.close()
 
     def reconfigure(self, config):
-        self.c = config
+        with self.lock:
+            self.c = config
 
     def read(self, name):
-        row = self.db.execute("SELECT value FROM records WHERE name=?", (name,)).fetchone()
-        return json.loads(row[0]) if row else None
+        with self.lock:
+            row = self.db.execute("SELECT value FROM records WHERE name=?", (name,)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def write(self, name, value):
-        raw = canonical(value)
-        if len(raw) > MAX_STATE_BYTES:
-            raise ProbeError("state_byte_limit", "watch state exceeds limit")
-        self.db.execute("INSERT OR REPLACE INTO records VALUES (?,?)", (name, raw.decode("utf-8")))
+        with self.lock:
+            raw = canonical(value)
+            if len(raw) > MAX_STATE_BYTES:
+                raise ProbeError("state_byte_limit", "watch state exceeds limit")
+            self.db.execute("INSERT OR REPLACE INTO records VALUES (?,?)", (name, raw.decode("utf-8")))
 
     def status(self, state, error=None, **extra):
-        self.health.update(state=state, error=error, updated_at=now_iso(), **extra)
-        with self.db:
-            self.write("health", self.health)
-        self.b.atomic_json(str(Path(self.b.VAR_DIR) / "health.json"), self.health)
+        with self.lock:
+            self.health.update(state=state, error=error, updated_at=now_iso(), **extra)
+            with self.db:
+                self.write("health", self.health)
+            self.b.atomic_json(str(Path(self.b.VAR_DIR) / "health.json"), self.health)
 
     def _base_state(self, observed_at):
         identity = _source_identity(self.c)
+        pending = self.read("pending")
+        if (
+            pending is not None
+            and isinstance(pending.get("candidate"), dict)
+            and pending["candidate"].get("schema_version") == 1
+            and pending["candidate"].get("identity") == identity
+        ):
+            return json.loads(json.dumps(pending["candidate"])), False
         previous = self.read("state")
         if previous is not None and previous.get("schema_version") == 1 and previous.get("identity") == identity:
             return json.loads(json.dumps(previous)), False
@@ -695,77 +985,128 @@ class Watcher:
         return (now_unix - last_fired) >= cooldown
 
     def _stage_notice(self, candidate, payload_body):
-        payload = canonical(payload_body)
-        digest = self.b.octopus_content_hash(payload)
-        payload_path = str(Path(self.b.PAYLOADS_DIR) / (digest + ".payload"))
-        self.b.private_file(payload_path, payload, self.b.IO_LIMITS["max_payload_bytes"], "watch notice")
-        label = self.c["label"]
-        manifest = canonical({"label": label, "payload_path": payload_path, "payload_content_hash": digest})
-        manifest_hash = self.b.octopus_content_hash(manifest)
-        manifest_path = str(Path(self.b.PAYLOADS_DIR) / (manifest_hash + ".artifact.json"))
-        self.b.private_file(manifest_path, manifest, self.b.IO_LIMITS["max_manifest_bytes"], "watch manifest")
-        notice = {
-            "label": label,
-            "manifest_path": manifest_path,
-            "manifest_hash": manifest_hash,
-            "admitted_seq": None,
-        }
-        with self.db:
-            self.write("pending", {"candidate": candidate, "notices": [notice]})
-        return notice
+        with self.lock:
+            existing = self.read("pending")
+            notices = list(existing["notices"]) if existing else []
+            if len(notices) >= MAX_PENDING_NOTICES:
+                raise ProbeError("queue_full", f"pending queue reached {MAX_PENDING_NOTICES}")
+            payload = canonical(payload_body)
+            digest = self.b.octopus_content_hash(payload)
+            payload_path = str(Path(self.b.PAYLOADS_DIR) / (digest + ".payload"))
+            self.b.private_file(payload_path, payload, self.b.IO_LIMITS["max_payload_bytes"], "watch notice")
+            label = self.c["label"]
+            manifest = canonical({"label": label, "payload_path": payload_path, "payload_content_hash": digest})
+            manifest_hash = self.b.octopus_content_hash(manifest)
+            manifest_path = str(Path(self.b.PAYLOADS_DIR) / (manifest_hash + ".artifact.json"))
+            self.b.private_file(manifest_path, manifest, self.b.IO_LIMITS["max_manifest_bytes"], "watch manifest")
+            notice = {
+                "label": label,
+                "manifest_path": manifest_path,
+                "manifest_hash": manifest_hash,
+                "admitted_seq": None,
+            }
+            notices.append(notice)
+            with self.db:
+                self.write("pending", {"candidate": candidate, "notices": notices})
+            return notice
+
+    def ingest_push(self, observation, now_unix=None):
+        now_unix = time.time() if now_unix is None else now_unix
+        observed_at = now_iso()
+        with self.lock:
+            try:
+                staged, reason = self._prepare_observation(observation, observed_at, now_unix)
+            except ProbeError as error:
+                if error.code != "queue_full":
+                    self._prepare_error(error, observed_at, now_unix)
+                    self.status("probe_failed", error=error.code, error_detail=error.detail, pending=self.read("pending") is not None)
+                raise
+            self.status(
+                "listening",
+                error=None,
+                error_detail=None,
+                failures=0,
+                last_success_at=observed_at,
+                last_reason=reason,
+                pending=self.read("pending") is not None,
+            )
+            return staged, reason
 
     def deliver(self):
-        pending = self.read("pending")
-        if pending is None:
-            return "clear"
-        if self.c["hold_while_working"]:
-            working = self.b.working_pinning_runs()
-            if working:
-                self.status("holding", error=None, held_by=working, pending=True)
-                return "held"
-        admitted = None
-        for notice in pending["notices"]:
-            self.b.verify_prepared(notice)
-            artifact_id = notice["label"] + ":" + notice["manifest_hash"]
-            admitted = self.b.find_admitted_arrival_seq(artifact_id)
-            if notice["admitted_seq"] is not None and admitted != notice["admitted_seq"]:
-                raise RuntimeError("recorded admission missing from ledger")
-            if admitted is None:
-                evidence = [
-                    {
-                        "interface_id": self.b.INTERFACE_ID,
-                        "artifact_id": artifact_id,
-                        "label": "world.watch.idempotency",
-                        "bytes": list(bytes.fromhex(self.b.octopus_content_hash(artifact_id.encode("utf-8")))),
-                    }
-                ]
-                try:
-                    admitted = self.b.hand(notice["manifest_path"], evidence)
-                except self.b.Refused as refusal:
-                    if refusal.duplicate_of(artifact_id):
-                        admitted = self.b.find_admitted_arrival_seq(artifact_id)
-                        if admitted is None:
-                            raise RuntimeError("duplicate verdict without ledger admission") from None
-                    else:
-                        self.status(
-                            "delivery_refused",
-                            error="runtime_refused",
-                            refusal_reason=refusal.reason,
-                            pending=True,
-                        )
-                        return "refused"
-                except Exception:
-                    self.status("delivery_uncertain", error="runtime_verdict_uncertain", pending=True)
-                    raise
-            notice["admitted_seq"] = admitted
-            with self.db:
-                self.write("pending", pending)
-        with self.db:
-            self.write("state", pending["candidate"])
-            self.db.execute("DELETE FROM records WHERE name='pending'")
-        self.reclaim_completed(pending["notices"])
-        self.status("watching", pending=False, held_by=[], last_admitted_seq=admitted, refusal_reason=None)
-        return "delivered"
+        last_admitted = None
+        while True:
+            with self.lock:
+                pending = self.read("pending")
+                if pending is None:
+                    return "delivered" if last_admitted is not None else "clear"
+                if self.c["hold_while_working"]:
+                    working = self.b.working_pinning_runs()
+                    if working:
+                        self.status("holding", error=None, held_by=working, pending=True)
+                        return "held"
+                target_index = None
+                target_notice = None
+                for idx, notice in enumerate(pending["notices"]):
+                    self.b.verify_prepared(notice)
+                    artifact_id = notice["label"] + ":" + notice["manifest_hash"]
+                    admitted = self.b.find_admitted_arrival_seq(artifact_id)
+                    if notice["admitted_seq"] is not None and admitted != notice["admitted_seq"]:
+                        raise RuntimeError("recorded admission missing from ledger")
+                    if admitted is not None:
+                        if notice["admitted_seq"] is None:
+                            notice["admitted_seq"] = admitted
+                            with self.db:
+                                self.write("pending", pending)
+                        last_admitted = admitted
+                        continue
+                    target_index = idx
+                    target_notice = dict(notice)
+                    break
+                if target_notice is None:
+                    completed = list(pending["notices"])
+                    with self.db:
+                        self.write("state", pending["candidate"])
+                        self.db.execute("DELETE FROM records WHERE name='pending'")
+                    self.reclaim_completed(completed)
+                    idle_state = "listening" if self.c["source"]["kind"] == "webhook" else "watching"
+                    self.status(idle_state, pending=False, held_by=[], last_admitted_seq=last_admitted, refusal_reason=None)
+                    return "delivered"
+
+            artifact_id = target_notice["label"] + ":" + target_notice["manifest_hash"]
+            evidence = [
+                {
+                    "interface_id": self.b.INTERFACE_ID,
+                    "artifact_id": artifact_id,
+                    "label": "world.watch.idempotency",
+                    "bytes": list(bytes.fromhex(self.b.octopus_content_hash(artifact_id.encode("utf-8")))),
+                }
+            ]
+            try:
+                admitted = self.b.hand(target_notice["manifest_path"], evidence)
+            except self.b.Refused as refusal:
+                if refusal.duplicate_of(artifact_id):
+                    admitted = self.b.find_admitted_arrival_seq(artifact_id)
+                    if admitted is None:
+                        raise RuntimeError("duplicate verdict without ledger admission") from None
+                else:
+                    self.status(
+                        "delivery_refused",
+                        error="runtime_refused",
+                        refusal_reason=refusal.reason,
+                        pending=True,
+                    )
+                    return "refused"
+            except Exception:
+                self.status("delivery_uncertain", error="runtime_verdict_uncertain", pending=True)
+                raise
+
+            with self.lock:
+                pending = self.read("pending")
+                if pending is not None and target_index < len(pending["notices"]):
+                    pending["notices"][target_index]["admitted_seq"] = admitted
+                    with self.db:
+                        self.write("pending", pending)
+                last_admitted = admitted
 
     def reclaim_completed(self, notices):
         if self.db.in_transaction:
@@ -862,7 +1203,7 @@ class Watcher:
                 candidate["last_matched"] = matched
         else:
             if (is_first and trigger["fire_on_first"]) or (not is_first and cooldown_ready):
-                reason = "periodic"
+                reason = "push" if observation["kind"] == "webhook" else "periodic"
             candidate["last_digest"] = digest
             candidate["last_value"] = value
             candidate["last_value_truncated"] = value_truncated

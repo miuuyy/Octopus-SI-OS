@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "World watch",
-    "description": "A JSON-configured sensor template: polls an HTTP endpoint or local file and wakes bound tasks on change, condition match, or failure. Read-only.",
+    "description": "A JSON-configured sensor template: polls HTTP endpoints or local files, or listens for local/tunnelled HTTP webhooks, waking bound tasks on change, match, push, or failure.",
     "developer": "Octopus",
     "category": "connector",
     "icon": "scheduled"

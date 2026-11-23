@@ -3,8 +3,9 @@
 `world_watch` is a reusable, read-only World observation sensor driven purely by
 JSON configuration. It is the external-world companion to `world_cron`: where
 `world_cron` watches time and quiet periods, `world_watch` watches an HTTP/HTTPS
-endpoint or a local file and emits a declared artifact (`watch.event` by
-default) whenever a change, predicate match, recovery, or probe error occurs.
+endpoint, a local file, or an incoming HTTP webhook (`source.kind: "webhook"`)
+and emits a declared artifact (`watch.event` by default) whenever a change,
+predicate match, recovery, push delivery, or probe error occurs.
 
 Every run whose active checkpoint pins the interface folder receives the
 artifact. Like `world_cron`, when `hold_while_working` is `true`, delivery waits
@@ -56,8 +57,11 @@ run. The sensor never creates or edits runs.
 
 ## Boundaries
 
-- Read-only sources only: `http` (`GET` / `HEAD`, conditional `ETag` /
-  `Last-Modified`) and `file` (`O_NOFOLLOW`, bounded regular file read).
+- Supported sources: `http` (read-only `GET`/`HEAD` with conditional `ETag`/
+  `Last-Modified`), `file` (`O_NOFOLLOW`, bounded regular file read), and
+  `webhook` (local HTTP listener defaulting to `127.0.0.1`, constant-time
+  `hmac_sha256` / `bearer` / `header` verification, bounded body & pending
+  queue, `202 Accepted` only after durable staging).
 - Credentials never live in `probe.json`: `source.auth` references either a
   `0600` file inside `OCTOPUS_VAR_DIR` (`token_file`) or an explicit inherited
   environment variable (`env`).
