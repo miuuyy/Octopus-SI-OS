@@ -238,28 +238,30 @@ engineering discipline. The system-review trigger binds that library, and its
 role directs the run to read the entry before changing Octopus. The guide does
 not depend on a maintainer's private skill files or grant additional authority.
 
-The registry ships `skill.capture`, `skill.upsert`, `skill.search`,
-`skill.list`, and `skill.get` as **ordinary tools** behind the system room's
-door. A concept-named tool is fine. A concept-named runtime primitive is not.
+The registry ships bound context-collection tools (`context.discover`,
+`context.read`, `context.prepare_publication`) and ordinary artifact tools
+(`artifact.read`, `artifact.list`, `artifact.search`, `artifact.append`,
+`artifact.send`) behind the system room's doors. A concept-named tool is fine.
+A concept-named runtime primitive is not.
 
 - **Authority is policy, never worker identity.** Whoever's formed grant
-  includes the tool may call it. A memory worker is the typical writer in a
-  maintenance environment because policy grants it there. That is
-  configuration, not doctrine.
-- **Visibility is binding.** A worker receives a concrete skill artifact
-  through an artifact binding, or searches when policy grants the tool. Search
-  narrows within binding-gated access; it is not a global lookup.
-- **Runs carry provenance.** A skill is written from inside a run, so its
-  source run and trace are honest by construction. Needing to fabricate
-  provenance is the signal you are off the road.
+  includes the tool and collection binding may discover, read, or publish
+  entries. That is configuration, not doctrine.
+- **Visibility is binding.** A worker receives a concrete skill or library
+  collection through an artifact binding, and searches only within its bound
+  collections. Search narrows within binding-gated access; it is not a global
+  lookup.
+- **Runs carry provenance.** Every published entry and memory note is written
+  from inside a run, so its source run and trace are honest by construction.
+  Needing to fabricate provenance is the signal you are off the road.
 
 ### Three ways a skill gets written
 
-1. **Seed.** Any run with the grant writes it directly. Hand-written seeds are
-   first-class.
-2. **Capture.** A worker whose policy grants capture emits a proposal artifact.
-   What happens next is ordinary artifact movement: a granted worker may
-   inspect it, refine it, reject it, or persist it.
+1. **Seed.** Any run with the grant writes an artifact or publishes a collection
+   entry directly. Hand-written seeds are first-class.
+2. **Capture.** A run observes a reusable procedure and either saves it via
+   `memory.save` or prepares a collection entry via `context.prepare_publication`
+   and `file.write` (or sends a proposal artifact to a review run).
 3. **Delegation.** A run that should not hold write grants emits an artifact
    through a System-interface binding to a run that does.
 

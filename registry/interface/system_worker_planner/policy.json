@@ -55,10 +55,6 @@
       "artifact.list",
       "artifact.read",
       "artifact.search",
-      "skill.list",
-      "skill.get",
-      "skill.search",
-      "skill.capture",
       "artifact.send",
       "file.write"
     ],

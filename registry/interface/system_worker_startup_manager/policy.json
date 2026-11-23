@@ -50,11 +50,6 @@
       "artifact.read",
       "artifact.search",
       "artifact.append",
-      "skill.list",
-      "skill.get",
-      "skill.search",
-      "skill.capture",
-      "skill.upsert",
       "artifact.send",
       "file.write"
     ],

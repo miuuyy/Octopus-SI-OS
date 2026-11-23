@@ -5,8 +5,6 @@ use octopus_tool_handlers::{
     optional_string_argument, required_string_argument,
 };
 
-use crate::skill_bound;
-
 pub struct ArtifactBoundHandler;
 
 impl ToolHandler for ArtifactBoundHandler {
@@ -42,9 +40,6 @@ async fn execute(
         "read" => read(surface.as_ref(), call).await,
         "list" => list(surface.as_ref(), call).await,
         "search" => search(surface.as_ref(), call).await,
-        "skill_list" | "skill_get" | "skill_search" | "skill_capture" | "skill_upsert" => {
-            skill_bound::execute(surface.as_ref(), call, operation).await
-        }
         other => Err(ToolHandlerError::Execution {
             tool_id: call.tool_id.clone(),
             reason: format!("artifact-bound operation '{other}' was not dispatched"),
@@ -78,8 +73,7 @@ fn descriptor_operation(call: &ToolCall) -> Result<&str, ToolHandlerError> {
         });
     }
     match operation {
-        "append" | "read" | "list" | "search" | "skill_list" | "skill_get" | "skill_search"
-        | "skill_capture" | "skill_upsert" => Ok(operation),
+        "append" | "read" | "list" | "search" => Ok(operation),
         other => Err(ToolHandlerError::Execution {
             tool_id: call.tool_id.clone(),
             reason: format!("unknown artifact-bound operation '{other}'"),

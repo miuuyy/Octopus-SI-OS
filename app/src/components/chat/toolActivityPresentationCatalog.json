@@ -1396,48 +1396,6 @@
     "target_arguments": [],
     "query_arguments": []
   },
-  "skill.capture": {
-    "kind": "tool",
-    "conversation_visible": true,
-    "label": "Capture",
-    "target_arguments": [],
-    "query_arguments": []
-  },
-  "skill.get": {
-    "kind": "read",
-    "conversation_visible": true,
-    "label": "Read",
-    "target_arguments": [
-      "id"
-    ],
-    "query_arguments": [],
-    "target_kind": "artifact"
-  },
-  "skill.list": {
-    "kind": "list",
-    "conversation_visible": true,
-    "label": "List",
-    "target_arguments": [],
-    "query_arguments": [],
-    "target_kind": "artifact"
-  },
-  "skill.search": {
-    "kind": "search",
-    "conversation_visible": true,
-    "label": "Search",
-    "target_arguments": [],
-    "query_arguments": [
-      "query"
-    ],
-    "target_kind": "artifact"
-  },
-  "skill.upsert": {
-    "kind": "tool",
-    "conversation_visible": true,
-    "label": "Upsert",
-    "target_arguments": [],
-    "query_arguments": []
-  },
   "speaker.list_devices": {
     "kind": "tool",
     "conversation_visible": true,

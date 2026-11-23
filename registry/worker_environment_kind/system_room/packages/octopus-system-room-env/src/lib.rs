@@ -25,7 +25,6 @@ mod memory_bound;
 mod memory_evidence;
 mod memory_observation;
 mod memory_rank;
-mod skill_bound;
 
 pub use artifact_bound_process::run_artifact_bound_tool_process;
 pub use file_read::run_file_read_tool_process;
