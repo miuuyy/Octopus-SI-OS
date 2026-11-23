@@ -362,16 +362,24 @@ jobs:
           path: registry/interface/world_provider_codex/packages/bin
           key: managed-codex-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('registry/interface/world_provider_codex/packages/octopus-provider-codex/managed-cli/release.json', 'registry/interface/world_provider_codex/packages/octopus-provider-codex/managed-cli/bootstrap.cjs') }}
 
-      - name: Build the topology planner and input intake life
-        run: cargo build --locked -p octopus-operator-chat-client --bin octopus-operator-chat-topology -p octopus-provider-codex --bin octopus-input-intake-life
+      - name: Build the topology planner and provider life binaries
+        run: cargo build --locked -p octopus-operator-chat-client --bin octopus-operator-chat-topology -p octopus-provider-codex --bin octopus-input-intake-life --bin octopus-provider-opencodex-life
+
+      - name: Build the OpenCodex bridge executable
+        working-directory: registry/interface/world_provider_codex/packages/octopus-provider-codex/opencodex-bridge
+        run: |
+          npm ci
+          npm run build
 
       - name: Prepare the declared managed provider executable
         run: node registry/interface/world_provider_codex/packages/octopus-provider-codex/managed-cli/bootstrap.cjs materialize --destination "$PWD/registry/interface/world_provider_codex/packages/bin"
 
       - name: Local package lifecycle and fresh Home setup through the real topology planner
         run: |
-          mkdir -p registry/interface/world_provider_codex/packages/octopus-provider-codex/intake/life-bin
+          mkdir -p registry/interface/world_provider_codex/packages/octopus-provider-codex/intake/life-bin registry/interface/world_provider_codex/packages/octopus-provider-codex/life-bin
           install -m 755 target/debug/octopus-input-intake-life registry/interface/world_provider_codex/packages/octopus-provider-codex/intake/life-bin/octopus-input-intake-life
+          install -m 755 target/debug/octopus-provider-opencodex-life registry/interface/world_provider_codex/packages/octopus-provider-codex/life-bin/octopus-provider-opencodex-life
+          strip -S registry/interface/world_provider_codex/packages/octopus-provider-codex/intake/life-bin/octopus-input-intake-life registry/interface/world_provider_codex/packages/octopus-provider-codex/life-bin/octopus-provider-opencodex-life
           node app/scripts/test-local-packages.cjs
           node app/scripts/test-local-package-closure.cjs --topology-binary target/debug/octopus-operator-chat-topology
           node app/scripts/test-local-package-closure.cjs --bounded-agent-preset target/debug/octopus-operator-chat-topology

@@ -198,7 +198,7 @@ async function assertPackageCopyBudget(packageIds, executable, root) {
     const source = await readLocalPackageSourcePackage({ sourceRegistryRoot, libraryRoot, packageId });
     bytes += source.members.reduce((total, member) => total + member.files.reduce((size, file) => size + file.size, 0), 0);
   }
-  const copyBudget = 512 * 1024 * 1024;
+  const copyBudget = 768 * 1024 * 1024;
   assert.ok(bytes + 8 * 1024 * 1024 < copyBudget, `Fixture exceeds copy budget: ${bytes}`);
   const space = await fs.statfs(root);
   assert.ok(space.bavail * space.bsize > copyBudget + 256 * 1024 * 1024, "Fixture requires its copy budget plus 256 MiB free reserve");
