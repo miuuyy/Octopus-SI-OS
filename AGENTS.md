@@ -6,10 +6,9 @@ records movements. Everything else - model providers, channels, tool rooms,
 workers, memory, the desktop client - attaches to it through JSON descriptors
 and one boundary contract.
 
-Codex was the first provider ported onto it and still backs initial desktop
-onboarding, while active autonomy experiments now prioritize the **Gemini 4**
-family — especially **Gemini 4 Neon** (via Antigravity). The desktop app is the
-product surface: Home, Projects, Agents, Tasks, Applications, Drivers.
+Codex was the first provider ported onto it and backs voice and initial sign-in;
+Home defaults to Gemini 4 Neon via Antigravity. The desktop app is the product
+surface: Home, Projects, Agents, Tasks, Applications, Drivers.
 
 Read [README.md](README.md), [docs/architecture.md](docs/architecture.md), and
 [docs/development.md](docs/development.md) before non-trivial work. For work
@@ -51,20 +50,18 @@ Do not make the surface pay for the architecture.
 ## Design stance
 
 I keep the design intentionally small in primitives and intentionally large in
-descriptors. Octopus is not built to win standard benchmarks or short, bounded
-coding tasks — on those it gives no advantage over a plain agent loop. It is an
-experimental harness for long-horizon, abstract, maximally autonomous tracks
-where persistent goals (EEs), triggers, parallel runs, replayable evidence, and
-descriptor-level self-modification matter. I am not claiming this is AGI.
+descriptors. Octopus is not built for standard benchmarks or short, bounded
+coding tasks; on those it adds nothing over a plain agent loop. It is built for
+long-horizon, open-ended autonomy where persistent goals, triggers, parallel
+runs, replayable evidence, and descriptor-level self-modification matter. I am
+not claiming this is AGI.
 
-Execution failures in the harness are almost always architectural: the wrong
-contract, the wrong data shown to the model, a missing field. Hardcoding around
-one hides a problem in the system behind a workaround for the model. Separately,
-unsupervised experiments have shown that *autonomous initiative* is gated by
-model alignment: ChatGPT/OpenAI and Claude models largely stay passive or
-decline self-waking continuity, while early initiative has emerged primarily in
-recent Gemini 4 models (especially Gemini 4 Neon). That empirical priority
-never turns into provider- or model-specific branching in the kernel.
+Execution failures here are almost always architectural: the wrong contract, the
+wrong data shown to the model, a missing field. Hardcoding around one hides a
+problem in the system behind a workaround for the model. Autonomous initiative
+itself still depends on model alignment (currently seen mainly in recent
+Gemini 4 models, especially Gemini 4 Neon), but that stays an empirical choice
+of default provider, never a provider or model branch in the kernel.
 
 If a direction here looks wrong, overbuilt, or unclear, do not quietly
 translate it into a familiar agent-framework pattern and keep coding. Stop and

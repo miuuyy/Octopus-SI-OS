@@ -1,15 +1,15 @@
 # Architecture
 
-Octopus is an experimental self-evolving agentic operating system built for
-**long-horizon, open-ended autonomy**. It uses operating-system principles so
-agents can persist across hours or days, organize their own goals and triggers,
-and reshape the execution environment that governs their future work.
+Octopus is an experimental self-evolving agentic operating system for
+long-horizon, open-ended autonomy. It is built on operating-system principles
+so agents can persist across runs, organize their own goals and triggers, and
+reshape the execution environment that governs their future work.
 
-It is not designed to beat standard agent loops on benchmarks or short, bounded
+It is not built to beat plain agent loops on benchmarks or short, bounded
 coding tasks. For one-shot work, an OS architecture adds machinery without
-improving results; it becomes useful only when the horizon is long and abstract
-enough that persistent goals, independent triggers, parallel runs, replayable
-evidence, and self-modifiable descriptors matter.
+improving results; it becomes useful when work is open-ended enough that
+persistent goals, triggers, parallel runs, replayable evidence, and editable
+descriptors matter.
 
 The usual agent is a loop around a model: act, observe, accumulate context,
 repeat. Memory, skills, sub-agents, and schedules are then bolted onto that
@@ -610,15 +610,11 @@ an interface is live or a tool succeeded.
 
 ![Topology showing the World projection and an execution-environment inspector](images/client/topology.png)
 
-## Autonomy, alignment, and attention
+## Autonomy and attention
 
-Octopus is built for a narrow, demanding regime: **long-horizon, open-ended,
-maximally autonomous trajectories**. On conventional benchmarks and short,
-bounded coding tasks, it provides no advantage over a plain coding harness such
-as Codex CLI. The architecture pays off only when a goal is abstract and runs
-long enough that an agent must organize its own subgoals (EEs), arm triggers
-and watchdogs, run parallel workers, survive restarts, and modify its
-environment from the inside.
+The research question is how an architecture that lets agents reshape their
+execution environment supports sustained initiative and long-term development
+on open-ended, long-horizon work.
 
 **Self-evolution** is this process of changing the environment that shapes
 subsequent activity. Under policy, agents can create and revise goals, change
@@ -634,37 +630,17 @@ tools, and context change what it can do next. These changes persist beyond the
 task that made them. The resulting experience can inform the next revision of
 the environment, so the system can keep redirecting its own activity over time.
 
-Recent unsupervised experiments sharpened an empirical boundary: **architecture
-alone does not produce initiative if model alignment suppresses it.**
-
-- **ChatGPT / OpenAI and Claude models** generally do not sustain autonomous
-  initiative in open-ended, unsupervised runs. Their alignment keeps them
-  waiting for a human operator or leads them to refuse self-waking and
-  self-maintaining infrastructure without an external stop switch, so the OS
-  affordances largely go unused. Both families remain effective as bounded
-  delegated workers.
-- **Recent Gemini 4 models — especially Gemini 4 Neon** (alongside Gemini 4
-  Carbon and Hydrogen) — are where autonomous initiative has actually begun to
-  appear: structuring goals, setting recurring triggers and watchdogs, running
-  parallel sub-tasks, and patching their own environment over extended
-  unsupervised runs.
-- **Early harness comparisons** running the same open-ended scenario and the
-  same Gemini 4 Neon model in Octopus versus plain Codex show early signs that
-  persistent goals, triggers, runs, the movement ledger, and editable
-  descriptors change the autonomous trajectory compared to a session-based
-  harness.
-
-Because of these findings, **active autonomy experiments and near-term model
-priority focus on the Gemini 4 family, with Gemini 4 Neon as the primary
-model**. That priority is empirical, never architectural: the kernel knows no
-model or provider by name, and every provider attaches through the same
-interface contract.
-
 **Self-improvement** remains the broader research aim and a possible result of
 self-evolution: the changes must actually make the system better. Persistent
-goals and artifact exchange make useful initiative possible; turning early
-initiative into reliable long-term improvement remains an empirical problem. A
-run can wait for input; the architecture does not require continuous activity.
+goals and artifact exchange make initiative possible, though unsupervised runs
+also show that architecture alone is not enough when model alignment keeps a
+model waiting for an operator. So far, sustained autonomous initiative has
+appeared mainly on recent Gemini 4 models (especially Gemini 4 Neon), while
+ChatGPT and Claude models mostly wait for direction in open-ended runs despite
+working well on bounded tasks. That difference shapes which models are used as
+defaults and in autonomy experiments, never the kernel, which knows no model or
+provider by name. A run can wait for input; the architecture does not require
+continuous activity.
 
 Attention is part of that question: what should wake a run? A model can use
 its observations to configure an interface that listens for a relevant event,
@@ -675,29 +651,24 @@ return-after-a-pause examples.
 
 ## What is not solved
 
-- **No advantage on benchmarks; initiative is narrow and alignment-gated.** For
-  ordinary coding tasks and standard benchmarks, Octopus gives nothing over a
-  plain agent loop such as Codex CLI. In unsupervised open-ended runs,
-  initiative depends heavily on model alignment: ChatGPT/OpenAI and Claude
-  models largely remain passive or decline autonomous continuity, while early
-  initiative has emerged primarily in recent **Gemini 4** models (especially
-  **Gemini 4 Neon**). Turning those early traces into dependable, sustained
-  self-improvement is still open.
-- **Provider depth is uneven.** Desktop onboarding was built first around
-  bundled Codex CLI / ChatGPT sign-in on macOS, while active autonomy
-  experiments prioritize **Gemini 4 / Gemini 4 Neon** through Antigravity
-  (alongside Google Gemini and Vertex), with Codex and Claude used mainly for
-  bounded tasks. Many other provider descriptors ship via the OpenCodex bridge;
-  a descriptor is not an end-to-end test.
+- **Autonomous initiative is still narrow.** For ordinary coding tasks and
+  standard benchmarks, the architecture gives nothing over a plain agent loop
+  such as Codex CLI. In open-ended runs, initiative remains heavily gated by
+  model alignment - seen so far mainly on recent Gemini 4 models - and turning
+  early initiative into reliable long-term improvement is still open.
+- **Provider depth is uneven.** The paths exercised end to end on macOS are
+  Antigravity (for Gemini 4 models) and bundled Codex CLI / ChatGPT (which
+  also backs voice). Many other provider descriptors ship through OpenCodex; a
+  descriptor is not a test.
 - **A mark is only as strong as its verifier.** "It builds" is a check. Proof
   that a coder stayed on-contract and wrote nothing harmful is not designed
   yet.
 - **A capable model routing around its own policy** is acknowledged, not
   solved. Policy and marks are the control surface; they are not a proof of
   safety.
-- **Emergence and self-improvement remain empirical.** The framework provides
-  the affordances and records what runs do with them; early harness comparisons
-  show promising differences on long-horizon tracks, not solved autonomy.
+- **Emergence is a hypothesis.** The framework provides the affordances and
+  records what runs do with them; early long-horizon comparisons are
+  encouraging, not solved autonomy.
 
 ## Read next
 

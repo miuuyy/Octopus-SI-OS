@@ -2,12 +2,10 @@
 
 The research preview runs locally on macOS (with a headless Linux runtime via
 the [terminal client](cli.md)). Install a published binary as described below,
-or [build from source](#build-from-source). You finish setup inside the app.
-Codex CLI was the first provider integrated into desktop onboarding (**Sign in
-with ChatGPT** in the app, with no separate CLI login). For long-horizon
-autonomy work, the current priority is the **Gemini 4** family — especially
-**Gemini 4 Neon** — installed and connected through **Antigravity** (or Google
-Gemini / Vertex) in **Applications**.
+or [build from source](#build-from-source). You finish setup inside the app:
+onboarding starts with **Sign in with ChatGPT** (no separate CLI login), and
+workspace setup includes both Antigravity (defaulting Home to Gemini 4 Neon)
+and Codex.
 
 For the terminal client and its independent build command, see
 [Terminal client](cli.md). Both clients use the same Home and runtime.
@@ -29,11 +27,11 @@ Requirements:
 - Command Line Tools for Xcode (`xcode-select --install`). Octopus runs
   `python3` and `git` from them; a Mac without them offers the install the
   first time something calls `python3`.
-- A model provider account: desktop onboarding currently starts with a ChatGPT
-  account (bundled Codex CLI) or the read-only **Test** profile, and you can
-  connect **Antigravity** (recommended for **Gemini 4 Neon** and other Gemini 4
-  models), Google Gemini, Vertex, Claude Code, or API-key / OpenAI-compatible
-  providers in **Applications**.
+- A ChatGPT account for Codex, live voice, and dictation (plus an Antigravity
+  account if you keep the default Gemini 4 Neon model for Home). Without an
+  account, you can explore the read-only **Test** profile. Additional providers
+  (Google Gemini, Vertex, Claude Code, API-key or OpenAI-compatible endpoints)
+  can be added in **Applications**.
 
 Once a release is published, install it from Terminal:
 
@@ -87,13 +85,8 @@ published release, and is required when no binary release is available.
   The workspace and locked dependencies require at least Rust 1.91.
   Use current stable for the preview build.
 - Internet access to fetch dependencies and the pinned provider distribution.
-  Desktop onboarding signs into ChatGPT (for Codex, live voice, and dictation)
-  or unlocks the read-only **Test** profile. The base pack includes both
-  **Antigravity** and **Codex**: Home defaults to **Gemini 4 Neon (`low`)**
-  through Antigravity (connecting Antigravity ACP during setup when selected
-  for Home), while live voice runs through Codex (`world_provider_realtime`).
-  Additional providers (Google Gemini, Vertex, Claude Code, API-key /
-  OpenAI-compatible) install in **Applications**.
+  A ChatGPT account is needed for desktop onboarding (plus Antigravity if you
+  keep the default Home model), or you can use the read-only **Test** profile.
 
 The packager builds for the architecture of the Node process running it. Use a
 native Node installation on Apple Silicon. Intel packaging has a source path but
@@ -141,22 +134,22 @@ previous bundles in `app/build/` can be deleted when you need the space back.
 Follow the client screens. The actions depend on the setup already present on
 your machine:
 
-- **Sign in with ChatGPT** opens browser authentication (used by Codex, live
-  voice, and dictation). Complete it in the browser and return to the client.
+- **Sign in with ChatGPT** opens browser authentication, used for Codex, live
+  voice, and dictation. Complete it in the browser and return to the client.
   To look around first, unlock the **Test** profile, a fixture lab with no live
   runtime ([client guide](client.md)).
 - The access screen lets you configure or enter the local administrator password.
 - The embedded launch terminal prepares a command ending in `octopus up`.
   Press Enter to run it and wait for the runtime's ready state.
 - Workspace setup asks for a starting structure, project names, the Home
-  provider/model (defaulting to **Antigravity · Gemini 4 Neon (`low`)**, with
-  a separate Codex voice model selection whenever Home uses a non-ChatGPT
-  provider), and optional capabilities. **Antigravity** is included in the base
-  pack; if Home uses Antigravity, setup connects Google's Antigravity ACP
-  server in the browser before opening Home (if you choose Codex for Home,
-  Antigravity is still installed without forcing ACP sign-in). Review the
-  choices and select **Set up Octopus**. To start from someone else's setup
-  instead, see [Setup files](#setup-files).
+  provider and model, and optional capabilities. The base pack includes both
+  Antigravity and Codex: Home defaults to Gemini 4 Neon (`low`) via
+  Antigravity, with a separate Codex voice model choice when Home uses a
+  non-ChatGPT provider. If Home uses Antigravity, setup connects it in the
+  browser before opening Home; if you pick Codex instead, Antigravity is still
+  installed without requiring sign-in. Review the choices and select **Set up
+  Octopus**. To start from someone else's setup instead, see
+  [Setup files](#setup-files).
 
 ![Local client lock screen asking for the Administrator or Test password](images/client/client-lock.png)
 

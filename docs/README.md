@@ -3,8 +3,7 @@
 ## Using Octopus
 
 - [Getting started](getting-started.md) - install or build the macOS app,
-  first setup, providers (bundled Codex CLI and Applications such as
-  Antigravity / Gemini 4), and where your data lives.
+  first setup, providers, and where your data lives.
 - [Desktop client](client.md) - Home, Tasks, voice, gestures, Applications,
   Drivers, Extensions, and where packages come from.
 - [Terminal client](cli.md) - interactive chat, shared tasks, setup, and commands
@@ -21,8 +20,7 @@
 - [UX](UX.md) - what the experience is built around, and where each part of
   it is served.
 - [Architecture](architecture.md) - System and World, the primitives, one turn
-  end to end, long-horizon autonomy, model-alignment findings, and
-  self-evolution.
+  end to end, and self-evolution for long-horizon autonomy.
 - [Glossary](glossary.md) - every term, and what the app's words mean
   underneath.
 - [Scenarios](scenarios.md) - what the primitives are meant to express.

@@ -31,33 +31,27 @@ interface owns? Then it crosses an interface under policy. If it is the
 client's own presentation or preparation, it stays in the client and is not
 routed through runtime policy for the sake of consistency.
 
-## Providers and model priority
+## Providers and defaults
 
-Octopus is provider-agnostic at the architecture layer: every provider is one
-declared `world_provider_*` interface, never the kernel.
+Octopus is provider-agnostic underneath: every provider is one declared
+`world_provider_*` interface, never the kernel.
 
-Desktop onboarding signs into ChatGPT (which backs Codex, live voice through
-`world_provider_realtime`, and dictation) and installs both **Antigravity** and
-**Codex** as included components of the base pack. Home defaults to **Gemini 4
-Neon (`low`)** through **Antigravity** (connecting Antigravity ACP during setup
-when Home uses Antigravity; if Home is set to Codex, Antigravity is still
-installed without forcing ACP sign-in), while live voice stays on Codex and
-delegates actions into Home so Home remains one center. The OpenCodex bridge
-lets additional providers enter through the same contract without becoming
-separate agent products. In the registry each provider is its own interface
-folder, and whichever one serves a task, the model receives Octopus's own
-instructions, history, and tools.
+The desktop experience is shaped around two included providers. ChatGPT sign-in
+backs Codex, live voice (`world_provider_realtime`), and dictation. Home
+defaults to Gemini 4 Neon through Antigravity, because autonomous initiative
+starts from the root center and recent Gemini 4 models are where it has
+emerged, while live voice stays on Codex and delegates actions back into Home
+so Home remains one center. Tasks and Agents can use any configured provider.
 
-In practice, active long-horizon autonomy experiments now prioritize the
-**Gemini 4** family — especially **Gemini 4 Neon** (through **Antigravity**,
-which runs on Google's official Antigravity ACP server, alongside Google Gemini
-and Vertex) — because that is where sustained autonomous initiative has
-emerged. ChatGPT/Codex, Claude Code, and other providers remain supported
-interfaces in **Applications** and are commonly used for bounded tasks.
+Other models enter through the same contract rather than as separate agent
+products. Through [OpenCodex](https://github.com/lidge-jun/opencodex),
+additional providers - reached by API key, signed-in CLI, or subscription
+account - each live in their own interface folder, and whichever one serves a
+task, the model receives Octopus's own instructions, history, and tools.
 
-Messaging and external-world integrations follow the same rule: connectors
-such as Email, Gmail, Telegram, Slack, and GitHub attach as ordinary
-Applications in the registry rather than special-cased runtime channels.
+External channels follow the same rule: connectors such as Email, Gmail,
+Telegram, Slack, and GitHub attach as ordinary Applications in the registry
+rather than special-cased runtime channels.
 
 ## Where to go
 
@@ -250,6 +244,5 @@ journal with the exact earlier bytes of every file it touched and the checks
 it ran. Triggers lists each review with what it changed, and undoes one in a
 step while the files still hold what the review wrote.
 
-See [Architecture](architecture.md#autonomy-alignment-and-attention) for the
-long-horizon scope, model-alignment findings, and the relationship between
-self-evolution, attention, and trajectory.
+See [Architecture](architecture.md#autonomy-and-attention) for the research
+scope and the relationship between self-evolution, attention, and trajectory.

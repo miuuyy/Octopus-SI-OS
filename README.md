@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>An experimental self-evolving agentic OS for long-horizon autonomy.</b><br>
-  An operating-system architecture for open-ended, persistent agent execution, where agents reshape their own environment and steer the trajectory of their work across hours and days.
+  Built on operating-system principles, where agents reshape their environment and steer the trajectory of their own work.
 </p>
 
 <p align="center">
@@ -27,57 +27,27 @@ channels, sensors, and tool rooms attach through registry-owned interfaces.
 
 The macOS client brings these together in Home, Projects, Agents, and Tasks.
 You can talk by text or voice and grant tools for files, browsers, desktop
-applications, and connected services. Codex CLI was the first provider ported
-onto the system and ships bundled for initial setup; active autonomy experiments
-now center on the **Gemini 4** family — especially **Gemini 4 Neon** (via
-Antigravity) — while ChatGPT/Codex, Claude, Gemini, Vertex, and other providers
-all attach through declared interfaces. Models and tools operate through
-declared contracts; neither is the runtime authority.
-
-## Scope and empirical findings
-
-Octopus is **not** a general-purpose benchmark harness, and it does not try to
-beat plain coding agents on short, bounded tasks.
-
-- **No gain on standard benchmarks.** On conventional benchmarks and ordinary
-  coding or assistant tasks, an operating-system architecture adds machinery
-  without improving scores over a plain agent loop such as Codex CLI.
-- **Built for long-horizon, open-ended autonomy.** The architecture starts to
-  pay off only on abstract, maximally autonomous tracks that run across hours or
-  days without continuous human steering — where an agent must organize its own
-  goals (EEs), set triggers and wake-ups, coordinate parallel runs, survive
-  restarts, and reshape its environment from the inside.
-- **Initiative depends on model alignment — Gemini 4 / Neon priority.** Putting
-  a model inside an autonomous OS does nothing if its alignment keeps it waiting
-  for an operator. In unsupervised long-horizon runs so far, **ChatGPT / OpenAI**
-  and **Claude** models do not sustain self-directed initiative (they defer to
-  human direction or decline to build self-waking infrastructure, though they
-  remain strong workhorses for bounded delegated tasks). Genuine autonomous
-  initiative has emerged primarily in recent **Gemini 4** models — especially
-  **Gemini 4 Neon** — so experimental priority and near-term product focus are
-  placed on the Gemini 4 family, while the runtime itself remains strictly
-  provider-agnostic.
-- **Early harness-comparison signal.** Controlled comparisons running the same
-  open-ended scenario and the same **Gemini 4 Neon** model in Octopus versus
-  plain Codex show early signs that persistent goals, triggers, runs, a
-  replayable ledger, and editable descriptors inside the environment shift how
-  long-horizon trajectories unfold compared to session-based harnesses.
+applications, and connected services. Home defaults to Gemini 4 Neon via
+Antigravity - where active autonomy work is focused - while Codex backs live
+voice and dictation, and ChatGPT, Claude, Gemini, Vertex, and API-key
+providers attach the same way. Models and tools operate through declared
+contracts; neither is the runtime authority.
 
 **Self-evolution** means shaping the conditions of future work. Under policy, an
-agent can create and revise goals, change interfaces (triggers), add tools,
+agent can create and revise goals, change interfaces and triggers, add tools,
 organize workers, and arrange context and execution environments. These changes
 persist across tasks and runs: they affect what it notices, when it acts, what
-it works on, and which capabilities it can use next. **Self-improvement**
-remains the open research aim: whether this process reliably makes the system
-better over time.
+it works on, and which capabilities it can use next. The architecture is built
+for long-horizon, open-ended autonomy where that persistence matters, not for
+short coding benchmarks. **Self-improvement** remains the research aim: whether
+this process actually makes the system better.
 
 > [!NOTE]
-> This is an experimental research preview, not a claim of AGI or solved
-> self-improvement. Early autonomous initiative has been observed mainly on
-> recent Gemini 4 models (especially Gemini 4 Neon) in long-horizon, open-ended
-> settings; outcomes still depend heavily on model alignment, permissions,
-> available software, and verification. Ongoing public experiment notes and
-> harness comparisons are shared at [@miu21590 on X](https://x.com/miu21590).
+> This is a research preview, not a claim of AGI or demonstrated autonomous
+> self-improvement. The research question is whether letting agents reshape
+> their execution environment supports sustained initiative and long-term
+> development. A model's ability, alignment, available software, permissions,
+> and verification still determine what succeeds.
 
 ## What you get
 
@@ -99,7 +69,7 @@ published Apple Silicon disk images. The [getting-started guide](docs/getting-st
 covers the installer, requirements, and the ad-hoc signing / Gatekeeper warning.
 If no binary is published, use the source build.
 
-You need macOS 14+, Swift 6.2+ (Xcode 26 or its Command Line Tools), Node 24, stable Rust, and a model provider account. Desktop onboarding currently starts with **Sign in with ChatGPT** (bundled Codex CLI) or the read-only **Test** profile ([client guide](docs/client.md)); from **Applications**, you can connect **Antigravity** (recommended for **Gemini 4 Neon** and other Gemini 4 models), Google Gemini, Vertex, Claude Code, or any API-key / OpenAI-compatible provider.
+You need macOS 14+, Swift 6.2+ (Xcode 26 or its Command Line Tools), Node 24, stable Rust, and a ChatGPT account (plus Antigravity if you keep the default Gemini 4 Neon model for Home). Without an account, you can explore the client in its read-only **Test** profile ([client guide](docs/client.md)), and additional providers (Gemini, Vertex, Claude Code, API-key or OpenAI-compatible endpoints) can be configured in **Applications**.
 
 ```sh
 git clone https://github.com/miuuyy/Octopus-SI-OS.git
@@ -140,7 +110,7 @@ place. Use the [staged self-update procedure](docs/development.md#updating-an-in
 1. **Sign in with ChatGPT.** It opens the browser. There is no terminal login.
 2. **Set a local password.** It guards the client on this machine.
 3. **Start the system.** The embedded terminal prepares a command ending in `octopus up`. Press Enter and wait for the ready state.
-4. **Pick a starting structure.** Projects, names, capabilities. Select **Set up Octopus**.
+4. **Pick a starting structure.** Projects, names, Home provider and model (defaulting to Antigravity with Gemini 4 Neon), and capabilities. Select **Set up Octopus**.
 5. **Say something in Home.** A reply proves the connection. A task that uses its tools proves that task's setup.
 
 For a new task, create an Agent first: choose a Project and a model, review its capabilities, then select it in the task composer.
@@ -245,7 +215,7 @@ More in [Scenarios](docs/scenarios.md).
 The cookbook is [Extending Octopus](docs/contracts/EXTENSION_SURFACES.md).
 
 <details>
-<summary><b>Desktop client — voice, tasks, and a view into the system</b></summary>
+<summary><b>Desktop client - voice, tasks, and a view into the system</b></summary>
 
 The optional **macOS 14+** client is inspired by the ChatGPT desktop app. It
 brings together Home and voice calls, Projects and Tasks, split panes,
@@ -266,10 +236,10 @@ MIT-licensed companion tools:
 
 - [mcp-identity-guard](examples/mcp-identity-guard/README.md): a Rust MCP stdio
   gateway and trusted process-oracle demonstration (with local synthetic
-  overhead and spoof checks—not a general security guarantee).
+  overhead and spoof checks, not a general security guarantee).
 - [agent-ready-radar](examples/agent-ready-radar/README.md): a zero-dependency
   Python scanner with a [60-domain, 420-probe survey](examples/agent-ready-radar/SURVEY_2026_11_17.md)
-  (a dated, purposive sample—not a web-wide readiness estimate).
+  (a dated, purposive sample, not a web-wide readiness estimate).
 
 See the collection for quickstarts, data, reproduction steps, and scope
 boundaries. Neither tool requires Octopus.
