@@ -53,8 +53,7 @@ I keep the design intentionally small in primitives and intentionally large in
 descriptors. Octopus is not built for standard benchmarks or short, bounded
 coding tasks; on those it adds nothing over a plain agent loop. It is built for
 long-horizon, open-ended autonomy where persistent goals, triggers, parallel
-runs, replayable evidence, and descriptor-level self-modification matter. I am
-not claiming this is AGI.
+runs, replayable evidence, and descriptor-level self-modification matter.
 
 Execution failures here are almost always architectural: the wrong contract, the
 wrong data shown to the model, a missing field. Hardcoding around one hides a

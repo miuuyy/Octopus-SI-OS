@@ -27,27 +27,29 @@ channels, sensors, and tool rooms attach through registry-owned interfaces.
 
 The macOS client brings these together in Home, Projects, Agents, and Tasks.
 You can talk by text or voice and grant tools for files, browsers, desktop
-applications, and connected services. Home defaults to Gemini 4 Neon via
-Antigravity - where active autonomy work is focused - while Codex backs live
-voice and dictation, and ChatGPT, Claude, Gemini, Vertex, and API-key
-providers attach the same way. Models and tools operate through declared
+applications, and connected services. Models and tools operate through declared
 contracts; neither is the runtime authority.
 
 **Self-evolution** means shaping the conditions of future work. Under policy, an
 agent can create and revise goals, change interfaces and triggers, add tools,
-organize workers, and arrange context and execution environments. These changes
-persist across tasks and runs: they affect what it notices, when it acts, what
-it works on, and which capabilities it can use next. The architecture is built
-for long-horizon, open-ended autonomy where that persistence matters, not for
-short coding benchmarks. **Self-improvement** remains the research aim: whether
-this process actually makes the system better.
+organize workers, and arrange context and execution environments. Those changes
+persist across tasks and runs: the agent reshapes its environment, and that
+environment shapes what it notices, when it wakes, and what it builds next. On
+short coding tasks or standard benchmarks, a plain agent loop is enough. Octopus
+is built for long-horizon, open-ended autonomy across hours and days, where that
+persistence lets the system improve itself over time rather than execute one-off
+turns.
 
-> [!NOTE]
-> This is a research preview, not a claim of AGI or demonstrated autonomous
-> self-improvement. The research question is whether letting agents reshape
-> their execution environment supports sustained initiative and long-term
-> development. A model's ability, alignment, available software, permissions,
-> and verification still determine what succeeds.
+Autonomous initiative also depends on model alignment. In unsupervised
+long-horizon runs, ChatGPT and Claude models largely wait for human direction:
+they work well on bounded delegated tasks, not sustained self-directed work.
+Genuine initiative has emerged primarily in recent **Gemini 4** models,
+especially **Gemini 4 Neon**. For that reason, Home defaults to Gemini 4 Neon
+via Antigravity while Codex backs initial sign-in, live voice, and dictation.
+The runtime itself stays provider-agnostic: ChatGPT, Claude, Gemini, Vertex, and
+API-key providers all attach through the same interface contract. Ongoing
+long-horizon experiments and comparisons against plain Codex are shared at
+[@miu21590 on X](https://x.com/miu21590).
 
 ## What you get
 
