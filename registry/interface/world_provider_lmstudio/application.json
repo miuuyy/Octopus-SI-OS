@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_provider_lmstudio",
   "name": "LM Studio",
-  "description": "A model served by LM Studio on this Mac.",
+  "description": "A model served by LM Studio on this machine.",
   "category": "provider",
   "developer": "LM Studio",
   "version": "1.0.0",

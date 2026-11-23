@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "LM Studio",
-    "description": "A model served by LM Studio on this Mac.",
+    "description": "A model served by LM Studio on this machine.",
     "developer": "LM Studio",
     "category": "provider",
     "icon": "sparkles"

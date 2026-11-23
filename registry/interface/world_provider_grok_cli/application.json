@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_provider_grok_cli",
   "name": "Grok CLI",
-  "description": "Grok models through the Grok CLI you are signed in to on this Mac.",
+  "description": "Grok models through the Grok CLI you are signed in to on this machine.",
   "category": "provider",
   "developer": "xAI",
   "version": "1.0.0",

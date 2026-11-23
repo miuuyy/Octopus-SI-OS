@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "vLLM",
-    "description": "A model served by vLLM on this Mac.",
+    "description": "A model served by vLLM on this machine.",
     "developer": "vLLM",
     "category": "provider",
     "icon": "sparkles"

@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_provider_vllm",
   "name": "vLLM",
-  "description": "A model served by vLLM on this Mac.",
+  "description": "A model served by vLLM on this machine.",
   "category": "provider",
   "developer": "vLLM",
   "version": "1.0.0",

@@ -64,7 +64,9 @@ fn opencodex_account_composition_grants_only_the_connected_owner_directory() {
             .authority
             .read_env_paths
             .iter()
+            .chain(&process.authority.optional_read_env_paths)
             .chain(&process.authority.write_env_paths)
+            .chain(&process.authority.optional_write_env_paths)
             .any(|name| name.starts_with("OCTOPUS_MACHINE_CODEX_AUTH")));
     }
     config
@@ -144,5 +146,34 @@ fn opencodex_vertex_composition_grants_secret_owner_root_and_private_env_slot() 
             .authority
             .read_env_paths
             .contains("OCTOPUS_PROVIDER_VERTEX_CREDENTIALS_FILE"));
+    }
+}
+
+#[test]
+fn world_provider_realtime_life_resolves_with_and_without_codex_auth_env() {
+    use octopus_verifiers::process_authority::ProcessAuthoritySpecExecution;
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+
+    let _dir = tempfile::tempdir().unwrap();
+    let root = _dir.path().canonicalize().unwrap();
+    let root_slots: BTreeMap<String, PathBuf> = [("run_records_root", "runs"), ("interface_hand_in_root", "hand_in"), ("app_server_control_root", "control")]
+        .into_iter().map(|(slot, dir)| { let p = root.join(dir); std::fs::create_dir_all(&p).unwrap(); (slot.to_string(), p) }).collect();
+    let life_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../../registry/interface/world_provider_realtime/life.json");
+    let life: SpawnLifeConfig = serde_json::from_slice(&std::fs::read(&life_path).unwrap()).unwrap();
+    assert!(!life.processes.is_empty());
+
+    let (auth_file, auth_lock) = (root.join(".codex/auth.json"), root.join(".codex/auth.lock"));
+    let present_env = BTreeMap::from([
+        ("OCTOPUS_MACHINE_CODEX_AUTH_FILE".to_string(), OsString::from(&auth_file)),
+        ("OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE".to_string(), OsString::from(&auth_lock)),
+    ]);
+    let absent_env = BTreeMap::new();
+    let empty = || std::iter::empty::<PathBuf>();
+    for process in &life.processes {
+        let absent = process.authority.resolve(&root, &root_slots, &absent_env, empty(), empty(), empty(), empty()).unwrap();
+        assert!(!absent.authority.writable().contains(&auth_file) && !absent.authority.writable().contains(&auth_lock));
+        let present = process.authority.resolve(&root, &root_slots, &present_env, empty(), empty(), empty(), empty()).unwrap();
+        assert!(present.authority.readable().contains(&auth_file) && present.authority.writable().contains(&auth_file) && present.authority.writable().contains(&auth_lock));
     }
 }

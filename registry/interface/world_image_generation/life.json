@@ -20,7 +20,8 @@
         "write_paths": [],
         "executable_paths": [],
         "executable_commands": [],
-        "read_env_paths": [
+        "read_env_paths": [],
+        "optional_read_env_paths": [
           "OCTOPUS_MACHINE_CODEX_AUTH_FILE"
         ],
         "write_env_paths": [],

@@ -334,6 +334,16 @@ function life(spec: ProviderSpec, template: any) {
     const authority = process.authority;
     authority.read_env_paths = authority.read_env_paths.filter((name: string) => !MACHINE_AUTH_ENVS.includes(name));
     authority.write_env_paths = authority.write_env_paths.filter((name: string) => !MACHINE_AUTH_ENVS.includes(name));
+    if (Array.isArray(authority.optional_read_env_paths)) {
+      const remaining = authority.optional_read_env_paths.filter((name: string) => !MACHINE_AUTH_ENVS.includes(name));
+      if (remaining.length > 0) authority.optional_read_env_paths = remaining;
+      else delete authority.optional_read_env_paths;
+    }
+    if (Array.isArray(authority.optional_write_env_paths)) {
+      const remaining = authority.optional_write_env_paths.filter((name: string) => !MACHINE_AUTH_ENVS.includes(name));
+      if (remaining.length > 0) authority.optional_write_env_paths = remaining;
+      else delete authority.optional_write_env_paths;
+    }
     if (spec.vertex) authority.read_env_paths = [...authority.read_env_paths, spec.vertex.credentials.env];
     authority.executable_root_subpaths = [
       ...authority.executable_root_subpaths,

@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "Ollama",
-    "description": "A model served by Ollama on this Mac.",
+    "description": "A model served by Ollama on this machine.",
     "developer": "Ollama",
     "category": "provider",
     "icon": "sparkles"

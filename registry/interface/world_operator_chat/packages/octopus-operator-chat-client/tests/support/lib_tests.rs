@@ -2059,9 +2059,13 @@
                     .authority
                     .read_env_paths
                     .contains("OCTOPUS_MACHINE_CODEX_AUTH_FILE")
+                && !process
+                    .authority
+                    .optional_read_env_paths
+                    .contains("OCTOPUS_MACHINE_CODEX_AUTH_FILE")
                 && process
                     .authority
-                    .write_env_paths
+                    .optional_write_env_paths
                     .contains("OCTOPUS_MACHINE_CODEX_AUTH_FILE")
         }));
 

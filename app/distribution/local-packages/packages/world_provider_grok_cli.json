@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "Grok CLI",
-    "description": "Grok models through the Grok CLI you are signed in to on this Mac.",
+    "description": "Grok models through the Grok CLI you are signed in to on this machine.",
     "developer": "xAI",
     "category": "provider",
     "icon": "sparkles"

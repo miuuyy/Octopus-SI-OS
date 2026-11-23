@@ -8,7 +8,7 @@
   "release_status": "optional",
   "display": {
     "name": "Claude Code",
-    "description": "Claude models through the Claude Code CLI you are signed in to on this Mac.",
+    "description": "Claude models through the Claude Code CLI you are signed in to on this machine.",
     "developer": "Anthropic",
     "category": "provider",
     "icon": "sparkles"

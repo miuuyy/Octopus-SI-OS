@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_provider_claude_cli",
   "name": "Claude Code",
-  "description": "Claude models through the Claude Code CLI you are signed in to on this Mac.",
+  "description": "Claude models through the Claude Code CLI you are signed in to on this machine.",
   "category": "provider",
   "developer": "Anthropic",
   "version": "1.0.0",

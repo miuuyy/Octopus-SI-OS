@@ -2,7 +2,7 @@
   "schema_version": 3,
   "id": "world_provider_ollama",
   "name": "Ollama",
-  "description": "A model served by Ollama on this Mac.",
+  "description": "A model served by Ollama on this machine.",
   "category": "provider",
   "developer": "Ollama",
   "version": "1.0.0",

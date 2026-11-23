@@ -63,7 +63,7 @@
       "input_modalities": ["text", "image"],
       "name": "Claude Code",
       "developer": "Anthropic",
-      "description": "Claude models through the Claude Code CLI you are signed in to on this Mac.",
+      "description": "Claude models through the Claude Code CLI you are signed in to on this machine.",
       "icon": "claude-color.svg",
       "models": [
         {"slug": "claude-fable-5-2", "display_name": "Claude Fable 5.2", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "medium"},
@@ -116,7 +116,7 @@
       "input_modalities": ["text"],
       "name": "Grok CLI",
       "developer": "xAI",
-      "description": "Grok models through the Grok CLI you are signed in to on this Mac.",
+      "description": "Grok models through the Grok CLI you are signed in to on this machine.",
       "icon": "grok.svg",
       "icon_dark": ["#000000"],
       "models": [
@@ -586,7 +586,7 @@
       "registry_entry": "ollama",
       "name": "Ollama",
       "developer": "Ollama",
-      "description": "A model served by Ollama on this Mac.",
+      "description": "A model served by Ollama on this machine.",
       "icon": "ollama-color.svg",
       "icon_dark": [
         "#141414"
@@ -605,7 +605,7 @@
       "registry_entry": "lm-studio",
       "name": "LM Studio",
       "developer": "LM Studio",
-      "description": "A model served by LM Studio on this Mac.",
+      "description": "A model served by LM Studio on this machine.",
       "icon": "lm-studio-color.svg",
       "local": true,
       "model": {
@@ -621,7 +621,7 @@
       "registry_entry": "vllm",
       "name": "vLLM",
       "developer": "vLLM",
-      "description": "A model served by vLLM on this Mac.",
+      "description": "A model served by vLLM on this machine.",
       "icon": "vllm-color.svg",
       "local": true,
       "model": {
