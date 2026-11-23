@@ -1,0 +1,82 @@
+{
+  "schema": "octopus.local_package",
+  "schema_version": 1,
+  "id": "world_watch",
+  "version": "1.0.0",
+  "product_kind": "application",
+  "product_id": "world_watch",
+  "release_status": "optional",
+  "display": {
+    "name": "World watch",
+    "description": "A JSON-configured sensor template: polls an HTTP endpoint or local file and wakes bound tasks on change, condition match, or failure. Read-only.",
+    "developer": "Octopus",
+    "category": "connector",
+    "icon": "scheduled"
+  },
+  "members": [
+    {
+      "registry_kind": "interface",
+      "owner": "world_watch",
+      "primary": true,
+      "configuration": [
+        {
+          "path": "probe.json",
+          "fields": [
+            {
+              "pointer": "/enabled",
+              "schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "pointer": "/poll_seconds",
+              "schema": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 86400
+              }
+            },
+            {
+              "pointer": "/source",
+              "schema": {
+                "type": "object"
+              }
+            },
+            {
+              "pointer": "/extract",
+              "schema": {
+                "type": "object"
+              }
+            },
+            {
+              "pointer": "/trigger",
+              "schema": {
+                "type": "object"
+              }
+            },
+            {
+              "pointer": "/hold_while_working",
+              "schema": {
+                "type": "boolean"
+              }
+            },
+            {
+              "pointer": "/label",
+              "schema": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+              }
+            },
+            {
+              "pointer": "/note",
+              "schema": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

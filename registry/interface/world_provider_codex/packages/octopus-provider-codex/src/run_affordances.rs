@@ -1057,6 +1057,7 @@ impl RunAffordances {
         }
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn plan_call(
         &self,
@@ -1067,6 +1068,30 @@ impl RunAffordances {
         operation_name: &str,
         arguments: &Value,
         checked_baseline: Option<&[u8]>,
+    ) -> Result<NativeStep, String> {
+        self.plan_call_with_context(
+            metadata,
+            admitted_parent,
+            parent_record,
+            call_id,
+            operation_name,
+            arguments,
+            checked_baseline,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn plan_call_with_context(
+        &self,
+        metadata: &InvocationMetadata,
+        admitted_parent: &RunRecord,
+        parent_record: &RunRecord,
+        call_id: &str,
+        operation_name: &str,
+        arguments: &Value,
+        checked_baseline: Option<&[u8]>,
+        life_context: Option<&octopus_interface_transport::InterfaceLiftContext>,
     ) -> Result<NativeStep, String> {
         exact_string(call_id, "native call_id")?;
         require_readable_refs(
@@ -1184,10 +1209,14 @@ impl RunAffordances {
                     .as_ref()
                     .ok_or("inspect_authoring requires declared roots")?;
                 let inspected = validate_registry_candidate(&validation_roots(roots), &[])?;
+                let interfaces = crate::run_observation::inspect_interface_topology(roots);
+                let ee_instances = crate::run_observation::inspect_ee_tree(roots);
                 Ok(NativeStep::Complete {
                     result: json!({
                         "roots":roots,"defaults":self.config.defaults,
                         "current_selection":current_selection(roots, parent_record, &runtime.interface)?,
+                        "interfaces":interfaces,
+                        "ee_instances":ee_instances,
                         "installed":inspected.stages[0],
                         "selection_contract":"Installed entries are candidates. Each run is validated against its own worker ceiling, EE chain and exact authored bindings; creation does not inherit the initiator grant.",
                         "exact_contract":{"argument":"authored","run_id":"exact new run id (existing id for revise_run)",
@@ -1248,17 +1277,61 @@ impl RunAffordances {
                 {
                     return Err("list_runs expects an empty object".into());
                 }
-                Ok(NativeStep::Complete {
-                    result: json!({
-                        "source_run": {"run_id": runtime.run, "ee_id": runtime.ee,
-                            "worker_interface_id": runtime.worker, "recorded_status": parent_record.status,
-                            "run_record_hash": runtime.run_record_hash, "provider_activity": "not_observed"},
+                let include_other_runs = self.config.roots.is_some()
+                    && self.config.file_read_tool.as_ref().is_some_and(|tool| {
+                        metadata.grant.tools.contains(tool)
+                            && !metadata.grant.hard_blocked_tools.contains(tool)
+                    });
+                let observed = crate::run_observation::observe_runs_pulse(
+                    parent_record,
+                    &peers,
+                    self.config.roots.as_ref(),
+                    life_context,
+                    include_other_runs,
+                );
+                let mut source_run = json!({
+                    "run_id": runtime.run,
+                    "ee_id": runtime.ee,
+                    "worker_interface_id": runtime.worker,
+                    "recorded_status": parent_record.status,
+                    "run_record_hash": runtime.run_record_hash,
+                    "provider_activity": observed.source_provider_activity,
+                    "activity": observed.source_activity,
+                });
+                if let Some(obj) = source_run.as_object_mut() {
+                    if let Some(title) = observed.source_title {
+                        obj.insert("title".into(), json!(title));
+                    }
+                    if let Some(provider) = observed.source_provider_interface_id {
+                        obj.insert("provider_interface_id".into(), json!(provider));
+                    }
+                    if let Some(model) = observed.source_model {
+                        obj.insert("model".into(), json!(model));
+                    }
+                    if let Some(effort) = observed.source_reasoning_effort {
+                        obj.insert("reasoning_effort".into(), json!(effort));
+                    }
+                    if !observed.source_external_inputs.is_empty() {
+                        obj.insert("external_inputs".into(), json!(observed.source_external_inputs));
+                    }
+                }
+                let mut result = json!({
+                    "source_run": source_run,
                     "declared_peer_interfaces": peers.keys().collect::<Vec<_>>(),
-                    "declared_peer_runs": peers.iter().filter_map(|(interface, run)| run.as_ref().map(|run| json!({"interface_id": interface, "run_id": run}))).collect::<Vec<_>>(),
+                    "declared_peer_runs": observed.declared_peer_runs,
                     "receive_interface_id": declared_receive_interface(parent_record, &metadata.runtime.as_ref().ok_or("list requires runtime metadata")?.interface)?,
-                        "source_movement_seq": metadata.source_movement_seq,
-                    }),
-                })
+                    "source_movement_seq": metadata.source_movement_seq,
+                });
+                if let (Some(other_runs), Some(total), Some(archived)) = (
+                    observed.other_runs,
+                    observed.other_runs_total,
+                    observed.archived_runs_count,
+                ) {
+                    result["other_runs"] = json!(other_runs);
+                    result["other_runs_total"] = json!(total);
+                    result["archived_runs_count"] = json!(archived);
+                }
+                Ok(NativeStep::Complete { result })
             }
             RunOperation::Wait => {
                 let request: WaitRequest =

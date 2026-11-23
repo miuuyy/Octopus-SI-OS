@@ -19,6 +19,7 @@ mod peer_reader;
 mod remote;
 mod result_media;
 mod run_affordances;
+mod run_observation;
 mod rustls_provider;
 mod spawn;
 mod uds;

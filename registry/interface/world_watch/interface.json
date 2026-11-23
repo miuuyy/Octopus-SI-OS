@@ -1,0 +1,10 @@
+{
+  "id": "world_watch",
+  "interface_type": "world",
+  "role": "sensor",
+  "direction": "inbound",
+  "source_names": [
+    "watch.event"
+  ],
+  "interface_driver_ref": "world_watch_life"
+}

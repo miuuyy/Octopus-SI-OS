@@ -331,6 +331,17 @@ period. A disabled clock folder that no run binds is a template; an Application
 Pack's `workspace_setup.triggers` arms templates at setup together with the task
 that pins them.
 
+An external observation trigger is a copy of the read-only sensor interface
+`world_watch`: its descriptor declares `copy_of: "world_watch"`, its `life.json`
+imports the owner's `world_watch_life.py` (with `allow_network: false` and
+explicit `authority.read_paths` for local `file` watches), and its `probe.json`
+configures a read-only `http` (`GET`/`HEAD`) or `file` source, extraction
+(`text`, `json` with RFC 6901 `json_pointer`, or `status`), and trigger mode
+(`on_change`, `on_match` with predicates and optional recovery, or `always`,
+plus optional `notify_on_error` and `hold_while_working`). When the condition
+holds it sends `watch.event` (or the configured `label`) marked
+`untrusted_external_data: true` to every run whose checkpoint pins the folder.
+
 ## Add a worker
 
 1. Copy a `system_worker_<name>/` folder.

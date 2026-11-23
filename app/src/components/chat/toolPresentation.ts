@@ -154,9 +154,22 @@ export function nativeRunOperationPresentation(message: ChatRenderMessage | unde
       details: [["Task", peers || text(created.run_id)], ["Message", text(argumentsValue.text)], ["Error", error]] };
   }
   if (data.tool === "list_runs") {
+    const peerSummaries = [
+      ...(Array.isArray(body.declared_peer_runs) ? body.declared_peer_runs : []),
+      ...(Array.isArray(body.other_runs) ? body.other_runs : []),
+    ]
+      .map((entry) => {
+        const item = record(entry);
+        const name = text(item.title) || text(item.run_id);
+        const phase = text(record(item.activity).phase);
+        return name ? (phase ? `${name} (${humanize(phase)})` : name) : "";
+      })
+      .filter(Boolean)
+      .slice(0, 8)
+      .join("\n");
     return { label: active ? "Checking connected tasks" : failed ? "Task lookup failed" : "Checked connected tasks",
       target: peers,
-      details: [["Tasks", peers], ["Interfaces", stringArray(body.declared_peer_interfaces).join("\n")], ["Error", error]] };
+      details: [["Tasks", peerSummaries || peers], ["Interfaces", stringArray(body.declared_peer_interfaces).join("\n")], ["Error", error]] };
   }
   if (["followup_task", "send_message", "interrupt_run"].includes(text(data.tool))) {
     const target = text(argumentsValue.interface) || text(body.interface);

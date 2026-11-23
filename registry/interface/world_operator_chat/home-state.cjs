@@ -126,14 +126,22 @@ function taskState(chat) {
 function triggerLine(trigger, nowMs) {
   const name = quote(trigger?.display_name || trigger?.interface_id, TITLE_CHARS);
   if (trigger?.valid === false) return `${name} · invalid: ${clip(trigger.error, ERROR_CHARS)}`;
-  const parts = [name, scheduleText(trigger?.schedule, trigger?.timezone)];
+  const eventSource = trigger?.event_source && typeof trigger.event_source === "object" ? trigger.event_source : null;
+  const parts = [name, eventSource ? eventSourceText(eventSource) : scheduleText(trigger?.schedule, trigger?.timezone)];
   if (trigger?.status === "disabled") parts.push("paused");
   if (Number(trigger?.next_run_at_ms) > 0) parts.push(`next ${until(trigger.next_run_at_ms, nowMs)}`);
   if (Number(trigger?.last_run_at_ms) > 0) parts.push(`last ${age(trigger.last_run_at_ms, nowMs)}`);
-  const targets = Array.isArray(trigger?.targets) ? trigger.targets.map((target) => text(target?.title) || text(target?.run_id)).filter(Boolean) : [];
+  const targetList = Array.isArray(trigger?.targets) ? trigger.targets : Array.isArray(eventSource?.targets) ? eventSource.targets : [];
+  const targets = targetList.map((target) => text(target?.title) || text(target?.run_id)).filter(Boolean);
   if (targets.length) parts.push(`wakes ${targets.join(", ")}`);
   if (text(trigger?.instructions)) parts.push(`prompt ${quote(trigger.instructions, INSTRUCTION_CHARS)}`);
   return parts.join(" · ");
+}
+
+function eventSourceText(eventSource) {
+  if (text(eventSource?.condition)) return `sensor (${clip(eventSource.condition, INSTRUCTION_CHARS)})`;
+  const sources = Array.isArray(eventSource?.sources) ? eventSource.sources.map(text).filter(Boolean) : [];
+  return sources.length ? `sensor (${clip(sources.join(", "), INSTRUCTION_CHARS)})` : "sensor";
 }
 
 function scheduleText(schedule, timezone) {

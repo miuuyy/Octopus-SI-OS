@@ -12,6 +12,11 @@
       "reason": "Provides time and inactivity triggers for ordinary runs."
     },
     {
+      "package_id": "world_watch",
+      "selection": "recommended",
+      "reason": "Provides a JSON-configured read-only sensor template for watching HTTP endpoints and local files."
+    },
+    {
       "package_id": "world_system_review",
       "selection": "recommended",
       "reason": "Offers a trigger that reviews recent work after a quiet period and improves Octopus when the evidence supports it."

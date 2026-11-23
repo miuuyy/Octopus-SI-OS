@@ -147,6 +147,7 @@ jobs:
           python3 registry/interface/world_email/tests/test_email_contract.py
           node --test registry/interface/world_email/tests/test_connection.cjs
           python3 -m unittest discover -s registry/interface/world_cron/tests -p 'test_*.py'
+          python3 -m unittest discover -s registry/interface/world_watch/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_issues/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_github_watch/tests -p 'test_*.py'
           python3 -m unittest discover -s registry/interface/world_quiet_watch/tests -p 'test_*.py'

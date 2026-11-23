@@ -17,6 +17,9 @@ const projections = {
   "projection.scheduled_interfaces.list": { scheduled_interfaces: [
     { display_name: "Hourly weather", valid: true, status: "enabled", schedule: { type: "interval", interval_seconds: 3600 },
       next_run_at_ms: now + 840_000, last_run_at_ms: now - 2_760_000, targets: [{ run_id: "run_weather" }] },
+    { display_name: "Release watch", valid: true, status: "enabled",
+      event_source: { sources: ["watch.event"], targets: [{ run_id: "run_weather", title: "Погода в Киеве" }] },
+      last_run_at_ms: now - 600_000 },
     { display_name: "Broken", valid: false, error: "activation is malformed" },
     { display_name: "System review", template: true, valid: true, schedule: { type: "inactivity", seconds: 3600 } },
   ] },
@@ -35,10 +38,11 @@ test("Home state names the operator's tasks, triggers, projects and agents as th
   assert.ok(lines.includes('  last reply: "Виджет обновлён."'));
   assert.ok(lines.includes('- "Flights" · failed · 2 h ago · run_flights'));
   assert.ok(lines.includes('- "Hourly weather" · every 1 h · next in 14 min · last 46 min ago · wakes run_weather'));
+  assert.ok(lines.includes('- "Release watch" · sensor (watch.event) · last 10 min ago · wakes Погода в Киеве'));
   assert.ok(lines.includes('- "Broken" · invalid: activation is malformed'));
   assert.ok(lines.includes("Projects: Life (ee_life): Everyday life."));
   assert.ok(lines.includes("Agents: Planner in Life (worker system_worker_life, ee ee_life)."));
-  assert.ok(lines.includes("Triggers (2):"));
+  assert.ok(lines.includes("Triggers (3):"));
   assert.ok(["run_home", "run_old", "run_writer_internal", "System review"].every((hidden) => !context.text.includes(hidden)));
 });
 

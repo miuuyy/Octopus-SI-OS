@@ -756,7 +756,7 @@ impl CodexAppServerInterfaceDriver {
                     }
                     let step = native
                         .affordances
-                        .plan_call(
+                        .plan_call_with_context(
                             native.metadata,
                             native.admitted_record,
                             &current,
@@ -764,6 +764,7 @@ impl CodexAppServerInterfaceDriver {
                             &tool,
                             &arguments,
                             observed_baseline.as_deref(),
+                            self.life_context.get(),
                         )
                         .unwrap_or_else(|error| NativeStep::Complete {
                             result: serde_json::json!({"ok": false, "error": error}),

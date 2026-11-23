@@ -1,0 +1,22 @@
+{
+  "enabled": false,
+  "poll_seconds": 300,
+  "source": {
+    "kind": "http",
+    "url": "https://example.invalid/status.json",
+    "method": "GET",
+    "headers": {}
+  },
+  "extract": {
+    "format": "text"
+  },
+  "trigger": {
+    "mode": "on_change",
+    "fire_on_first": false,
+    "cooldown_seconds": 0,
+    "notify_on_error": false
+  },
+  "hold_while_working": true,
+  "label": "watch.event",
+  "note": ""
+}

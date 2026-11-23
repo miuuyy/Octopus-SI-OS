@@ -38,6 +38,7 @@
     "world_provider_antigravity",
     "world_operator_chat",
     "world_cron",
+    "world_watch",
     "world_email",
     "system_coder_env",
     "system_workspace_env",
