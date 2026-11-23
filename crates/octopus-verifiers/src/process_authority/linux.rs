@@ -437,7 +437,7 @@ impl LinuxProcessPolicy {
         let mut profile = format!(
             "abi <abi/4.0>,\nprofile {name} flags=(mediate_deleted) {{\n  signal (receive),\n  signal (send) peer={name},\n  signal (send) peer={name}//&unconfined,\n  ptrace (read, trace) peer={name},\n  ptrace (read, trace) peer={name}//&unconfined,\n  ptrace (readby, tracedby),\n"
         );
-        profile.push_str("  owner /proc/[0-9]*/{auxv,cmdline,environ,exe,fd/,fdinfo/,fdinfo/*,limits,maps,mountinfo,mounts,cgroup,stat,statm,status,task/,task/[0-9]*/{stat,status}} r,\n  /proc/{cpuinfo,meminfo,version,sys/kernel/hostname,sys/kernel/osrelease} r,\n  /sys/devices/system/cpu/{online,possible,present} r,\n");
+        profile.push_str("  owner /proc/[0-9]*/{auxv,cmdline,environ,exe,fd/,fdinfo/,fdinfo/*,limits,maps,mountinfo,mounts,cgroup,stat,statm,status,task/,task/[0-9]*/{stat,status}} r,\n  /proc/{cpuinfo,meminfo,version,sys/kernel/hostname,sys/kernel/osrelease} r,\n  /sys/devices/system/cpu/ r,\n  /sys/devices/system/cpu/** r,\n  /sys/devices/system/node/ r,\n  /sys/devices/system/node/** r,\n  /sys/fs/cgroup/{cpu.max,cpu.cfs_quota_us,cpu.cfs_period_us,memory.max,memory.limit_in_bytes} r,\n  /sys/fs/cgroup/**/{cpu.max,cpu.cfs_quota_us,cpu.cfs_period_us,memory.max,memory.limit_in_bytes} r,\n");
         for line in lines {
             profile.push_str(&line);
         }
@@ -700,6 +700,15 @@ mod tests {
         assert!(local.contains("  network unix,\n  unix,\n") && !local.contains(ANONYMOUS_STREAM_SOCKETS), "{local}");
         let network = profile(true, false, false);
         assert!(network.contains("  network,\n  unix,\n") && !network.contains(ANONYMOUS_STREAM_SOCKETS), "{network}");
+    }
+
+    #[test]
+    fn cpu_topology_and_cgroup_limits_are_read_only() {
+        let generated = profile(false, false, false);
+        assert!(generated.contains("  /sys/devices/system/cpu/** r,\n"), "{generated}");
+        assert!(generated.contains("  /sys/devices/system/node/** r,\n"), "{generated}");
+        assert!(generated.contains("  /sys/fs/cgroup/**/{cpu.max,cpu.cfs_quota_us,cpu.cfs_period_us,memory.max,memory.limit_in_bytes} r,\n"), "{generated}");
+        assert!(generated.contains("  deny /sys/fs/cgroup/** wkl,\n"), "{generated}");
     }
 
     #[test]
