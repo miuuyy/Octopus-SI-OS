@@ -482,7 +482,8 @@ async function boundedAgentPresetFixture(executable) {
   const root = await fs.realpath(await fs.mkdtemp("/private/tmp/octopus-cu-preset-"));
   const home = path.join(root, "home");
   const active = path.join(home, "registry");
-  const roots = { publication: require("./support/native-publication.cjs").nativePublication(executable), sourceRegistryRoot, activeRegistryRoot: active, libraryRoot, stateRoot: path.join(home, "client", "package-state") };
+  const { nativePublication, resolveNativePublicationTimeoutMs } = require("./support/native-publication.cjs");
+  const roots = { publication: nativePublication(executable), sourceRegistryRoot, activeRegistryRoot: active, libraryRoot, stateRoot: path.join(home, "client", "package-state") };
   const originalSpawn = childProcess.spawn;
   try {
     const catalog = await readLocalPackageCatalog(roots);
@@ -515,7 +516,7 @@ async function boundedAgentPresetFixture(executable) {
     childProcess.spawn = (command, args, options) => {
       assert.equal(command, binary);
       plannerCalls += 1;
-      const child = originalSpawn(command, args, { ...options, timeout: 30000, env: { PATH: process.env.PATH, OCTOPUS_HOME: home, TMPDIR: root } });
+      const child = originalSpawn(command, args, { ...options, timeout: resolveNativePublicationTimeoutMs(), env: { PATH: process.env.PATH, OCTOPUS_HOME: home, TMPDIR: root } });
       let outputBytes = 0;
       for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { outputBytes += chunk.length; if (outputBytes > 16 * 1024 * 1024) child.kill("SIGKILL"); });
       return child;

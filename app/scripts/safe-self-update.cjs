@@ -75,21 +75,298 @@ function control(home, request, timeoutMs = 5000) {
 const isReady = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
   && Array.isArray(status.interface_failures) && status.interface_failures.length === 0;
 
-async function waitForStatus(home, accept, timeoutMs) {
+async function waitForStatus(home, accept, timeoutMs, pollMs = 250) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const status = await control(home, "status", 2000);
     if (accept(status)) return { ok: true, status };
     if (Date.now() >= deadline) return { ok: false, status };
-    await delay(250);
+    await delay(pollMs);
   }
+}
+
+const DEFAULT_LAUNCHD_SERVICE_LABEL = "app.octopus.runtime";
+const DEFAULT_TERMINATE_GRACE_MS = 5_000;
+const DEFAULT_TERMINATE_POLL_MS = 100;
+
+function normalizeFsPath(targetPath) {
+  const resolved = path.resolve(targetPath);
+  try { return fs.realpathSync(resolved); } catch {}
+  const missing = [];
+  let cursor = resolved;
+  while (cursor !== path.dirname(cursor)) {
+    missing.unshift(path.basename(cursor));
+    cursor = path.dirname(cursor);
+    try { return path.join(fs.realpathSync(cursor), ...missing); } catch {}
+  }
+  return resolved;
+}
+
+function readRuntimeInstanceState(home) {
+  const file = path.join(home, "state", "runtime-instance", "state.json");
+  try {
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!Number.isSafeInteger(record?.pid) || record.pid <= 0) return null;
+    return {
+      pid: record.pid,
+      phase: typeof record.phase === "string" ? record.phase : null,
+      started_at_unix_ms: sequence(record.started_at_unix_ms) ? record.started_at_unix_ms : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function defaultIsProcessAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultSendSignal(pid, signal) {
+  try {
+    process.kill(pid, signal);
+    return { delivered: true, code: null, error: null };
+  } catch (error) {
+    return { delivered: false, code: error?.code ?? null, error: error?.message ?? String(error) };
+  }
+}
+
+function defaultLaunchctl(args) {
+  const result = spawnSync("launchctl", args, { encoding: "utf8", timeout: 15_000 });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error ? result.error.message : null,
+  };
+}
+
+function parseLaunchdService(stdout) {
+  const text = typeof stdout === "string" ? stdout : "";
+  const matchField = (pattern) => {
+    const match = pattern.exec(text);
+    return match ? match[1].trim() : null;
+  };
+  const pidText = matchField(/^\s*pid\s*=\s*(\d+)\s*$/m);
+  return {
+    state: matchField(/^\s*state\s*=\s*(.+?)\s*$/m),
+    program: matchField(/^\s*program\s*=\s*(.+?)\s*$/m),
+    octopusHome: matchField(/^\s*OCTOPUS_HOME\s*=>\s*(.+?)\s*$/m),
+    pid: pidText ? Number(pidText) : null,
+  };
+}
+
+function inspectLaunchdService(layout, home, {
+  platform = process.platform,
+  uid = typeof process.getuid === "function" ? process.getuid() : null,
+  launchdServiceLabel = DEFAULT_LAUNCHD_SERVICE_LABEL,
+  launchctl = defaultLaunchctl,
+} = {}) {
+  if (platform !== "darwin") return { loaded: false, matchesTarget: false, target: null, reason: "non_darwin" };
+  if (!Number.isSafeInteger(uid) || uid < 0 || !nonempty(launchdServiceLabel)) {
+    return { loaded: false, matchesTarget: false, target: null, reason: "invalid_target" };
+  }
+  const target = `gui/${uid}/${launchdServiceLabel}`;
+  const result = launchctl(["print", target]);
+  if (!result || result.status !== 0) {
+    return {
+      loaded: false,
+      matchesTarget: false,
+      target,
+      reason: result?.error ? `launchctl_error: ${result.error}` : "not_loaded",
+    };
+  }
+  const parsed = parseLaunchdService(result.stdout);
+  const expectedHome = normalizeFsPath(home);
+  const expectedBinary = normalizeFsPath(runtimeBinary(layout.live));
+  if (parsed.octopusHome && normalizeFsPath(parsed.octopusHome) !== expectedHome) {
+    return {
+      loaded: true,
+      matchesTarget: false,
+      target,
+      ...parsed,
+      reason: `launchd service OCTOPUS_HOME (${parsed.octopusHome}) does not match ${home}`,
+    };
+  }
+  if (parsed.program && normalizeFsPath(parsed.program) !== expectedBinary) {
+    return {
+      loaded: true,
+      matchesTarget: false,
+      target,
+      ...parsed,
+      reason: `launchd service program (${parsed.program}) does not match ${runtimeBinary(layout.live)}`,
+    };
+  }
+  return { loaded: true, matchesTarget: true, target, ...parsed, reason: null };
+}
+
+async function terminateProcess(pid, {
+  isProcessAlive = defaultIsProcessAlive,
+  sendSignal = defaultSendSignal,
+  graceMs = DEFAULT_TERMINATE_GRACE_MS,
+  pollMs = DEFAULT_TERMINATE_POLL_MS,
+} = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) {
+    return { pid, alive: false, terminated: false, signals: [], skipped: "invalid_pid" };
+  }
+  if (!isProcessAlive(pid)) {
+    return { pid, alive: false, terminated: false, signals: [] };
+  }
+  const signals = [];
+  const waitGone = async (budgetMs) => {
+    const deadline = Date.now() + budgetMs;
+    for (;;) {
+      if (!isProcessAlive(pid)) return true;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return !isProcessAlive(pid);
+      await delay(Math.min(pollMs, remaining));
+    }
+  };
+  const term = sendSignal(pid, "SIGTERM");
+  signals.push("SIGTERM");
+  if (!term.delivered) {
+    if (term.code === "ESRCH") return { pid, alive: false, terminated: true, signals };
+    return { pid, alive: isProcessAlive(pid), terminated: false, signals, error: term.error };
+  }
+  if (await waitGone(graceMs)) return { pid, alive: false, terminated: true, signals };
+  const kill = sendSignal(pid, "SIGKILL");
+  signals.push("SIGKILL");
+  if (!kill.delivered) {
+    if (kill.code === "ESRCH") return { pid, alive: false, terminated: true, signals };
+    return { pid, alive: isProcessAlive(pid), terminated: false, signals, error: kill.error };
+  }
+  const gone = await waitGone(Math.max(pollMs, Math.min(graceMs, 2_000)));
+  return { pid, alive: !gone, terminated: gone, signals };
+}
+
+function collectCandidatePids({ current, second, first, instanceState, launchdInfo, before }) {
+  const pids = [];
+  const add = (pid) => {
+    if (Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid && !pids.includes(pid)) {
+      pids.push(pid);
+    }
+  };
+  if (second?.status?.outcome === "status") add(second.status.pid);
+  if (current?.outcome === "status") add(current.pid);
+  if (first?.status?.outcome === "status") add(first.status.pid);
+  if (instanceState?.pid) add(instanceState.pid);
+  if (launchdInfo?.matchesTarget && launchdInfo.pid) add(launchdInfo.pid);
+  if (before?.pid) add(before.pid);
+  return pids;
+}
+
+async function recoverRolledBackRuntime(layout, home, { before, first, current, second, staleStartedAt, healthy, options }) {
+  const {
+    timeoutMs = 300_000,
+    recoveryTimeoutMs = timeoutMs,
+    terminateGraceMs = DEFAULT_TERMINATE_GRACE_MS,
+    terminatePollMs = DEFAULT_TERMINATE_POLL_MS,
+    statusPollMs = 250,
+    isProcessAlive = defaultIsProcessAlive,
+    sendSignal = defaultSendSignal,
+    launchctl = defaultLaunchctl,
+    platform = process.platform,
+    uid = typeof process.getuid === "function" ? process.getuid() : null,
+    launchdServiceLabel = DEFAULT_LAUNCHD_SERVICE_LABEL,
+  } = options;
+  const graceMs = nonNegativeMs(terminateGraceMs, "terminateGraceMs");
+  const termPollMs = positiveMs(terminatePollMs, "terminatePollMs");
+  const pollMs = positiveMs(statusPollMs, "statusPollMs");
+  const instanceState = readRuntimeInstanceState(home);
+  const launchd = inspectLaunchdService(layout, home, { platform, uid, launchdServiceLabel, launchctl });
+  const candidatePids = collectCandidatePids({ current, second, first, instanceState, launchdInfo: launchd, before });
+  const terminations = [];
+  for (const pid of candidatePids) {
+    if (!isProcessAlive(pid)) continue;
+    terminations.push(await terminateProcess(pid, { isProcessAlive, sendSignal, graceMs, pollMs: termPollMs }));
+  }
+  const terminatedPids = terminations.filter((entry) => entry.terminated).map((entry) => entry.pid);
+  const stillAlivePids = terminations.filter((entry) => entry.alive).map((entry) => entry.pid);
+  const isRecovered = (status) => healthy(status) && sequence(status.started_at_unix_ms) && !staleStartedAt.has(status.started_at_unix_ms);
+
+  const afterTerminate = await control(home, "status", 2000);
+  if (isRecovered(afterTerminate)) {
+    return {
+      recovered: true,
+      runtime: afterTerminate,
+      recovery: {
+        terminated_pids: terminatedPids,
+        ...(stillAlivePids.length ? { still_alive_pids: stillAlivePids } : {}),
+        terminations,
+        launchd_target: launchd.target,
+        launchd_loaded: launchd.loaded && launchd.matchesTarget,
+        launchd_kickstarted: false,
+      },
+    };
+  }
+
+  if (launchd.loaded && launchd.matchesTarget) {
+    const kick = launchctl(["kickstart", "-k", launchd.target]);
+    const kickstarted = kick?.status === 0;
+    if (!kickstarted) {
+      const detail = kick?.error || lastLines(kick ?? {}) || `exit status ${kick?.status}`;
+      return {
+        recovered: false,
+        runtime: afterTerminate,
+        error: `launchctl kickstart -k ${launchd.target} failed after rollback: ${detail}`,
+        recovery: {
+          terminated_pids: terminatedPids,
+          ...(stillAlivePids.length ? { still_alive_pids: stillAlivePids } : {}),
+          terminations,
+          launchd_target: launchd.target,
+          launchd_loaded: true,
+          launchd_kickstarted: false,
+          launchd_error: detail,
+        },
+      };
+    }
+    const waited = await waitForStatus(home, isRecovered, recoveryTimeoutMs, pollMs);
+    return {
+      recovered: waited.ok,
+      runtime: waited.status,
+      ...(waited.ok ? {} : {
+        error: `runtime did not become ready for Home ${home} after rollback and launchctl kickstart -k ${launchd.target}`,
+      }),
+      recovery: {
+        terminated_pids: terminatedPids,
+        ...(stillAlivePids.length ? { still_alive_pids: stillAlivePids } : {}),
+        terminations,
+        launchd_target: launchd.target,
+        launchd_loaded: true,
+        launchd_kickstarted: true,
+      },
+    };
+  }
+
+  return {
+    recovered: false,
+    runtime: afterTerminate,
+    error: `no runtime answers for Home ${home} after the rollback${launchd.reason ? ` (launchd: ${launchd.reason})` : ""}; start it from ${layout.live}`,
+    recovery: {
+      terminated_pids: terminatedPids,
+      ...(stillAlivePids.length ? { still_alive_pids: stillAlivePids } : {}),
+      terminations,
+      launchd_target: launchd.target,
+      launchd_loaded: false,
+      launchd_kickstarted: false,
+      ...(launchd.reason ? { launchd_reason: launchd.reason } : {}),
+    },
+  };
 }
 
 function runtimeEnv(bundle, home) {
   const root = installation(bundle), user = os.userInfo().username;
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   return {
     HOME: os.homedir(), USER: user, LOGNAME: user, TMPDIR: os.tmpdir(),
-    CODEX_HOME: process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
+    CODEX_HOME: codexHome,
+    OCTOPUS_MACHINE_CODEX_AUTH_FILE: path.join(codexHome, "auth.json"),
+    OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE: path.join(codexHome, "auth.lock"),
     PATH: [path.join(root, "bin"), "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":"),
     OCTOPUS_HOME: home, OCTOPUS_INSTALLATION_ROOT: root,
     OCTOPUS_SOURCE_REGISTRY: path.join(root, "registry"), OCTOPUS_RUNTIME_BIN: runtimeBinary(bundle),
@@ -477,15 +754,16 @@ function positiveMs(value, label) {
 async function restartRuntime(layout, home, options = {}) {
   const { callerRun = null, allowInFlightRuns = [], dryRun = false, force = false, swap = false, rollback = true,
     timeoutMs = 300_000, waitQuietMs = 0, quietWindowMs = waitQuietMs > 0 ? DEFAULT_QUIET_WINDOW_MS : 0,
-    pollIntervalMs = DEFAULT_QUIET_POLL_MS, readTurns = readTurnsInFlight } = options;
+    pollIntervalMs = DEFAULT_QUIET_POLL_MS, statusPollMs = 250, readTurns = readTurnsInFlight } = options;
   const waitBudgetMs = nonNegativeMs(waitQuietMs, "waitQuietMs");
   const settleMs = nonNegativeMs(quietWindowMs, "quietWindowMs");
   const pollMs = positiveMs(pollIntervalMs, "pollIntervalMs");
+  const statusPoll = positiveMs(statusPollMs, "statusPollMs");
   const before = await control(home, "status");
   if (before?.outcome !== "status") throw new Error(`no runtime answers for Home ${home} (${before?.error}); only a running runtime is restarted`);
   if (swap) requireBundle(layout.staging);
   const plan = [...(swap ? swapBundles(layout, { dryRun: true }).plan : []), "restart through the control socket", "wait for a ready successor",
-    rollback ? `on failure: restore ${layout.prev} and restart again` : "on failure: report only"];
+    rollback ? `on failure: restore ${layout.prev} and recover runtime` : "on failure: report only"];
   const refuse = (refused, extra = {}) => ({ ok: false, applied: false, refused, plan, ...extra });
   const usable = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
     && sequence(status.started_at_unix_ms) && status.started_at_unix_ms > 0 && sequence(status.pid) && status.pid > 0
@@ -583,20 +861,40 @@ async function restartRuntime(layout, home, options = {}) {
   const healthy = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
     && Array.isArray(status.interface_failures) && newInterfaceFailures(before, status).length === 0;
   await control(home, "restart");
-  const first = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms, timeoutMs);
+  const first = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms, timeoutMs, statusPoll);
   if (first.ok) return { ok: true, applied: true, swapped: swap, previous: before, runtime: first.status, revision: buildInfo(layout.live)?.revision ?? null, ...(waitSummary ?? {}) };
   const regressed = newInterfaceFailures(before, first.status);
   if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, new_interface_failures: regressed, runtime: first.status, ...(waitSummary ?? {}) };
   rollbackBundles(layout);
   const current = await control(home, "status");
-  if (current?.outcome !== "status") {
-    return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: false, new_interface_failures: regressed, failed: first.status,
-      error: `no runtime answers for Home ${home} after the rollback; start it from ${layout.live}`, ...(waitSummary ?? {}) };
+  const staleStartedAt = new Set([
+    before.started_at_unix_ms,
+    first.status?.outcome === "status" ? first.status.started_at_unix_ms : null,
+    current?.outcome === "status" ? current.started_at_unix_ms : null,
+  ].filter(sequence));
+  let second = null;
+  if (current?.outcome === "status") {
+    const restartAck = await control(home, "restart");
+    if (restartAck?.outcome === "status") {
+      second = await waitForStatus(home, (status) => healthy(status) && sequence(status.started_at_unix_ms)
+        && !staleStartedAt.has(status.started_at_unix_ms), timeoutMs, statusPoll);
+      if (second.ok) {
+        return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: true, new_interface_failures: regressed,
+          failed: first.status, runtime: second.status, ...(waitSummary ?? {}) };
+      }
+      if (second.status?.outcome === "status" && sequence(second.status.started_at_unix_ms)) {
+        staleStartedAt.add(second.status.started_at_unix_ms);
+      }
+    }
   }
-  await control(home, "restart");
-  const second = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms
-    && status.started_at_unix_ms !== current.started_at_unix_ms, timeoutMs);
-  return { ok: false, applied: true, swapped: swap, rolled_back: true, recovered: second.ok, new_interface_failures: regressed, failed: first.status, runtime: second.status, ...(waitSummary ?? {}) };
+  const recovered = await recoverRolledBackRuntime(layout, home, { before, first, current, second, staleStartedAt, healthy, options });
+  return {
+    ok: false, applied: true, swapped: swap, rolled_back: true, recovered: recovered.recovered,
+    new_interface_failures: regressed, failed: first.status, runtime: recovered.runtime,
+    ...(recovered.error ? { error: recovered.error } : {}),
+    recovery: recovered.recovery,
+    ...(waitSummary ?? {}),
+  };
 }
 
 async function status(layout, home) {
@@ -699,7 +997,8 @@ async function main(argv) {
 }
 
 module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
-  newInterfaceFailures, packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions, main };
+  newInterfaceFailures, packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions,
+  readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService, terminateProcess, runtimeEnv, main };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {

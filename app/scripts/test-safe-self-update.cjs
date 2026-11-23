@@ -5,7 +5,8 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { bundles, buildInfo, swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
-  packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions } = require("./safe-self-update.cjs");
+  packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions,
+  readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService, terminateProcess, runtimeEnv } = require("./safe-self-update.cjs");
 
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const roots = [];
@@ -430,6 +431,237 @@ async function main() {
   layout = fakeLayout();
   await assert.rejects(restartRuntime(layout, tempRoot(), { ...options, swap: true, readTurns: idle }), /no runtime answers/);
   assert.equal(buildInfo(layout.live).revision, "live");
+
+  // Rollback recovery helper contracts: state parsing, launchd ownership guard, and SIGTERM -> SIGKILL escalation.
+  const parsedLaunchd = parseLaunchdService([
+    "gui/501/app.octopus.runtime = {",
+    "\tstate = running",
+    "\tprogram = /opt/Octopus.app/Contents/Resources/app/bin/octopus",
+    "\tenvironment = {",
+    "\t\tOCTOPUS_HOME => /var/lib/octopus-home",
+    "\t}",
+    "\tpid = 8123",
+    "\tresource coalition = {",
+    "\t\tstate = active",
+    "\t}",
+    "}",
+  ].join("\n"));
+  assert.deepEqual(parsedLaunchd, {
+    state: "running",
+    program: "/opt/Octopus.app/Contents/Resources/app/bin/octopus",
+    octopusHome: "/var/lib/octopus-home",
+    pid: 8123,
+  });
+
+  layout = fakeLayout();
+  home = tempRoot();
+  const liveBin = path.join(layout.live, "Contents", "Resources", "app", "bin", "octopus");
+  assert.equal(readRuntimeInstanceState(home), null);
+  fs.mkdirSync(path.join(home, "state", "runtime-instance"), { recursive: true });
+  fs.writeFileSync(path.join(home, "state", "runtime-instance", "state.json"), JSON.stringify({
+    schema_version: 3, pid: 9001, phase: "starting", started_at_unix_ms: 55, updated_at_unix_ms: 55, launch_owner: null,
+  }));
+  assert.deepEqual(readRuntimeInstanceState(home), { pid: 9001, phase: "starting", started_at_unix_ms: 55 });
+
+  assert.equal(inspectLaunchdService(layout, home, { platform: "linux", uid: 501 }).loaded, false);
+  assert.equal(inspectLaunchdService(layout, home, {
+    platform: "darwin", uid: 501, launchctl: () => ({ status: 113, stdout: "", stderr: "Could not find service" }),
+  }).loaded, false);
+  const matchedService = inspectLaunchdService(layout, home, {
+    platform: "darwin", uid: 501,
+    launchctl: () => ({ status: 0, stdout: `\tstate = waiting\n\tprogram = ${liveBin}\n\t\tOCTOPUS_HOME => ${home}\n\tpid = 9001\n`, stderr: "" }),
+  });
+  assert.equal(matchedService.loaded, true);
+  assert.equal(matchedService.matchesTarget, true);
+  assert.equal(matchedService.target, "gui/501/app.octopus.runtime");
+  assert.equal(matchedService.pid, 9001);
+  const wrongHomeService = inspectLaunchdService(layout, home, {
+    platform: "darwin", uid: 501,
+    launchctl: () => ({ status: 0, stdout: `\tstate = running\n\tprogram = ${liveBin}\n\t\tOCTOPUS_HOME => ${tempRoot()}\n`, stderr: "" }),
+  });
+  assert.equal(wrongHomeService.loaded, true);
+  assert.equal(wrongHomeService.matchesTarget, false);
+  const wrongBinService = inspectLaunchdService(layout, home, {
+    platform: "darwin", uid: 501,
+    launchctl: () => ({ status: 0, stdout: `\tstate = running\n\tprogram = /other/Octopus.app/Contents/Resources/app/bin/octopus\n\t\tOCTOPUS_HOME => ${home}\n`, stderr: "" }),
+  });
+  assert.equal(wrongBinService.loaded, true);
+  assert.equal(wrongBinService.matchesTarget, false);
+
+  {
+    let alive = true;
+    const sent = [];
+    const termResult = await terminateProcess(7777, {
+      isProcessAlive: () => alive,
+      sendSignal: (pid, signal) => { sent.push([pid, signal]); if (signal === "SIGTERM") alive = false; return { delivered: true }; },
+      graceMs: 80, pollMs: 10,
+    });
+    assert.deepEqual(sent, [[7777, "SIGTERM"]]);
+    assert.equal(termResult.terminated, true);
+    assert.deepEqual(termResult.signals, ["SIGTERM"]);
+  }
+  {
+    let alive = true;
+    const sent = [];
+    const killResult = await terminateProcess(7778, {
+      isProcessAlive: () => alive,
+      sendSignal: (pid, signal) => { sent.push([pid, signal]); if (signal === "SIGKILL") alive = false; return { delivered: true }; },
+      graceMs: 35, pollMs: 10,
+    });
+    assert.deepEqual(sent, [[7778, "SIGTERM"], [7778, "SIGKILL"]]);
+    assert.equal(killResult.terminated, true);
+    assert.deepEqual(killResult.signals, ["SIGTERM", "SIGKILL"]);
+  }
+  {
+    const selfSkip = await terminateProcess(process.pid, {
+      isProcessAlive: () => { throw new Error("must not probe self"); },
+      sendSignal: () => { throw new Error("must not signal self"); },
+    });
+    assert.equal(selfSkip.skipped, "invalid_pid");
+  }
+
+  async function bindControlServer(homeDir, handler) {
+    const directory = path.join(homeDir, "state", "runtime-instance");
+    fs.mkdirSync(directory, { recursive: true });
+    const sock = path.join(directory, "control.sock");
+    fs.rmSync(sock, { force: true });
+    const server = net.createServer((socket) => {
+      socket.once("data", (chunk) => {
+        const { request } = JSON.parse(String(chunk));
+        handler(request, socket);
+      });
+    });
+    await new Promise((resolve) => server.listen(sock, resolve));
+    return { close: () => new Promise((done) => server.close(done)) };
+  }
+
+  // Scenario A: hung successor unreachable on control.sock, exits on SIGTERM, recovered via launchctl kickstart -k.
+  for (const ignoreTerm of [false, true]) {
+    layout = fakeLayout();
+    const targetHome = tempRoot();
+    const targetBin = path.join(layout.live, "Contents", "Resources", "app", "bin", "octopus");
+    const hungPid = 6100 + (ignoreTerm ? 1 : 0);
+    let hungAlive = true;
+    const signals = [];
+    const launchctlCalls = [];
+    let recoveredServer = null;
+    let liveRevisionAtSignal = null;
+    let liveRevisionAtKickstart = null;
+    const initialServer = await bindControlServer(targetHome, (request, socket) => {
+      socket.end(`${JSON.stringify({ outcome: "status", pid: hungPid, phase: "ready", started_at_unix_ms: 10, stopping: null, interface_failures: [] })}\n`);
+      if (request === "restart") {
+        // Simulate new binary exec()ing with same PID, writing state.json, and hanging before binding control.sock.
+        initialServer.close();
+        fs.rmSync(path.join(targetHome, "state", "runtime-instance", "control.sock"), { force: true });
+        fs.writeFileSync(path.join(targetHome, "state", "runtime-instance", "state.json"), JSON.stringify({
+          schema_version: 3, pid: hungPid, phase: "starting", started_at_unix_ms: 20, updated_at_unix_ms: 20, launch_owner: null,
+        }));
+      }
+    });
+    try {
+      result = await restartRuntime(layout, targetHome, {
+        timeoutMs: 120, recoveryTimeoutMs: 1500, statusPollMs: 20, terminateGraceMs: 40, terminatePollMs: 10,
+        swap: true, readTurns: idle, platform: "darwin", uid: 501,
+        isProcessAlive: (pid) => pid === hungPid && hungAlive,
+        sendSignal: (pid, signal) => {
+          liveRevisionAtSignal = buildInfo(layout.live)?.revision ?? null;
+          signals.push([pid, signal]);
+          if (pid === hungPid && (!ignoreTerm || signal === "SIGKILL")) hungAlive = false;
+          return { delivered: true };
+        },
+        launchctl: (args) => {
+          launchctlCalls.push(args);
+          if (args[0] === "print") {
+            return { status: 0, stdout: `\tstate = running\n\tprogram = ${targetBin}\n\t\tOCTOPUS_HOME => ${targetHome}\n\tpid = ${hungPid}\n`, stderr: "" };
+          }
+          if (args[0] === "kickstart") {
+            liveRevisionAtKickstart = buildInfo(layout.live)?.revision ?? null;
+            assert.equal(hungAlive, false, "hung successor must be terminated before launchctl kickstart");
+            bindControlServer(targetHome, (_req, socket) => {
+              socket.end(`${JSON.stringify({ outcome: "status", pid: hungPid + 100, phase: "ready", started_at_unix_ms: 30, stopping: null, interface_failures: [] })}\n`);
+            }).then((srv) => { recoveredServer = srv; });
+            return { status: 0, stdout: "", stderr: "" };
+          }
+          return { status: 1, stdout: "", stderr: "unexpected launchctl call" };
+        },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.rolled_back, true);
+      assert.equal(result.recovered, true);
+      assert.equal(result.runtime.started_at_unix_ms, 30);
+      assert.equal(result.runtime.phase, "ready");
+      assert.equal(buildInfo(layout.live).revision, "live");
+      assert.equal(buildInfo(layout.failed).revision, "staging");
+      assert.equal(liveRevisionAtSignal, "live", "previous bundle must be restored before terminating hung successor");
+      assert.equal(liveRevisionAtKickstart, "live", "previous bundle must be restored before launchctl kickstart");
+      assert.deepEqual(result.recovery.terminated_pids, [hungPid]);
+      assert.deepEqual(signals, ignoreTerm ? [[hungPid, "SIGTERM"], [hungPid, "SIGKILL"]] : [[hungPid, "SIGTERM"]]);
+      assert.equal(result.recovery.launchd_loaded, true);
+      assert.equal(result.recovery.launchd_kickstarted, true);
+      assert.deepEqual(launchctlCalls, [["print", "gui/501/app.octopus.runtime"], ["kickstart", "-k", "gui/501/app.octopus.runtime"]]);
+    } finally {
+      await initialServer.close();
+      if (recoveredServer) await recoveredServer.close();
+    }
+  }
+
+  // Scenario D: launchd service NOT loaded -> hung PID is still terminated cleanly, no kickstart attempted, recovered: false.
+  {
+    layout = fakeLayout();
+    const targetHome = tempRoot();
+    let hungAlive = true;
+    const signals = [];
+    const launchctlCalls = [];
+    const initialServer = await bindControlServer(targetHome, (request, socket) => {
+      socket.end(`${JSON.stringify({ outcome: "status", pid: 6300, phase: "ready", started_at_unix_ms: 10, stopping: null, interface_failures: [] })}\n`);
+      if (request === "restart") {
+        initialServer.close();
+        fs.rmSync(path.join(targetHome, "state", "runtime-instance", "control.sock"), { force: true });
+      }
+    });
+    try {
+      result = await restartRuntime(layout, targetHome, {
+        timeoutMs: 120, statusPollMs: 20, terminateGraceMs: 40, terminatePollMs: 10,
+        swap: true, readTurns: idle, platform: "darwin", uid: 501,
+        isProcessAlive: (pid) => pid === 6300 && hungAlive,
+        sendSignal: (pid, signal) => { signals.push([pid, signal]); hungAlive = false; return { delivered: true }; },
+        launchctl: (args) => { launchctlCalls.push(args); return { status: 113, stdout: "", stderr: "Could not find service" }; },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.rolled_back, true);
+      assert.equal(result.recovered, false);
+      assert.deepEqual(signals, [[6300, "SIGTERM"]]);
+      assert.deepEqual(result.recovery.terminated_pids, [6300]);
+      assert.equal(result.recovery.launchd_loaded, false);
+      assert.equal(result.recovery.launchd_kickstarted, false);
+      assert.deepEqual(launchctlCalls, [["print", "gui/501/app.octopus.runtime"]]);
+      assert.match(result.error, /no runtime answers/);
+      assert.equal(buildInfo(layout.live).revision, "live");
+    } finally {
+      await initialServer.close();
+    }
+  }
+
+  {
+    const prevCodexHome = process.env.CODEX_HOME;
+    try {
+      const customCodexHome = path.join(tempRoot(), "custom-codex");
+      process.env.CODEX_HOME = customCodexHome;
+      const customEnv = runtimeEnv("/tmp/Octopus.app", "/tmp/octopus-home");
+      assert.equal(customEnv.CODEX_HOME, customCodexHome);
+      assert.equal(customEnv.OCTOPUS_MACHINE_CODEX_AUTH_FILE, path.join(customCodexHome, "auth.json"));
+      assert.equal(customEnv.OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE, path.join(customCodexHome, "auth.lock"));
+      delete process.env.CODEX_HOME;
+      const defaultEnv = runtimeEnv("/tmp/Octopus.app", "/tmp/octopus-home");
+      assert.equal(defaultEnv.CODEX_HOME, path.join(os.homedir(), ".codex"));
+      assert.equal(defaultEnv.OCTOPUS_MACHINE_CODEX_AUTH_FILE, path.join(os.homedir(), ".codex", "auth.json"));
+      assert.equal(defaultEnv.OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE, path.join(os.homedir(), ".codex", "auth.lock"));
+    } finally {
+      if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodexHome;
+    }
+  }
+
   console.log("safe self-update checks passed");
 }
 
