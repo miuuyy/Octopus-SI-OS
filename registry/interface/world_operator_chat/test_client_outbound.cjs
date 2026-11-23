@@ -2647,12 +2647,12 @@ test("task deletion releases its exact worker environment through an allow-only 
       run: ACTIVE_RUN, provider: ACTIVE_PROVIDER, source: ACTIVE_CLIENT, door, generation: 0,
     } } },
     checkpoints: [
-      { id: "writer_call", run: writerId, epoch: 0, trace: `trace:${writerId}:writer_call`,
+      { id: "cp_provider_authoring_1", run: writerId, epoch: 0, trace: `trace:${writerId}:cp_provider_authoring_1`,
         interface_binding: authoredBinding(ACTIVE_CLIENT), outbound_interface_bindings: [authoredBinding(door)], artifact_bindings: [] },
-      { id: "writer_result", run: writerId, epoch: 0, trace: `trace:${writerId}:writer_result`,
+      { id: "cp_authoring_provider_1", run: writerId, epoch: 0, trace: `trace:${writerId}:cp_authoring_provider_1`,
         interface_binding: authoredBinding(door), outbound_interface_bindings: [authoredBinding(ACTIVE_PROVIDER)], artifact_bindings: [] },
     ],
-    active_checkpoints: ["writer_call", "writer_result"],
+    active_checkpoints: ["cp_authoring_provider_1", "cp_provider_authoring_1"],
   };
   run.interface_state[ACTIVE_PROVIDER].run_authoring_binding.writer_run = {
     run: writerId, initial_record: initialWriter, role_artifact_bindings: [],
@@ -2663,7 +2663,7 @@ test("task deletion releases its exact worker environment through an allow-only 
     checkpoint.id += "_2";
     checkpoint.trace = `trace:${writerId}:${checkpoint.id}`;
   });
-  currentWriter.active_checkpoints = currentWriter.checkpoints.map((checkpoint) => checkpoint.id);
+  currentWriter.active_checkpoints = initialWriter.active_checkpoints.map((checkpointId) => `${checkpointId}_2`);
   const writerPath = path.join(runsRoot, `${writerId}.json`);
   await fs.promises.writeFile(writerPath, JSON.stringify(currentWriter));
   const runPath = path.join(runsRoot, `${ACTIVE_RUN}.json`);
@@ -2698,6 +2698,10 @@ test("task deletion releases its exact worker environment through an allow-only 
   writerFormation.formation.run = writerId;
   await fs.promises.writeFile(writerFormationPath, JSON.stringify(writerFormation));
   await fs.promises.writeFile(writerPath, JSON.stringify({ ...currentWriter, ee: "unrelated_ee" }));
+  await assert.rejects(preflightRelease(), /drifted from its declared generation/);
+  await fs.promises.writeFile(writerPath, JSON.stringify({ ...currentWriter, active_checkpoints: currentWriter.checkpoints.map((checkpoint) => checkpoint.id) }));
+  await assert.rejects(preflightRelease(), /drifted from its declared generation/);
+  await fs.promises.writeFile(writerPath, JSON.stringify({ ...currentWriter, active_checkpoints: [...currentWriter.active_checkpoints, "cp_extra_2"] }));
   await assert.rejects(preflightRelease(), /drifted from its declared generation/);
   await fs.promises.writeFile(writerPath, JSON.stringify(currentWriter));
   assert.equal(await fs.promises.readFile(runPath, "utf8"), runText);

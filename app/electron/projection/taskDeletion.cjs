@@ -616,7 +616,7 @@ async function octopusOsOwnedWriterRunsAtRoot(runRoot, run, exactInterfaces) {
       for (const cp of expected.checkpoints) {
         cp.id = `${cp.id}_${generation}`; cp.trace = `trace:${id}:${cp.id}`;
       }
-      expected.active_checkpoints = expected.checkpoints.map((cp) => cp.id);
+      expected.active_checkpoints = expected.active_checkpoints.map((cpId) => `${cpId}_${generation}`);
     }
     if (stableJson(current.document) !== stableJson(expected)) throw new Error(`${label} drifted from its declared generation`);
     ids.add(id);

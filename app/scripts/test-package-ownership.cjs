@@ -61,6 +61,11 @@ async function nativeRenameFixture(root) {
   const rename = (from, to) => nativeFiles.renameDirectoryExclusive(parent.fd, from, parent.fd, to);
   const errno = number => error => error.code === "ERR_PACKAGE_RENAME" && error.errno === number;
   try {
+    if (process.platform !== "darwin") {
+      assert.throws(() => rename("source", "moved"), /require macOS with RENAME_EXCL support/);
+      assert.equal(await fs.readFile(path.join(root, "source", "retained.bin"), "utf8"), "source bytes\n");
+      return;
+    }
     for (const name of ["", ".", "..", "../escape", "nested/target", "embedded\0nul", "x".repeat(256)]) {
       assert.throws(() => rename("source", name), errno(os.constants.errno.EINVAL));
     }

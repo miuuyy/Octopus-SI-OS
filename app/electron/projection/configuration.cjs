@@ -66,7 +66,12 @@ function configurationProjection(store) {
     if (filename === null || filename === undefined) return true;
     const segments = String(filename).split(/[\\/]/).filter(Boolean);
     if (!segments.length) return true;
-    if (segments[0] === "client" && segments[1] === "package-state") return true;
+    if (segments[0] === "client" && segments[1] === "package-state") {
+      if (segments.length === 3 && ["maintenance-lock.sqlite", "maintenance-lock.sqlite-journal", "maintenance-lock.sqlite-wal", "maintenance-lock.sqlite-shm"].includes(segments[2])) {
+        return false;
+      }
+      return true;
+    }
     if (segments[0] !== "registry") return false;
     if (segments.length < 3 || !packageOwners
       || packageOwnerScope !== store.fileProjectionScope(store.resolveRepoRoot())

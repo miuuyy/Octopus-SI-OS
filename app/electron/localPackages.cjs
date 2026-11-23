@@ -371,17 +371,28 @@ async function repairLocalPackages(options) {
       if (packageIds.includes(dependency.manifest.id)) continue;
       const source = await snapshotPackageSource(roots, dependency.manifest, { fresh: true });
       const state = await readPackageState(roots, dependency.manifest, source);
-      if (!state.materialized || state.receiptState !== "valid") throw new Error(`Repair requires installed dependency '${dependency.manifest.id}'`);
+      if (state.receiptState !== "valid" || (!state.materialized && !canAddMissingOwners(state))) throw new Error(`Repair requires installed dependency '${dependency.manifest.id}'`);
     }
     await installedApplicationHosts(roots, library);
     const result = await repairResolvedPackages(roots, selected, {
       operationId,
       expectedRepairs,
+      allowOwnerAdditions: true,
       onProgress: options?.onProgress,
     });
     await syncApplicationHosts(roots, library, operationId, selected);
     return result;
   });
+}
+
+function canAddMissingOwners(state) {
+  return state.receiptState === "valid"
+    && Boolean(state.receipt)
+    && state.activeMembers.some((member) => member.present)
+    && state.activeMembers.every((member) => (
+      member.present
+      || !state.receipt.members.some((receiptMember) => memberKey(receiptMember) === memberKey(member))
+    ));
 }
 
 function assertCurrentConfiguration(member, baseline) {
@@ -1954,7 +1965,8 @@ async function repairResolvedPackages(roots, entries, operation) {
     }
     const state = await readPackageState(roots, entry.manifest, source);
     const currentReceiptDigest = state.receipt ? hashJson(state.receipt) : null;
-    const alreadyCurrent = state.receiptState === "valid"
+    const alreadyCurrent = state.materialized
+      && state.receiptState === "valid"
       && state.receipt?.operation_id === operation.operationId
       && state.receipt.members.every(member => state.activeMembers.some(active => memberKey(active) === memberKey(member)
         && active.digest === member.digest));
@@ -1962,7 +1974,8 @@ async function repairResolvedPackages(roots, entries, operation) {
       prepared.push({ entry, source, state, alreadyCurrent: true });
       continue;
     }
-    if ((!state.materialized || state.partiallyMaterialized) && !operation.allowOwnerAdditions) {
+    if ((!state.materialized || state.partiallyMaterialized)
+      && !(operation.allowOwnerAdditions === true && canAddMissingOwners(state))) {
       throw new Error(`local package '${entry.manifest.id}' repair requires every declared active owner`);
     }
     if (expected.installedDigest !== state.installedDigest) {
@@ -2004,7 +2017,11 @@ async function repairResolvedPackages(roots, entries, operation) {
   const moves = replacements.flatMap(({ entry, materialization, state }) => installationMembers(materialization).map((member) => {
     const active = state.activeMembers.find((candidate) => memberKey(candidate) === memberKey(member));
     const prior = state.receipt?.members.find(candidate => memberKey(candidate) === memberKey(member));
-    const added = operation.allowOwnerAdditions === true && !prior && active?.present === false;
+    const added = operation.allowOwnerAdditions === true
+      && state.receiptState === "valid"
+      && Boolean(state.receipt)
+      && !prior
+      && active?.present === false;
     if (!added && (!active?.present || !DIGEST.test(active.digest))) {
       throw new Error(`local package '${entry.manifest.id}' repair lost active owner '${memberKey(member)}'`);
     }
@@ -2180,6 +2197,10 @@ async function preparePackageRepair(manifest, source, state) {
   const members = [];
   for (const member of source.members) {
     const active = state.activeMembers.find((candidate) => memberKey(candidate) === memberKey(member));
+    if (!active?.present) {
+      members.push(member);
+      continue;
+    }
     const receipt = state.receipt?.members.find((candidate) => memberKey(candidate) === memberKey(member));
     const baselines = new Map((receipt?.source_files ?? []).map((file) => [file.path, file]));
     const runtimeData = memberRuntimeData(member, active);
@@ -2392,6 +2413,8 @@ async function packageTransactionEntries(roots) {
 
 async function recoverLocalPackageTransactionsUnlocked(roots) {
   const entries = await packageTransactionEntries(roots);
+  if (entries.length === 0) return { recovered: [] };
+  packagePublisher(roots);
   const recovered = [];
   for (const entry of entries.filter(entry => TRANSACTION_PUBLICATION_TEMP.test(entry.name))) {
     const file = path.join(roots.transactionsRoot, entry.name), stat = await fs.lstat(file);
@@ -3544,6 +3567,7 @@ async function withPackageStateRead(roots, operation) {
   return withPackageStateLock(roots.stateRoot, async (acquireExclusive) => {
     await ensurePackageState(roots);
     if ((await packageTransactionEntries(roots)).length) {
+      packagePublisher(roots);
       await acquireExclusive();
       await recoverLocalPackageTransactionsUnlocked(roots);
     }

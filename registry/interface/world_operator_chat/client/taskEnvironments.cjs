@@ -346,13 +346,21 @@ async function validateTaskWriterFormation(octopusHome, run, formation, exactInt
   const generation = current?.interface_state?.[owner]?.file_writer_target?.generation;
   if (!Number.isSafeInteger(generation) || generation < 0) throw new Error(`task writer '${writerId}' has invalid generation`);
   const expected = structuredClone(initial);
+  const checkpoints = requiredArray(expected.checkpoints, "task writer checkpoints");
+  const activeCheckpoints = requiredArray(expected.active_checkpoints, "task writer active checkpoints");
+  const initialIds = checkpoints.map((checkpoint) => requiredString(checkpoint?.id, "task writer checkpoint id"));
+  const activeIds = activeCheckpoints.map((checkpointId) => requiredString(checkpointId, "task writer active checkpoint id"));
+  if (new Set(initialIds).size !== initialIds.length
+    || canonicalJson([...initialIds].sort()) !== canonicalJson([...activeIds].sort())) {
+    throw new Error(`task writer '${writerId}' has an unrelated active checkpoint`);
+  }
   if (generation > 0) {
     expected.interface_state[owner].file_writer_target.generation = generation;
-    for (const checkpoint of requiredArray(expected.checkpoints, "task writer checkpoints")) {
+    for (const checkpoint of checkpoints) {
       checkpoint.id = `${checkpoint.id}_${generation}`;
       checkpoint.trace = `trace:${writerId}:${checkpoint.id}`;
     }
-    expected.active_checkpoints = expected.checkpoints.map((checkpoint) => checkpoint.id);
+    expected.active_checkpoints = activeIds.map((checkpointId) => `${checkpointId}_${generation}`);
   }
   if (canonicalJson(current) !== canonicalJson(expected)) throw new Error(`task writer '${writerId}' drifted from its declared generation`);
 }

@@ -1525,17 +1525,20 @@ async function verifyTaskArchive(temporary) {
     assert.deepEqual(await read("projection.operator.chat.messages", { run_id: plan.runId }), messagesBefore);
     await fs.unlink(amendmentWriterFile); await fs.rm(applicationRoot, { recursive: true });
     const writerId = "declared_task_writer", writerIds = new Set(["cp_intake_call", "cp_intake_result"]);
-    const writerCheckpoints = original.checkpoints.filter((cp) => writerIds.has(cp.id)).map((cp) => ({
-      ...structuredClone(cp), run: writerId, trace: `trace:${writerId}:${cp.id}`,
-    }));
+    const writerNames = { cp_intake_call: "cp_provider_authoring_1", cp_intake_result: "cp_authoring_provider_1" };
+    const writerCheckpoints = ["cp_intake_call", "cp_intake_result"].map((sourceId) => {
+      const cp = original.checkpoints.find((row) => row.id === sourceId);
+      const renamedId = writerNames[sourceId];
+      return { ...structuredClone(cp), id: renamedId, run: writerId, trace: `trace:${writerId}:${renamedId}` };
+    });
     const initialWriter = { id: writerId, ee: original.ee, worker: original.worker, trace: `trace:${writerId}`, status: "idle",
       interface_state: { [intakeId]: { file_writer_target: { run: plan.runId, provider: intakeId, source: intakeId, door: doorId, generation: 0 } } },
-      checkpoints: writerCheckpoints, active_checkpoints: [...writerIds].sort() };
+      checkpoints: writerCheckpoints, active_checkpoints: writerCheckpoints.map((cp) => cp.id).sort() };
     const writerFile = path.join(home, "state", "runs", `${writerId}.json`);
     const writerRun = structuredClone(initialWriter);
     writerRun.interface_state[intakeId].file_writer_target.generation = 2;
     writerRun.checkpoints.forEach((cp) => { cp.id = `${cp.id}_2`; cp.trace = `trace:${writerId}:${cp.id}`; });
-    writerRun.active_checkpoints = writerRun.checkpoints.map((cp) => cp.id);
+    writerRun.active_checkpoints = initialWriter.active_checkpoints.map((cpId) => `${cpId}_2`);
     await fs.writeFile(writerFile, JSON.stringify(writerRun));
     original.checkpoints = original.checkpoints.filter((cp) => !writerIds.has(cp.id));
     original.active_checkpoints = original.active_checkpoints.filter((id) => !writerIds.has(id));
@@ -1600,6 +1603,10 @@ async function verifyTaskArchive(temporary) {
     await fs.writeFile(otherRun, JSON.stringify({ id: "another_run", context: { id: snapshot.id } }));
     await assert.rejects(remove(), /referenced by run/); await fs.unlink(otherRun);
     await fs.writeFile(writerFile, JSON.stringify({ ...writerRun, ee: "unrelated_ee" }));
+    await assert.rejects(remove(), /drifted from its declared generation/); await fs.writeFile(writerFile, JSON.stringify(writerRun));
+    await fs.writeFile(writerFile, JSON.stringify({ ...writerRun, active_checkpoints: writerRun.checkpoints.map((cp) => cp.id) }));
+    await assert.rejects(remove(), /drifted from its declared generation/); await fs.writeFile(writerFile, JSON.stringify(writerRun));
+    await fs.writeFile(writerFile, JSON.stringify({ ...writerRun, active_checkpoints: [...writerRun.active_checkpoints, "cp_extra_2"] }));
     await assert.rejects(remove(), /drifted from its declared generation/); await fs.writeFile(writerFile, JSON.stringify(writerRun));
     await artifact({ ...preludeBody, run: "another_run" });
     await assert.rejects(remove(), /drifted identity, ownership or content/); await artifact(preludeBody);

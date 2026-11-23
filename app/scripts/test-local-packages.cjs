@@ -239,17 +239,25 @@ async function cloneIsolationFixture() {
     await fs.writeFile(source, bytes, { mode: 0o750 });
     const catalog = await readLocalPackageCatalog(roots);
     const request = { packId: "test-pack", selectedRecommended: [], expectedSourceDigests: { "application.test_provider": packageRecord(catalog).source_digest } };
-    nativeFiles.cloneFile = () => { throw Object.assign(new Error("clone unsupported"), { code: "ENOTSUP" }); };
-    await assert.rejects(applyLocalApplicationPack({ ...roots, ...request, operationId: "clone_refused_001" }), /clone unsupported/);
-    assert.deepEqual(await transactionEntries(roots), []);
-    assert.equal(await fs.access(target).then(() => true, () => false), false);
-    nativeFiles.cloneFile = original;
+    if (process.platform === "darwin") {
+      nativeFiles.cloneFile = () => { throw Object.assign(new Error("clone unsupported"), { code: "ENOTSUP" }); };
+      await assert.rejects(applyLocalApplicationPack({ ...roots, ...request, operationId: "clone_refused_001" }), /clone unsupported/);
+      assert.deepEqual(await transactionEntries(roots), []);
+      assert.equal(await fs.access(target).then(() => true, () => false), false);
+      nativeFiles.cloneFile = original;
+    } else {
+      assert.throws(
+        () => nativeFiles.cloneFile(0, 0, "payload.bin"),
+        /requires macOS with clonefile support/,
+      );
+    }
     await applyLocalApplicationPack({ ...roots, ...request, operationId: "clone_install_001" });
     const second = { ...roots, ...rootsFor(path.join(root, "second")), sourceRegistryRoot: roots.sourceRegistryRoot, libraryRoot: roots.libraryRoot };
     await applyLocalApplicationPack({ ...second, ...request, operationId: "clone_sibling_001" });
     const sibling = path.join(second.activeRegistryRoot, relative);
-    const allocations = () => {
-      const probe = spawnSync("/usr/bin/python3", ["-c", `
+    if (process.platform === "darwin") {
+      const allocations = () => {
+        const probe = spawnSync("/usr/bin/python3", ["-c", `
 import ctypes,json,os,struct,sys
 class A(ctypes.Structure):
  _fields_=[('count',ctypes.c_ushort),('reserved',ctypes.c_ushort),('common',ctypes.c_uint32),('volume',ctypes.c_uint32),('directory',ctypes.c_uint32),('file',ctypes.c_uint32),('extended',ctypes.c_uint32)]
@@ -265,35 +273,56 @@ for path in sys.argv[1:]:
  rows.append(dict(logical=s.st_size,allocated=s.st_blocks*512,private=private,clone_id=clone_id,refs=refs,inode=s.st_ino,nlink=s.st_nlink))
 print(json.dumps(rows))
 `, source, target, sibling], { encoding: "utf8" });
-      assert.equal(probe.status, 0, probe.stderr);
-      return JSON.parse(probe.stdout);
-    };
-    const before = allocations();
-    assert.equal(new Set(before.map(row => row.inode)).size, 3);
-    assert.equal(new Set(before.map(row => row.clone_id)).size, 1);
-    for (const row of before) { assert.equal(row.private, 0); assert.equal(row.nlink, 1); assert.equal(row.logical, bytes.length); assert.ok(row.refs >= 3); }
-    assert.equal((await fs.stat(target)).mode & 0o777, 0o750);
-    const input = await fs.open(source, "r"), parent = await fs.open(path.dirname(target), "r");
-    try { assert.throws(() => original(input.fd, parent.fd, path.basename(target)), /File exists/); }
-    finally { await input.close(); await parent.close(); }
-    const handle = await fs.open(target, "r+");
-    try { await handle.write(Buffer.from([bytes[0] ^ 0xff]), 0, 1, 0); await handle.sync(); }
-    finally { await handle.close(); }
-    assert.deepEqual(await fs.readFile(source), bytes);
-    assert.deepEqual(await fs.readFile(sibling), bytes);
-    assert.notDeepEqual(await fs.readFile(target), bytes);
-    const after = allocations();
-    assert.ok(after[1].private > 0);
-    const third = { ...roots, ...rootsFor(path.join(root, "third")), sourceRegistryRoot: roots.sourceRegistryRoot, libraryRoot: roots.libraryRoot };
-    nativeFiles.cloneFile = (fd, directory, name) => {
-      if (name === "payload.bin") syncFs.writeFileSync(source, Buffer.alloc(bytes.length, 0x23));
-      return original(fd, directory, name);
-    };
-    await assert.rejects(applyLocalApplicationPack({ ...third, ...request, operationId: "clone_drift_001" }), /source changed while copying/);
-    assert.deepEqual(await transactionEntries(third), []);
-    assert.equal(await fs.access(path.join(third.activeRegistryRoot, relative)).then(() => true, () => false), false);
-    assert.deepEqual(await fs.readFile(sibling), bytes);
-    process.stdout.write(`APFS package clone fixture: ${JSON.stringify({ before, after })}\n`);
+        assert.equal(probe.status, 0, probe.stderr);
+        return JSON.parse(probe.stdout);
+      };
+      const before = allocations();
+      assert.equal(new Set(before.map(row => row.inode)).size, 3);
+      assert.equal(new Set(before.map(row => row.clone_id)).size, 1);
+      for (const row of before) { assert.equal(row.private, 0); assert.equal(row.nlink, 1); assert.equal(row.logical, bytes.length); assert.ok(row.refs >= 3); }
+      assert.equal((await fs.stat(target)).mode & 0o777, 0o750);
+      const input = await fs.open(source, "r"), parent = await fs.open(path.dirname(target), "r");
+      try { assert.throws(() => original(input.fd, parent.fd, path.basename(target)), /File exists/); }
+      finally { await input.close(); await parent.close(); }
+      const handle = await fs.open(target, "r+");
+      try { await handle.write(Buffer.from([bytes[0] ^ 0xff]), 0, 1, 0); await handle.sync(); }
+      finally { await handle.close(); }
+      assert.deepEqual(await fs.readFile(source), bytes);
+      assert.deepEqual(await fs.readFile(sibling), bytes);
+      assert.notDeepEqual(await fs.readFile(target), bytes);
+      const after = allocations();
+      assert.ok(after[1].private > 0);
+      const third = { ...roots, ...rootsFor(path.join(root, "third")), sourceRegistryRoot: roots.sourceRegistryRoot, libraryRoot: roots.libraryRoot };
+      nativeFiles.cloneFile = (fd, directory, name) => {
+        if (name === "payload.bin") syncFs.writeFileSync(source, Buffer.alloc(bytes.length, 0x23));
+        return original(fd, directory, name);
+      };
+      await assert.rejects(applyLocalApplicationPack({ ...third, ...request, operationId: "clone_drift_001" }), /source changed while copying/);
+      assert.deepEqual(await transactionEntries(third), []);
+      assert.equal(await fs.access(path.join(third.activeRegistryRoot, relative)).then(() => true, () => false), false);
+      assert.deepEqual(await fs.readFile(sibling), bytes);
+      process.stdout.write(`APFS package clone fixture: ${JSON.stringify({ before, after })}\n`);
+    } else {
+      const stats = await Promise.all([source, target, sibling].map((entry) => fs.stat(entry)));
+      assert.equal(new Set(stats.map((row) => row.ino)).size, 3);
+      for (const row of stats) {
+        assert.equal(row.nlink, 1);
+        assert.equal(row.size, bytes.length);
+      }
+      assert.equal(stats[1].mode & 0o777, 0o750);
+      const handle = await fs.open(target, "r+");
+      try { await handle.write(Buffer.from([bytes[0] ^ 0xff]), 0, 1, 0); await handle.sync(); }
+      finally { await handle.close(); }
+      assert.deepEqual(await fs.readFile(source), bytes);
+      assert.deepEqual(await fs.readFile(sibling), bytes);
+      assert.notDeepEqual(await fs.readFile(target), bytes);
+      const third = { ...roots, ...rootsFor(path.join(root, "third")), sourceRegistryRoot: roots.sourceRegistryRoot, libraryRoot: roots.libraryRoot };
+      await fs.writeFile(source, Buffer.alloc(bytes.length, 0x23), { mode: 0o750 });
+      await assert.rejects(applyLocalApplicationPack({ ...third, ...request, operationId: "copy_drift_001" }), /changed|digest/i);
+      assert.deepEqual(await transactionEntries(third), []);
+      assert.equal(await fs.access(path.join(third.activeRegistryRoot, relative)).then(() => true, () => false), false);
+      assert.deepEqual(await fs.readFile(sibling), bytes);
+    }
   } finally { nativeFiles.cloneFile = original; await fs.rm(root, { recursive: true, force: true }); }
 }
 
@@ -494,7 +523,15 @@ async function run() {
     }
 
     runCrashChild("rollback-install", root);
-    assert.notDeepEqual(await transactionEntries(roots), [], "the crashed install left a transaction to recover");
+    const pendingBeforeRefusal = await transactionEntries(roots);
+    assert.notDeepEqual(pendingBeforeRefusal, [], "the crashed install left a transaction to recover");
+    const journalFiles = await Promise.all(
+      pendingBeforeRefusal.map(async (name) => {
+        const journalPath = path.join(roots.stateRoot, "transactions", name, "journal.json");
+        const content = await fs.readFile(journalPath, "utf8").catch(() => null);
+        return [journalPath, content];
+      }),
+    );
     const projectionOptions = {
       resolveRepoRoot: () => path.resolve(__dirname, "../.."),
       sourceRegistry: () => roots.sourceRegistryRoot,
@@ -513,6 +550,10 @@ async function run() {
       unpublishedStore.close();
     }
     assert.notDeepEqual(await transactionEntries(roots), [], "a refused recovery keeps the transaction");
+    for (const [journalPath, beforeContent] of journalFiles) {
+      const afterContent = await fs.readFile(journalPath, "utf8").catch(() => null);
+      assert.equal(afterContent, beforeContent, "a refused recovery must not mutate the transaction journal");
+    }
     const publishedStore = createProjectionStore({ ...projectionOptions, localPackagePublication: () => roots.publication });
     try {
       const recoveredCatalog = await publishedStore.read(localPackagesRead);
