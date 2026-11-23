@@ -24,6 +24,7 @@ function configurationProjection(store) {
   let applicationCatalogGeneration = 1;
   let applicationOwnerScope = null;
   let applicationOwners = null;
+  const runRecordCache = new Map();
   const packageProjectionStates = new WeakMap();
 
   async function cachedPackageCatalog(repoRoot) {
@@ -355,7 +356,7 @@ function configurationProjection(store) {
   async function buildFileProjection(repoRoot) {
     const configuration = await cachedConfigurationProjection(repoRoot);
     const warnings = [...configuration.warnings];
-    const runRecordProjection = await readRunRecords(configuration.runRecordsRoot, warnings);
+    const runRecordProjection = await readRunRecords(configuration.runRecordsRoot, warnings, runRecordCache);
     let workspaceSetup;
     try {
       workspaceSetup = await (store.options.inspectWorkspaceSetupState ?? inspectWorkspaceSetupState)({ octopusHomeRoot: configuration.octopusHome, registryRoot: configuration.registryRoot });
@@ -438,6 +439,7 @@ function configurationProjection(store) {
     applicationCatalogBuild = null;
     applicationOwners = null;
     applicationOwnerScope = null;
+    runRecordCache.clear();
   }
 
   return { buildConfigurationProjection, buildFileProjection, cachedConfigurationProjection, cachedEePolicyProjection, closeConfigurationProjection, invalidateConfigurationProjection, withFileProjectionPackages };

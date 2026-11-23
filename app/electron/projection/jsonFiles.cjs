@@ -25,11 +25,12 @@ function jsonDocumentDigest(value) {
 }
 
 async function readRegularJsonDocument(file, label) {
+  const observedBeforeReadMs = Date.now();
   const before = await fs.lstat(file);
   if (before.isSymbolicLink() || !before.isFile()) throw new Error(`${label} must be a regular file`);
   const body = await fs.readFile(file);
   const after = await fs.lstat(file);
-  if (after.isSymbolicLink() || !after.isFile() || before.ino !== after.ino || before.dev !== after.dev || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+  if (after.isSymbolicLink() || !after.isFile() || before.ino !== after.ino || before.dev !== after.dev || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
     throw new Error(`${label} changed while it was read`);
   }
   let document;
@@ -38,7 +39,7 @@ async function readRegularJsonDocument(file, label) {
   } catch (error) {
     throw new Error(`${label} is malformed JSON: ${error.message}`);
   }
-  return { document, digest: crypto.createHash("sha256").update(body).digest("hex"), body };
+  return { document, digest: crypto.createHash("sha256").update(body).digest("hex"), body, stat: after, observedBeforeReadMs };
 }
 
 async function readOptionalRegularJsonDocument(file, label) {

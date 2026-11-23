@@ -161,15 +161,30 @@ impl ArrivalDedupIndex {
         movements: impl IntoIterator<Item = Movement>,
     ) -> Result<(), LedgerIndexError> {
         for movement in movements {
-            if movement.seq.0 != self.watermark {
-                return Err(LedgerIndexError::NonContiguousTail {
-                    expected: self.watermark,
-                    got: movement.seq.0,
-                });
-            }
-            self.note(&movement);
-            self.watermark += 1;
+            self.catch_up_movement(&movement)?;
         }
+        Ok(())
+    }
+
+    pub fn catch_up_movement_slice(
+        &mut self,
+        movements: &[Movement],
+    ) -> Result<(), LedgerIndexError> {
+        for movement in movements {
+            self.catch_up_movement(movement)?;
+        }
+        Ok(())
+    }
+
+    fn catch_up_movement(&mut self, movement: &Movement) -> Result<(), LedgerIndexError> {
+        if movement.seq.0 != self.watermark {
+            return Err(LedgerIndexError::NonContiguousTail {
+                expected: self.watermark,
+                got: movement.seq.0,
+            });
+        }
+        self.note(movement);
+        self.watermark += 1;
         Ok(())
     }
 

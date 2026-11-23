@@ -355,7 +355,7 @@ pub(crate) async fn run_daemon_on_dirs(
         .arrival_dedup
         .lock()
         .expect("arrival dedup index mutex is not poisoned")
-        .catch_up_movements(boot_movements.clone())
+        .catch_up_movement_slice(&boot_movements)
         .map_err(|error| -> Box<dyn std::error::Error> {
             format!("arrival dedup index failed to fold the durable ledger: {error}").into()
         })?;
@@ -384,7 +384,7 @@ pub(crate) async fn run_daemon_on_dirs(
             .arrival_dedup
             .lock()
             .expect("arrival dedup index mutex is not poisoned")
-            .catch_up_movements(recovered.clone())
+            .catch_up_movement_slice(&recovered)
             .map_err(|error| -> Box<dyn std::error::Error> {
                 format!("arrival dedup index failed to fold recovered outbound tail: {error}")
                     .into()

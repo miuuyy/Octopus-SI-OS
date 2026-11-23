@@ -1235,14 +1235,14 @@ impl InterfaceActivationReconciler {
                         }
                     };
                     let mut event_error = None;
-                    let mut reconcile = interface_watch_event_requires_reconcile(&event, &roots);
+                    let mut reconcile = classify_interface_watch_event(&event, &roots);
                     for _ in 1..INTERFACE_WATCH_EVENT_BATCH_LIMIT {
                         let Ok(event) = events.try_recv() else {
                             break;
                         };
                         match event {
                             Ok(event) => {
-                                reconcile |= interface_watch_event_requires_reconcile(&event, &roots);
+                                reconcile = reconcile.merge(classify_interface_watch_event(&event, &roots));
                             }
                             Err(error) => {
                                 event_error = Some(error);
@@ -1254,8 +1254,12 @@ impl InterfaceActivationReconciler {
                         tracing::error!(error = %error, "interface life filesystem watcher failed");
                         break;
                     }
-                    if !reconcile { continue; }
-                    if let Err(error) = self.reconcile_once().await {
+                    let reconcile_result = match reconcile {
+                        WatchReconcile::None => continue,
+                        WatchReconcile::RunRecordsOnly => self.reconcile_run_records_change().await,
+                        WatchReconcile::Full => self.reconcile_interface_lives(None).await,
+                    };
+                    if let Err(error) = reconcile_result {
                         tracing::warn!(
                             error = %error,
                             "interface life reconciliation failed closed; lifted lives were stopped"
@@ -1394,6 +1398,79 @@ impl InterfaceActivationReconciler {
     async fn reconcile_once(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
         self.reconcile_interface_lives(None).await?;
         Ok(self.lifted.len())
+    }
+
+    async fn reconcile_run_records_change(&mut self) -> Result<(), String> {
+        if self.root_cancel.is_cancelled() {
+            self.stop_all_lives().await;
+            return Err("interface lifecycle reconciliation cancelled".to_string());
+        }
+        if self.durable_root.is_none() {
+            self.stop_all_lives().await;
+            return Ok(());
+        }
+        let root_slots = match life_root_slots(
+            &self.registry_root,
+            &self.octopus_home,
+            &self.interface_life_install_root,
+        ) {
+            Ok(root_slots) => root_slots,
+            Err(error) => {
+                self.stop_all_lives().await;
+                return Err(error);
+            }
+        };
+        let Some(run_records_dir) = root_slots.get("run_records_root").cloned() else {
+            self.stop_all_lives().await;
+            return Err(
+                "host manifest resolved no run_records_root slot for interface life reconciliation"
+                    .to_string(),
+            );
+        };
+        if let Err(error) = self.run_index.catch_up(&run_records_dir) {
+            self.stop_all_lives().await;
+            return Err(format!(
+                "run records directory '{}' cannot be indexed for interface life reconciliation: {error}",
+                run_records_dir.display()
+            ));
+        }
+        let mentioned = self.run_index.interfaces_requiring_life();
+        self.failures.send_modify(|failures| {
+            failures.retain(|interface, _| mentioned.contains(interface));
+        });
+        self.deferred_lifts
+            .retain(|interface| mentioned.contains(interface));
+        self.latest_movements
+            .retain(|interface, _| mentioned.contains(interface));
+        let stale = self
+            .lifted
+            .keys()
+            .filter(|interface| !mentioned.contains(*interface))
+            .cloned()
+            .collect::<Vec<_>>();
+        for interface in stale {
+            self.stop_life(&interface).await;
+            self.resolved_lives.remove(&interface);
+            self.clear_failure(&interface);
+        }
+        let scope = {
+            let failures = self.failures.borrow();
+            mentioned
+                .iter()
+                .filter(|interface| {
+                    self.deferred_lifts.contains(*interface)
+                        || failures.contains_key(*interface)
+                        || self.lifted.get(*interface).is_none_or(|lifted| {
+                            !lifted.sleeping && (lifted.ended || lifted.handle.is_finished())
+                        })
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        };
+        if scope.is_empty() {
+            return Ok(());
+        }
+        self.reconcile_interface_lives(Some(&scope)).await
     }
 
     async fn reconcile_scope(&mut self, scope: Option<&BTreeSet<InterfaceId>>) -> Result<(), String> {
@@ -1755,12 +1832,36 @@ fn enqueue_interface_watch_event(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchReconcile {
+    None,
+    RunRecordsOnly,
+    Full,
+}
+
+impl WatchReconcile {
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Full, _) | (_, Self::Full) => Self::Full,
+            (Self::RunRecordsOnly, _) | (_, Self::RunRecordsOnly) => Self::RunRecordsOnly,
+            (Self::None, Self::None) => Self::None,
+        }
+    }
+}
+
 fn interface_watch_event_requires_reconcile(
     event: &notify::Event,
     roots: &InterfaceWatchRoots,
 ) -> bool {
+    classify_interface_watch_event(event, roots) != WatchReconcile::None
+}
+
+fn classify_interface_watch_event(
+    event: &notify::Event,
+    roots: &InterfaceWatchRoots,
+) -> WatchReconcile {
     if event.need_rescan() {
-        return true;
+        return WatchReconcile::Full;
     }
     use notify::event::{AccessKind, AccessMode};
     if matches!(
@@ -1769,26 +1870,31 @@ fn interface_watch_event_requires_reconcile(
             AccessKind::Read | AccessKind::Open(_) | AccessKind::Close(AccessMode::Read)
         )
     ) {
-        return false;
+        return WatchReconcile::None;
     }
-    event.paths.iter().any(|path| {
-        if path.starts_with(&roots.interface_registry) || path.starts_with(&roots.run_records) {
-            return true;
+    let mut scope = WatchReconcile::None;
+    for path in &event.paths {
+        if path.starts_with(&roots.interface_registry)
+            || path.parent() == Some(roots.host_directory.as_path())
+        {
+            return WatchReconcile::Full;
         }
-        if path.parent() == Some(roots.host_directory.as_path()) {
-            return true;
+        if let Some(private_interfaces) = &roots.private_interfaces
+            && let Ok(relative) = path.strip_prefix(private_interfaces)
+        {
+            let parts = relative.components().collect::<Vec<_>>();
+            if parts.len() == 2
+                && parts[1].as_os_str() == "environment.json"
+                && matches!(parts[0], std::path::Component::Normal(_))
+            {
+                return WatchReconcile::Full;
+            }
         }
-        let Some(private_interfaces) = &roots.private_interfaces else {
-            return false;
-        };
-        let Ok(relative) = path.strip_prefix(private_interfaces) else {
-            return false;
-        };
-        let parts = relative.components().collect::<Vec<_>>();
-        parts.len() == 2
-            && parts[1].as_os_str() == "environment.json"
-            && matches!(parts[0], std::path::Component::Normal(_))
-    })
+        if path.starts_with(&roots.run_records) {
+            scope = scope.merge(WatchReconcile::RunRecordsOnly);
+        }
+    }
+    scope
 }
 
 fn life_root_slots(
@@ -1981,8 +2087,8 @@ fn interface_local_ipc_base(octopus_home: &Path) -> PathBuf {
 }
 
 fn ensure_owner_only_directory(path: &Path, label: &str) -> Result<(), String> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+    let mut metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Some(metadata),
         Ok(_) => {
             return Err(format!(
                 "{label} '{}' is not a real directory",
@@ -1999,6 +2105,7 @@ fn ensure_owner_only_directory(path: &Path, label: &str) -> Result<(), String> {
             builder.create(path).map_err(|error| {
                 format!("{label} '{}' cannot be created: {error}", path.display())
             })?;
+            None
         }
         Err(error) => {
             return Err(format!(
@@ -2006,32 +2113,45 @@ fn ensure_owner_only_directory(path: &Path, label: &str) -> Result<(), String> {
                 path.display()
             ));
         }
-    }
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-            format!(
-                "{label} '{}' cannot be reinspected: {error}",
+        let metadata = match metadata.take() {
+            Some(metadata) => metadata,
+            None => std::fs::symlink_metadata(path).map_err(|error| {
+                format!(
+                    "{label} '{}' cannot be reinspected: {error}",
+                    path.display()
+                )
+            })?,
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!(
+                "{label} '{}' is not a real directory",
                 path.display()
-            )
-        })?;
+            ));
+        }
         if metadata.uid() != unsafe { libc::geteuid() } {
             return Err(format!(
                 "{label} '{}' is not owned by the current user",
                 path.display()
             ));
         }
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
-            |error| {
-                format!(
-                    "{label} '{}' cannot be made owner-only: {error}",
-                    path.display()
-                )
-            },
-        )?;
+        if metadata.permissions().mode() & 0o777 != 0o700 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
+                |error| {
+                    format!(
+                        "{label} '{}' cannot be made owner-only: {error}",
+                        path.display()
+                    )
+                },
+            )?;
+        }
     }
+    #[cfg(not(unix))]
+    let _ = metadata;
     Ok(())
 }
 
@@ -2155,6 +2275,22 @@ mod interface_life_switch_tests {
         }
         let event = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
         assert!(interface_watch_event_requires_reconcile(&event, &roots));
+    }
+
+    #[test]
+    fn watch_classification_keeps_run_record_updates_scoped() {
+        let root = Path::new("/octopus-home");
+        let roots = watch_roots(root);
+        let run = watch_event(roots.run_records.join("task.json"));
+        let life = watch_event(roots.interface_registry.join("world_probe/life.json"));
+        let env = watch_event(root.join("interfaces/world_probe/environment.json"));
+        let cursor = watch_event(root.join("interfaces/world_probe/ledger-cursor.json"));
+        assert_eq!(classify_interface_watch_event(&run, &roots), WatchReconcile::RunRecordsOnly);
+        assert_eq!(classify_interface_watch_event(&life, &roots), WatchReconcile::Full);
+        assert_eq!(classify_interface_watch_event(&env, &roots), WatchReconcile::Full);
+        assert_eq!(classify_interface_watch_event(&cursor, &roots), WatchReconcile::None);
+        assert_eq!(WatchReconcile::RunRecordsOnly.merge(WatchReconcile::None), WatchReconcile::RunRecordsOnly);
+        assert_eq!(WatchReconcile::RunRecordsOnly.merge(WatchReconcile::Full), WatchReconcile::Full);
     }
 
     #[test]

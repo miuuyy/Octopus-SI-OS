@@ -338,3 +338,40 @@ test("scoped EE and run invalidations preserve application catalog cache while r
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("settled run records reuse cached parses while rewritten records reread immediately", async () => {
+  const { readRunRecords } = require("../electron/projection/registryRows.cjs");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oct-run-record-cache-"));
+  const runPath = path.join(root, "run.json");
+  const base = { id: "run", ee: "ee", worker: "worker", trace: "trace", status: "idle", active_checkpoints: [], checkpoints: [] };
+  const originalReadFile = fs.readFile;
+  let reads = 0;
+  fs.readFile = (target, ...rest) => {
+    if (typeof target === "string" && path.resolve(target) === path.resolve(runPath)) reads += 1;
+    return originalReadFile(target, ...rest);
+  };
+  try {
+    await fs.writeFile(runPath, JSON.stringify(base));
+    const cache = new Map();
+    const first = await readRunRecords(root, [], cache);
+    assert.equal(first.records.length, 1);
+    assert.equal(reads, 1);
+    const recent = await readRunRecords(root, [], cache);
+    assert.equal(recent.records[0].record_status, "idle");
+    assert.equal(reads, 2);
+    await delay(1100);
+    const settledWarm = await readRunRecords(root, [], cache);
+    assert.equal(settledWarm.records[0].record_status, "idle");
+    assert.equal(reads, 3);
+    const settledHit = await readRunRecords(root, [], cache);
+    assert.equal(settledHit.records[0].record_status, "idle");
+    assert.equal(reads, 3);
+    await fs.writeFile(runPath, JSON.stringify({ ...base, status: "running" }));
+    const updated = await readRunRecords(root, [], cache);
+    assert.equal(updated.records[0].record_status, "running");
+    assert.equal(reads, 4);
+  } finally {
+    fs.readFile = originalReadFile;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

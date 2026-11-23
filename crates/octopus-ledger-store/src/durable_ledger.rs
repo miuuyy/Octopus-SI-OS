@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::ops::ControlFlow;
@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use octopus_file_storage::metadata::FileStamp;
 use octopus_ledger::{
     BlobStore, ContentHash, DurableMetadataContent, GrantProjection, Lamport, LedgerError, LedgerResult, Movement,
     MovementDraft, MovementLog, MovementMetadata, Seq, decode_durable_movement_row,
@@ -166,7 +167,7 @@ impl DurableMovementDecoder {
         let dir = movement_metadata_root(movements_path.as_ref());
         Self {
             caches: ledger_metadata_caches(&dir),
-            blobs: DurableBlobs { dir },
+            blobs: DurableBlobs::from_dir(dir),
         }
     }
 
@@ -574,18 +575,20 @@ impl DurableLog {
             invocation_metadata: draft.invocation_metadata,
         };
         let mut grant_content = None;
-        let mut pinned_metadata = false;
+        let mut pending_metadata_sync = Vec::new();
         let mut json = encode_durable_movement_row(&placed, self.offsets.len(), |kind, bytes| {
-            let hash = self.metadata.blobs.stage_blob(bytes)?;
-            pinned_metadata = true;
-            if kind == DurableMetadataContent::Grant {
-                grant_content = Some(hash);
+            let staged = self.metadata.blobs.stage_blob(bytes)?;
+            if let Some(entry) = staged.pending_sync {
+                pending_metadata_sync.push(entry);
             }
-            Ok(hash)
+            if kind == DurableMetadataContent::Grant {
+                grant_content = Some(staged.hash);
+            }
+            Ok(staged.hash)
         })?;
-        if pinned_metadata {
-            sync_directory(&self.metadata.blobs.dir)?;
-        }
+        self.metadata
+            .blobs
+            .finish_staged_dir_sync(&pending_metadata_sync)?;
         json.push('\n');
         self.file
             .write_all(json.as_bytes())
@@ -768,19 +771,65 @@ impl MovementLog for DurableLog {
     }
 }
 
+const SYNCED_BLOB_DIR_CACHE_LIMIT: usize = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SyncedBlobEntry {
+    hash: ContentHash,
+    stamp: FileStamp,
+}
+
+#[derive(Default)]
+struct SyncedBlobDirCache {
+    entries: HashSet<SyncedBlobEntry>,
+    order: VecDeque<SyncedBlobEntry>,
+}
+
+impl SyncedBlobDirCache {
+    fn contains(&self, entry: &SyncedBlobEntry) -> bool {
+        self.entries.contains(entry)
+    }
+
+    fn record(&mut self, entry: SyncedBlobEntry) {
+        if self.entries.insert(entry) {
+            self.order.push_back(entry);
+            while self.entries.len() > SYNCED_BLOB_DIR_CACHE_LIMIT {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.entries.remove(&oldest);
+                }
+            }
+        }
+    }
+}
+
+struct StagedBlob {
+    hash: ContentHash,
+    pending_sync: Option<SyncedBlobEntry>,
+}
+
 pub struct DurableBlobs {
     dir: PathBuf,
+    synced_dir_entries: SyncedBlobDirCache,
+    #[cfg(test)]
+    dir_syncs: usize,
 }
 
 static BLOB_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl DurableBlobs {
+    fn from_dir(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            synced_dir_entries: SyncedBlobDirCache::default(),
+            #[cfg(test)]
+            dir_syncs: 0,
+        }
+    }
+
     pub fn open(dir: impl AsRef<Path>) -> LedgerResult<Self> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir).map_err(|e| io_err(&dir, &e))?;
-        Ok(Self {
-            dir,
-        })
+        Ok(Self::from_dir(dir))
     }
 
     fn blob_path(&self, hash: &ContentHash) -> PathBuf {
@@ -794,22 +843,41 @@ impl DurableBlobs {
     /// Formation evidence is durable before any movement may reference it:
     /// sync every blob's data, then its directory and the device before returning.
     pub fn try_put_batch(&mut self, contents: &[&[u8]]) -> LedgerResult<Vec<ContentHash>> {
-        let hashes = contents
-            .iter()
-            .map(|bytes| self.stage_blob(bytes))
-            .collect::<LedgerResult<Vec<_>>>()?;
-        if !contents.is_empty() {
-            sync_directory(&self.dir)?;
+        let mut hashes = Vec::with_capacity(contents.len());
+        let mut pending_sync = Vec::new();
+        for bytes in contents {
+            let staged = self.stage_blob(bytes)?;
+            hashes.push(staged.hash);
+            if let Some(entry) = staged.pending_sync {
+                pending_sync.push(entry);
+            }
         }
+        self.finish_staged_dir_sync(&pending_sync)?;
         Ok(hashes)
     }
 
-    fn stage_blob(&mut self, bytes: &[u8]) -> LedgerResult<ContentHash> {
+    fn finish_staged_dir_sync(&mut self, pending: &[SyncedBlobEntry]) -> LedgerResult<()> {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        sync_directory(&self.dir)?;
+        #[cfg(test)]
+        {
+            self.dir_syncs += 1;
+        }
+        for entry in pending {
+            self.synced_dir_entries.record(*entry);
+        }
+        Ok(())
+    }
+
+    fn stage_blob(&mut self, bytes: &[u8]) -> LedgerResult<StagedBlob> {
         let hash = ContentHash::of_bytes(bytes);
         let path = self.blob_path(&hash);
-        if path.exists() {
-            verify_blob_file(&path, &hash)?;
-            return Ok(hash);
+        if let Some(stamp) = verify_existing_blob(&path, &hash)? {
+            let entry = SyncedBlobEntry { hash, stamp };
+            let pending_sync = (!self.synced_dir_entries.contains(&entry)).then_some(entry);
+            return Ok(StagedBlob { hash, pending_sync });
         }
         let tmp = self.dir.join(format!(
             ".{}.{}.{}.tmp",
@@ -823,15 +891,22 @@ impl DurableBlobs {
             f.flush().map_err(|e| io_err(&tmp, &e))?;
             verify_blob_file(&tmp, &hash)?;
             sync_blob_data(&f).map_err(|e| io_err(&tmp, &e))?;
-            match std::fs::hard_link(&tmp, &path) {
-                Ok(()) => {}
+            let existing_stamp = match std::fs::hard_link(&tmp, &path) {
+                Ok(()) => None,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    verify_blob_file(&path, &hash)?;
+                    Some(verify_blob_file_with_stamp(&path, &hash)?)
                 }
                 Err(error) => return Err(io_err(&path, &error)),
-            }
+            };
             std::fs::remove_file(&tmp).map_err(|error| io_err(&tmp, &error))?;
-            Ok(hash)
+            let stamp = match existing_stamp {
+                Some(stamp) => stamp,
+                None => FileStamp::of(&f.metadata().map_err(|error| io_err(&path, &error))?),
+            };
+            Ok(StagedBlob {
+                hash,
+                pending_sync: Some(SyncedBlobEntry { hash, stamp }),
+            })
         })();
         if result.is_err() {
             let _ = std::fs::remove_file(&tmp);
@@ -869,7 +944,33 @@ fn sync_blob_data(file: &File) -> std::io::Result<()> {
 }
 
 pub(super) fn verify_blob_file(path: &Path, expected: &ContentHash) -> LedgerResult<()> {
-    let mut file = File::open(path).map_err(|error| io_err(path, &error))?;
+    verify_blob_file_with_stamp(path, expected).map(|_| ())
+}
+
+fn verify_existing_blob(
+    path: &Path,
+    expected: &ContentHash,
+) -> LedgerResult<Option<FileStamp>> {
+    match File::open(path) {
+        Ok(file) => verify_open_blob_file(file, path, expected).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_err(path, &error)),
+    }
+}
+
+fn verify_blob_file_with_stamp(
+    path: &Path,
+    expected: &ContentHash,
+) -> LedgerResult<FileStamp> {
+    let file = File::open(path).map_err(|error| io_err(path, &error))?;
+    verify_open_blob_file(file, path, expected)
+}
+
+fn verify_open_blob_file(
+    mut file: File,
+    path: &Path,
+    expected: &ContentHash,
+) -> LedgerResult<FileStamp> {
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -889,7 +990,8 @@ pub(super) fn verify_blob_file(path: &Path, expected: &ContentHash) -> LedgerRes
             actual,
         });
     }
-    Ok(())
+    let metadata = file.metadata().map_err(|error| io_err(path, &error))?;
+    Ok(FileStamp::of(&metadata))
 }
 
 #[cfg(unix)]
@@ -1633,5 +1735,28 @@ mod tests {
             ),
             "a committed (newline-terminated) unparseable middle row fails closed at its line"
         );
+    }
+
+    #[test]
+    fn durable_blobs_skip_redundant_dir_sync_and_still_fail_closed_on_tamper() {
+        let dir = tempfile::tempdir().unwrap();
+        let contents: &[&[u8]] = &[b"worker ceiling", b"ee policy"];
+        let mut blobs = DurableBlobs::open(dir.path()).unwrap();
+        let hashes = blobs.try_put_batch(contents).unwrap();
+        assert_eq!(blobs.dir_syncs, 1);
+        assert_eq!(blobs.try_put_batch(contents).unwrap(), hashes);
+        assert_eq!(blobs.dir_syncs, 1);
+
+        let replaced = blobs.blob_path(&hashes[0]);
+        std::fs::remove_file(&replaced).unwrap();
+        std::fs::write(&replaced, contents[0]).unwrap();
+        assert_eq!(blobs.try_put_batch(contents).unwrap(), hashes);
+        assert_eq!(blobs.dir_syncs, 2);
+
+        std::fs::write(&replaced, b"tampered").unwrap();
+        assert!(matches!(
+            blobs.try_put_batch(contents),
+            Err(LedgerError::BlobIntegrity { .. })
+        ));
     }
 }

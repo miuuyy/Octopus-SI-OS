@@ -438,6 +438,76 @@ impl LedgerSqliteIndex {
         Ok(expected - watermark)
     }
 
+    pub fn ingest_movement(
+        &mut self,
+        movement: &Movement,
+        byte_range: Option<(u64, u64)>,
+    ) -> Result<u64, SqliteIndexError> {
+        let watermark = self.watermark()?;
+        if movement.seq.0 != watermark {
+            return Err(SqliteIndexError::NonContiguousTail {
+                expected: watermark,
+                got: movement.seq.0,
+            });
+        }
+        let tx = self.conn.transaction()?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT OR REPLACE INTO movements(
+                    seq, lamport, recorded_at_unix_ms, trace, kind, mark,
+                    from_kind, from_id, to_kind, to_id,
+                    artifact_id, artifact_label, artifact_content,
+                    runtime_run, runtime_checkpoint, runtime_interface,
+                    start_offset, end_offset
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            )?;
+            let row = project(movement);
+            insert.execute(params![
+                row.seq as i64,
+                row.lamport as i64,
+                row.recorded_at_unix_ms as i64,
+                row.trace,
+                row.kind,
+                row.mark,
+                row.from_kind,
+                row.from_id,
+                row.to_kind,
+                row.to_id,
+                row.artifact_id,
+                row.artifact_label,
+                row.artifact_content,
+                row.runtime_run,
+                row.runtime_checkpoint,
+                row.runtime_interface,
+                byte_range.map(|range| range.0 as i64),
+                byte_range.map(|range| range.1 as i64),
+            ])?;
+        }
+        let next = watermark + 1;
+        tx.execute(
+            "INSERT INTO index_meta(key, value) VALUES ('watermark', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![next.to_string()],
+        )?;
+        match byte_range.map(|(_, end)| end) {
+            Some(offset) => {
+                tx.execute(
+                    "INSERT INTO index_meta(key, value) VALUES ('durable_end_offset', ?1)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    params![offset.to_string()],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM index_meta WHERE key = 'durable_end_offset'",
+                    [],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(1)
+    }
+
     pub fn verify_against(&self, log: &(dyn MovementLog + Send)) -> Result<bool, SqliteIndexError> {
         let watermark = self.watermark()?;
         let log_len = log.len() as u64;

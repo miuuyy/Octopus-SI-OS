@@ -34,10 +34,15 @@ impl LedgerWriter {
     fn index_appended_movements(
         &self,
         index: &mut LedgerSqliteIndex,
-        through: Seq,
+        appended: &Movement,
+        appended_range: Option<(u64, u64)>,
     ) -> Result<(), SqliteIndexError> {
         loop {
             let from = index.watermark()?;
+            if from == appended.seq.0 {
+                index.ingest_movement(appended, appended_range)?;
+                return Ok(());
+            }
             let snapshot = {
                 let log = self
                     .log
@@ -50,7 +55,7 @@ impl LedgerWriter {
                         log_len: len as u64,
                     });
                 }
-                if from == len as u64 || from > through.0 {
+                if from == len as u64 || from > appended.seq.0 {
                     return Ok(());
                 }
                 let mut rows = Vec::new();
@@ -121,17 +126,23 @@ impl MovementLog for LedgerIndexSnapshot {
 
 impl MovementLog for LedgerWriter {
     fn append(&mut self, draft: MovementDraft) -> Movement {
-        let movement = self
-            .log
-            .lock()
-            .expect("ledger writer mutex is not poisoned")
-            .append(draft);
+        let (movement, range) = {
+            let mut log = self
+                .log
+                .lock()
+                .expect("ledger writer mutex is not poisoned");
+            let movement = log.append(draft);
+            let range = log.durable_row_byte_range(movement.seq);
+            (movement, range)
+        };
         let mut spotlight = self
             .spotlight
             .lock()
             .expect("ledger index mutex is not poisoned");
         let ingest_error = match spotlight.as_mut() {
-            Some(index) => self.index_appended_movements(index, movement.seq).err(),
+            Some(index) => self
+                .index_appended_movements(index, &movement, range)
+                .err(),
             None => None,
         };
         if let Some(error) = ingest_error {
@@ -298,5 +309,48 @@ mod tests {
         let index = held.as_mut().unwrap();
         assert_eq!(index.watermark().unwrap(), 262);
         assert!(index.verify_against(&writer).unwrap());
+    }
+
+    #[test]
+    fn uncontended_append_indexes_without_rereading_the_log() {
+        use octopus_ledger_store::DurableLog;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct CountingLog(DurableLog, Arc<AtomicUsize>);
+        impl MovementLog for CountingLog {
+            fn append(&mut self, draft: MovementDraft) -> Movement {
+                self.0.append(draft)
+            }
+            fn read_from(&self, from: Seq) -> Vec<Movement> {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                self.0.read_from(from)
+            }
+            fn scan_from(&self, from: Seq, visit: &mut dyn FnMut(Movement) -> ControlFlow<()>) {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                self.0.scan_from(from, visit);
+            }
+            fn len(&self) -> usize {
+                self.0.len()
+            }
+            fn durable_end_offset(&self) -> Option<u64> {
+                self.0.durable_end_offset()
+            }
+            fn durable_row_byte_range(&self, seq: Seq) -> Option<(u64, u64)> {
+                self.0.durable_row_byte_range(seq)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let scans = Arc::new(AtomicUsize::new(0));
+        let log = CountingLog(
+            DurableLog::open(dir.path().join("movements.jsonl")).unwrap(),
+            scans.clone(),
+        );
+        let index = LedgerSqliteIndex::open(&dir.path().join("ledger-index.sqlite")).unwrap();
+        let mut writer = LedgerWriter::new(log, Some(index));
+        for _ in 0..5 {
+            writer.append(moved("fast"));
+        }
+        assert_eq!(scans.load(Ordering::Relaxed), 0);
+        let held = writer.spotlight.lock().unwrap();
+        assert!(held.as_ref().unwrap().verify_against(&writer).unwrap());
     }
 }

@@ -272,18 +272,59 @@ function validateProjectedEePolicy(value, label) {
   return structuredClone(value);
 }
 
-async function readRunRecords(runRecordsRoot, warnings = []) {
+function regularFileStamp(stat) {
+  if (!stat || stat.isSymbolicLink() || !stat.isFile()) return null;
+  return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, stat.mode, stat.uid, stat.gid];
+}
+
+function sameFileStamp(left, right) {
+  return Boolean(left && right && left.length === right.length && left.every((value, index) => value === right[index]));
+}
+
+function isSettledFileStat(stat, observedBeforeReadMs) {
+  if (process.platform === "win32") return false;
+  return Boolean(
+    stat
+    && Number.isFinite(stat.mtimeMs)
+    && Number.isFinite(stat.ctimeMs)
+    && observedBeforeReadMs - stat.mtimeMs >= 1000
+    && observedBeforeReadMs - stat.ctimeMs >= 1000,
+  );
+}
+
+async function readRunRecords(runRecordsRoot, warnings = [], cache = null) {
   const files = await listDirectFiles(runRecordsRoot, isRunRecordJsonPath);
+  const uniqueFiles = Array.from(new Set(files)).sort();
+  const seenFiles = cache ? new Set(uniqueFiles) : null;
   const records = [];
   const invalidRecords = [];
-  for (const file of Array.from(new Set(files)).sort()) {
+  for (const file of uniqueFiles) {
+    if (cache) {
+      const cached = cache.get(file);
+      if (cached?.settled) {
+        try {
+          const observedBeforeReadMs = Date.now();
+          const stat = await fs.lstat(file);
+          const stamp = regularFileStamp(stat);
+          if (sameFileStamp(cached.stamp, stamp) && isSettledFileStat(stat, observedBeforeReadMs)) {
+            records.push(structuredClone(cached.record));
+            continue;
+          }
+        } catch {}
+      }
+    }
     let record;
     let recordDigest;
+    let fileStat;
+    let observedBeforeReadMs;
     try {
       const document = await readRegularJsonDocument(file, `run record ${file}`);
       record = document.document;
       recordDigest = document.digest;
+      fileStat = document.stat;
+      observedBeforeReadMs = document.observedBeforeReadMs;
     } catch (error) {
+      cache?.delete(file);
       const message = String(error?.message ?? error);
       warnings.push(message);
       invalidRecords.push({ source_path: file, error: message });
@@ -299,6 +340,7 @@ async function readRunRecords(runRecordsRoot, warnings = []) {
       }
     }
     if (!schemaPassed || semanticError) {
+      cache?.delete(file);
       const schemaDetail = schemaPassed ? "" : formatCanonicalSchemaErrors(runRecordSchemaValidator.errors);
       const details = [schemaDetail, semanticError].filter(Boolean).join("; ");
       const detail = details ? `: ${details}` : "";
@@ -342,7 +384,7 @@ async function readRunRecords(runRecordsRoot, warnings = []) {
       };
     });
     const recordStatus = stringValue(record.status) || "recorded";
-    records.push({
+    const projectedRecord = {
       run_id: stringValue(record.id),
       ee_id: stringValue(record.ee),
       worker: stringValue(record.worker),
@@ -356,7 +398,22 @@ async function readRunRecords(runRecordsRoot, warnings = []) {
         .filter(([, state]) => state?.client_surface_role === "task" && state.client_archive !== undefined)
         .map(([interfaceId]) => interfaceId),
       checkpoints,
-    });
+    };
+    if (cache) {
+      const stamp = regularFileStamp(fileStat);
+      const settled = isSettledFileStat(fileStat, observedBeforeReadMs);
+      if (stamp && settled) {
+        cache.set(file, { stamp, settled: true, record: structuredClone(projectedRecord) });
+      } else {
+        cache.delete(file);
+      }
+    }
+    records.push(projectedRecord);
+  }
+  if (cache) {
+    for (const cachedPath of cache.keys()) {
+      if (!seenFiles.has(cachedPath)) cache.delete(cachedPath);
+    }
   }
   return { records, invalidRecords };
 }
