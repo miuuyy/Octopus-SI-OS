@@ -2152,20 +2152,31 @@ impl Runtime {
         delivery_scope_seq: Option<u64>,
         pending: Option<&Movement>,
     ) -> Result<PreparedInterfaceCheckpointAdmission, RuntimeError> {
-        let registry_generation = self.inner.registry_generation.load(Ordering::Acquire);
         let admitted_checkpoint = self.admit_run_record_artifact_arrival(&mut inv)?;
         let mut commit_inv = inv.clone();
+        let admitted_grant = admitted_checkpoint.grant.clone();
         let admitted_artifact_bindings = admitted_checkpoint.artifact_bindings.clone();
         let required_verified_artifacts = admitted_checkpoint.required_verified_artifacts.clone();
         let inbound_interface_binding = admitted_checkpoint.inbound_binding.clone();
         let outbound_interface_bindings = admitted_checkpoint.outbound_bindings.clone();
         self.require_known_interface(&inv.interface)?;
-        self.require_known_interface_bindings(
-            &outbound_interface_bindings
-                .iter()
-                .map(|binding| binding.interface.clone())
-                .collect::<Vec<_>>(),
-        )?;
+        let outbound_interfaces = outbound_interface_bindings
+            .iter()
+            .map(|binding| binding.interface.clone())
+            .collect::<Vec<_>>();
+        self.require_known_interface_bindings(&outbound_interfaces)?;
+        let verified_interface_classes: BTreeMap<InterfaceId, InterfaceClass> =
+            std::iter::once(inv.interface.clone())
+                .chain(outbound_interfaces)
+                .map(|interface| {
+                    let class = self
+                        .inner
+                        .interface_catalog
+                        .interface_class(&interface)
+                        .ok_or_else(|| RuntimeError::UnknownInterface(interface.clone()))?;
+                    Ok((interface, class))
+                })
+                .collect::<Result<_, RuntimeError>>()?;
         let spent_run = inv.run.clone();
         let spent_checkpoint = inv.checkpoint.clone().ok_or_else(|| {
             RuntimeError::InterfaceBoundaryFailed(format!(
@@ -2238,7 +2249,11 @@ impl Runtime {
         let metadata = &observation.invocation_metadata;
         let runtime = metadata.runtime.as_ref()
             .ok_or_else(|| admission_sources_changed("prepared admission lost its runtime coordinates"))?;
+        let interface_classes_unchanged = verified_interface_classes.iter().all(|(interface, class)| {
+            self.inner.interface_catalog.interface_class(interface) == Some(*class)
+        });
         if current.ee != runtime.ee || current.worker != runtime.worker
+            || current.grant != admitted_grant
             || current.metadata_projection != metadata.grant
             || current.artifact_bindings != metadata.artifact_binding_refs
             || current.required_verified_artifacts != metadata.required_verified_artifacts
@@ -2246,7 +2261,7 @@ impl Runtime {
                 inbound: current.inbound_binding,
                 outbound: current.outbound_bindings,
             })
-            || self.inner.registry_generation.load(Ordering::Acquire) != registry_generation
+            || !interface_classes_unchanged
         {
             return Err(admission_sources_changed("the verified checkpoint, bindings or current grant changed"));
         }

@@ -1509,6 +1509,39 @@ pub struct HostConfig {
     pub connection_file: String,
 }
 
+fn build_desktop_executor(
+    native: Option<PathBuf>,
+    kinds: &Path,
+    host: &HostConfig,
+    config: &crate::config::DesktopConfig,
+    device_file: Arc<std::fs::File>,
+    state: &Path,
+) -> Result<Arc<dyn DesktopExecutor>, String> {
+    match native {
+        Some(native) => {
+            let instructions = host.application_behavior.instruction_resource.read(kinds)?;
+            let executor = crate::native_client::NativeExecutor::new(
+                native,
+                config.max_response_bytes,
+                config.timeout(),
+            )
+            .with_device_file(device_file)?
+            .with_application_behavior(host.application_behavior.clone())?
+            .with_application_instructions(instructions)?
+            .with_application_policy(host.application_policy.clone())?;
+            let executor = match host.native_sandbox_mode {
+                octopus_descriptors::ProcessSandboxMode::Enforced => executor.with_sandbox(
+                    resolve_member(kinds, &host.native_sandbox_profile)?,
+                    state.to_path_buf(),
+                )?,
+                octopus_descriptors::ProcessSandboxMode::Disabled => executor,
+            };
+            Ok(Arc::new(executor))
+        }
+        None => Ok(Arc::new(UnavailableNativeExecutor)),
+    }
+}
+
 pub async fn run_desktop_host() -> Result<(), String> {
     let interface = PathBuf::from(
         std::env::var("OCTOPUS_INTERFACE_DIR")
@@ -1537,7 +1570,6 @@ pub async fn run_desktop_host() -> Result<(), String> {
     let native = Some(resolve_member(kinds, &host.native_program)?);
     #[cfg(not(target_os = "macos"))]
     let native = resolve_optional_member(kinds, &host.native_program)?;
-    let instructions = host.application_behavior.instruction_resource.read(kinds)?;
     let private = PathBuf::from(
         std::env::var("OCTOPUS_VAR_DIR").map_err(|_| "desktop host has no private directory")?,
     );
@@ -1563,27 +1595,14 @@ pub async fn run_desktop_host() -> Result<(), String> {
     .map_err(|e| format!("desktop host bind failed: {e}"))?;
     let address = listener.local_addr().map_err(|_| "desktop native bound address unavailable")?;
     let device_file = Arc::new(open_device_file(&device_lock)?);
-    let executor: Arc<dyn DesktopExecutor> = match native {
-        Some(native) => Arc::new({
-            let executor = crate::native_client::NativeExecutor::new(
-                native,
-                config.max_response_bytes,
-                config.timeout(),
-            )
-            .with_device_file(device_file.clone())?
-            .with_application_behavior(host.application_behavior.clone())?
-            .with_application_instructions(instructions)?
-            .with_application_policy(host.application_policy.clone())?;
-            match host.native_sandbox_mode {
-                octopus_descriptors::ProcessSandboxMode::Enforced => executor.with_sandbox(
-                    resolve_member(kinds, &host.native_sandbox_profile)?,
-                    state.clone(),
-                )?,
-                octopus_descriptors::ProcessSandboxMode::Disabled => executor,
-            }
-        }),
-        None => Arc::new(UnavailableNativeExecutor),
-    };
+    let executor = build_desktop_executor(
+        native,
+        kinds,
+        host,
+        &config,
+        device_file.clone(),
+        &state,
+    )?;
     let host = Arc::new(
         DesktopHost::with_device_file(
             executor,
@@ -1895,5 +1914,62 @@ mod unavailable_executor_tests {
         let missing = resolve_optional_member(temp.path(), "native/bin/octopus-desktop-native")
             .expect("missing helper returns None");
         assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn unavailable_native_executor_skips_macos_instruction_resource_checks() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kinds = temp.path().join("kinds");
+        let state = temp.path().join("state");
+        std::fs::create_dir_all(&kinds).expect("kinds dir");
+        std::fs::create_dir_all(&state).expect("state dir");
+        let lock_file = Arc::new(open_device_file(&temp.path().join("device.lock")).expect("lock"));
+
+        let desktop_json = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../interface/system_gui/desktop.json");
+        let config = crate::config::DesktopConfig::read(&desktop_json).expect("desktop.json");
+        let host_config = config.host.as_ref().expect("host config");
+
+        // Even when application_instructions.json is absent under kinds,
+        // None (non-macOS) builds UnavailableNativeExecutor without failing.
+        let executor = build_desktop_executor(
+            None,
+            &kinds,
+            host_config,
+            &config,
+            lock_file.clone(),
+            &state,
+        )
+        .expect("None native program must not require macOS instruction resource");
+        let host = DesktopHost::with_device_file(executor, state.clone(), lock_file.clone())
+            .expect("host");
+        let evidence = host.status().await.expect("unavailable status");
+        assert_eq!(evidence.status, "unavailable");
+
+        // Even if a group-writable (0o664) instruction resource exists (e.g. umask 0002),
+        // None still avoids reading it and stays healthy.
+        let instruction_path = kinds.join(&host_config.application_behavior.instruction_resource.path);
+        std::fs::create_dir_all(instruction_path.parent().expect("parent")).expect("parent dir");
+        std::fs::write(&instruction_path, b"{}").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&instruction_path, std::fs::Permissions::from_mode(0o664))
+                .expect("chmod 0664");
+        }
+        let executor = build_desktop_executor(
+            None,
+            &kinds,
+            host_config,
+            &config,
+            lock_file.clone(),
+            &state,
+        )
+        .expect("None native program must not fail on group-writable instruction resource");
+        let host = DesktopHost::with_device_file(executor, state, lock_file).expect("host");
+        assert_eq!(
+            host.status().await.expect("status").status,
+            "unavailable"
+        );
     }
 }

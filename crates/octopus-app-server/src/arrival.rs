@@ -853,7 +853,10 @@ struct PendingArrivalEdge {
     target: InterfaceArrivalTarget,
     source: Option<Movement>,
     pending: Option<Movement>,
+    retries: usize,
 }
+
+const ADMISSION_UNSTABLE_RETRY_ATTEMPTS: usize = 8;
 
 pub struct InterfaceArtifactArrivalFromInterface<'a> {
     runtime: &'a octopus_runtime::Runtime,
@@ -862,6 +865,7 @@ pub struct InterfaceArtifactArrivalFromInterface<'a> {
     dedup: std::sync::Arc<std::sync::Mutex<octopus_ledger_index::ArrivalDedupIndex>>,
     trace: TraceId,
     interface: InterfaceId,
+    embedded: Option<&'a crate::EmbeddedRuntime>,
 }
 
 impl<'a> InterfaceArtifactArrivalFromInterface<'a> {
@@ -880,7 +884,13 @@ impl<'a> InterfaceArtifactArrivalFromInterface<'a> {
             dedup,
             trace,
             interface,
+            embedded: None,
         }
+    }
+
+    pub(crate) fn with_embedded(mut self, embedded: &'a crate::EmbeddedRuntime) -> Self {
+        self.embedded = Some(embedded);
+        self
     }
 
     fn record_delivery_refusal(
@@ -1047,6 +1057,7 @@ impl<'a> InterfaceArtifactArrivalFromInterface<'a> {
             target,
             source,
             pending,
+            retries: _,
         } = edge;
         let arriving_interface = &interface;
         let artifact = &artifact;
@@ -1223,6 +1234,7 @@ impl<'a> InterfaceArtifactArrivalFromInterface<'a> {
                 target,
                 source: None,
                 pending: None,
+                retries: 0,
             })
             .collect();
         let (records, refusal) = self.admit_edges_concurrently(edges).await?;
@@ -1277,9 +1289,51 @@ impl<'a> InterfaceArtifactArrivalFromInterface<'a> {
             let Some(completed) = inflight.join_next().await else {
                 break;
             };
-            let (edge, result) = completed.map_err(|error| {
+            let (mut edge, result) = completed.map_err(|error| {
                 ArrivalError::Malformed(format!("artifact admission task failed: {error}"))
             })?;
+            let result = match result {
+                Ok(prepared) => match prepared.validate_commit() {
+                    Ok(()) => Ok(prepared),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
+            let result = match result {
+                Ok(prepared) => Ok(prepared),
+                Err(error)
+                    if error.refused_reason() == RefusedReason::RegistryUnstable
+                        && self.embedded.is_some()
+                        && edge.retries < ADMISSION_UNSTABLE_RETRY_ATTEMPTS =>
+                {
+                    let embedded = self.embedded.expect("checked embedded runtime");
+                    tokio::time::sleep(crate::spine_root::registry_retry_delay(edge.retries)).await;
+                    match embedded.reload_registry_snapshot_on_artifact_arrival().await {
+                        Ok(()) => match self
+                            .runtime
+                            .refresh_retained_interface_arrival_target(&edge.target)
+                        {
+                            Ok(refreshed) => {
+                                edge.target = refreshed;
+                                edge.retries += 1;
+                                edges.push(edge);
+                                continue;
+                            }
+                            Err(refresh_error)
+                                if refresh_error.refused_reason() == RefusedReason::RegistryUnstable
+                                    && edge.retries + 1 < ADMISSION_UNSTABLE_RETRY_ATTEMPTS =>
+                            {
+                                edge.retries += 1;
+                                edges.push(edge);
+                                continue;
+                            }
+                            Err(refresh_error) => Err(refresh_error),
+                        },
+                        Err(_) => Err(error),
+                    }
+                }
+                Err(error) => Err(error),
+            };
             match self.finish_target_edge(edge, result) {
                 Ok(record) => {
                     for source in &record.outbound_transfer_movements {
@@ -1435,6 +1489,7 @@ impl<'a> InterfaceArtifactArrivalFromInterface<'a> {
                 target: target.with_source_movement_seq(source.seq.0),
                 source: Some(source.clone()),
                 pending,
+                retries: 0,
             });
         }
         Ok(records)

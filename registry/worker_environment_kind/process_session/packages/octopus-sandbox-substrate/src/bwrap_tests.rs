@@ -163,6 +163,23 @@ fn root_cwd_does_not_hide_system_bwrap_candidates() {
     );
 }
 
+#[test]
+fn finds_packaged_bwrap_only_for_matching_architecture() {
+    assert!(packaged_bwrap_relative_candidates_for_arch("riscv64").is_empty());
+    let temp_dir = tempdir().expect("temp dir");
+    let x86_dir = temp_dir.path().join(packaged_bwrap_relative_candidates_for_arch("x86_64")[0]).parent().unwrap().to_path_buf();
+    let arm64_dir = temp_dir.path().join(packaged_bwrap_relative_candidates_for_arch("aarch64")[0]).parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&x86_dir).unwrap();
+    let expected_x86 = write_named_fake_bwrap_in(&x86_dir);
+    assert_eq!(find_packaged_bwrap_under_root(temp_dir.path(), "x86_64"), Some(expected_x86.clone()));
+    assert_eq!(find_packaged_bwrap_under_root(temp_dir.path(), "aarch64"), None);
+    assert_eq!(find_packaged_bwrap_under_root(temp_dir.path(), "riscv64"), None);
+    std::fs::create_dir_all(&arm64_dir).unwrap();
+    let expected_arm64 = write_named_fake_bwrap_in(&arm64_dir);
+    assert_eq!(find_packaged_bwrap_under_root(temp_dir.path(), "x86_64"), Some(expected_x86));
+    assert_eq!(find_packaged_bwrap_under_root(temp_dir.path(), "aarch64"), Some(expected_arm64));
+}
+
 fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     write_fake_bwrap_in(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),

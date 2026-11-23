@@ -76,7 +76,7 @@ impl InterfaceArtifactArrivalFromInterface<'_> {
             };
             edges.push(PendingArrivalEdge {
                 interface: self.interface.clone(), artifact: pinned.artifact.clone(), artifact_label: pinned.artifact_label.clone(),
-                artifact_root: pinned.artifact_root.clone(), target, source: None, pending,
+                artifact_root: pinned.artifact_root.clone(), target, source: None, pending, retries: 0,
             });
         }
         self.admit_edges_concurrently(edges).await?;

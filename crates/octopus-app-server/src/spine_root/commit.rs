@@ -1,4 +1,5 @@
 use super::*;
+use crate::registry_reference_graph::RegistryNodeKind;
 use octopus_file_storage::publication::{COORDINATION_DIRECTORY, ReadGuard};
 use octopus_runtime::AdmissionSourceGuard;
 
@@ -14,6 +15,9 @@ impl AdmissionSourceGuard for RegistryCommitGuard {
 struct Inputs {
     files: BTreeSet<PathBuf>,
     directories: BTreeSet<PathBuf>,
+    packages: BTreeSet<PathBuf>,
+    ee_files: BTreeSet<PathBuf>,
+    source_files: BTreeSet<PathBuf>,
 }
 
 impl Inputs {
@@ -41,6 +45,9 @@ impl Inputs {
             let kind = entry.file_type().map_err(|error| error.to_string())?;
             if kind.is_file() && (recursive || entry.path().extension().is_some_and(|extension| extension == "json")) {
                 self.files.insert(entry.path());
+                if !recursive {
+                    self.source_files.insert(entry.path());
+                }
             } else if recursive && kind.is_dir() {
                 self.files_in(&entry.path(), true)?;
             } else if recursive && kind.is_symlink() {
@@ -57,7 +64,10 @@ impl Inputs {
         for ee in snapshot.ee_tree.ancestors(&record.ee).map_err(|error| error.to_string())? {
             let instance = snapshot.ee_tree.get(&ee).ok_or("admission EE ancestry is incomplete")?;
             roots.push(RegistryNode::ee_template(instance.template.as_str()));
-            inputs.files.insert(owner.ee_instances_root.join(format!("{ee}.json")));
+            let ee_file = owner.ee_instances_root.join(format!("{ee}.json"));
+            inputs.files.insert(ee_file.clone());
+            inputs.ee_files.insert(ee_file.clone());
+            inputs.source_files.insert(ee_file);
         }
         for id in &record.active_checkpoints {
             let checkpoint = record.checkpoint(id).ok_or("active admission checkpoint is absent")?;
@@ -70,12 +80,52 @@ impl Inputs {
                 RegistryNode::mark(required.mark.as_str()), RegistryNode::verifier(required.verifier.as_str()),
             ]));
         }
-        for node in snapshot.reference_graph.dependency_nodes(roots) {
+        let mut nodes = snapshot.reference_graph.dependency_nodes(roots);
+        loop {
+            let mut extra = Vec::new();
+            for node in &nodes {
+                match node.kind {
+                    RegistryNodeKind::Interface => {
+                        let interface = InterfaceId::new(node.id.as_str());
+                        if let Some(original) = snapshot.copy_lineage.interface_original(&interface) {
+                            let original_node = RegistryNode::interface(original.as_str());
+                            if !nodes.contains(&original_node) {
+                                extra.push(original_node);
+                            }
+                        }
+                        for tool in snapshot.tool_descriptions.by_tool.values() {
+                            if tool.interface == interface {
+                                let tool_node = RegistryNode::tool(tool.id.as_str());
+                                if !nodes.contains(&tool_node) {
+                                    extra.push(tool_node);
+                                }
+                            }
+                        }
+                    }
+                    RegistryNodeKind::Tool => {
+                        let tool = ToolId::new(node.id.as_str());
+                        if let Some(original) = snapshot.copy_lineage.tool_original(&tool) {
+                            let original_node = RegistryNode::tool(original.as_str());
+                            if !nodes.contains(&original_node) {
+                                extra.push(original_node);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if extra.is_empty() {
+                break;
+            }
+            nodes.extend(snapshot.reference_graph.dependency_nodes(extra));
+        }
+        for node in nodes {
             if node.id.is_empty() || node.id == "." || node.id == ".." || node.id.contains('/') || node.id.contains('\\') {
                 return Err("admission dependency has invalid registry identity".into());
             }
             let package = owner.registry_root.join(node.to_string());
             inputs.directory(package.parent().ok_or("admission dependency has no registry kind")?)?;
+            inputs.packages.insert(package.clone());
             inputs.files_in(&package, false)?;
         }
         drop(snapshot);
@@ -100,13 +150,24 @@ pub(super) fn acquire(owner: &RegistryRunGrantResolver, record: &octopus_run_rec
     if before != Inputs::capture(owner, record, marks)? {
         return Err("admission registry dependency set changed while acquiring ownership".into());
     }
-    let observed = {
-        let mut files = owner.files.lock().map_err(|_| "registry file cache lock is poisoned")?;
-        registry_descriptor_fingerprint(&owner.registry_root, &owner.ee_instances_root, &mut files)
-            .map_err(|error| error.to_string())?
-    };
-    if *owner.fingerprint.lock().map_err(|_| "registry fingerprint lock is poisoned")? != Some(observed) {
-        return Err("admission registry snapshot no longer matches its source files".into());
+    {
+        let snapshot = owner.live_registry.read().map_err(|_| "registry snapshot lock is poisoned")?;
+        for path in &before.source_files {
+            let Some(expected) = snapshot.source_file_hashes.get(path) else {
+                return Err("admission registry snapshot no longer matches its source files".into());
+            };
+            let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+            if ContentHash::of_bytes(&bytes) != *expected {
+                return Err("admission registry snapshot no longer matches its source files".into());
+            }
+        }
+        for path in snapshot.source_file_hashes.keys() {
+            let in_scope = before.ee_files.contains(path)
+                || path.parent().is_some_and(|parent| before.packages.contains(parent));
+            if in_scope && !before.source_files.contains(path) {
+                return Err("admission registry snapshot no longer matches its source files".into());
+            }
+        }
     }
     for mark in marks {
         let current_mark = load_referenced_descriptor::<MarkDescriptor>(&owner.registry_root, mark.name.as_str())?;

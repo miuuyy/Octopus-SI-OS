@@ -183,7 +183,8 @@ pub async fn admit_interface_artifact_arrival(
     let mut arrival = InterfaceArtifactArrivalFromInterface::new(
         &embedded.runtime, log, blobs_arrival, embedded.arrival_dedup.clone(),
         arrival_trace_id(arriving_interface), arriving_interface.clone(),
-    );
+    )
+    .with_embedded(embedded);
     let dispatch = arrival.arrive_artifact_for_run(&arrival_artifact_file).await?;
     if dispatch.records.is_empty() {
         return Err(InterfaceArtifactArrivalAdmissionError::Arrival(
@@ -213,7 +214,9 @@ pub async fn admit_retained_interface_artifact_arrival(
     InterfaceArtifactArrivalFromInterface::new(
         &embedded.runtime, log, blobs_arrival, embedded.arrival_dedup.clone(),
         arrival_trace_id(arriving_interface), arriving_interface.clone(),
-    ).arrive_retained_artifact(&artifact, identity).await.map_err(Into::into)
+    )
+    .with_embedded(embedded)
+    .arrive_retained_artifact(&artifact, identity).await.map_err(Into::into)
 }
 
 async fn prepare_interface_artifact_arrival(
@@ -288,7 +291,8 @@ pub async fn admit_system_interface_emission(
         embedded.arrival_dedup.clone(),
         source.trace,
         from_interface.clone(),
-    );
+    )
+    .with_embedded(embedded);
     let outcome = arrival
         .emit_artifact_to_interface(
             &emission_artifact_file,
@@ -341,7 +345,8 @@ pub async fn admit_system_interface_reference_emission(
         embedded.arrival_dedup.clone(),
         source.trace,
         from_interface.clone(),
-    );
+    )
+    .with_embedded(embedded);
     let outcome = arrival
         .emit_artifact_reference_to_interface(
             artifact,

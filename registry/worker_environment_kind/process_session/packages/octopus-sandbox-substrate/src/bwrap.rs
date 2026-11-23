@@ -172,17 +172,32 @@ pub fn find_bwrap_for_sandbox() -> Option<PathBuf> {
 }
 
 fn find_packaged_bwrap() -> Option<PathBuf> {
-    const PACKAGED_BWRAP_CANDIDATES: &[&str] = &[
-        "/usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap",
-    ];
-    PACKAGED_BWRAP_CANDIDATES.iter().find_map(|candidate| {
-        let path = PathBuf::from(candidate);
-        if path.is_file() {
-            std::fs::canonicalize(path).ok()
-        } else {
-            None
-        }
-    })
+    find_packaged_bwrap_under_root(Path::new("/"), std::env::consts::ARCH)
+}
+
+fn packaged_bwrap_relative_candidates_for_arch(arch: &str) -> &'static [&'static str] {
+    match arch {
+        "x86_64" => &[
+            "usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap",
+        ],
+        "aarch64" => &[
+            "usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-resources/bwrap",
+        ],
+        _ => &[],
+    }
+}
+
+fn find_packaged_bwrap_under_root(root: &Path, arch: &str) -> Option<PathBuf> {
+    packaged_bwrap_relative_candidates_for_arch(arch)
+        .iter()
+        .find_map(|relative| {
+            let path = root.join(relative);
+            if path.is_file() {
+                std::fs::canonicalize(path).ok()
+            } else {
+                None
+            }
+        })
 }
 
 fn find_system_bwrap_in_search_paths(

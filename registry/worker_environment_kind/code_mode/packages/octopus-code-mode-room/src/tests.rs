@@ -3633,6 +3633,29 @@ async fn owner_registration_order_uses_disjoint_returns(
             admission.arrive(from,&file).await.unwrap();
             let input=admission.next().await.unwrap();admission.run(&room,&handoff,&formation,&kind,input).await.unwrap();
         }
+        tokio::time::timeout(std::time::Duration::from_secs(8),async {
+            loop {
+                let changed=delegate.registration_changed.notified();tokio::pin!(changed);changed.as_mut().enable();
+                let ready={ let state=delegate.state.lock().unwrap();state.registrations[&scheduling_cell].prefix>=12 };
+                if ready { break; }
+                changed.await;
+            }
+        }).await.unwrap();
+        if super::continuation::prepared_calls(&durable).unwrap().len()<2 {
+            let late_observer=tokio::spawn(handoff.clone().observe(admission.door.lock().await.context.clone()));
+            tokio::time::timeout(std::time::Duration::from_secs(8),async {
+                while super::continuation::prepared_calls(&durable).unwrap().len()<2 {
+                    let wake=admission.next().await.unwrap();
+                    assert_eq!(wake.2.read_artifact_manifest().unwrap().label,"code_mode.frontier_ready");
+                    admission.run(&room,&handoff,&formation,&kind,wake).await.unwrap();
+                }
+            }).await.unwrap();
+            late_observer.abort();assert!(late_observer.await.unwrap_err().is_cancelled());
+            while let Some(wake) = admission.door.lock().await.next_formed(super::decode_code_mode_door_artifact).unwrap() {
+                assert_eq!(wake.2.read_artifact_manifest().unwrap().label,"code_mode.frontier_ready");
+                admission.run(&room,&handoff,&formation,&kind,wake).await.unwrap();
+            }
+        }
         let pending=super::continuation::prepared_calls(&durable).unwrap();assert_eq!(pending.len(),2);
         let completion=pending.iter().find(|p|p.tool_call().tool=="browser.wait_complete").unwrap();
         let action=pending.iter().find(|p|p.tool_call().tool=="browser.click").unwrap();

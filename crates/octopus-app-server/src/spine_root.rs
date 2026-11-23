@@ -61,6 +61,7 @@ pub(crate) struct LoadedRegistrySnapshot {
     formation_source_hashes: BTreeMap<DescriptorName, DescriptorHash>,
     formation_source_bytes: BTreeMap<DescriptorName, Vec<u8>>,
     ee_instance_issues: Vec<String>,
+    source_file_hashes: Arc<BTreeMap<PathBuf, ContentHash>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -102,14 +103,25 @@ struct RegistryDescriptorFingerprint {
 #[derive(Default)]
 struct RegistryFileCache(BTreeMap<PathBuf, RegistryFileObservation>);
 
+impl RegistryFileCache {
+    fn content_hashes(&self) -> BTreeMap<PathBuf, ContentHash> {
+        self.0
+            .iter()
+            .map(|(path, observation)| (path.clone(), observation.content_hash))
+            .collect()
+    }
+}
+
 struct RegistryFileObservation {
     stamp: octopus_file_storage::metadata::FileStamp,
     settled: bool,
-    digest: u64,
+    content_hash: ContentHash,
     observed: bool,
 }
 
-const REGISTRY_OBSERVATION_ATTEMPTS: usize = 10;
+// Bounded observation budget for registry snapshot settling under concurrent authoring bursts
+// (10+20+40+80+160ms ramp followed by 250ms steps, ~10s max before failing closed).
+const REGISTRY_OBSERVATION_ATTEMPTS: usize = 40;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RegistrySnapshotError {
@@ -123,12 +135,16 @@ impl From<String> for RegistrySnapshotError {
     fn from(error: String) -> Self { Self::Invalid(error) }
 }
 
-async fn observe_stable_registry<T, W: std::future::Future<Output = ()>>(
-    mut observe: impl FnMut() -> Result<Option<T>, RegistrySnapshotError>,
+async fn observe_stable_registry<T, O, W>(
+    mut observe: impl FnMut() -> O,
     mut wait: impl FnMut(usize) -> W,
-) -> Result<T, RegistrySnapshotError> {
+) -> Result<T, RegistrySnapshotError>
+where
+    O: std::future::Future<Output = Result<Option<T>, RegistrySnapshotError>>,
+    W: std::future::Future<Output = ()>,
+{
     for attempt in 0..REGISTRY_OBSERVATION_ATTEMPTS {
-        if let Some(value) = observe()? {
+        if let Some(value) = observe().await? {
             return Ok(value);
         }
         if attempt + 1 < REGISTRY_OBSERVATION_ATTEMPTS {
@@ -138,7 +154,7 @@ async fn observe_stable_registry<T, W: std::future::Future<Output = ()>>(
     Err(RegistrySnapshotError::Unstable { attempts: REGISTRY_OBSERVATION_ATTEMPTS })
 }
 
-fn registry_retry_delay(attempt: usize) -> std::time::Duration {
+pub(crate) fn registry_retry_delay(attempt: usize) -> std::time::Duration {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     let base = (10u64 << attempt.min(5)).min(250);
     let jitter = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()
@@ -204,17 +220,15 @@ fn registry_descriptor_fingerprint(
             .filter(|cached| cached.stamp == stamp && cached.settled && settled)
         {
             cached.observed = true;
-            cached.digest
+            cached.content_hash
         } else {
-            let mut content = std::collections::hash_map::DefaultHasher::new();
-            std::fs::read(&path)?.hash(&mut content);
-            let digest = content.finish();
+            let content_hash = ContentHash::of_bytes(&std::fs::read(&path)?);
             files.0.insert(path.clone(), RegistryFileObservation {
-                stamp, settled, digest, observed: true,
+                stamp, settled, content_hash, observed: true,
             });
-            digest
+            content_hash
         };
-        content.hash(&mut hasher);
+        content.as_bytes().hash(&mut hasher);
         metadata.len().hash(&mut hasher);
         metadata.modified()?.hash(&mut hasher);
         #[cfg(unix)]
@@ -361,8 +375,6 @@ struct RegistryRunGrantResolver {
     blobs: SharedBlobs,
     registry_root: PathBuf,
     ee_instances_root: PathBuf,
-    fingerprint: Arc<Mutex<Option<RegistryDescriptorFingerprint>>>,
-    files: Arc<Mutex<RegistryFileCache>>,
 }
 
 /// The prospective run uses the same descriptor snapshot and policy formation
@@ -807,6 +819,7 @@ impl LoadedRegistrySnapshot {
             formation_source_hashes,
             formation_source_bytes,
             ee_instance_issues,
+            source_file_hashes: Arc::new(BTreeMap::new()),
         })
     }
 
@@ -1136,10 +1149,21 @@ impl LoadedRegistrySnapshot {
     }
 
     fn load(registry_root: &Path, ee_instances_dir: &Path) -> Result<Self, String> {
+        let mut files = RegistryFileCache::default();
+        let _ = registry_descriptor_fingerprint(registry_root, ee_instances_dir, &mut files);
         let ee_instances = load_persisted_ee_instances(ee_instances_dir)?;
         let packages = RegistryPackages::load(registry_root)
             .map_err(|error| format!("artifact-arrival registry read failed: {error}"))?;
-        Self::from_packages(packages, ee_instances)
+        let mut snapshot = Self::from_packages(packages, ee_instances)?;
+        if registry_descriptor_fingerprint(registry_root, ee_instances_dir, &mut files).is_ok() {
+            snapshot.source_file_hashes = Arc::new(files.content_hashes());
+        }
+        Ok(snapshot)
+    }
+
+    fn with_source_file_hashes(mut self, source_file_hashes: BTreeMap<PathBuf, ContentHash>) -> Self {
+        self.source_file_hashes = Arc::new(source_file_hashes);
+        self
     }
 
     pub(crate) fn load_from_packages(packages: RegistryPackages, ee_instances_dir: &Path) -> Result<Self, String> {
@@ -1607,6 +1631,7 @@ pub struct EmbeddedRuntime {
     live_registry: Arc<RwLock<LoadedRegistrySnapshot>>,
     registry_fingerprint: Arc<Mutex<Option<RegistryDescriptorFingerprint>>>,
     registry_files: Arc<Mutex<RegistryFileCache>>,
+    registry_reload_lock: Arc<tokio::sync::Mutex<()>>,
     pub ee_tree: EeTree,
     pub existence_ee_id: EeId,
     pub formation_source_hashes: BTreeMap<DescriptorName, DescriptorHash>,
@@ -1633,7 +1658,11 @@ impl EmbeddedRuntime {
             .map(|snapshot| snapshot.ee_tree.clone())
     }
 
-    fn install_registry_snapshot(&self, snapshot: LoadedRegistrySnapshot) -> Result<(), String> {
+    fn install_registry_snapshot_into(
+        live_registry: &RwLock<LoadedRegistrySnapshot>,
+        runtime: &Runtime,
+        snapshot: LoadedRegistrySnapshot,
+    ) -> Result<(), String> {
         for issue in &snapshot.ee_instance_issues {
             eprintln!("EE instance isolation warning: {issue}");
         }
@@ -1657,38 +1686,75 @@ impl EmbeddedRuntime {
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let mut live = self
-            .live_registry
+        let mut live = live_registry
             .write()
             .map_err(|_| "live registry snapshot lock is poisoned".to_string())?;
-        self.runtime
+        runtime
             .replace_interface_catalog_classes(interface_classes)?;
         *live = snapshot;
         Ok(())
     }
 
     pub async fn reload_registry_snapshot_on_artifact_arrival(&self) -> Result<(), RegistrySnapshotError> {
-        observe_stable_registry(|| self.try_reload_registry_snapshot(), |attempt| {
-            tokio::time::sleep(registry_retry_delay(attempt))
-        }).await
+        let _reload_guard = self.registry_reload_lock.lock().await;
+        observe_stable_registry(
+            || {
+                let registry_root = self.registry_root.clone();
+                let ee_instances_root = self.ee_instances_root.clone();
+                let registry_fingerprint = self.registry_fingerprint.clone();
+                let registry_files = self.registry_files.clone();
+                let live_registry = self.live_registry.clone();
+                let runtime = self.runtime.clone();
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        Self::try_reload_registry_snapshot_inner(
+                            &registry_root,
+                            &ee_instances_root,
+                            &registry_fingerprint,
+                            &registry_files,
+                            &live_registry,
+                            &runtime,
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        RegistrySnapshotError::Invalid(format!("registry reload task failed: {error}"))
+                    })?
+                }
+            },
+            |attempt| tokio::time::sleep(registry_retry_delay(attempt)),
+        )
+        .await
     }
 
-    fn try_reload_registry_snapshot(&self) -> Result<Option<()>, RegistrySnapshotError> {
-        let mut current = self
-            .registry_fingerprint
+    fn try_reload_registry_snapshot_inner(
+        registry_root: &Path,
+        ee_instances_root: &Path,
+        registry_fingerprint: &Mutex<Option<RegistryDescriptorFingerprint>>,
+        registry_files: &Mutex<RegistryFileCache>,
+        live_registry: &RwLock<LoadedRegistrySnapshot>,
+        runtime: &Runtime,
+    ) -> Result<Option<()>, RegistrySnapshotError> {
+        let mut current = registry_fingerprint
             .lock()
             .map_err(|_| "registry fingerprint lock is poisoned".to_string())?;
-        let mut files = self.registry_files.lock()
+        let mut files = registry_files.lock()
             .map_err(|_| "registry file cache lock is poisoned".to_string())?;
         let Some(candidate) = observe_registry_once(
             *current,
-            || registry_descriptor_fingerprint(&self.registry_root, &self.ee_instances_root, &mut files),
-            || LoadedRegistrySnapshot::load(&self.registry_root, &self.ee_instances_root),
+            || registry_descriptor_fingerprint(registry_root, ee_instances_root, &mut files),
+            || {
+                let ee_instances = load_persisted_ee_instances(ee_instances_root)?;
+                let packages = RegistryPackages::load(registry_root)
+                    .map_err(|error| format!("artifact-arrival registry read failed: {error}"))?;
+                LoadedRegistrySnapshot::from_packages(packages, ee_instances)
+            },
         )? else {
             return Ok(None);
         };
         if let Some((fingerprint, snapshot)) = candidate {
-            self.install_registry_snapshot(snapshot)?;
+            let snapshot = snapshot.with_source_file_hashes(files.content_hashes());
+            Self::install_registry_snapshot_into(live_registry, runtime, snapshot)?;
             *current = Some(fingerprint);
         }
         Ok(Some(()))
@@ -1994,7 +2060,8 @@ pub async fn build_embedded_spine(
         ee_tree.clone(),
         &ee_templates_loaded,
         persisted_ee_instances.issues,
-    )?;
+    )?
+    .with_source_file_hashes(registry_files.content_hashes());
     let formation_source_hashes = loaded_registry_snapshot.formation_source_hashes.clone();
     let live_registry = Arc::new(RwLock::new(loaded_registry_snapshot));
 
@@ -2012,8 +2079,6 @@ pub async fn build_embedded_spine(
         blobs: config.blobs.clone(),
         registry_root: config.registry_root.clone(),
         ee_instances_root: config.ee_instances_root.clone(),
-        fingerprint: registry_fingerprint.clone(),
-        files: registry_files.clone(),
     }));
     let repository_root = config
         .registry_root
@@ -2058,6 +2123,7 @@ pub async fn build_embedded_spine(
         live_registry,
         registry_fingerprint,
         registry_files,
+        registry_reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         ee_tree,
         existence_ee_id: bootstrap_ee,
         formation_source_hashes,
