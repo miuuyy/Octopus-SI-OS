@@ -6,7 +6,7 @@ const path = require("node:path");
 
 const { createClientSetupStore } = require("../electron/clientSetup.cjs");
 
-const STEPS = ["packages", "extensions", "workspace", "provider"];
+const STEPS = ["packages", "extensions", "provider", "workspace"];
 const KINDS = {
   packages: "package_install_evidence",
   extensions: "extension_lifecycle_receipt",
@@ -107,14 +107,25 @@ async function rendererPlanAdmission(root) {
     compileWorkspaceInitializeRequest: renderer.compileWorkspaceInitializeRequest, DIGEST: /^[a-f0-9]{64}$/, ProductSetupError: Error,
   });
   const draft = renderer.createWorkspaceSetupDraft("custom");
-  Object.assign(draft, { providerModel: "gpt-6-astra", reasoningEffort: "high", serviceTier: "ultrafast" });
+  Object.assign(draft, { providerInterfaceId: "world_provider_antigravity", providerModel: "gemini-4-neon", reasoningEffort: "low", serviceTier: "default", voiceProviderModel: "gpt-live-1-codex" });
   const selection = { packageIds: components.map((entry) => entry.packageId),
     selectedRecommended: native.components.filter((entry) => entry.selection === "recommended").map((entry) => entry.package_id),
     extensions: (native.extensions ?? []).map((entry) => ({ extensionId: entry.extension_id, version: "1.0.0", sourceDigest: "sha256:" + "3".repeat(64), desiredState: "available" })),
     projectKeysByPackage: Object.fromEntries(components.map((entry) => [entry.packageId, draft.projects.map((project) => project.key)])) };
   const request = renderer.compileWorkspaceInitializeRequest(draft, pack.recipe, pack);
+  assert.equal(request.home.providerInterfaceId, "world_provider_antigravity");
+  assert.equal(request.home.voiceModel, "gpt-live-1-codex");
   assert.deepEqual(request.home.doorHostSlots, { system_workspace_env: { workspace_root: "/", host_filesystem_root: "/" } });
   assert.ok(request.home.selectedWorkerEnvironmentKinds.includes("filesystem_workspace"));
+  const codexDraft = { ...draft, providerInterfaceId: "world_provider_codex", providerModel: "gpt-6-astra", reasoningEffort: "high", serviceTier: "ultrafast" };
+  delete codexDraft.voiceProviderModel;
+  const codexRequest = renderer.compileWorkspaceInitializeRequest(codexDraft, pack.recipe, pack);
+  assert.equal(codexRequest.home.providerInterfaceId, "world_provider_codex");
+  assert.equal(codexRequest.home.voiceModel, undefined);
+  const codexPlan = compile(codexDraft, pack, selection, await renderer.workspaceInitializeRequestDigest(codexRequest));
+  assert.equal(codexPlan.provider.interface_id, "world_provider_codex");
+  assert.equal(admit({ packs: [native] }, codexPlan), native);
+  assert.throws(() => renderer.compileWorkspaceInitializeRequest({ ...draft, providerInterfaceId: "world_provider_unknown" }, pack.recipe, pack), /not declared/);
   const cli = require("../cli/setup.cjs").compileSetupPlan(native, { operationId: draft.operationId, workspaceName: "Fresh", workspaceGoal: "Fresh",
     projects: [], model: draft.providerModel, reasoningEffort: draft.reasoningEffort, recommended: [] });
   assert.deepEqual(cli.workspace.request.home.doorHostSlots, request.home.doorHostSlots);
@@ -267,7 +278,7 @@ async function checkpointEphemeralOwnerCandidate(root) {
   const completed = await store.resume(operationId, { onProgress: (value) => progress.push(value) });
   assert.equal(completed.status, "complete");
   assert.ok(progress.slice(0, -1).every((value) => value.percent < 100));
-  assert.deepEqual(progress.slice(-5, -1).map((value) => [value.step, value.phase]), [["packages", "verifying"], ["extensions", "verifying"], ["workspace", "verifying"], ["provider", "verifying"]]);
+  assert.deepEqual(progress.slice(-5, -1).map((value) => [value.step, value.phase]), [["packages", "verifying"], ["extensions", "verifying"], ["provider", "verifying"], ["workspace", "verifying"]]);
   assert.equal(progress.at(-1).phase, "sealed");
   assert.equal(progress.at(-1).percent, 100);
   assert.equal(applyCount, 1);
@@ -360,7 +371,8 @@ async function explicitSignInBoundary(root) {
   const prepared = await store.resume({ operationId, stopBefore: "provider" });
   assert.equal(prepared.status, "in_progress");
   assert.equal(prepared.steps.find(step => step.step === "provider").state, "pending");
-  assert.ok(prepared.steps.filter(step => step.step !== "provider").every(step => step.state === "complete"));
+  assert.equal(prepared.steps.find(step => step.step === "workspace").state, "pending");
+  assert.ok(prepared.steps.filter(step => ["packages", "extensions"].includes(step.step)).every(step => step.state === "complete"));
   assert.equal(signIns, 0);
   const resumed = createClientSetupStore(options);
   await resumed.resume({ operationId, stopBefore: "provider" });

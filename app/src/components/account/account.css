@@ -58,7 +58,7 @@
 .chatgpt-signin-panel { display: flex; width: 340px; max-width: 100%; flex: none; flex-direction: column; align-items: center; gap: 32px; }
 .chatgpt-signin-heading { display: flex; width: 100%; flex-direction: column; align-items: center; gap: 16px; }
 .chatgpt-signin-logo { display: flex; width: 40px; height: 40px; flex: none; align-items: center; justify-content: center; }
-.chatgpt-signin-logo svg { display: block; width: 100%; height: 100%; }
+.chatgpt-signin-logo svg, .chatgpt-signin-logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .chatgpt-signin-title { width: 316px; max-width: 100%; margin: 0; font-size: 28px; font-weight: 400; line-height: 36px; text-align: center; }
 .chatgpt-signin-body { margin: 0; font-size: var(--text-base); font-weight: 400; line-height: 20px; text-align: center; color: var(--color-token-description-foreground); }
 .chatgpt-signin-body.account-error { color: var(--color-token-error-foreground); }

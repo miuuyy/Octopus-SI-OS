@@ -226,3 +226,80 @@ test("credential_configured providers probe and store private environment keys w
     assert.equal(probed[0].data.auth_env_key, "KEYED_API_KEY");
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test("client_connection providers verify and connect through the application connection host and expose multi-provider setup catalogs", async () => {
+  const { providerSetupRequiredState } = require("../electron/clientProviderMetadata.cjs");
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-provider-conn-")));
+  try {
+    const reg = path.join(root, "registry");
+    const write = async (id, descriptor) => {
+      await fs.mkdir(path.join(reg, "interface", id), { recursive: true });
+      await fs.writeFile(path.join(reg, "interface", id, "interface.json"), JSON.stringify(descriptor));
+    };
+    const acpDescriptor = {
+      id: "world_provider_acp", interface_type: "world", role: "provider",
+      interface_policy: { variables: { models: { default: ["gemini-4-neon"] } } },
+      interface_driver_config: {
+        private_config: {
+          model: "gemini-4-neon",
+          client_connection: { schema_version: 1, module: "interface://world_provider_acp/packages/account-client.cjs" },
+          model_catalog: [{ model: "gemini-4-neon", display_name: "Gemini 4 Neon", default_reasoning_effort: "high", supported_reasoning_efforts: ["low", "high"], show_in_picker: true }],
+        },
+      },
+    };
+    const voiceDescriptor = {
+      id: "world_provider_voice", interface_type: "world", role: "provider",
+      interface_policy: { variables: { models: { default: ["gpt-live-1-codex"] } } },
+      interface_driver_config: {
+        private_config: {
+          model: "gpt-live-1-codex",
+          model_catalog: [{ model: "gpt-live-1-codex", display_name: "gpt-live-1-codex", default_reasoning_effort: "", supported_reasoning_efforts: [], show_in_picker: true }],
+        },
+      },
+    };
+    await write("world_provider_acp", acpDescriptor);
+    await write("world_provider_voice", voiceDescriptor);
+    assert.equal(providerSetupRequiredState(acpDescriptor), "account_readable");
+    let connected = false;
+    const progressMessages = [];
+    const connectionHost = {
+      probe: async ({ applicationId }) => ({
+        applicationId,
+        interfaces: [{ interfaceId: applicationId, state: connected ? { state: "connected", account: { label: "user@example.com" } } : { state: "not_connected" } }],
+      }),
+      connect: async (_req, options) => {
+        options?.onProgress?.({ message: "Downloading ACP server" });
+        connected = true;
+        return { state: "connected", account: { label: "user@example.com" } };
+      },
+    };
+    const service = createClientProviderMetadata({
+      registryRoot: () => reg, sourceRegistryRoot: () => reg,
+      accountClient: () => assert.fail("must not touch Codex account"),
+      connectionHost: () => connectionHost,
+      reference: (kind, id, data) => ({ kind, id, data }),
+    });
+    const plan = { provider: { interface_id: "world_provider_acp", required_state: "account_readable" } };
+    assert.equal(await service.setupOwner.probe(plan), null);
+    await service.setupOwner.apply(plan, { onProgress: (message) => progressMessages.push(message) });
+    assert.deepEqual(progressMessages, ["Downloading ACP server"]);
+    const proof = await service.setupOwner.probe(plan);
+    assert.equal(proof[0].data.source, "interface.client_connection");
+    assert.equal(proof[0].data.state, "connected");
+    const setup = await service.setupCatalog({
+      packs: [{
+        id: "pack",
+        workspace_setup: { home: { provider_interface_id: "world_provider_acp", provider_interface_ids: ["world_provider_acp"], voice: { provider_interface_id: "world_provider_voice" } } },
+        components: [
+          { product_id: "world_provider_acp", materialized: false, partially_materialized: false },
+          { product_id: "world_provider_voice", materialized: false, partially_materialized: false },
+        ],
+        setup_provider: { id: "world_provider_acp", models: [] },
+        setup_providers: [{ id: "world_provider_acp", models: [] }],
+        setup_voice_provider: { id: "world_provider_voice", models: [] },
+      }],
+    });
+    assert.deepEqual(setup.packs[0].setup_providers.map((p) => p.id), ["world_provider_acp"]);
+    assert.deepEqual(setup.packs[0].setup_voice_provider.models.map((m) => m.model), ["gpt-live-1-codex"]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

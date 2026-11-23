@@ -298,6 +298,7 @@ fn selected_native_capture_keeps_companion_exact_on_operator_revisions() {
             model: Some("fixture-a".into()),
             reasoning_effort: Some("xhigh".into()),
             service_tier: None,
+            voice_model: None,
             ee_id: Some("ee_existence".into()),
             worker_interface_id: Some(plan.worker_interface_id.clone()),
             client_surface_role: "task".into(),

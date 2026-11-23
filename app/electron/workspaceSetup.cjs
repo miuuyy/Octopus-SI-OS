@@ -76,6 +76,7 @@ async function initializeWorkspace(options) {
           workerInterfaceId: request.home.workerInterfaceId,
           ...(request.home.reasoningEffort ? { reasoningEffort: request.home.reasoningEffort } : {}),
           ...(request.home.serviceTier ? { serviceTier: request.home.serviceTier } : {}),
+          ...(request.home.voiceModel ? { voiceModel: request.home.voiceModel } : {}),
           ...(Object.keys(request.home.doorHostSlots).length ? { doorHostSlots: request.home.doorHostSlots } : {}),
           ...(request.home.contextArtifactBindings.length
             ? { contextArtifactBindings: request.home.contextArtifactBindings }
@@ -1276,13 +1277,16 @@ function parseHomeIntent(value) {
   const home = exactObject(
     value,
     [
-      "name", "providerInterfaceId", "providerModel", "workerInterfaceId", "reasoningEffort", "serviceTier", "doorHostSlots",
+      "name", "providerInterfaceId", "providerModel", "workerInterfaceId", "reasoningEffort", "serviceTier", "voiceModel", "doorHostSlots",
       "contextArtifactBindings", "selectedWorkerEnvironmentKinds",
     ],
     ["name", "providerInterfaceId", "providerModel", "workerInterfaceId"],
     "Workspace Home",
   );
   if (home.name !== "Home") throw new Error("Workspace setup must create the canonical Home surface");
+  const voiceModel = home.voiceModel === undefined || home.voiceModel === null || home.voiceModel === ""
+    ? undefined
+    : requiredHumanText(home.voiceModel, "Home voice model", 256);
   return {
     name: "Home",
     providerInterfaceId: requiredId(home.providerInterfaceId, "Home provider interface"),
@@ -1290,6 +1294,7 @@ function parseHomeIntent(value) {
     workerInterfaceId: requiredId(home.workerInterfaceId, "Home worker interface"),
     reasoningEffort: optionalText(home.reasoningEffort, "Home reasoning effort", 80),
     serviceTier: optionalText(home.serviceTier, "Home service tier", 80),
+    ...(voiceModel !== undefined ? { voiceModel } : {}),
     doorHostSlots: parseDoorHostSlots(home.doorHostSlots),
     contextArtifactBindings: parseArtifactBindings(home.contextArtifactBindings),
     selectedWorkerEnvironmentKinds: parseUniqueIds(

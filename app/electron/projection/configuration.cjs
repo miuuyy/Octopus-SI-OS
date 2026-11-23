@@ -270,20 +270,50 @@ function configurationProjection(store) {
       cachedApplicationPackageCatalog(configuration),
     ]);
     if (packageRead.status === "rejected") throw packageRead.reason;
+    if (applicationRead.status === "rejected") throw applicationRead.reason;
     const localPackages = packageRead.value;
+    const applicationPackages = applicationRead.value.catalog;
     const setupSourceProviders = await readProviderInterfaceDescriptors(configuration.localPackageRegistryRoot);
     const setupInstalledProviders = await readProviderInterfaceDescriptors(configuration.registryRoot);
+    const applicationMetadataForProvider = (providerId, installed) => {
+      const primary = installed ? applicationPackages.active : applicationPackages.sources;
+      const fallback = installed ? applicationPackages.sources : applicationPackages.active;
+      const match = (Array.isArray(primary) ? primary.find((entry) => entry?.manifest?.id === providerId) : null)
+        ?? (Array.isArray(fallback) ? fallback.find((entry) => entry?.manifest?.id === providerId) : null);
+      if (!match) return {};
+      const disclosure = Array.isArray(match.manifest?.connection?.disclosure)
+        ? match.manifest.connection.disclosure.find((entry) => typeof entry === "string" && entry.trim())?.trim() ?? ""
+        : "";
+      return {
+        ...(match.logo_data_url ? { logoDataUrl: match.logo_data_url } : {}),
+        ...(match.logo_dark_data_url ? { logoDarkDataUrl: match.logo_dark_data_url } : {}),
+        ...(disclosure ? { connectionSummary: disclosure } : {}),
+      };
+    };
     for (const pack of localPackages.packs) {
-      const id = pack.workspace_setup?.home?.provider_interface_id;
-      if (!id) continue;
-      const owner = pack.components.find((component) => component.product_id === id);
-      const providers = owner?.materialized === true || owner?.partially_materialized === true ? setupInstalledProviders : setupSourceProviders;
-      pack.setup_provider = providers.find((provider) => provider.id === id) ?? null;
+      const home = pack.workspace_setup?.home;
+      const defaultId = home?.provider_interface_id;
+      if (!defaultId) continue;
+      const resolvePackProvider = (providerId) => {
+        const owner = pack.components.find((component) => component.product_id === providerId);
+        const installed = owner?.materialized === true || owner?.partially_materialized === true;
+        const providers = installed ? setupInstalledProviders : setupSourceProviders;
+        const provider = providers.find((candidate) => candidate.id === providerId);
+        return provider ? { ...provider, ...applicationMetadataForProvider(providerId, installed) } : null;
+      };
+      const providerIds = Array.isArray(home.provider_interface_ids) && home.provider_interface_ids.length
+        ? home.provider_interface_ids
+        : [defaultId];
+      pack.setup_providers = providerIds.map(resolvePackProvider).filter(Boolean);
+      pack.setup_provider = pack.setup_providers.find((provider) => provider.id === defaultId) ?? null;
+      const voiceProviderId = home.voice?.provider_interface_id;
+      if (voiceProviderId) {
+        pack.setup_voice_provider = resolvePackProvider(voiceProviderId);
+      }
     }
-    if (applicationRead.status === "rejected") throw applicationRead.reason;
     return {
       localPackages,
-      applicationPackages: applicationRead.value.catalog,
+      applicationPackages,
       applicationWarnings: applicationRead.value.warnings,
     };
   }

@@ -185,7 +185,7 @@
       "name": "Antigravity",
       "developer": "Google",
       "description": "Gemini through your Antigravity subscription, served by Google's official Antigravity ACP server.",
-      "icon": "antigravity-color.svg",
+      "logo": "application-logo.svg",
       "account": {
         "provider": "antigravity-acp",
         "client_module": "packages/account-client.cjs",

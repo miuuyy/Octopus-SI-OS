@@ -2205,8 +2205,13 @@ function applicationPackSetupStatus(
   pack: ApplicationPackRecord,
   byInterface: Map<string, ClientExtensionActionStatus>,
 ): ClientExtensionActionStatus | undefined {
-  const providerInterfaceId = pack.workspace_setup?.home.provider_interface_id;
-  return providerInterfaceId ? byInterface.get(providerInterfaceId) : undefined;
+  const home = pack.workspace_setup?.home as { provider_interface_id?: string; provider_interface_ids?: string[] } | undefined;
+  const ids = home?.provider_interface_ids?.length ? home.provider_interface_ids : (home?.provider_interface_id ? [home.provider_interface_id] : []);
+  for (const id of ids) {
+    const status = byInterface.get(id);
+    if (status) return status;
+  }
+  return undefined;
 }
 
 function applicationPackFacts(

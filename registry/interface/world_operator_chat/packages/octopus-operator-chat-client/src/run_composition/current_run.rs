@@ -465,7 +465,7 @@ fn plan_selection(roots: &CompositionRoots, current: &RunRecord, provider: &Inte
         write_hash_algorithm: WriteHashAlgorithm::Blake3, chat_id: chat_id.into(),
         provider_interface_id: exact_field(&state, "provider_choice_interface")?, model: Some(exact_field(&private, "model")?),
         reasoning_effort: Some(exact_field(&private, "reasoning_effort")?), service_tier: private.get("service_tier").map(parse).transpose()?,
-        ee_id: Some(current.ee.to_string()), worker_interface_id: Some(exact_field(&state, "worker_choice_interface")?),
+        voice_model: None, ee_id: Some(current.ee.to_string()), worker_interface_id: Some(exact_field(&state, "worker_choice_interface")?),
         client_surface_role: exact_field(&state, "client_surface_role")?, cycle: format!("amend_{}", octopus_ledger::ContentHash::of_bytes(key.as_bytes()).to_hex()),
         door_host_slots: selection.door_host_slots, external_inputs: selection.external_inputs, external_relays: selection.external_relays,
         model_outputs: selection.model_outputs, context_artifact_bindings: selection.context_artifact_bindings,

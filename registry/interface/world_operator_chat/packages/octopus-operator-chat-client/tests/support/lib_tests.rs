@@ -407,6 +407,7 @@
             model: None,
             reasoning_effort: None,
             service_tier: None,
+            voice_model: None,
             ee_id: Some("ee_operator_space".to_string()),
             worker_interface_id: Some("system_worker_coder_max".to_string()),
             client_surface_role: "task".to_string(),
@@ -934,8 +935,10 @@
                 kinds.push(kind.into());
             }
         }
+        let default_provider = setup["home"]["provider_interface_id"].as_str().unwrap();
+        std::fs::create_dir_all(ee_dir.path().join("private").join(default_provider).join("opencodex-account")).unwrap();
         for (provider, chat) in [
-            (setup["home"]["provider_interface_id"].as_str().unwrap(), "frameworkdefaulttask00001"),
+            (default_provider, "frameworkdefaulttask00001"),
             ("world_provider_claude_cli", "frameworkdefaulttask00002"),
         ] {
             let request: OperatorChatPlanRequest = serde_json::from_value(serde_json::json!({
@@ -1434,6 +1437,9 @@
         let mut inherited = source_profile.clone();
         let mut parent = "ee_existence".to_owned();
         let mut planned_ids = BTreeSet::new();
+        std::fs::create_dir_all(
+            ee_root.join("interface-private").join(home["provider_interface_id"].as_str().unwrap()).join("opencodex-account"),
+        ).unwrap();
         for (role, id) in [("home", "browser_home_pack"), ("task", "browser_project_pack"), ("task", "browser_nested_project_pack")] {
             if role == "task" {
                 let ee_id = format!("ee_{id}");
@@ -1735,7 +1741,7 @@
             registry_root:registry_root.into(), ee_instances_root:ee_root.into(), ee_policy_root:None, run_records_root:Some(ee_root.join("runs")),
             write_hash_algorithm:WriteHashAlgorithm::Sha256, interface_private_state_root:Some(ee_root.join("private")),
             chat_id:"browser_persistent_identity".into(), provider_interface_id:"world_provider_codex".into(),
-            model:None, reasoning_effort:None, service_tier:None, ee_id:Some("ee_operator_space".into()),
+            model:None, reasoning_effort:None, service_tier:None, voice_model:None, ee_id:Some("ee_operator_space".into()),
             worker_interface_id:Some("system_worker_coder_max".into()), client_surface_role:"task".into(),
             cycle:"browser_persistent_cycle".into(), door_host_slots:BTreeMap::new(),
             external_inputs:Vec::new(), external_relays:Vec::new(), model_outputs:Vec::new(),
@@ -1925,6 +1931,7 @@
             model: Some("gpt-5.6-terra".to_string()),
             reasoning_effort: Some("ultra".to_string()),
             service_tier: Some("priority".to_string()),
+            voice_model: None,
             ee_id: Some("ee_operator_space".to_string()),
             worker_interface_id: Some("system_worker_coder_max".to_string()),
             client_surface_role: "task".to_string(),

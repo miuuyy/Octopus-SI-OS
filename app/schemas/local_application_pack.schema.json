@@ -69,6 +69,24 @@
           ],
           "properties": {
             "provider_interface_id": { "$ref": "#/$defs/id" },
+            "provider_interface_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            },
+            "default_model": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "default_reasoning_effort": { "type": "string", "maxLength": 80 },
+            "voice": {
+              "type": "object",
+              "required": ["provider_interface_id"],
+              "properties": {
+                "provider_interface_id": { "$ref": "#/$defs/id" },
+                "shared_auth_provider_interface_id": { "$ref": "#/$defs/id" }
+              },
+              "additionalProperties": false
+            },
             "worker_interface_id": { "$ref": "#/$defs/id" },
             "door_host_slots": {
               "type": "object",

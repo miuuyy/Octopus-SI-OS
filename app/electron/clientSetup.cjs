@@ -11,7 +11,7 @@ const currentSchema = require("../schemas/client_setup_current.schema.json");
 const OPERATION_ID = /^[A-Za-z0-9_-]{8,96}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
-const STEPS = ["packages", "extensions", "workspace", "provider"];
+const STEPS = ["packages", "extensions", "provider", "workspace"];
 const PROOF_KIND = {
   packages: "package_install_evidence",
   extensions: "extension_lifecycle_receipt",
@@ -139,7 +139,11 @@ function createClientSetupStore(options) {
         reportProgress(onProgress, operationId, step, "applying", Math.round((index + 0.35) * 90 / STEPS.length));
         let candidateEvidence;
         try {
-          candidateEvidence = await owners[step].apply(operation.plan, { operationId, step });
+          candidateEvidence = await owners[step].apply(operation.plan, {
+            operationId,
+            step,
+            onProgress: (detail) => reportProgress(onProgress, operationId, step, "applying", Math.round((index + 0.35) * 90 / STEPS.length), detail),
+          });
         } catch (error) {
           operation = await recordFailure(operation, step, error);
           throw error;
@@ -702,9 +706,15 @@ function joinClientSetupResume(root, operationId, stopBefore, listener, execute)
   return active.promise;
 }
 
-function reportProgress(listener, operationId, step, phase, percent) {
+function reportProgress(listener, operationId, step, phase, percent, detail) {
   try {
-    listener({ operationId, step, phase, percent: Math.max(0, Math.min(100, percent)) });
+    listener({
+      operationId,
+      step,
+      phase,
+      percent: Math.max(0, Math.min(100, percent)),
+      ...(typeof detail === "string" && detail.trim() ? { detail: detail.trim() } : {}),
+    });
   } catch {}
 }
 

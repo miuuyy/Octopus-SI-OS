@@ -64,6 +64,11 @@ function providerInterfaceDescriptorRows(descriptors) {
       descriptorPath: stringValue(descriptor.descriptor_path),
       runtimeHandlerRef: stringValue(descriptor.interface_driver_ref),
       sourceNames: arrayValue(descriptor.source_names).map(stringValue).filter(Boolean),
+      accountAuthKind: privateConfig.client_metadata !== undefined
+        ? "client_metadata"
+        : privateConfig.client_connection !== undefined
+          ? "client_connection"
+          : "credential",
       model,
       reasoningEffort: stringValue(privateConfig.reasoning_effort),
       serviceTier: stringValue(privateConfig.service_tier),

@@ -2,9 +2,9 @@
   "schema": "octopus.local_application_pack",
   "schema_version": 1,
   "id": "codex",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "name": "Codex Pack",
-  "description": "Codex provider, agent working context, and local environments for browser, desktop, files, terminal, and git worktrees.",
+  "description": "Antigravity and Codex providers, live voice, agent working context, and local environments for browser, desktop, files, terminal, and git worktrees.",
   "components": [
     {
       "package_id": "world_cron",
@@ -27,9 +27,14 @@
       "reason": "Keeps the separate ChatGPT provider available for explicit installation."
     },
     {
+      "package_id": "world_provider_antigravity",
+      "selection": "included",
+      "reason": "Provides Gemini 4 models through Google's official Antigravity ACP server for Home and new tasks."
+    },
+    {
       "package_id": "world_provider_codex",
       "selection": "included",
-      "reason": "Provides the model interface with task-private state and the machine-wide Codex sign-in boundary."
+      "reason": "Provides the Codex model interface with task-private state and the machine-wide ChatGPT sign-in boundary for Codex, voice, and dictation."
     },
     {
       "package_id": "artifact.codex_context",
@@ -102,7 +107,17 @@
   "workspace_setup": {
     "selection": "included",
     "home": {
-      "provider_interface_id": "world_provider_codex",
+      "provider_interface_id": "world_provider_antigravity",
+      "provider_interface_ids": [
+        "world_provider_antigravity",
+        "world_provider_codex"
+      ],
+      "default_model": "gemini-4-neon",
+      "default_reasoning_effort": "low",
+      "voice": {
+        "provider_interface_id": "world_provider_realtime",
+        "shared_auth_provider_interface_id": "world_provider_codex"
+      },
       "worker_interface_id": "system_worker_operator_home",
       "door_host_slots": {
         "system_workspace_env": {
@@ -187,6 +202,10 @@
     },
     "project_defaults": [
       {
+        "package_id": "world_provider_antigravity",
+        "default_for_new_tasks": true
+      },
+      {
         "package_id": "world_provider_codex",
         "default_for_new_tasks": true
       },
@@ -267,7 +286,7 @@
         "name": "Computer Use",
         "icon": "goggles",
         "worker_interface_id": "system_worker_computer_use",
-        "provider_interface_id": "world_provider_codex",
+        "provider_interface_id": "world_provider_antigravity",
         "context_artifact_bindings": [
           {
             "id": "artifact-worker-role-template"

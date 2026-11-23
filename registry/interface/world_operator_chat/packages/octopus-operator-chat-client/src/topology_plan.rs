@@ -191,7 +191,8 @@ pub(crate) fn plan_operator_chat_topology_files_for_source(
     preserve_selected_file_writer(&config, &chat_id, &topology, &request.selected_tools,
         &request.selected_worker_environment_kinds, &mut identity)?;
     identity.voice = home_voice::select(&interface_root, &config, &identity, &topology,
-        request.existing_run_record.as_ref().filter(|_| current_worker.is_some()))?;
+        request.existing_run_record.as_ref().filter(|_| current_worker.is_some()),
+        request.voice_model.as_deref())?;
     ensure_external_interfaces_admitted_by_ee(&topology, &external_interfaces)?;
     let selected_context = if request.retain_current_capabilities {
         context_bindings::retained_context_bindings(request.existing_run_record.as_ref().ok_or("retained context selection requires its existing record")?,

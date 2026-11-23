@@ -31,27 +31,33 @@ interface owns? Then it crosses an interface under policy. If it is the
 client's own presentation or preparation, it stays in the client and is not
 routed through runtime policy for the sake of consistency.
 
-## Built around a ChatGPT subscription
+## Providers and model priority
 
-Octopus is universal, but its experience is built on a ChatGPT subscription and
-on Codex. The Codex provider is the main provider. It keeps its place in the
-hierarchy - one interface, never the kernel - but the product is shaped around
-it.
+Octopus is provider-agnostic at the architecture layer: every provider is one
+declared `world_provider_*` interface, never the kernel.
 
-Other models enter as models inside the Codex provider, not as separate agent
-products. [OpenCodex](https://github.com/lidge-jun/opencodex) is the example:
-it lets Codex run models from many providers. In the registry each such
-provider is its own interface folder that reuses the Codex provider's OpenCodex
-driver, generated from one list so every provider follows the same OpenCodex
-release. A provider is reached with an API key, a signed-in CLI or a
-subscription account, and whichever one serves a task, the model receives
-Octopus's own instructions, history and tools. This is a quiet center of the
-UX: Codex stays the way you work, and the set of models behind it can grow.
+Desktop onboarding signs into ChatGPT (which backs Codex, live voice through
+`world_provider_realtime`, and dictation) and installs both **Antigravity** and
+**Codex** as included components of the base pack. Home defaults to **Gemini 4
+Neon (`low`)** through **Antigravity** (connecting Antigravity ACP during setup
+when Home uses Antigravity; if Home is set to Codex, Antigravity is still
+installed without forcing ACP sign-in), while live voice stays on Codex and
+delegates actions into Home so Home remains one center. The OpenCodex bridge
+lets additional providers enter through the same contract without becoming
+separate agent products. In the registry each provider is its own interface
+folder, and whichever one serves a task, the model receives Octopus's own
+instructions, history, and tools.
 
-Earlier integrations borrowed from other agent projects are kept where they
-are cheap to maintain and dropped where they are not: Slack stays as a
-connector, and the other messaging channels and unconfigurable service stubs
-were removed.
+In practice, active long-horizon autonomy experiments now prioritize the
+**Gemini 4** family — especially **Gemini 4 Neon** (through **Antigravity**,
+which runs on Google's official Antigravity ACP server, alongside Google Gemini
+and Vertex) — because that is where sustained autonomous initiative has
+emerged. ChatGPT/Codex, Claude Code, and other providers remain supported
+interfaces in **Applications** and are commonly used for bounded tasks.
+
+Messaging and external-world integrations follow the same rule: connectors
+such as Email, Gmail, Telegram, Slack, and GitHub attach as ordinary
+Applications in the registry rather than special-cased runtime channels.
 
 ## Where to go
 
@@ -244,5 +250,6 @@ journal with the exact earlier bytes of every file it touched and the checks
 it ran. Triggers lists each review with what it changed, and undoes one in a
 step while the files still hold what the review wrote.
 
-See [Architecture](architecture.md#autonomy-and-attention) for the research
-question and the relationship between self-evolution, attention, and trajectory.
+See [Architecture](architecture.md#autonomy-alignment-and-attention) for the
+long-horizon scope, model-alignment findings, and the relationship between
+self-evolution, attention, and trajectory.

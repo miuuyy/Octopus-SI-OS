@@ -1440,16 +1440,22 @@ function requireClientSetupPack(catalog, plan) {
     default_for_new_tasks: entry.default_for_new_tasks,
   }));
   const requestProjectKeys = new Set((plan.workspace.request?.projects ?? []).map((project) => project.key));
+  const allowedHomeProviders = Array.isArray(recipe?.provider_interface_ids) && recipe.provider_interface_ids.length
+    ? recipe.provider_interface_ids
+    : recipe?.provider_interface_id ? [recipe.provider_interface_id] : [];
   const presetChoices = plan.workspace.request?.agentPresets ?? [];
   const presetIds = new Set();
   for (const choice of presetChoices) {
     const preset = pack.workspace_setup?.agent_presets?.find((entry) => entry.id === choice.presetId);
+    const expectedPresetProvider = preset?.provider_interface_id === recipe?.provider_interface_id
+      ? requestHome?.providerInterfaceId
+      : preset?.provider_interface_id;
     if (!preset || presetIds.has(choice.presetId)
         || choice.packId !== pack.id || choice.expectedPackManifestDigest !== pack.manifest_digest
         || !selectedPackageIds.has(preset.component_package_id)
         || !Array.isArray(choice.projectKeys) || choice.projectKeys.length === 0
         || new Set(choice.projectKeys).size !== choice.projectKeys.length || choice.projectKeys.some((key) => !requestProjectKeys.has(key))
-        || choice.providerInterfaceId !== preset.provider_interface_id || choice.providerInterfaceId !== requestHome?.providerInterfaceId
+        || choice.providerInterfaceId !== expectedPresetProvider || choice.providerInterfaceId !== requestHome?.providerInterfaceId
         || choice.providerModel !== requestHome?.providerModel || choice.reasoningEffort !== (requestHome?.reasoningEffort ?? "")
         || (choice.serviceTier ?? "") !== (requestHome?.serviceTier ?? "")) {
       throw new Error(`Client setup Agent preset does not match its reviewed pack, Projects, or provider selection.`);
@@ -1470,11 +1476,14 @@ function requireClientSetupPack(catalog, plan) {
     projects: plan.workspace.request?.projects,
     ...(plan.workspace.request?.agentPresets?.length ? { agentPresets: plan.workspace.request.agentPresets } : {}),
   };
+  const validVoiceModel = requestHome?.voiceModel === undefined
+    || (Boolean(recipe?.voice?.provider_interface_id) && typeof requestHome.voiceModel === "string" && requestHome.voiceModel.trim().length > 0);
   if (
     !recipe
     || !taskRecipe
-    || plan.provider.interface_id !== recipe.provider_interface_id
-    || requestHome?.providerInterfaceId !== recipe.provider_interface_id
+    || !allowedHomeProviders.includes(requestHome?.providerInterfaceId)
+    || plan.provider.interface_id !== requestHome?.providerInterfaceId
+    || !validVoiceModel
     || requestHome?.workerInterfaceId !== recipe.worker_interface_id
     || stableClientSetupJson(requestHome?.doorHostSlots ?? {}) !== stableClientSetupJson(recipe.door_host_slots ?? {})
     || typeof requestHome?.providerModel !== "string" || !requestHome.providerModel.trim()
@@ -1524,7 +1533,9 @@ function getClientProviderMetadata() {
   return createClientProviderMetadata({
     registryRoot: () => path.join(resolveOctopusHome(), "registry"),
     sourceRegistryRoot: resolveLocalPackageRegistry,
+    octopusHome: resolveOctopusHome,
     accountClient: getChatgptSignIn,
+    connectionHost: getApplicationConnectionHost,
     reference: clientSetupReference,
   });
 }

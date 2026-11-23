@@ -29,6 +29,7 @@ import {
   beginClientSetup,
   onClientSetupProgress,
   openSetupFile,
+  probeApplicationConnection,
   readProjection,
   readClientSetup,
   readCurrentClientSetup,
@@ -49,6 +50,7 @@ import {
   createDefaultWorkspaceSetupDraft,
   type WorkspaceSetupApplyState,
   type WorkspaceSetupCatalogCapability,
+  type WorkspaceSetupSignInProvider,
 } from "./WorkspaceSetupOverlay";
 
 type Props = {
@@ -117,6 +119,8 @@ type WorkspacePack = {
   extensions: PackExtension[];
   recipe: WorkspaceSetupHomeRecipe;
   setupProvider: OctopusProviderInterface | null;
+  setupProviders: OctopusProviderInterface[];
+  setupVoiceProvider: OctopusProviderInterface | null;
 };
 
 type LocalPackagesProjection = {
@@ -172,13 +176,98 @@ const APPLY_IDLE: WorkspaceSetupApplyState = {
   error: "",
 };
 
-const AWAITING_SIGN_IN: WorkspaceSetupApplyState = {
-  state: "awaiting_sign_in",
-  label: "Your space is ready. Connect ChatGPT.",
-  detail: "Continue with your ChatGPT account to start working with Home. No API key is needed.",
-  percent: null,
-  error: "",
-};
+function providerSignInPresentation(
+  provider: OctopusProviderInterface | null,
+  providerId: string,
+): WorkspaceSetupSignInProvider {
+  const id = provider?.id || providerId;
+  const label = provider?.label || id;
+  return {
+    id,
+    label,
+    ...(provider?.logoDataUrl ? { logoDataUrl: provider.logoDataUrl } : {}),
+    ...(provider?.logoDarkDataUrl ? { logoDarkDataUrl: provider.logoDarkDataUrl } : {}),
+  };
+}
+
+function awaitingSignInState(
+  provider: OctopusProviderInterface | null,
+  providerId: string,
+): WorkspaceSetupApplyState {
+  const signInProvider = providerSignInPresentation(provider, providerId);
+  if (provider?.accountAuthKind === "client_connection") {
+    const name = signInProvider.label || providerId;
+    return {
+      state: "awaiting_sign_in",
+      label: `Sign in to ${name}`,
+      detail: provider.connectionSummary || `Continue in your browser to connect ${name} before Octopus creates Home.`,
+      signInButtonLabel: `Continue with ${name}`,
+      signInProvider,
+      percent: null,
+      error: "",
+    };
+  }
+  return {
+    state: "awaiting_sign_in",
+    label: "Sign in to ChatGPT",
+    detail: "Continue with your ChatGPT account before Octopus creates Home. No API key is needed.",
+    signInButtonLabel: "Continue with ChatGPT",
+    signInProvider,
+    percent: null,
+    error: "",
+  };
+}
+
+function connectingSignInState(
+  setup: OctopusClientSetupState,
+  provider: OctopusProviderInterface | null,
+  providerId: string,
+): WorkspaceSetupApplyState {
+  const signInProvider = providerSignInPresentation(provider, providerId);
+  if (provider?.accountAuthKind === "client_connection") {
+    const name = signInProvider.label || providerId;
+    return {
+      ...savedSetupProgress(setup),
+      label: `Sign in to ${name}`,
+      detail: "Continue signing in with your browser",
+      connectingButtonLabel: "Opening browser…",
+      signInProvider,
+    };
+  }
+  return {
+    ...savedSetupProgress(setup),
+    label: "Sign in to ChatGPT",
+    detail: "Continue signing in with your browser",
+    connectingButtonLabel: "Opening browser…",
+    signInProvider,
+  };
+}
+
+async function isProviderReadyForAutoVerify(
+  providerId: string,
+  provider: OctopusProviderInterface | null,
+): Promise<boolean> {
+  if (provider?.accountAuthKind === "credential") return true;
+  if (provider?.accountAuthKind === "client_connection") {
+    try {
+      const probed = await probeApplicationConnection(providerId);
+      return probed.interfaces.some((entry) => entry.interfaceId === providerId && entry.state.state === "connected");
+    } catch {
+      return false;
+    }
+  }
+  return chatgptSignInCompleted();
+}
+
+function resolvePackSetupProvider(
+  pack: WorkspacePack | null | undefined,
+  providerId: string | undefined,
+): OctopusProviderInterface | null {
+  const id = providerId || pack?.recipe.provider_interface_id || "";
+  if (!id || !pack) return null;
+  return pack.setupProviders.find((entry) => entry.id === id)
+    ?? (pack.setupProvider?.id === id ? pack.setupProvider : null);
+}
 
 const SETUP_FILES = { open: openSetupFile, save: saveSetupFile };
 
@@ -294,12 +383,24 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
 
   useEffect(() => onClientSetupProgress((progress) => {
     if (!activeOperationId.current || progress.operationId !== activeOperationId.current) return;
-    setApplyState({
-      state: "running",
-      label: progress.phase === "sealed" ? "Opening Home" : clientSetupProgressLabel(progress.step, progress.phase),
-      detail: progress.phase === "sealed" ? "Checking that the prepared workspace is ready to open." : clientSetupProgressDetail(progress.step),
-      percent: Math.min(progress.percent, 99),
-      error: "",
+    setApplyState((current) => {
+      if (progress.step === "provider" && current.signInProvider) {
+        return {
+          ...current,
+          state: "running",
+          detail: progress.detail || current.detail || "Continue signing in with your browser",
+          connectingButtonLabel: progress.detail ? "Connecting…" : (current.connectingButtonLabel || "Opening browser…"),
+          percent: Math.min(progress.percent, 99),
+          error: "",
+        };
+      }
+      return {
+        state: "running",
+        label: progress.phase === "sealed" ? "Opening Home" : clientSetupProgressLabel(progress.step, progress.phase),
+        detail: progress.detail || (progress.phase === "sealed" ? "Checking that the prepared workspace is ready to open." : clientSetupProgressDetail(progress.step)),
+        percent: Math.min(progress.percent, 99),
+        error: "",
+      };
     });
   }), []);
 
@@ -391,30 +492,37 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
     allowSignIn = false,
   ): Promise<void> => {
     if (inFlight.current) return inFlight.current;
-    setApplyState(allowSignIn ? {
-      ...savedSetupProgress(setup),
-      label: "Connecting ChatGPT",
-      detail: "Finish signing in in your browser. Octopus will continue once your account is verified.",
-    } : savedSetupProgress(setup));
+    const providerId = setup.plan?.provider?.interface_id ?? "";
+    const initialProvider = resolvePackSetupProvider(catalogResult.pack, providerId);
+    setApplyState(allowSignIn
+      ? connectingSignInState(setup, initialProvider, providerId)
+      : savedSetupProgress(setup));
     activeOperationId.current = setup.operationId;
     let resumedDraft: WorkspaceSetupDraft | null = null;
+    let resolvedProvider: OctopusProviderInterface | null = initialProvider;
     const operation = Promise.resolve().then(async () => {
       const currentDraft = readDraftForHostResume(trustedDraft);
       if (currentDraft) {
+        const currentSnapshot = await readGateSnapshot();
+        const pack = currentSnapshot.localPackages?.packs.length === 1 ? currentSnapshot.localPackages.packs[0] : catalogResult.pack;
+        resolvedProvider = resolvePackSetupProvider(pack, providerId) ?? resolvedProvider;
         assertSavedDraftMatchesSetup(
           setup,
           currentDraft,
-          await readGateSnapshot(),
+          currentSnapshot,
           extensionsRef.current,
         );
         resumedDraft = currentDraft;
       }
       const resumed = await resumeClientSetup(setup.operationId, { allowSignIn });
-      return resumed.status === "in_progress" && chatgptSignInCompleted() ? verifyExistingSignIn(setup.operationId) : resumed;
+      if (resumed.status === "in_progress" && await isProviderReadyForAutoVerify(providerId, resolvedProvider)) {
+        return verifyExistingSignIn(setup.operationId);
+      }
+      return resumed;
     }).then(async (completed) => {
       if (completed.status === "in_progress") {
         await refresh(false);
-        setApplyState(AWAITING_SIGN_IN);
+        setApplyState(awaitingSignInState(resolvedProvider, providerId));
         return;
       }
       await refresh(false, (proven) => proveCompletedClientSetup(completed, proven));
@@ -432,14 +540,19 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
         level: "error", event: "workspace.setup.resume_failed",
         message: error instanceof Error ? error.message : String(error),
       }).catch(() => {});
+      const signInProvider = allowSignIn ? providerSignInPresentation(resolvedProvider, providerId) : undefined;
+      const providerName = signInProvider?.label || "Provider";
       setApplyState({
         state: "failed",
-        label: "Setup needs attention",
+        label: signInProvider ? `Sign in to ${providerName}` : "Setup needs attention",
         detail: "",
         percent: null,
+        ...(signInProvider ? { signInProvider } : {}),
         error: error instanceof ProductSetupError
           ? error.productMessage
-          : "Octopus could not finish the saved setup. Nothing was marked ready without proof.",
+          : signInProvider
+            ? `${providerName} sign-in did not complete. Your choices are saved, so it is safe to try again.`
+            : "Octopus could not finish the saved setup. Nothing was marked ready without proof.",
       });
     }).finally(() => {
       activeOperationId.current = "";
@@ -447,7 +560,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
     });
     inFlight.current = operation;
     return operation;
-  }, [draftState.draft, refresh]);
+  }, [catalogResult.pack, draftState.draft, refresh]);
 
   useEffect(() => {
     const draft = draftState.draft;
@@ -540,11 +653,17 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
   if (!matrix) return <OpeningState />;
   if (matrix.mode === "shell") return <>{children}</>;
   if (matrix.mode === "resume" && draftState.draft?.step !== "applying") {
+    if (snapshot.clientSetup && (applyState.state === "awaiting_sign_in" || applyState.signInProvider)) {
+      return (
+        <WorkspaceSetupProgress
+          applyState={applyState}
+          onSignIn={() => resumeCurrent(snapshot.clientSetup!, draftState.draft, true)}
+        />
+      );
+    }
     return (
       <GateState
-        action={applyState.state === "awaiting_sign_in" && snapshot.clientSetup
-          ? <OcButton variant="primary" onClick={() => void resumeCurrent(snapshot.clientSetup!, draftState.draft, true)}>Sign in with ChatGPT</OcButton>
-          : applyState.state === "failed" && snapshot.clientSetup
+        action={applyState.state === "failed" && snapshot.clientSetup
           ? <OcButton onClick={() => void resumeCurrent(snapshot.clientSetup!)}>Try again</OcButton>
           : undefined}
         detail={applyState.error || applyState.detail || matrix.detail}
@@ -575,6 +694,9 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
       catalogLoading={extensions.loading}
       draft={draft}
       provider={catalogResult.pack?.setupProvider ?? null}
+      providers={catalogResult.pack?.setupProviders ?? []}
+      voiceProvider={catalogResult.pack?.setupVoiceProvider ?? null}
+      homeRecipe={catalogResult.pack?.recipe ?? null}
       agentPresets={catalogResult.pack?.recipe.agent_presets ?? []}
       onApply={apply}
       onSignIn={async () => {
@@ -583,7 +705,17 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
           if (!setup) throw new Error("The prepared setup is no longer available.");
           await resumeCurrent(setup, draftState.draft, true);
         } catch {
-          setApplyState({ state: "failed", label: "Sign-in could not start", detail: "", percent: null, error: "Octopus could not reopen the prepared setup. Your choices are saved; try again." });
+          const fallbackId = draft.providerInterfaceId || catalogResult.pack?.recipe.provider_interface_id || "";
+          const fallbackProvider = resolvePackSetupProvider(catalogResult.pack, fallbackId);
+          const signInProvider = fallbackId ? providerSignInPresentation(fallbackProvider, fallbackId) : undefined;
+          setApplyState({
+            state: "failed",
+            label: signInProvider?.label ? `Sign in to ${signInProvider.label}` : "Sign-in could not start",
+            detail: "",
+            ...(signInProvider ? { signInProvider } : {}),
+            percent: null,
+            error: "Octopus could not reopen the prepared setup. Your choices are saved; try again.",
+          });
         }
       }}
       onChange={changeDraft}
@@ -624,14 +756,15 @@ async function performApply({
   const completed = setup.status === "complete"
     ? setup
     : await resumeClientSetup(draft.operationId);
+  const selectedProvider = resolvePackSetupProvider(pack, plan.provider.interface_id);
   let finished = completed;
-  if (finished.status === "in_progress" && chatgptSignInCompleted()) {
+  if (finished.status === "in_progress" && await isProviderReadyForAutoVerify(plan.provider.interface_id, selectedProvider)) {
     await refresh(false);
     finished = await verifyExistingSignIn(draft.operationId);
   }
   if (finished.status === "in_progress") {
     await refresh(false);
-    setApplyState(AWAITING_SIGN_IN);
+    setApplyState(awaitingSignInState(selectedProvider, plan.provider.interface_id));
     return false;
   }
   await refresh(false, (proven) => proveCompletedClientSetup(finished, proven, draft));
@@ -654,11 +787,17 @@ async function compileClientSetupPlan(
   pack: WorkspacePack,
   selection: ApplySelection,
 ): Promise<OctopusClientSetupPlan> {
-  if (!pack.setupProvider?.models.some((model) => model.model === draft.providerModel && model.showInPicker)) {
+  const selectedProvider = resolvePackSetupProvider(pack, draft.providerInterfaceId);
+  if (!selectedProvider?.models.some((model) => model.model === draft.providerModel && model.showInPicker)) {
     throw new ProductSetupError("Choose a model from the current provider catalog.");
   }
-  if (!providerServiceTierAvailable(pack.setupProvider, draft.providerModel!, draft.serviceTier ?? "default")) {
+  if (!providerServiceTierAvailable(selectedProvider, draft.providerModel!, draft.serviceTier ?? "default")) {
     throw new ProductSetupError(`Model '${draft.providerModel}' does not advertise service tier '${draft.serviceTier}'. Choose an available speed.`);
+  }
+  if (draft.voiceProviderModel !== undefined) {
+    if (!pack.setupVoiceProvider?.models.some((model) => model.model === draft.voiceProviderModel && model.showInPicker)) {
+      throw new ProductSetupError("Choose an available voice model from the current voice provider catalog.");
+    }
   }
   const workspaceRequest = compileWorkspaceInitializeRequest(draft, pack.recipe, pack);
   const workspaceRequestDigest = await workspaceInitializeRequestDigest(workspaceRequest);
@@ -717,8 +856,13 @@ function compileClientSetupPlanWithDigest(
       desired_state: extension.desiredState,
     })).sort((left, right) => left.id.localeCompare(right.id)),
     provider: {
-      interface_id: pack.recipe.provider_interface_id,
-      required_state: "account_readable",
+      interface_id: workspaceRequest.home.providerInterfaceId,
+      required_state: (
+        (pack.setupProviders ?? []).find((entry) => entry.id === workspaceRequest.home.providerInterfaceId)
+        ?? (pack.setupProvider?.id === workspaceRequest.home.providerInterfaceId ? pack.setupProvider : null)
+      )?.accountAuthKind === "credential"
+        ? "credential_configured"
+        : "account_readable",
     },
     workspace: {
       request_digest: workspaceRequestDigest,
@@ -1036,11 +1180,15 @@ function buildCatalog(
       components: [],
     });
   }
+  const providerCatalogWarnings = [
+    ...pack.setupProviders.map((provider) => provider.modelCatalogError).filter(Boolean),
+    pack.setupVoiceProvider?.modelCatalogError || "",
+  ].filter(Boolean);
   return {
     catalog,
     pack,
     error: "",
-    warning: pack.setupProvider?.modelCatalogError || (localPackages.errors.length || extensions.errors.length
+    warning: providerCatalogWarnings.join(" ") || (localPackages.errors.length || extensions.errors.length
       ? "Some optional local capability records could not be verified."
       : ""),
   };
@@ -1213,7 +1361,10 @@ function componentConfigured(
     && setup.plan.pack.id === pack.id
     && setup.plan.packages.some((entry) => entry.id === component.packageId)
   ) return true;
-  if (component.productId === pack.recipe.provider_interface_id) {
+  const homeProviderIds = pack.recipe.provider_interface_ids?.length
+    ? pack.recipe.provider_interface_ids
+    : [pack.recipe.provider_interface_id];
+  if (homeProviderIds.includes(component.productId)) {
     return false;
   }
   if (component.productKind === "driver") return false;
@@ -1225,11 +1376,14 @@ function findProviderCredentialStatus(
   extensions: ClientExtensionRegistryState,
   actionStatuses: readonly ClientExtensionActionStatus[] = extensions.actionStatuses,
 ): ClientExtensionActionStatus | null {
+  const homeProviderIds = new Set(pack.recipe.provider_interface_ids?.length
+    ? pack.recipe.provider_interface_ids
+    : [pack.recipe.provider_interface_id]);
   const extensionIds = new Set(pack.extensions.map((extension) => extension.extensionId));
   const registrations = extensions.extensions.flatMap((extension) => {
     if (!extensionIds.has(extension.manifest.id) || extension.manifest.contribution.kind !== "builtin_action") return [];
     return extension.manifest.contribution.triggers
-      .filter((trigger) => trigger.interface_id === pack.recipe.provider_interface_id)
+      .filter((trigger) => homeProviderIds.has(trigger.interface_id))
       .map((trigger) => ({
         extensionId: extension.manifest.id,
         actionId: extension.manifest.contribution.kind === "builtin_action"
@@ -1521,6 +1675,25 @@ function parseWorkspacePack(value: unknown, index: number): WorkspacePack {
   if (new Set(projectDefaults.map((projectDefault) => projectDefault.package_id)).size !== projectDefaults.length) {
     throw new Error("workspace Project defaults repeat a package");
   }
+  const setupProvider = row.setup_provider == null ? null : parseSetupProvider(row.setup_provider);
+  const setupProviders = row.setup_providers == null
+    ? (setupProvider ? [setupProvider] : [])
+    : array(row.setup_providers, "setup providers").map(parseSetupProvider);
+  const setupVoiceProvider = row.setup_voice_provider == null ? null : parseSetupProvider(row.setup_voice_provider);
+  const homeProviderIds = home.provider_interface_ids === undefined
+    ? undefined
+    : array(home.provider_interface_ids, "workspace Home providers").map((value, providerIndex) => id(value, `workspace Home provider ${providerIndex + 1}`));
+  const homeVoice = home.voice === undefined
+    ? undefined
+    : (() => {
+        const voice = record(home.voice, "workspace Home voice");
+        return {
+          provider_interface_id: id(voice.provider_interface_id, "workspace Home voice provider"),
+          ...(voice.shared_auth_provider_interface_id === undefined
+            ? {}
+            : { shared_auth_provider_interface_id: id(voice.shared_auth_provider_interface_id, "workspace Home voice auth provider") }),
+        };
+      })();
   return {
     id: id(row.id, `workspace Application Pack ${index + 1} id`),
     manifestDigest: digest(row.manifest_digest, `workspace Application Pack ${index + 1} manifest`),
@@ -1528,7 +1701,9 @@ function parseWorkspacePack(value: unknown, index: number): WorkspacePack {
     description: text(row.description, `workspace Application Pack ${index + 1} description`),
     components,
     extensions,
-    setupProvider: row.setup_provider == null ? null : parseSetupProvider(row.setup_provider),
+    setupProvider,
+    setupProviders,
+    setupVoiceProvider,
     recipe: {
       task: {
         worker_interface_id: id(task.worker_interface_id, "workspace Task worker"),
@@ -1538,6 +1713,10 @@ function parseWorkspacePack(value: unknown, index: number): WorkspacePack {
         selected_worker_environment_kinds: array(task.selected_worker_environment_kinds, "workspace Task environments").map((value) => id(value, "workspace Task environment")),
       },
       provider_interface_id: id(home.provider_interface_id, "workspace Home provider"),
+      ...(homeProviderIds === undefined ? {} : { provider_interface_ids: homeProviderIds }),
+      ...(home.default_model === undefined ? {} : { default_model: text(home.default_model, "workspace Home default model") }),
+      ...(home.default_reasoning_effort === undefined ? {} : { default_reasoning_effort: typeof home.default_reasoning_effort === "string" ? home.default_reasoning_effort : "" }),
+      ...(homeVoice === undefined ? {} : { voice: homeVoice }),
       worker_interface_id: id(home.worker_interface_id, "workspace Home worker"),
       ...(home.door_host_slots === undefined ? {} : { door_host_slots: home.door_host_slots as Record<string, Record<string, string>> }),
       context_artifact_bindings: contextArtifactBindings,
@@ -1551,9 +1730,22 @@ function parseWorkspacePack(value: unknown, index: number): WorkspacePack {
 
 function parseSetupProvider(value: unknown): OctopusProviderInterface {
   const provider = record(value, "setup provider");
+  const accountAuthKind = provider.accountAuthKind === undefined
+    ? undefined
+    : oneOf(provider.accountAuthKind, ["client_metadata", "client_connection", "credential"] as const, "setup provider auth kind");
+  const logoDataUrl = typeof provider.logoDataUrl === "string" && provider.logoDataUrl.startsWith("data:image/")
+    ? provider.logoDataUrl : undefined;
+  const logoDarkDataUrl = typeof provider.logoDarkDataUrl === "string" && provider.logoDarkDataUrl.startsWith("data:image/")
+    ? provider.logoDarkDataUrl : undefined;
+  const connectionSummary = typeof provider.connectionSummary === "string" && provider.connectionSummary.trim()
+    ? provider.connectionSummary.trim() : undefined;
   return {
     id: id(provider.id, "setup provider id"), label: text(provider.label, "setup provider label"),
     descriptorPath: text(provider.descriptorPath, "setup provider path"), sourceNames: stringArray(provider.sourceNames, "provider sources"),
+    ...(accountAuthKind === undefined ? {} : { accountAuthKind }),
+    ...(logoDataUrl === undefined ? {} : { logoDataUrl }),
+    ...(logoDarkDataUrl === undefined ? {} : { logoDarkDataUrl }),
+    ...(connectionSummary === undefined ? {} : { connectionSummary }),
     model: text(provider.model, "provider selected model"), reasoningEffort: typeof provider.reasoningEffort === "string" ? provider.reasoningEffort : "",
     serviceTier: typeof provider.serviceTier === "string" ? provider.serviceTier : "",
     modelCatalogError: provider.modelCatalogError === undefined || provider.modelCatalogError === ""

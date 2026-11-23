@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import "../account/account.css";
+import "../catalog/application-artwork.css";
 import { providerServiceTiers, providerServiceTierAvailable } from "../chat/chatWorkspaceCapabilities";
 import type { OctopusProviderInterface } from "../../electron";
 import {
@@ -9,6 +11,7 @@ import {
   type WorkspaceSetupCapabilityKind,
   type WorkspaceSetupDraft,
   type WorkspaceSetupAgentPreset,
+  type WorkspaceSetupHomeRecipe,
   type WorkspaceSetupPreset,
   type WorkspaceSetupProject,
   type WorkspaceSetupStep,
@@ -46,16 +49,29 @@ export type WorkspaceSetupCatalogCapability = {
   }>;
 };
 
+export type WorkspaceSetupSignInProvider = {
+  id: string;
+  label: string;
+  logoDataUrl?: string;
+  logoDarkDataUrl?: string;
+};
+
 export type WorkspaceSetupApplyState = {
   state: "idle" | "running" | "awaiting_sign_in" | "failed";
   label: string;
   detail: string;
+  signInButtonLabel?: string;
+  connectingButtonLabel?: string;
+  signInProvider?: WorkspaceSetupSignInProvider;
   percent: number | null;
   error: string;
 };
 
 type Props = {
   provider: OctopusProviderInterface | null;
+  providers?: readonly OctopusProviderInterface[];
+  voiceProvider?: OctopusProviderInterface | null;
+  homeRecipe?: WorkspaceSetupHomeRecipe | null;
   agentPresets: WorkspaceSetupAgentPreset[];
   draft: WorkspaceSetupDraft;
   catalog: WorkspaceSetupCatalogCapability[];
@@ -103,6 +119,9 @@ const KIND_LABELS: Record<WorkspaceSetupCapabilityKind, string> = {
 
 export function WorkspaceSetupOverlay({
   provider,
+  providers,
+  voiceProvider = null,
+  homeRecipe = null,
   agentPresets,
   draft,
   catalog,
@@ -119,9 +138,28 @@ export function WorkspaceSetupOverlay({
   const activeIndex = Math.max(0, STEPS.findIndex((step) => step.id === activeStep));
   const step = STEPS[activeIndex];
   const applying = draft.step === "applying";
-  const model = provider?.models.find((candidate) => candidate.model === draft.providerModel && candidate.showInPicker);
+  const availableProviders = providers?.length ? providers : (provider ? [provider] : []);
+  const defaultProvider = availableProviders.find((entry) => entry.id === homeRecipe?.provider_interface_id)
+    ?? provider
+    ?? availableProviders[0]
+    ?? null;
+  const activeProvider = (draft.providerInterfaceId
+    ? availableProviders.find((entry) => entry.id === draft.providerInterfaceId)
+    : draft.providerModel
+      ? availableProviders.find((entry) => entry.models.some((candidate) => candidate.model === draft.providerModel && candidate.showInPicker))
+      : undefined)
+    ?? defaultProvider;
+  const model = activeProvider?.models.find((candidate) => candidate.model === draft.providerModel && candidate.showInPicker);
+  const separateVoiceChoice = Boolean(
+    activeProvider && requiresSeparateVoiceSelection(activeProvider.id, homeRecipe, voiceProvider),
+  );
+  const voiceModelValid = !separateVoiceChoice || Boolean(
+    voiceProvider?.models.some((candidate) => candidate.model === draft.voiceProviderModel && candidate.showInPicker),
+  );
   const canContinue = stepIsComplete(draft, activeStep, catalogLoading, catalog.length)
-    && (!["capabilities", "review"].includes(activeStep) || Boolean(model && provider && providerServiceTierAvailable(provider, model.model, draft.serviceTier ?? "default")));
+    && (!["capabilities", "review"].includes(activeStep) || Boolean(
+      model && activeProvider && providerServiceTierAvailable(activeProvider, model.model, draft.serviceTier ?? "default") && voiceModelValid,
+    ));
   const [fileNotice, setFileNotice] = useState<SetupFileNotice | null>(null);
 
   async function importSetup() {
@@ -129,7 +167,7 @@ export function WorkspaceSetupOverlay({
     try {
       const picked = await setupFiles.open();
       if (!picked.opened) return;
-      onChange(draftFromSetupFile(parseSetupFile(picked.text), draft, catalog, provider));
+      onChange(draftFromSetupFile(parseSetupFile(picked.text), draft, catalog, availableProviders, undefined, undefined, voiceProvider));
       setFileNotice({ tone: "info", text: `Imported ${picked.name}. Check each step before setting up.` });
     } catch (error) {
       setFileNotice({ tone: "error", text: setupFileMessage(error) });
@@ -148,10 +186,30 @@ export function WorkspaceSetupOverlay({
   }
 
   useEffect(() => {
-    if (draft.providerModel !== undefined || draft.step === "applying" || !provider) return;
-    const selected = provider.models.find((candidate) => candidate.model === provider.model && candidate.showInPicker);
-    if (selected) onChange({ ...draft, providerModel: selected.model, reasoningEffort: provider.reasoningEffort ?? "", serviceTier: provider.serviceTier || selected.defaultServiceTier || "default" });
-  }, [draft, provider, onChange]);
+    if (draft.step === "applying" || !defaultProvider) return;
+    if (draft.providerModel === undefined) {
+      const defaults = defaultDraftSelectionForProvider(defaultProvider, homeRecipe, voiceProvider);
+      if (defaults) onChange(applyProviderDraftDefaults(draft, defaults));
+      return;
+    }
+    if (!activeProvider) return;
+    const needsVoice = requiresSeparateVoiceSelection(activeProvider.id, homeRecipe, voiceProvider);
+    const defaultVoiceModel = needsVoice ? defaultVoiceModelId(voiceProvider) : undefined;
+    const missingProviderId = draft.providerInterfaceId !== activeProvider.id;
+    const missingVoiceModel = needsVoice && !draft.voiceProviderModel && Boolean(defaultVoiceModel);
+    const staleVoiceModel = !needsVoice && draft.voiceProviderModel !== undefined;
+    if (missingProviderId || missingVoiceModel || staleVoiceModel) {
+      const next: WorkspaceSetupDraft = {
+        ...draft,
+        providerInterfaceId: activeProvider.id,
+        ...(needsVoice && (draft.voiceProviderModel || defaultVoiceModel)
+          ? { voiceProviderModel: draft.voiceProviderModel || defaultVoiceModel }
+          : {}),
+      };
+      if (!needsVoice) delete next.voiceProviderModel;
+      onChange(next);
+    }
+  }, [activeProvider, defaultProvider, draft, homeRecipe, onChange, voiceProvider]);
 
   useEffect(() => {
     if (!catalog.length || draft.step === "applying") return;
@@ -187,6 +245,17 @@ export function WorkspaceSetupOverlay({
 
   const backVisible = applying ? applyState.state === "failed" : activeIndex > 0;
 
+  if (applying && isProviderSignInView(applyState)) {
+    return (
+      <ProviderSignInScreen
+        applyState={applyState}
+        fallbackProvider={activeProvider}
+        onBack={applyState.state === "failed" ? goBack : undefined}
+        onSignIn={onSignIn}
+      />
+    );
+  }
+
   return (
     <main className="welcome" aria-labelledby="welcome-title">
       <SetupHeader />
@@ -217,14 +286,25 @@ export function WorkspaceSetupOverlay({
                 catalog={catalog}
                 draft={draft}
                 error={catalogError}
+                homeRecipe={homeRecipe}
                 loading={catalogLoading}
                 onChange={onChange}
                 onRetry={onRetryCatalog}
-                provider={provider}
+                provider={activeProvider}
+                providers={availableProviders}
+                voiceProvider={voiceProvider}
               />
             ) : (
               <>
-                <ReviewStep agentPresets={agentPresets} catalog={catalog} draft={draft} />
+                <ReviewStep
+                  agentPresets={agentPresets}
+                  catalog={catalog}
+                  draft={draft}
+                  homeRecipe={homeRecipe}
+                  provider={activeProvider}
+                  providers={availableProviders}
+                  voiceProvider={voiceProvider}
+                />
                 <SetupFileAction
                   disabled={false}
                   glyph="download"
@@ -260,8 +340,6 @@ export function WorkspaceSetupOverlay({
             <button className="welcome-next" type="button" disabled={!canContinue} onClick={continueForward}>
               {activeStep === "review" ? "Set up Octopus" : "Continue"}
             </button>
-          ) : applyState.state === "awaiting_sign_in" ? (
-            <button className="welcome-next" type="button" onClick={() => void onSignIn()}>Sign in with ChatGPT</button>
           ) : applyState.state === "failed" ? (
             <button className="welcome-next" type="button" onClick={() => void onApply(draft)}>Try again</button>
           ) : (
@@ -406,18 +484,24 @@ function CapabilitiesStep({
   catalog,
   draft,
   error,
+  homeRecipe,
   loading,
   onChange,
   onRetry,
   provider,
+  providers,
+  voiceProvider,
 }: {
   catalog: WorkspaceSetupCatalogCapability[];
   draft: WorkspaceSetupDraft;
   error: string;
+  homeRecipe: WorkspaceSetupHomeRecipe | null;
   loading: boolean;
   onChange: (draft: WorkspaceSetupDraft) => void;
   onRetry: () => void;
   provider: OctopusProviderInterface | null;
+  providers: readonly OctopusProviderInterface[];
+  voiceProvider: OctopusProviderInterface | null;
 }) {
   if (loading) return <p className="setup-note">Loading available capabilities…</p>;
   if (!catalog.length) {
@@ -430,36 +514,106 @@ function CapabilitiesStep({
   }
   const models = (provider?.models ?? []).filter((entry) => entry.showInPicker);
   const model = models.find((entry) => entry.model === draft.providerModel);
+  const serviceTiers = provider && model ? providerServiceTiers(provider, model.model) : [];
+  const showSpeedPicker = Boolean(
+    provider && model && (serviceTiers.length > 1 || !providerServiceTierAvailable(provider, model.model, draft.serviceTier ?? "default")),
+  );
+  const showVoiceChoice = Boolean(
+    provider && requiresSeparateVoiceSelection(provider.id, homeRecipe, voiceProvider),
+  );
+  const voiceModels = (voiceProvider?.models ?? []).filter((entry) => entry.showInPicker);
+  const voiceAuthProviderLabel = voiceAuthLabel(providers, homeRecipe, voiceProvider);
   const selections = new Map(draft.capabilities.map((capability) => [`${capability.kind}:${capability.id}`, capability]));
   return (
     <div className="setup-list">
       <div className="setup-row setup-row-static">
         <span className="setup-row-name">Model for Home</span>
-        <select
-          aria-label="Model for Home"
-          className="setup-select"
-          onChange={(event) => onChange({ ...draft, providerModel: event.target.value, reasoningEffort: models.find((entry) => entry.model === event.target.value)?.defaultReasoningEffort ?? "" })}
-          value={draft.providerModel ?? ""}
-        >
-          {draft.providerModel ? null : <option value="">Choose a model</option>}
-          {models.map((entry) => <option key={entry.model} value={entry.model}>{entry.displayName}</option>)}
-        </select>
-        {model?.supportedReasoningEfforts.length ? (
+        <div className="setup-row-controls">
+          {providers.length > 1 ? (
+            <select
+              aria-label="Provider for Home"
+              className="setup-select"
+              onChange={(event) => {
+                const nextProvider = providers.find((entry) => entry.id === event.target.value);
+                if (!nextProvider) return;
+                const defaults = defaultDraftSelectionForProvider(nextProvider, homeRecipe, voiceProvider);
+                if (defaults) {
+                  onChange(applyProviderDraftDefaults(draft, defaults));
+                } else {
+                  const next: WorkspaceSetupDraft = { ...draft, providerInterfaceId: nextProvider.id, providerModel: undefined, reasoningEffort: "" };
+                  delete next.providerModel;
+                  onChange(next);
+                }
+              }}
+              value={provider?.id ?? ""}
+            >
+              {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+            </select>
+          ) : null}
           <select
-            aria-label="Reasoning"
+            aria-label="Model for Home"
             className="setup-select"
-            onChange={(event) => onChange({ ...draft, reasoningEffort: event.target.value })}
-            value={draft.reasoningEffort ?? ""}
+            onChange={(event) => {
+              const chosen = models.find((entry) => entry.model === event.target.value);
+              const nextEffort = provider?.id === homeRecipe?.provider_interface_id
+                && chosen?.model === homeRecipe?.default_model
+                && homeRecipe?.default_reasoning_effort
+                && chosen?.supportedReasoningEfforts.includes(homeRecipe.default_reasoning_effort)
+                ? homeRecipe.default_reasoning_effort
+                : chosen?.defaultReasoningEffort ?? "";
+              onChange({
+                ...draft,
+                providerInterfaceId: provider?.id,
+                providerModel: event.target.value,
+                reasoningEffort: nextEffort,
+                serviceTier: chosen?.defaultServiceTier || "default",
+              });
+            }}
+            value={draft.providerModel ?? ""}
           >
-            {model.supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+            {draft.providerModel ? null : <option value="">Choose a model</option>}
+            {models.map((entry) => <option key={entry.model} value={entry.model}>{entry.displayName}</option>)}
           </select>
-        ) : null}
-        {provider && model ? <select aria-label="Speed for Home" className="setup-select"
-          value={draft.serviceTier || "default"} onChange={(event) => onChange({ ...draft, serviceTier: event.target.value })}>
-          {providerServiceTierAvailable(provider, model.model, draft.serviceTier ?? "default") ? null : <option value={draft.serviceTier} disabled>{draft.serviceTier} · unavailable</option>}
-          {providerServiceTiers(provider, model.model).map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
-        </select> : null}
+          {model?.supportedReasoningEfforts.length ? (
+            <select
+              aria-label="Reasoning"
+              className="setup-select"
+              onChange={(event) => onChange({ ...draft, reasoningEffort: event.target.value })}
+              value={draft.reasoningEffort ?? ""}
+            >
+              {model.supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+            </select>
+          ) : null}
+          {showSpeedPicker && provider && model ? (
+            <select
+              aria-label="Speed for Home"
+              className="setup-select"
+              value={draft.serviceTier || "default"}
+              onChange={(event) => onChange({ ...draft, serviceTier: event.target.value })}
+            >
+              {providerServiceTierAvailable(provider, model.model, draft.serviceTier ?? "default") ? null : <option value={draft.serviceTier} disabled>{draft.serviceTier} · unavailable</option>}
+              {serviceTiers.map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
+            </select>
+          ) : null}
+        </div>
       </div>
+      {showVoiceChoice ? (
+        <div className="setup-row setup-row-static">
+          <span className="setup-row-name">Voice for Home</span>
+          <span className="setup-row-note">Uses {voiceAuthProviderLabel}</span>
+          <div className="setup-row-controls">
+            <select
+              aria-label="Voice model for Home"
+              className="setup-select"
+              onChange={(event) => onChange({ ...draft, voiceProviderModel: event.target.value })}
+              value={draft.voiceProviderModel ?? ""}
+            >
+              {draft.voiceProviderModel ? null : <option value="">Choose a voice model</option>}
+              {voiceModels.map((entry) => <option key={entry.model} value={entry.model}>{entry.displayName}</option>)}
+            </select>
+          </div>
+        </div>
+      ) : null}
       {error ? <InlineError detail={error} title="Some local packages could not be read" /> : null}
       {catalog.map((capability) => {
         const selection = selections.get(`${capability.kind}:${capability.id}`);
@@ -546,17 +700,46 @@ function CapabilityRow({
   );
 }
 
-function ReviewStep({ catalog, draft, agentPresets }: { catalog: WorkspaceSetupCatalogCapability[]; draft: WorkspaceSetupDraft; agentPresets: WorkspaceSetupAgentPreset[] }) {
+function ReviewStep({
+  catalog,
+  draft,
+  agentPresets,
+  provider,
+  providers,
+  homeRecipe,
+  voiceProvider,
+}: {
+  catalog: WorkspaceSetupCatalogCapability[];
+  draft: WorkspaceSetupDraft;
+  agentPresets: WorkspaceSetupAgentPreset[];
+  provider: OctopusProviderInterface | null;
+  providers: readonly OctopusProviderInterface[];
+  homeRecipe: WorkspaceSetupHomeRecipe | null;
+  voiceProvider: OctopusProviderInterface | null;
+}) {
   const intent = compileWorkspaceSetupDraft(draft);
   const names = new Map(catalog.map((capability) => [`${capability.kind}:${capability.id}`, capability.name]));
+  const selectedModel = provider?.models.find((entry) => entry.model === draft.providerModel);
+  const modelSummary = `${provider?.label ? `${provider.label} · ` : ""}${selectedModel?.displayName || draft.providerModel || ""}${draft.reasoningEffort ? ` (${draft.reasoningEffort})` : ""}`;
+  const showVoiceLine = Boolean(
+    provider && draft.voiceProviderModel && requiresSeparateVoiceSelection(provider.id, homeRecipe, voiceProvider),
+  );
+  const voiceModelLabel = voiceProvider?.models.find((entry) => entry.model === draft.voiceProviderModel)?.displayName || draft.voiceProviderModel || "";
+  const voiceAuthProviderLabel = voiceAuthLabel(providers, homeRecipe, voiceProvider);
   return (
     <div className="setup-review">
       <section className="welcome-card setup-review-card" style={{ "--i": 0 } as React.CSSProperties}>
         <span className="welcome-card-title">{intent.root.name}</span>
         <div className="setup-review-line">
           <Glyph name="home" size={14} className="setup-row-glyph" />
-          Home · {draft.providerModel}
+          Home · {modelSummary}
         </div>
+        {showVoiceLine ? (
+          <div className="setup-review-line">
+            <Glyph name="microphone" size={14} className="setup-row-glyph" />
+            Voice · {voiceAuthProviderLabel} · {voiceModelLabel}
+          </div>
+        ) : null}
         {orderedProjects(draft.projects).map(({ project, depth }) => (
           <div className="setup-review-line" key={project.key} style={{ paddingLeft: 18 * (depth + 1) }}>
             <Glyph name={project.icon as GlyphName} size={14} className="setup-row-glyph" />
@@ -589,7 +772,18 @@ function ReviewStep({ catalog, draft, agentPresets }: { catalog: WorkspaceSetupC
   );
 }
 
-export function WorkspaceSetupProgress({ applyState }: { applyState: WorkspaceSetupApplyState }) {
+export function WorkspaceSetupProgress({
+  applyState,
+  onBack,
+  onSignIn,
+}: {
+  applyState: WorkspaceSetupApplyState;
+  onBack?: () => void;
+  onSignIn?: () => Promise<void>;
+}) {
+  if (isProviderSignInView(applyState)) {
+    return <ProviderSignInScreen applyState={applyState} onBack={onBack} onSignIn={onSignIn} />;
+  }
   return <main className="welcome" aria-labelledby="welcome-title">
     <SetupHeader />
     <div className="welcome-stage setup-stage" data-applying><ApplyingStep applyState={applyState} /></div>
@@ -600,6 +794,114 @@ export function WorkspaceSetupProgress({ applyState }: { applyState: WorkspaceSe
       </div>
     </footer>
   </main>;
+}
+
+function isProviderSignInView(applyState: WorkspaceSetupApplyState): boolean {
+  return applyState.state === "awaiting_sign_in" || Boolean(applyState.signInProvider);
+}
+
+function ProviderSignInScreen({
+  applyState,
+  fallbackProvider = null,
+  onBack,
+  onSignIn,
+}: {
+  applyState: WorkspaceSetupApplyState;
+  fallbackProvider?: OctopusProviderInterface | null;
+  onBack?: () => void;
+  onSignIn?: () => Promise<void>;
+}) {
+  const running = applyState.state === "running";
+  const failed = applyState.state === "failed";
+  const provider = applyState.signInProvider ?? (fallbackProvider ? {
+    id: fallbackProvider.id,
+    label: fallbackProvider.label,
+    logoDataUrl: fallbackProvider.logoDataUrl,
+    logoDarkDataUrl: fallbackProvider.logoDarkDataUrl,
+  } : null);
+  const lightArtwork = provider?.logoDataUrl?.trim() || "";
+  const darkArtwork = provider?.logoDarkDataUrl?.trim() || "";
+  const artwork = lightArtwork || darkArtwork;
+  const hasThemeArtwork = Boolean(lightArtwork && darkArtwork && lightArtwork !== darkArtwork);
+  const [waitingLong, setWaitingLong] = useState(false);
+  useEffect(() => {
+    setWaitingLong(false);
+    if (!running) return;
+    const timer = window.setTimeout(() => setWaitingLong(true), 45_000);
+    return () => window.clearTimeout(timer);
+  }, [running, applyState.label, applyState.detail]);
+
+  return (
+    <main
+      className="chatgpt-signin"
+      data-state={running ? "waiting" : failed ? "failed" : "idle"}
+      aria-labelledby="welcome-title"
+    >
+      <header className="welcome-top chatgpt-signin-brand">
+        <div className="welcome-brand">
+          <img className="welcome-brand-mark" src="./octopus-logo.png" alt="" />
+          <span className="welcome-brand-name">Octopus&nbsp;OS</span>
+        </div>
+      </header>
+      <section className="chatgpt-signin-panel">
+        <div className="chatgpt-signin-heading">
+          {artwork ? (
+            <span className="chatgpt-signin-logo" aria-hidden="true">
+              <img
+                alt=""
+                className={hasThemeArtwork ? "application-artwork-light" : undefined}
+                draggable={false}
+                src={artwork}
+              />
+              {hasThemeArtwork ? (
+                <img
+                  alt=""
+                  className="application-artwork-dark"
+                  draggable={false}
+                  src={darkArtwork}
+                />
+              ) : null}
+            </span>
+          ) : null}
+          <h1 id="welcome-title" className="chatgpt-signin-title">
+            {applyState.label || (provider?.label ? `Sign in to ${provider.label}` : "Sign in to continue")}
+          </h1>
+          {!failed && applyState.detail ? (
+            <p className="chatgpt-signin-body">{applyState.detail}</p>
+          ) : null}
+        </div>
+        {failed && applyState.error ? (
+          <p className="chatgpt-signin-body account-error" role="alert">{applyState.error}</p>
+        ) : null}
+        <div className="chatgpt-signin-actions">
+          {running ? (
+            <button className="chatgpt-signin-button" type="button" disabled>
+              {applyState.connectingButtonLabel || "Connecting…"}
+            </button>
+          ) : (
+            <>
+              <button
+                className="chatgpt-signin-button"
+                type="button"
+                disabled={!onSignIn}
+                onClick={() => void onSignIn?.()}
+              >
+                {failed ? "Try again" : applyState.signInButtonLabel || "Sign in with ChatGPT"}
+              </button>
+              {failed && onBack ? (
+                <button className="chatgpt-signin-button is-secondary" type="button" onClick={onBack}>
+                  Review choices
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
+        {waitingLong && running ? (
+          <p className="chatgpt-signin-body">Still waiting for this step. You can collect diagnostics from Help → Report a Problem.</p>
+        ) : null}
+      </section>
+    </main>
+  );
 }
 
 function SetupHeader() {
@@ -892,6 +1194,93 @@ function stepIsComplete(
   } catch {
     return false;
   }
+}
+
+type ProviderDraftDefaults = {
+  providerInterfaceId: string;
+  providerModel: string;
+  reasoningEffort: string;
+  serviceTier: string;
+  voiceProviderModel?: string;
+};
+
+function requiresSeparateVoiceSelection(
+  providerInterfaceId: string,
+  homeRecipe: WorkspaceSetupHomeRecipe | null,
+  voiceProvider: OctopusProviderInterface | null,
+): boolean {
+  if (!voiceProvider || !homeRecipe?.voice?.provider_interface_id) return false;
+  if (!voiceProvider.models.some((entry) => entry.showInPicker)) return false;
+  return homeRecipe.voice.shared_auth_provider_interface_id
+    ? providerInterfaceId !== homeRecipe.voice.shared_auth_provider_interface_id
+    : providerInterfaceId !== homeRecipe.voice.provider_interface_id;
+}
+
+function defaultVoiceModelId(voiceProvider: OctopusProviderInterface | null): string | undefined {
+  if (!voiceProvider) return undefined;
+  return voiceProvider.models.find((candidate) => candidate.model === voiceProvider.model && candidate.showInPicker)?.model
+    ?? voiceProvider.models.find((candidate) => candidate.showInPicker)?.model;
+}
+
+function voiceAuthLabel(
+  providers: readonly OctopusProviderInterface[],
+  homeRecipe: WorkspaceSetupHomeRecipe | null,
+  voiceProvider: OctopusProviderInterface | null,
+): string {
+  const sharedId = homeRecipe?.voice?.shared_auth_provider_interface_id;
+  if (sharedId) {
+    const shared = providers.find((entry) => entry.id === sharedId);
+    if (shared?.label) return shared.label;
+  }
+  return voiceProvider?.label || "Codex";
+}
+
+function defaultDraftSelectionForProvider(
+  provider: OctopusProviderInterface,
+  homeRecipe: WorkspaceSetupHomeRecipe | null,
+  voiceProvider: OctopusProviderInterface | null,
+): ProviderDraftDefaults | null {
+  const models = provider.models.filter((candidate) => candidate.showInPicker);
+  const preferRecipeDefault = provider.id === homeRecipe?.provider_interface_id;
+  const selected = (preferRecipeDefault && homeRecipe?.default_model
+    ? models.find((candidate) => candidate.model === homeRecipe.default_model)
+    : undefined)
+    ?? models.find((candidate) => candidate.model === provider.model)
+    ?? models[0];
+  if (!selected) return null;
+  const reasoningEffort = preferRecipeDefault
+    && homeRecipe?.default_model === selected.model
+    && homeRecipe?.default_reasoning_effort
+    && selected.supportedReasoningEfforts.includes(homeRecipe.default_reasoning_effort)
+    ? homeRecipe.default_reasoning_effort
+    : selected.defaultReasoningEffort || (selected.model === provider.model ? provider.reasoningEffort ?? "" : "");
+  const serviceTier = provider.serviceTier || selected.defaultServiceTier || "default";
+  const voiceProviderModel = requiresSeparateVoiceSelection(provider.id, homeRecipe, voiceProvider)
+    ? defaultVoiceModelId(voiceProvider)
+    : undefined;
+  return {
+    providerInterfaceId: provider.id,
+    providerModel: selected.model,
+    reasoningEffort,
+    serviceTier,
+    ...(voiceProviderModel !== undefined ? { voiceProviderModel } : {}),
+  };
+}
+
+function applyProviderDraftDefaults(
+  draft: WorkspaceSetupDraft,
+  defaults: ProviderDraftDefaults,
+): WorkspaceSetupDraft {
+  const next: WorkspaceSetupDraft = {
+    ...draft,
+    providerInterfaceId: defaults.providerInterfaceId,
+    providerModel: defaults.providerModel,
+    reasoningEffort: defaults.reasoningEffort,
+    serviceTier: defaults.serviceTier,
+    ...(defaults.voiceProviderModel !== undefined ? { voiceProviderModel: defaults.voiceProviderModel } : {}),
+  };
+  if (defaults.voiceProviderModel === undefined) delete next.voiceProviderModel;
+  return next;
 }
 
 export function createDefaultWorkspaceSetupDraft(): WorkspaceSetupDraft {

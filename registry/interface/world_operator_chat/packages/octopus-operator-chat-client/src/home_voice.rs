@@ -20,6 +20,7 @@ pub(super) struct HomeVoiceContext {
 
 pub(super) struct PlannedVoice {
     pub context: HomeVoiceContext,
+    pub model: Option<String>,
     pub source: String,
     pub door: String,
     pub writer: String,
@@ -45,8 +46,12 @@ pub(super) fn select(
     identity: &PlannedIdentity,
     topology: &FormedCapabilityTopology,
     existing: Option<&Value>,
+    requested_model: Option<&str>,
 ) -> Result<Option<PlannedVoice>, String> {
     if identity.surface_role != "home" {
+        if requested_model.is_some_and(|value| !value.trim().is_empty()) {
+            return Err("voice_model is only supported on Home".into());
+        }
         return Ok(None);
     }
     let selected = config
@@ -129,8 +134,24 @@ pub(super) fn select(
         );
     }
     outputs.retain(|label| label != "realtime.delegation");
+    let model = if existing.is_none() {
+        match requested_model.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(requested) => Some(resolve_provider(
+                root,
+                &selected.provider_interface_id,
+                requested,
+                "",
+                None,
+                topology,
+            )?.model),
+            None => None,
+        }
+    } else {
+        None
+    };
     Ok(Some(PlannedVoice {
         context,
+        model,
         source: format!(
             "{}_voice_{}",
             config.authoring.source_interface, identity.chat_id
@@ -248,6 +269,9 @@ pub(super) fn plan_descriptors(
         .interface_driver_config
         .clone()
         .ok_or("Home voice provider has no driver configuration")?;
+    if let Some(model) = &voice.model {
+        driver.private_config.insert("model".into(), json!(model));
+    }
     replace_provider_hidden_tools(
         &mut driver.private_config,
         &selected.provider_interface_id,

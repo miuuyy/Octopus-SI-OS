@@ -798,6 +798,26 @@ function validatePackWorkspaceSetup(pack, packageById) {
       throw new Error(`Application Pack '${pack.id}' workspace_setup.${field} is not supplied by a component`);
     }
   }
+  const homeProviderIds = pack.workspace_setup.home.provider_interface_ids;
+  if (homeProviderIds !== undefined) {
+    if (!homeProviderIds.includes(pack.workspace_setup.home.provider_interface_id)) {
+      throw new Error(`Application Pack '${pack.id}' workspace_setup.home.provider_interface_ids must include provider_interface_id`);
+    }
+    for (const interfaceId of homeProviderIds) {
+      if (!interfaceOwners.has(interfaceId)) {
+        throw new Error(`Application Pack '${pack.id}' workspace_setup.home.provider_interface_ids '${interfaceId}' is not supplied by a component`);
+      }
+    }
+  }
+  const homeVoice = pack.workspace_setup.home.voice;
+  if (homeVoice !== undefined) {
+    if (!interfaceOwners.has(homeVoice.provider_interface_id)) {
+      throw new Error(`Application Pack '${pack.id}' workspace_setup.home.voice.provider_interface_id is not supplied by a component`);
+    }
+    if (homeVoice.shared_auth_provider_interface_id !== undefined && !interfaceOwners.has(homeVoice.shared_auth_provider_interface_id)) {
+      throw new Error(`Application Pack '${pack.id}' workspace_setup.home.voice.shared_auth_provider_interface_id is not supplied by a component`);
+    }
+  }
   for (const binding of [...pack.workspace_setup.home.context_artifact_bindings, ...pack.workspace_setup.task.context_artifact_bindings]) {
     if (!artifactOwners.has(binding.id)) {
       throw new Error(`Application Pack '${pack.id}' workspace context artifact '${binding.id}' is not supplied by a component`);

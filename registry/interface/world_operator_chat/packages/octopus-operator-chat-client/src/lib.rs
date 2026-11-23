@@ -74,6 +74,8 @@ pub struct OperatorChatPlanRequest {
     #[serde(default)]
     pub service_tier: Option<String>,
     #[serde(default)]
+    pub voice_model: Option<String>,
+    #[serde(default)]
     pub ee_id: Option<String>,
     #[serde(default)]
     pub worker_interface_id: Option<String>,

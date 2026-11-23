@@ -83,6 +83,7 @@ export async function readClientSetup() { return null; }
 export async function resumeClientSetup() { throw new Error("setup is outside this fixture"); }
 export function onClientSetupProgress() { return () => {}; }
 export async function openSetupFile() { return { opened: false }; }
+export async function probeApplicationConnection() { return { interfaces: [] }; }
 export async function saveSetupFile() { return { saved: false }; }`,
   "../../projectionLive": `import { useState } from "react"; export function useProjectionStructureGeneration() { const [generation, setGeneration] = useState(0); globalThis.__boot.gate.change = () => setGeneration((value) => value + 1); return generation; }`,
   "../../account/useChatgptAccount": "export function useChatgptAccount() { return { account: null }; }",

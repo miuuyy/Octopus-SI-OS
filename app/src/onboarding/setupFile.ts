@@ -32,9 +32,11 @@ export type SetupFileCapability = {
 };
 
 export type SetupFileModel = {
+  provider?: string;
   id: string;
   reasoning_effort?: string;
   service_tier?: string;
+  voice_model?: string;
 };
 
 export type SetupFile = {
@@ -130,9 +132,11 @@ export function setupFileFromDraft(value: WorkspaceSetupDraft): SetupFile {
     capabilities,
     ...(draft.providerModel === undefined ? {} : {
       model: {
+        ...(draft.providerInterfaceId ? { provider: draft.providerInterfaceId } : {}),
         id: draft.providerModel,
         ...(draft.reasoningEffort ? { reasoning_effort: draft.reasoningEffort } : {}),
         ...(draft.serviceTier ? { service_tier: draft.serviceTier } : {}),
+        ...(draft.voiceProviderModel ? { voice_model: draft.voiceProviderModel } : {}),
       },
     }),
   };
@@ -142,9 +146,10 @@ export function draftFromSetupFile(
   file: SetupFile,
   base: WorkspaceSetupDraft,
   catalog: readonly SetupFileCatalogItem[],
-  provider: OctopusProviderInterface | null,
+  provider: OctopusProviderInterface | readonly OctopusProviderInterface[] | null,
   idFactory: () => string = () => crypto.randomUUID(),
   timestamp = new Date().toISOString(),
+  voiceProvider: OctopusProviderInterface | null = null,
 ): WorkspaceSetupDraft {
   const offered = new Map(catalog.map((item) => [`${item.kind}:${item.id}`, item]));
   const missing = file.capabilities.filter((capability) => !offered.has(`${capability.kind}:${capability.id}`));
@@ -182,10 +187,13 @@ export function draftFromSetupFile(
         : [],
     };
   });
-  const model = file.model ? chosenModel(file.model, provider) : {
+  const providers = Array.isArray(provider) ? provider : provider ? [provider] : [];
+  const model = file.model ? chosenModel(file.model, providers, voiceProvider) : {
+    ...(base.providerInterfaceId === undefined ? {} : { providerInterfaceId: base.providerInterfaceId }),
     ...(base.providerModel === undefined ? {} : { providerModel: base.providerModel }),
     ...(base.reasoningEffort === undefined ? {} : { reasoningEffort: base.reasoningEffort }),
     ...(base.serviceTier === undefined ? {} : { serviceTier: base.serviceTier }),
+    ...(base.voiceProviderModel === undefined ? {} : { voiceProviderModel: base.voiceProviderModel }),
   };
   return validateWorkspaceSetupDraft({
     schemaVersion: 1,
@@ -292,10 +300,24 @@ export function setupFileName(file: SetupFile): string {
 
 function chosenModel(
   model: SetupFileModel,
-  provider: OctopusProviderInterface | null,
-): Pick<WorkspaceSetupDraft, "providerModel" | "reasoningEffort" | "serviceTier"> {
-  const offered = provider?.models.find((candidate) => candidate.model === model.id && candidate.showInPicker);
-  if (!offered) throw new Error(`This setup chooses the model '${model.id}', which is not available here.`);
+  providers: readonly OctopusProviderInterface[],
+  voiceProvider: OctopusProviderInterface | null,
+): Pick<WorkspaceSetupDraft, "providerInterfaceId" | "providerModel" | "reasoningEffort" | "serviceTier" | "voiceProviderModel"> {
+  const candidates = model.provider
+    ? providers.filter((entry) => entry.id === model.provider)
+    : providers;
+  if (model.provider && !candidates.length) {
+    throw new Error(`This setup chooses the provider '${model.provider}', which is not available here.`);
+  }
+  const matches = candidates.flatMap((entry) => {
+    const offered = entry.models.find((candidate) => candidate.model === model.id && candidate.showInPicker);
+    return offered ? [{ provider: entry, offered }] : [];
+  });
+  if (matches.length === 0) throw new Error(`This setup chooses the model '${model.id}', which is not available here.`);
+  if (matches.length > 1) {
+    throw new Error(`The model '${model.id}' is offered by more than one provider; specify 'model.provider' in the setup file.`);
+  }
+  const { provider: selectedProvider, offered } = matches[0];
   if (model.reasoning_effort && offered.supportedReasoningEfforts.length && !offered.supportedReasoningEfforts.includes(model.reasoning_effort)) {
     throw new Error(`The model '${offered.displayName || offered.model}' does not offer the reasoning effort '${model.reasoning_effort}'.`);
   }
@@ -303,10 +325,18 @@ function chosenModel(
   if (tier !== "default" && !(offered.serviceTiers ?? []).some((candidate) => candidate.id === tier)) {
     throw new Error(`The model '${offered.displayName || offered.model}' does not offer the speed '${tier}'.`);
   }
+  let voiceProviderModel: string | undefined;
+  if (model.voice_model !== undefined) {
+    const offeredVoice = voiceProvider?.models.find((candidate) => candidate.model === model.voice_model && candidate.showInPicker);
+    if (!offeredVoice) throw new Error(`This setup chooses the voice model '${model.voice_model}', which is not available here.`);
+    voiceProviderModel = offeredVoice.model;
+  }
   return {
+    providerInterfaceId: selectedProvider.id,
     providerModel: offered.model,
     reasoningEffort: model.reasoning_effort ?? offered.defaultReasoningEffort ?? "",
     serviceTier: tier,
+    ...(voiceProviderModel !== undefined ? { voiceProviderModel } : {}),
   };
 }
 
@@ -343,11 +373,18 @@ function parseCapability(value: unknown, index: number, projectIds: ReadonlySet<
 }
 
 function parseModel(value: unknown): SetupFileModel {
-  const row = exact(value, ["id", "reasoning_effort", "service_tier"], ["reasoning_effort", "service_tier"], "The model");
+  const row = exact(
+    value,
+    ["provider", "id", "reasoning_effort", "service_tier", "voice_model"],
+    ["provider", "reasoning_effort", "service_tier", "voice_model"],
+    "The model",
+  );
   return {
+    ...(row.provider === undefined ? {} : { provider: identifier(row.provider, "The model provider") }),
     id: text(row.id, "The model id", 256),
     ...(row.reasoning_effort === undefined ? {} : { reasoning_effort: text(row.reasoning_effort, "The reasoning effort", 80) }),
     ...(row.service_tier === undefined ? {} : { service_tier: text(row.service_tier, "The model speed", 80) }),
+    ...(row.voice_model === undefined ? {} : { voice_model: text(row.voice_model, "The voice model", 256) }),
   };
 }
 

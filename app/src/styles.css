@@ -7030,6 +7030,16 @@ button.detail-row.is-clickable:hover {
   white-space: nowrap;
 }
 
+.setup-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  padding: 6px 0;
+}
+
 .setup-inline-input {
   flex: 1 1 auto;
   min-width: 0;

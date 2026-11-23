@@ -103,6 +103,36 @@ test("onboarding requires the explicit ChatGPT sign-in action and prevents dupli
     await view.render({ ...props, applyState: { ...props.applyState, state: "running", label: "Connecting ChatGPT" } });
     assert.equal(button(view.container, "Sign in with ChatGPT"), undefined);
     assert.equal(button(view.container, "Working…").disabled, true);
+    const providerLogo = "data:image/svg+xml;base64,PHN2Zy8+";
+    await view.render({
+      ...props,
+      applyState: {
+        state: "awaiting_sign_in",
+        label: "Sign in to Antigravity",
+        detail: "Continue in your browser.",
+        signInButtonLabel: "Continue with Antigravity",
+        signInProvider: { id: "world_provider_antigravity", label: "Antigravity", logoDataUrl: providerLogo },
+        percent: null,
+        error: "",
+      },
+    });
+    assert.equal(view.container.querySelector(".chatgpt-signin-logo img")?.getAttribute("src"), providerLogo);
+    assert.equal(view.container.querySelector(".welcome-footer"), null);
+    await click(button(view.container, "Continue with Antigravity"));
+    assert.equal(signIns, 2);
+    await view.render({
+      ...props,
+      applyState: {
+        state: "running",
+        label: "Sign in to Antigravity",
+        detail: "Continue signing in with your browser",
+        connectingButtonLabel: "Opening browser…",
+        signInProvider: { id: "world_provider_antigravity", label: "Antigravity", logoDataUrl: providerLogo },
+        percent: 55,
+        error: "",
+      },
+    });
+    assert.equal(button(view.container, "Opening browser…").disabled, true);
   } finally { await view.close(); }
 });
 

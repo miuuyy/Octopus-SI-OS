@@ -6,6 +6,7 @@ const { createClientSetupStore } = require("../electron/clientSetup.cjs");
 const { initializeWorkspace, readWorkspaceSetupState, workspaceInitializeRequestDigest } = require("../electron/workspaceSetup.cjs");
 const { applyLocalApplicationPack, installLocalPackages, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
 const { createOperatorChatClientLoader } = require("../electron/operatorChatClientContract.cjs");
+const { createApplicationConnectionHost, createRegistryConnectionTargets } = require("../electron/applicationConnection.cjs");
 const { createClientProviderMetadata, validateProviderModelSelection, providerSetupRequiredState, readProviderDescriptor } = require("../electron/clientProviderMetadata.cjs");
 const { readProviderInterfaceDescriptors, mutateOctopusOsWorkspace, setupTriggerEntries, setupTriggerProof, armSetupTriggers, setupTriggerTaskPlanner } = require("../electron/projection.cjs");
 const { projectionReadRequest } = require("../electron/projectionReadContract.cjs");
@@ -100,10 +101,27 @@ function createSetupOwners(environment, options = {}) {
   });
   let projection = null;
   const getProjection = () => projection ??= projectionStore(environment);
+  let connectionHost = null;
+  const getConnectionHost = () => connectionHost ??= createApplicationConnectionHost({
+    resolveTargets: createRegistryConnectionTargets({
+      registryRoot: () => registryRoot,
+      octopusHome: () => environment.home,
+      launchEnvironment: () => ({ ...process.env, ...(environment.launchEnv ?? {}) }),
+      openExternal: (url) => {
+        if (typeof options.ui?.openExternal !== "function") {
+          throw new Error("Sign-in requires ui.openExternal(url) to display the native sign-in address.");
+        }
+        return options.ui.openExternal(url);
+      },
+    }),
+    scope: () => environment.home,
+  });
   const metadata = createClientProviderMetadata({ registryRoot: () => registryRoot,
     sourceRegistryRoot: () => environment.packageRoots.sourceRegistryRoot,
     octopusHome: () => environment.home,
-    accountClient: () => environment.accountClient(), reference: setupReference });
+    accountClient: () => environment.accountClient(),
+    connectionHost: getConnectionHost,
+    reference: setupReference });
 
   async function planSurface({ eeInstancesRoot, request }) {
     checkCancelled(options.signal);
@@ -308,11 +326,26 @@ function createSetupOwners(environment, options = {}) {
           }
           return;
         }
+        const descriptor = await readProviderDescriptor(registryRoot, plan.provider.interface_id);
+        if (descriptor.interface_driver_config?.private_config?.client_connection !== undefined) {
+          let allowed = options.signIn === true;
+          if (!allowed && !options.nonInteractive) {
+            allowed = await choose(options, "sign_in", `Connect ${descriptor.id} to continue`, [
+              { value: "sign_in", label: `Connect ${descriptor.id}` }, { value: "cancel", label: "Cancel setup" },
+            ], undefined, "sign_in") === "sign_in";
+          }
+          if (!allowed) throw new Error(`Provider '${descriptor.id}' is not connected. Run interactive setup or explicitly allow sign-in with an address handler.`);
+          await metadata.setupOwner.apply(plan, {
+            onProgress: (detail) => options.onProgress?.({ step: "provider", phase: "applying", detail }),
+          });
+          if (!await metadata.setupOwner.probe(plan)) throw new Error(`Provider '${descriptor.id}' sign-in completed without a connected account.`);
+          return;
+        }
         await ensureSignIn(environment, options);
         if (!await metadata.setupOwner.probe(plan)) throw new Error("ChatGPT sign-in completed without a readable account.");
       },
     },
-    close() { projection?.close(); },
+    close() { projection?.close(); connectionHost?.dispose(); },
   };
 }
 
@@ -396,18 +429,36 @@ async function collectChoices(environment, catalog, pack, options) {
   if (discovered.modelCatalogError) throw new Error(discovered.modelCatalogError);
   const models = discovered.models.filter((row) => row.showInPicker);
   if (!models.length) throw new Error("Home's provider returned no selectable models.");
+  const homeRecipe = pack.workspace_setup.home;
+  const defaultModel = providerId === homeRecipe.provider_interface_id && homeRecipe.default_model
+    && models.some((row) => row.model === homeRecipe.default_model)
+    ? homeRecipe.default_model
+    : models.find((row) => row.isDefault)?.model ?? models[0].model;
   const model = await choose(options, "model", "Choose a model for Home", models.map((row) => ({ value: row.model, label: row.displayName })),
-    options.model, models.find((row) => row.isDefault)?.model ?? models[0].model);
+    options.model, defaultModel);
   const modelRow = models.find((row) => row.model === model);
   if (!modelRow) throw new Error("Choose a model from the provider's current catalogue.");
+  const defaultEffort = providerId === homeRecipe.provider_interface_id && model === homeRecipe.default_model
+    && homeRecipe.default_reasoning_effort && modelRow.supportedReasoningEfforts.includes(homeRecipe.default_reasoning_effort)
+    ? homeRecipe.default_reasoning_effort
+    : modelRow.defaultReasoningEffort;
   const reasoningEffort = options.reasoningEffort ?? (modelRow.supportedReasoningEfforts.length
-    ? options.nonInteractive ? modelRow.defaultReasoningEffort : await choose(options, "reasoning", "Choose a reasoning level",
-      modelRow.supportedReasoningEfforts.map((value) => ({ value, label: value })), undefined, modelRow.defaultReasoningEffort)
+    ? options.nonInteractive ? defaultEffort : await choose(options, "reasoning", "Choose a reasoning level",
+      modelRow.supportedReasoningEfforts.map((value) => ({ value, label: value })), undefined, defaultEffort)
     : "");
   const serviceTier = options.serviceTier;
   validateProviderModelSelection([discovered], { providerInterfaceId: provider.id, providerModel: model, reasoningEffort, serviceTier });
+  let voiceModel = options.voiceModel;
+  if (voiceModel !== undefined) {
+    const voiceProviderId = homeRecipe.voice?.provider_interface_id;
+    const voiceProvider = voiceProviderId ? providers.find((row) => row.id === voiceProviderId) : null;
+    if (!voiceProvider) throw new Error("This Application Pack does not declare a Home voice provider.");
+    const [discoveredVoice] = await metadata.catalog([voiceProvider]);
+    if (discoveredVoice.modelCatalogError) throw new Error(discoveredVoice.modelCatalogError);
+    validateProviderModelSelection([discoveredVoice], { providerInterfaceId: voiceProvider.id, providerModel: voiceModel, reasoningEffort: "" });
+  }
   return { operationId: options.operationId ?? randomUUID(), workspaceName, workspaceGoal: options.workspaceGoal ?? workspaceName,
-    projects, providerId, requiredState, extraPackages, providerPackage, model, reasoningEffort, serviceTier, recommended, agentPresets: options.agentPresets };
+    projects, providerId, requiredState, extraPackages, providerPackage, model, reasoningEffort, serviceTier, voiceModel, recommended, agentPresets: options.agentPresets };
 }
 
 function compileSetupPlan(pack, choices) {
@@ -444,7 +495,9 @@ function compileSetupPlan(pack, choices) {
     root: { key: "root", templateName: "existence", name: humanText(choices.workspaceName, "Workspace name", 80), goal: humanText(choices.workspaceGoal, "Workspace goal", 240) },
     home: { name: "Home", providerInterfaceId: providerId, providerModel: choices.model,
       workerInterfaceId: recipe.worker_interface_id, reasoningEffort: choices.reasoningEffort,
-      ...(choices.serviceTier ? { serviceTier: choices.serviceTier } : {}), doorHostSlots: structuredClone(recipe.door_host_slots ?? {}),
+      ...(choices.serviceTier ? { serviceTier: choices.serviceTier } : {}),
+      ...(choices.voiceModel ? { voiceModel: choices.voiceModel } : {}),
+      doorHostSlots: structuredClone(recipe.door_host_slots ?? {}),
       contextArtifactBindings: recipe.context_artifact_bindings, selectedWorkerEnvironmentKinds: recipe.selected_worker_environment_kinds },
     task: { workerInterfaceId: taskRecipe.worker_interface_id, contextArtifactBindings: taskRecipe.context_artifact_bindings,
       selectedWorkerEnvironmentKinds: taskRecipe.selected_worker_environment_kinds },
@@ -494,7 +547,7 @@ async function verifySetupPlan(environment, plan) {
     operationId: request.operationId, workspaceName: request.root.name, workspaceGoal: request.root.goal,
     projects: request.projects.map((row) => ({ ...row, ...row.presentation })),
     providerId, requiredState, extraPackages, providerPackage,
-    model: request.home.providerModel, reasoningEffort: request.home.reasoningEffort, serviceTier: request.home.serviceTier,
+    model: request.home.providerModel, reasoningEffort: request.home.reasoningEffort, serviceTier: request.home.serviceTier, voiceModel: request.home.voiceModel,
     recommended: plan.pack.selected_recommended, agentPresets: (request.agentPresets ?? []).map((row) => row.presetId),
   });
   if (stableJson(plan) !== stableJson(expected)) throw new Error("Saved setup choices no longer match the Application Pack's recipe and source files.");
@@ -596,11 +649,11 @@ async function choose(options, id, prompt, choices, value, defaultValue) {
   return value;
 }
 
-function hasNewChoices(options) { return ["packId", "workspaceName", "workspaceGoal", "projectName", "projects", "providerId", "model", "reasoningEffort", "serviceTier", "agentPresets"].some((key) => options[key] !== undefined) || options.recommended?.length > 0; }
+function hasNewChoices(options) { return ["packId", "workspaceName", "workspaceGoal", "projectName", "projects", "providerId", "model", "reasoningEffort", "serviceTier", "voiceModel", "agentPresets"].some((key) => options[key] !== undefined) || options.recommended?.length > 0; }
 function assertSavedChoices(options, plan) {
   const expected = { packId: plan.pack.id, workspaceName: plan.workspace.request.root.name,
     workspaceGoal: plan.workspace.request.root.goal, providerId: plan.workspace.request.home.providerInterfaceId, model: plan.workspace.request.home.providerModel,
-    reasoningEffort: plan.workspace.request.home.reasoningEffort, serviceTier: plan.workspace.request.home.serviceTier };
+    reasoningEffort: plan.workspace.request.home.reasoningEffort, serviceTier: plan.workspace.request.home.serviceTier, voiceModel: plan.workspace.request.home.voiceModel };
   for (const [field, value] of Object.entries(expected)) {
     if (options[field] !== undefined && options[field] !== value) throw new Error(`Saved setup already chose ${field}. Rerun without replacement choices.`);
   }

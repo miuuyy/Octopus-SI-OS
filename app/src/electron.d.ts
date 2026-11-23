@@ -1405,6 +1405,10 @@ export type OctopusProviderInterface = {
   descriptorPath: string;
   runtimeHandlerRef?: string;
   sourceNames: string[];
+  accountAuthKind?: "client_metadata" | "client_connection" | "credential";
+  logoDataUrl?: string;
+  logoDarkDataUrl?: string;
+  connectionSummary?: string;
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;
@@ -1973,6 +1977,7 @@ export type OctopusClientSetupProgress = {
   step: "packages" | "extensions" | "provider" | "workspace";
   phase: "verifying" | "applying" | "complete" | "sealed";
   percent: number;
+  detail?: string;
 };
 
 export type OctopusClientContext = readonly Readonly<{ name: string; text: string }>[];

@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { modelServiceTiers, validateModelServiceTier } = require("./providerModelTiers.cjs");
@@ -21,7 +22,8 @@ async function readProvider(registryRoot, id) {
 }
 
 function providerSetupRequiredState(descriptor) {
-  return descriptor?.interface_driver_config?.private_config?.client_metadata !== undefined
+  const privateConfig = descriptor?.interface_driver_config?.private_config;
+  return privateConfig?.client_metadata !== undefined || privateConfig?.client_connection !== undefined
     ? "account_readable"
     : "credential_configured";
 }
@@ -59,7 +61,7 @@ async function loadClientMetadata(registryRoot, descriptor) {
   return client;
 }
 
-function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopusHome, accountClient, reference }) {
+function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopusHome, accountClient, connectionHost, reference }) {
   async function catalog(providers, selectedRegistryRoot = registryRoot) {
     const root = selectedRegistryRoot();
     const cache = new Map();
@@ -87,16 +89,61 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopu
     if (selectedRegistryRoot() !== root) throw new Error("Provider catalogue scope changed during discovery.");
     return result;
   }
-  async function accountOperation(plan, operation) {
+  async function connectionOperation(descriptor, root, operation, options = {}) {
+    const host = typeof connectionHost === "function" ? connectionHost() : connectionHost;
+    if (!host || typeof host.probe !== "function" || typeof host.connect !== "function") {
+      throw new Error(`Provider '${descriptor.id}' requires the application connection host during setup.`);
+    }
+    if (operation === "probeAccount") {
+      const probed = await host.probe({ applicationId: descriptor.id });
+      if (registryRoot() !== root) throw new Error("Provider account scope changed during setup.");
+      const match = probed?.interfaces?.find((entry) => entry.interfaceId === descriptor.id);
+      if (!match) throw new Error(`Provider '${descriptor.id}' connection status could not be checked.`);
+      if (match.state?.state === "connected") {
+        return [reference("provider_observation", descriptor.id, {
+          source: "interface.client_connection",
+          state: "connected",
+          ...(match.state.account ? { account: match.state.account } : {}),
+        })];
+      }
+      if (match.state?.state === "not_connected" || match.state?.state === "expired") return null;
+      throw new Error(match.state?.error?.message || `Provider '${descriptor.id}' connection check failed.`);
+    }
+    if (operation === "signIn") {
+      const connected = await host.connect(
+        { operationId: `setup_${crypto.randomUUID()}`, applicationId: descriptor.id, interfaceId: descriptor.id, input: {} },
+        {
+          onProgress: (update) => {
+            if (typeof options?.onProgress === "function" && typeof update?.message === "string" && update.message.trim()) {
+              options.onProgress(update.message.trim());
+            }
+          },
+        },
+      );
+      if (registryRoot() !== root) throw new Error("Provider account scope changed during setup.");
+      if (connected?.state !== "connected") {
+        throw new Error(`Provider '${descriptor.id}' did not establish a connected account.`);
+      }
+      return connected;
+    }
+    throw new Error(`Provider '${descriptor.id}' does not support setup operation '${operation}'.`);
+  }
+  async function accountOperation(plan, operation, options = {}) {
     const root = registryRoot();
     const descriptor = await readProvider(root, plan.provider.interface_id);
-    const client = await loadClientMetadata(root, descriptor);
-    if (typeof client?.[operation] !== "function") {
-      throw new Error(`Provider '${descriptor.id}' does not support desktop account setup.`);
+    if (descriptor.interface_driver_config?.private_config?.client_metadata !== undefined) {
+      const client = await loadClientMetadata(root, descriptor);
+      if (typeof client?.[operation] !== "function") {
+        throw new Error(`Provider '${descriptor.id}' does not support desktop account setup.`);
+      }
+      const result = await client[operation]({ descriptor, accountClient, reference });
+      if (registryRoot() !== root) throw new Error("Provider account scope changed during setup.");
+      return result;
     }
-    const result = await client[operation]({ descriptor, accountClient, reference });
-    if (registryRoot() !== root) throw new Error("Provider account scope changed during setup.");
-    return result;
+    if (descriptor.interface_driver_config?.private_config?.client_connection !== undefined) {
+      return connectionOperation(descriptor, root, operation, options);
+    }
+    throw new Error(`Provider '${descriptor.id}' does not support desktop account setup.`);
   }
   async function credentialScope(plan) {
     const root = registryRoot();
@@ -175,17 +222,40 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopu
     async setupCatalog(localPackages) {
       const activeRoot = registryRoot();
       const sourceRoot = sourceRegistryRoot();
-      const packs = await Promise.all(localPackages.packs.map(async (pack) => {
-        if (pack.workspace_setup === undefined) return pack;
-        const id = pack.workspace_setup.home.provider_interface_id;
-        const owners = pack.components.filter((component) => component.product_id === id);
-        if (owners.length !== 1 || pack.setup_provider?.id !== id) {
+      async function discoverPackProvider(pack, providerId, providerEntry) {
+        const owners = pack.components.filter((component) => component.product_id === providerId);
+        if (owners.length !== 1 || providerEntry?.id !== providerId) {
           throw new Error(`Setup pack '${pack.id}' has no exact provider catalogue owner.`);
         }
         const selectedRoot = owners[0].materialized === true || owners[0].partially_materialized === true
           ? registryRoot : sourceRegistryRoot;
-        const [provider] = await catalog([pack.setup_provider], selectedRoot);
-        return { ...pack, setup_provider: provider };
+        const [provider] = await catalog([providerEntry], selectedRoot);
+        return provider;
+      }
+      const packs = await Promise.all(localPackages.packs.map(async (pack) => {
+        if (pack.workspace_setup === undefined) return pack;
+        const home = pack.workspace_setup.home;
+        const defaultId = home.provider_interface_id;
+        const providerIds = Array.isArray(home.provider_interface_ids) && home.provider_interface_ids.length
+          ? home.provider_interface_ids
+          : [defaultId];
+        const rawProviders = Array.isArray(pack.setup_providers)
+          ? pack.setup_providers
+          : (pack.setup_provider ? [pack.setup_provider] : []);
+        const discoveredProviders = await Promise.all(providerIds.map((id) => (
+          discoverPackProvider(pack, id, rawProviders.find((entry) => entry?.id === id))
+        )));
+        const provider = discoveredProviders.find((entry) => entry.id === defaultId) ?? null;
+        const voiceProviderId = home.voice?.provider_interface_id;
+        const voiceProvider = voiceProviderId
+          ? await discoverPackProvider(pack, voiceProviderId, pack.setup_voice_provider)
+          : undefined;
+        return {
+          ...pack,
+          setup_provider: provider,
+          ...(Array.isArray(pack.setup_providers) ? { setup_providers: discoveredProviders } : {}),
+          ...(voiceProviderId ? { setup_voice_provider: voiceProvider } : {}),
+        };
       }));
       if (registryRoot() !== activeRoot || sourceRegistryRoot() !== sourceRoot) {
         throw new Error("Setup provider catalogue scope changed during discovery.");
@@ -193,12 +263,12 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopu
       return { ...localPackages, packs };
     },
     setupOwner: {
-      probe: (plan) => (plan?.provider?.required_state === "credential_configured"
+      probe: (plan, options) => (plan?.provider?.required_state === "credential_configured"
         ? probeCredential(plan)
-        : accountOperation(plan, "probeAccount")),
+        : accountOperation(plan, "probeAccount", options)),
       apply: (plan, options) => (plan?.provider?.required_state === "credential_configured"
         ? applyCredential(plan, options)
-        : accountOperation(plan, "signIn")),
+        : accountOperation(plan, "signIn", options)),
     },
     async models(request) {
       const id = request?.providerInterfaceId;

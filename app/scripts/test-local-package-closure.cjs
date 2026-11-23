@@ -49,8 +49,11 @@ async function assertPackMembers() {
     "verifier/tool_result_correspondence",
   ]);
   const pack = JSON.parse(await fs.readFile(path.join(libraryRoot, "packs", "codex.json"), "utf8"));
-  assert.equal(pack.workspace_setup.home.provider_interface_id, "world_provider_codex");
-  assert.equal(pack.workspace_setup.project_defaults[0].package_id, "world_provider_codex");
+  assert.equal(pack.workspace_setup.home.provider_interface_id, "world_provider_antigravity");
+  assert.deepEqual(pack.workspace_setup.home.provider_interface_ids, ["world_provider_antigravity", "world_provider_codex"]);
+  assert.equal(pack.workspace_setup.home.default_model, "gemini-4-neon");
+  assert.equal(pack.workspace_setup.home.default_reasoning_effort, "low");
+  assert.equal(pack.workspace_setup.project_defaults[0].package_id, "world_provider_antigravity");
 }
 
 async function copyBaseline(activeRegistryRoot) {
@@ -260,6 +263,7 @@ async function run(preparedExecutable) {
     assert.equal(pack.workspace_setup.selection, "included");
     assert.deepEqual(pack.workspace_setup.home.selected_worker_environment_kinds, ["browser_session", "code_mode", "desktop_session", "filesystem_workspace", "system_room"]);
     assert.deepEqual(pack.workspace_setup.project_defaults, [
+      { package_id: "world_provider_antigravity", default_for_new_tasks: true },
       { package_id: "world_provider_codex", default_for_new_tasks: true },
       { package_id: "driver.browser_session", default_for_new_tasks: true },
       { package_id: "driver.desktop_session", default_for_new_tasks: true },
@@ -331,6 +335,7 @@ async function run(preparedExecutable) {
 
     const home = installedPack.workspace_setup.home;
     const task = installedPack.workspace_setup.task;
+    await fs.mkdir(path.join(octopusHomeRoot, "interfaces", home.provider_interface_id, "opencodex-account"), { recursive: true });
     const plan = await planOperatorChatSurface({
       octopusHome: () => octopusHomeRoot,
       installationRoot: () => root,
@@ -340,7 +345,9 @@ async function run(preparedExecutable) {
       chatId: "freshhome0000000000000001",
       cycle: "freshcycle00000000000001",
       providerInterfaceId: home.provider_interface_id,
-      providerModel: "gpt-5.6-sol",
+      providerModel: home.default_model,
+      reasoningEffort: home.default_reasoning_effort,
+      voiceModel: "gpt-live-1-codex",
       workerInterfaceId: home.worker_interface_id,
       eeId: "ee_existence",
       clientSurfaceRole: "home",
@@ -386,7 +393,7 @@ async function run(preparedExecutable) {
       chatId: "freshproject00000000000001",
       cycle: "freshprojectcycle00000001",
       providerInterfaceId: home.provider_interface_id,
-      providerModel: "gpt-5.6-sol",
+      providerModel: home.default_model,
       workerInterfaceId: task.worker_interface_id,
       eeId: "ee_project_preflight",
       clientSurfaceRole: "task",
@@ -498,6 +505,7 @@ async function boundedAgentPresetFixture(executable) {
     const model = provider.interface_driver_config.private_config.model;
     const effort = provider.interface_driver_config.private_config.reasoning_effort;
     const eeRoot = path.join(home, "state", "ee_instances");
+    await fs.mkdir(path.join(home, "interfaces", providerId, "opencodex-account"), { recursive: true });
     await fs.mkdir(path.join(home, "state", "runs"), { recursive: true });
     await fs.mkdir(path.join(home, "ledger"), { recursive: true });
     await fs.writeFile(path.join(home, "ledger", "movements.jsonl"), "");
