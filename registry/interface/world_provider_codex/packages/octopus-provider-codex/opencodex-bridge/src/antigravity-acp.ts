@@ -193,6 +193,7 @@ class AcpProcess {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private stderr = "";
+  private lastAuthorizationUrl = "";
   private killed = false;
   readonly closed: Promise<number | null>;
   onNotification: (method: string, params: JsonRecord) => void = () => undefined;
@@ -221,7 +222,7 @@ class AcpProcess {
         diagnosticLine = diagnosticLine.slice(newline + 1);
       }
       if (diagnosticLine.length > STDERR_LIMIT) diagnosticLine = diagnosticLine.slice(-STDERR_LIMIT);
-      if (url) this.onAuthorizationUrl(url);
+      if (url && url !== this.lastAuthorizationUrl) { this.lastAuthorizationUrl = url; this.onAuthorizationUrl(url); }
     });
     void this.read();
     void this.closed.then(code => {
