@@ -580,8 +580,10 @@ async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn s
                     },
                 }
             };
-            while let Ok(event) = daemon_boot_rx.try_recv() {
-                report_daemon_boot_event(&mut boot, event);
+            if !matches!(startup_result, Ok(false)) {
+                while let Some(event) = daemon_boot_rx.recv().await {
+                    report_daemon_boot_event(&mut boot, event);
+                }
             }
             let daemon_ready = match startup_result {
                 Ok(ready) => ready,

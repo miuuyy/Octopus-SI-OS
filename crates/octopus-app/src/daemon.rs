@@ -455,6 +455,7 @@ pub(crate) async fn run_daemon_on_dirs(
         },
     );
     let writer = crate::ledger_writer::LedgerWriter::new(log, spotlight).with_movement_wakes(movement_wakes);
+    drop(boot_events);
     if let Some(ready) = ready {
         ready
             .send(())
@@ -509,9 +510,12 @@ async fn run_admission_loop(
         Emission(SystemInterfaceEmission),
     }
 
+    const RUN_CHANGE_BATCH_LIMIT: usize = 256;
     let mut inflight = tokio::task::JoinSet::new();
     let mut relay = RelayCatchUpQueue::default();
     let (relay_done, mut relay_results) = tokio::sync::mpsc::unbounded_channel();
+    let mut run_change_batch = Vec::with_capacity(RUN_CHANGE_BATCH_LIMIT);
+    let mut run_changes_open = true;
     let mut result = loop {
         let relay_due = relay.ready_at();
         tokio::select! {
@@ -550,19 +554,20 @@ async fn run_admission_loop(
                     let _ = done.send(retry);
                 });
             }
-            Some(change) = run_changes.recv() => {
-                let mut paths = RelayPaths::new();
-                let mut collect = |change: notify::Result<notify::Event>| match change {
-                    Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => paths.extend(event.paths),
-                    Ok(_) => {},
-                    Err(error) => eprintln!("run binding watcher failed: {error}"),
-                };
-                collect(change);
-                for _ in 0..255 {
-                    let Ok(change) = run_changes.try_recv() else { break };
-                    collect(change);
+            count = run_changes.recv_many(&mut run_change_batch, RUN_CHANGE_BATCH_LIMIT), if run_changes_open => {
+                if count == 0 {
+                    run_changes_open = false;
+                } else {
+                    let mut paths = RelayPaths::new();
+                    for change in run_change_batch.drain(..) {
+                        match change {
+                            Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => paths.extend(event.paths),
+                            Ok(_) => {},
+                            Err(error) => eprintln!("run binding watcher failed: {error}"),
+                        }
+                    }
+                    relay.extend(paths);
                 }
-                relay.extend(paths);
             }
             next = async {
                 tokio::select! {

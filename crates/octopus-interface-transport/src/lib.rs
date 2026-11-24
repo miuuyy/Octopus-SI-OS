@@ -1219,27 +1219,18 @@ impl InterfaceActivationReconciler {
                 "interface life reconciliation failed closed after filesystem watch activation"
             );
         }
+        let mut event_batch = Vec::with_capacity(INTERFACE_WATCH_EVENT_BATCH_LIMIT);
         loop {
             tokio::select! {
                 _ = self.root_cancel.cancelled() => break,
-                event = events.recv() => {
-                    let Some(event) = event else {
+                count = events.recv_many(&mut event_batch, INTERFACE_WATCH_EVENT_BATCH_LIMIT) => {
+                    if count == 0 {
                         tracing::error!("interface life filesystem watcher channel closed");
                         break;
-                    };
-                    let event = match event {
-                        Ok(event) => event,
-                        Err(error) => {
-                            tracing::error!(error = %error, "interface life filesystem watcher failed");
-                            break;
-                        }
-                    };
+                    }
                     let mut event_error = None;
-                    let mut reconcile = classify_interface_watch_event(&event, &roots);
-                    for _ in 1..INTERFACE_WATCH_EVENT_BATCH_LIMIT {
-                        let Ok(event) = events.try_recv() else {
-                            break;
-                        };
+                    let mut reconcile = WatchReconcile::None;
+                    for event in event_batch.drain(..) {
                         match event {
                             Ok(event) => {
                                 reconcile = reconcile.merge(classify_interface_watch_event(&event, &roots));
