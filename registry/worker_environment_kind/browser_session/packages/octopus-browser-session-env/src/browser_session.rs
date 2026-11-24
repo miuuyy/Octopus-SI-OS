@@ -58,6 +58,29 @@ use actions::{BrowserRef, ObservationState, NavigationExpectation, arm_navigatio
 const CDP_WIRE: &str = "cdp";
 const DEFAULT_AUTH_HEADER: &str = "Authorization";
 const DEFAULT_AUTH_VALUE_PREFIX: &str = "Bearer ";
+const DEFAULT_CDP_REQUEST_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_CDP_NAVIGATION_TIMEOUT_MS: u64 = 45_000;
+const DEFAULT_CDP_MAX_CONTROL_RESPONSE_BYTES: usize = 4_194_304;
+
+fn default_cdp_auth_header() -> String {
+    DEFAULT_AUTH_HEADER.to_string()
+}
+
+fn default_cdp_auth_value_prefix() -> String {
+    DEFAULT_AUTH_VALUE_PREFIX.to_string()
+}
+
+fn default_cdp_request_timeout_ms() -> u64 {
+    DEFAULT_CDP_REQUEST_TIMEOUT_MS
+}
+
+fn default_cdp_navigation_timeout_ms() -> u64 {
+    DEFAULT_CDP_NAVIGATION_TIMEOUT_MS
+}
+
+fn default_cdp_max_control_response_bytes() -> usize {
+    DEFAULT_CDP_MAX_CONTROL_RESPONSE_BYTES
+}
 
 pub(crate) trait WorkerEnvironmentRecorder:
     WorkerEnvironmentLifecycleRecorder + WorkerEnvironmentLiveStateRecorder
@@ -172,16 +195,25 @@ enum BrowserTransportConfig {
 #[serde(deny_unknown_fields)]
 struct CdpConfig {
     discovery_url: String,
+    #[serde(default)]
     discovery_url_env: String,
+    #[serde(default)]
     auth_env_key: String,
+    #[serde(default)]
     auth_required: bool,
+    #[serde(default = "default_cdp_auth_header")]
     auth_header: String,
+    #[serde(default = "default_cdp_auth_value_prefix")]
     auth_value_prefix: String,
+    #[serde(default)]
     headers: BTreeMap<String, String>,
     #[serde(default)]
     allowed_websocket_hosts: Vec<String>,
+    #[serde(default = "default_cdp_request_timeout_ms")]
     request_timeout_ms: u64,
+    #[serde(default = "default_cdp_navigation_timeout_ms")]
     navigation_timeout_ms: u64,
+    #[serde(default = "default_cdp_max_control_response_bytes")]
     max_control_response_bytes: usize,
 }
 
@@ -2812,11 +2844,17 @@ impl ToolProcessHandler for BrowserRoom {
 }
 
 impl CdpTransport {
-    fn form(config: &CdpConfig) -> Result<Self, String> {
-
-        let env_url = std::env::var(&config.discovery_url_env)
-            .ok()
-            .filter(|value| !value.trim().is_empty());
+    fn validate_config(
+        config: &CdpConfig,
+        enforce_auth_env: bool,
+    ) -> Result<(reqwest::Url, HeaderMap, BTreeSet<String>), String> {
+        let env_url = if config.discovery_url_env.trim().is_empty() {
+            None
+        } else {
+            std::env::var(&config.discovery_url_env)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        };
         let raw_url = env_url.as_deref().unwrap_or(&config.discovery_url);
         let mut discovery_url = reqwest::Url::parse(raw_url.trim())
             .map_err(|error| format!("browser discovery URL '{raw_url}' is invalid: {error}"))?;
@@ -2841,6 +2879,7 @@ impl CdpTransport {
             if normalized.is_empty()
                 || normalized.contains('/')
                 || normalized.contains(':')
+                || normalized.chars().any(char::is_whitespace)
                 || normalized != host.as_str()
             {
                 return Err(format!(
@@ -2863,29 +2902,37 @@ impl CdpTransport {
                 .map_err(|error| format!("browser header value is invalid: {error}"))?;
             headers.insert(name, value);
         }
-        let auth = std::env::var(&config.auth_env_key)
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-        if config.auth_required && auth.is_none() {
+        let auth_header_name = if config.auth_header.trim().is_empty() {
+            DEFAULT_AUTH_HEADER
+        } else {
+            config.auth_header.trim()
+        };
+        let auth_header_name = HeaderName::from_bytes(auth_header_name.as_bytes())
+            .map_err(|error| format!("browser auth header name is invalid: {error}"))?;
+        if config.auth_required && config.auth_env_key.trim().is_empty() {
+            return Err("browser auth_required requires a non-empty auth_env_key".to_string());
+        }
+        let auth = if config.auth_env_key.trim().is_empty() {
+            None
+        } else {
+            std::env::var(&config.auth_env_key)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        };
+        if enforce_auth_env && config.auth_required && auth.is_none() {
             return Err(format!(
                 "browser auth env var '{}' is required but unset/empty",
                 config.auth_env_key
             ));
         }
         if let Some(secret) = auth {
-            let name = if config.auth_header.trim().is_empty() {
-                DEFAULT_AUTH_HEADER
-            } else {
-                config.auth_header.trim()
-            };
             let prefix = if config.auth_value_prefix.is_empty() {
                 DEFAULT_AUTH_VALUE_PREFIX
             } else {
                 &config.auth_value_prefix
             };
             headers.insert(
-                HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|error| format!("browser auth header name is invalid: {error}"))?,
+                auth_header_name,
                 HeaderValue::from_str(&format!("{prefix}{secret}"))
                     .map_err(|error| format!("browser auth header value is invalid: {error}"))?,
             );
@@ -2902,6 +2949,16 @@ impl CdpTransport {
                 "browser max_control_response_bytes must be between 1 and 67108864".to_string(),
             );
         }
+        Ok((discovery_url, headers, allowed_websocket_hosts))
+    }
+
+    fn validate_door_config(config: &CdpConfig) -> Result<(), String> {
+        Self::validate_config(config, false).map(|_| ())
+    }
+
+    fn form(config: &CdpConfig) -> Result<Self, String> {
+        let (discovery_url, headers, allowed_websocket_hosts) =
+            Self::validate_config(config, true)?;
         let request_timeout = Duration::from_millis(config.request_timeout_ms);
         let http = reqwest::Client::builder()
             .no_proxy()
@@ -3197,6 +3254,13 @@ impl CdpSession {
 
 fn load_browser_config(environment: &ToolProcessEnvironment) -> Result<BrowserConfig, String> {
     let descriptor = environment.resolved_interface_descriptor()?;
+    load_browser_config_from_descriptor(&environment.interface, &descriptor)
+}
+
+fn load_browser_config_from_descriptor(
+    interface: &octopus_descriptors::InterfaceId,
+    descriptor: &octopus_interfaces::InterfaceDescriptor,
+) -> Result<BrowserConfig, String> {
     let value = descriptor
         .interface_driver_config
         .as_ref()
@@ -3205,22 +3269,46 @@ fn load_browser_config(environment: &ToolProcessEnvironment) -> Result<BrowserCo
         .ok_or_else(|| {
             format!(
                 "browser interface '{}' declares no interface_driver_config.private_config.browser_room",
-                environment.interface
+                interface
             )
         })?;
     let config: BrowserConfig = serde_json::from_value(value).map_err(|error| {
         format!(
             "browser interface '{}' room config is malformed: {error}",
-            environment.interface
+            interface
         )
     })?;
     if config.schema_version != 1 {
         return Err(format!(
             "browser interface '{}' room schema_version is {}, expected 1",
-            environment.interface, config.schema_version
+            interface, config.schema_version
         ));
     }
     Ok(config)
+}
+
+pub fn prepare_browser_door_roots(
+    ctx: &octopus_tool_door_runtime::InterfaceLiftContext,
+) -> Result<BTreeMap<String, std::path::PathBuf>, String> {
+    let descriptor = ctx.owner_descriptor()?;
+    prepare_browser_door_roots_for_descriptor(&descriptor.id, &descriptor, ctx.owner_root_slots())
+}
+
+pub(crate) fn prepare_browser_door_roots_for_descriptor(
+    interface: &octopus_descriptors::InterfaceId,
+    descriptor: &octopus_interfaces::InterfaceDescriptor,
+    roots: &BTreeMap<String, std::path::PathBuf>,
+) -> Result<BTreeMap<String, std::path::PathBuf>, String> {
+    let config = load_browser_config_from_descriptor(interface, descriptor)?;
+    match &config.transport {
+        BrowserTransportConfig::Native(_) => {
+            crate::native_transport::prepare_private_native_host(roots)
+        }
+        BrowserTransportConfig::Cdp(cdp) => {
+            CdpTransport::validate_door_config(cdp)?;
+            Ok(roots.clone())
+        }
+    }
 }
 
 fn validate_limits(limits: &BrowserLimits) -> Result<(), String> {

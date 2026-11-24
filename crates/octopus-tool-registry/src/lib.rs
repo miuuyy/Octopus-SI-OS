@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod schema_narrowing;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +155,10 @@ pub enum ToolInterruptedEffectRecovery {
     ReinvokeExactArtifact,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(
     Clone,
     Debug,
@@ -167,6 +173,8 @@ pub enum ToolInterruptedEffectRecovery {
 #[serde(deny_unknown_fields)]
 pub struct ToolProcessPrivateReadSubpath {
     pub path: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -189,22 +197,28 @@ pub struct ToolDescriptor {
 }
 
 impl ToolDescriptor {
-    /// A copy is never wider than its original: the same executable, handler and
-    /// schema, run under an authority the original's authority covers.
+    /// A copy is never wider than its original: the same executable and handler,
+    /// an argument schema that narrows the original's, and an authority the
+    /// original's authority covers.
     pub fn never_wider_than(&self, original: &ToolDescriptor) -> bool {
         let (copy, held) = (&self.process, &original.process);
         copy.bin == held.bin
             && copy.args == held.args
             && copy.env == held.env
-            && copy.interrupted_effect_recovery == held.interrupted_effect_recovery
+            && (copy.interrupted_effect_recovery == held.interrupted_effect_recovery
+                || copy.interrupted_effect_recovery == ToolInterruptedEffectRecovery::Indeterminate)
             && copy.required_files.is_subset(&held.required_files)
             && copy.inherit_env.is_subset(&held.inherit_env)
             && copy.inherit_env_from_interface.is_subset(&held.inherit_env_from_interface)
             && copy.coordinate_root_slots.is_subset(&held.coordinate_root_slots)
-            && copy.private_read_subpaths.is_subset(&held.private_read_subpaths)
+            && copy.private_read_subpaths.iter().all(|declaration| {
+                held.private_read_subpaths
+                    .iter()
+                    .any(|allowed| allowed.path == declaration.path)
+            })
             && copy.authority.narrows(&held.authority)
             && self.handler_config == original.handler_config
-            && self.args_schema == original.args_schema
+            && schema_narrowing::args_schema_narrows(&self.args_schema, &original.args_schema)
             && self.is_world_effect == original.is_world_effect
             && self.supported_worker_environment_kinds.iter().all(|kind| original.supported_worker_environment_kinds.contains(kind))
     }
@@ -548,6 +562,7 @@ mod tests {
         .is_err());
         let declaration = ToolProcessPrivateReadSubpath {
             path: "secrets/auth".to_string(),
+            optional: false,
         };
         let mut descriptor = descriptor_with_code_kind();
         descriptor.process.private_read_subpaths = BTreeSet::from([declaration]);
@@ -555,6 +570,7 @@ mod tests {
         descriptor.process.private_read_subpaths =
             BTreeSet::from([ToolProcessPrivateReadSubpath {
                 path: "../secrets/auth".to_string(),
+                optional: false,
             }]);
         assert!(descriptor
             .validate()
@@ -568,5 +584,285 @@ mod tests {
             "private_read_subpaths": [{"path": "secrets/auth", "max_bytes": 4096}]
         }))
         .is_err());
+
+        let parsed: ToolProcessDeclaration = serde_json::from_value(json!({
+            "bin": "/usr/bin/true",
+            "authority": authority,
+            "private_read_subpaths": [{"path": "secrets/auth"}]
+        }))
+        .unwrap();
+        let required = parsed.private_read_subpaths.iter().next().unwrap();
+        assert!(!required.optional);
+        assert_eq!(serde_json::to_value(required).unwrap(), json!({"path": "secrets/auth"}));
+
+        let parsed_optional: ToolProcessDeclaration = serde_json::from_value(json!({
+            "bin": "/usr/bin/true",
+            "authority": serde_json::to_value(ProcessAuthoritySpec::default()).unwrap(),
+            "private_read_subpaths": [{"path": "secrets/auth", "optional": true}]
+        }))
+        .unwrap();
+        let optional = parsed_optional.private_read_subpaths.iter().next().unwrap();
+        assert!(optional.optional);
+        assert_eq!(
+            serde_json::to_value(optional).unwrap(),
+            json!({"path": "secrets/auth", "optional": true})
+        );
+
+        let mut duplicate_paths = descriptor_with_code_kind();
+        duplicate_paths.process.private_read_subpaths = BTreeSet::from([
+            ToolProcessPrivateReadSubpath {
+                path: "secrets/auth".to_string(),
+                optional: false,
+            },
+            ToolProcessPrivateReadSubpath {
+                path: "secrets/auth".to_string(),
+                optional: true,
+            },
+        ]);
+        assert!(duplicate_paths
+            .validate()
+            .unwrap_err()
+            .contains("repeats process private_read_subpath"));
+
+        let mut original = descriptor_with_code_kind();
+        original.process.private_read_subpaths = BTreeSet::from([ToolProcessPrivateReadSubpath {
+            path: "secrets/auth".to_string(),
+            optional: true,
+        }]);
+        let mut copy = original.clone();
+        copy.process.private_read_subpaths = BTreeSet::from([ToolProcessPrivateReadSubpath {
+            path: "secrets/auth".to_string(),
+            optional: false,
+        }]);
+        assert!(copy.never_wider_than(&original));
+        copy.process.private_read_subpaths.insert(ToolProcessPrivateReadSubpath {
+            path: "secrets/other".to_string(),
+            optional: true,
+        });
+        assert!(!copy.never_wider_than(&original));
+    }
+
+    #[test]
+    fn copy_of_survives_non_widening_base_schema_evolution() {
+        let mut copy = descriptor_with_code_kind();
+        copy.id = ToolDescriptorId::new("test.publish__run1");
+        copy.copy_of = Some(ToolDescriptorId::new("test.publish"));
+        copy.args_schema = json!({
+            "$defs": {
+                "str": { "type": "string" },
+                "ids": { "type": "array", "items": { "$ref": "#/$defs/str" } }
+            },
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entry"],
+            "properties": {
+                "entry": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id"],
+                    "properties": {
+                        "id": { "$ref": "#/$defs/str" },
+                        "inputs": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["checkpoint_id", "interface_id"],
+                                "properties": {
+                                    "checkpoint_id": { "$ref": "#/$defs/str" },
+                                    "interface_id": { "$ref": "#/$defs/str" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut upgraded_original = copy.clone();
+        upgraded_original.id = ToolDescriptorId::new("test.publish");
+        upgraded_original.copy_of = None;
+        upgraded_original.process.interrupted_effect_recovery =
+            super::ToolInterruptedEffectRecovery::ReinvokeExactArtifact;
+        upgraded_original.args_schema = json!({
+            "$defs": {
+                "str": { "type": "string", "description": "Updated doc" },
+                "ids": { "type": "array", "items": { "$ref": "#/$defs/str" } }
+            },
+            "type": "object",
+            "description": "Upgraded schema",
+            "additionalProperties": false,
+            "required": ["entry"],
+            "properties": {
+                "entry": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id"],
+                    "properties": {
+                        "id": { "$ref": "#/$defs/str" },
+                        "inputs": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["checkpoint_id", "interface_id"],
+                                "properties": {
+                                    "checkpoint_id": { "$ref": "#/$defs/str" },
+                                    "interface_id": { "$ref": "#/$defs/str" },
+                                    "allowed_operations": {
+                                        "type": "array",
+                                        "items": { "$ref": "#/$defs/str" },
+                                        "minItems": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(copy.never_wider_than(&upgraded_original));
+        assert!(!upgraded_original.never_wider_than(&copy));
+    }
+
+    #[test]
+    fn copy_of_rejects_schema_and_authority_widening_fail_closed() {
+        let mut original = descriptor_with_code_kind();
+        original.args_schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "limit"],
+            "properties": {
+                "mode": { "type": "string", "enum": ["read", "write"] },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "label": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z]+$" },
+                "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 8, "uniqueItems": true }
+            }
+        });
+
+        let mut narrowed = original.clone();
+        narrowed.args_schema = json!({
+            "type": "object",
+            "description": "Tighter copy",
+            "additionalProperties": false,
+            "required": ["mode", "limit", "label"],
+            "properties": {
+                "mode": { "type": "string", "enum": ["read"] },
+                "limit": { "type": "integer", "minimum": 5, "maximum": 50 },
+                "label": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[a-z]+$" }
+            }
+        });
+        assert!(narrowed.never_wider_than(&original));
+
+        let mut extra_prop = original.clone();
+        extra_prop.args_schema["properties"]["extra"] = json!({ "type": "string" });
+        assert!(!extra_prop.never_wider_than(&original));
+
+        let mut open_ap = original.clone();
+        open_ap.args_schema["additionalProperties"] = json!(true);
+        assert!(!open_ap.never_wider_than(&original));
+
+        let mut open_copy = descriptor_with_code_kind();
+        open_copy.args_schema = json!({ "type": "object", "properties": {} });
+        let mut typed_original = descriptor_with_code_kind();
+        typed_original.args_schema = json!({
+            "type": "object",
+            "properties": { "flag": { "type": "boolean" } }
+        });
+        assert!(!open_copy.never_wider_than(&typed_original));
+
+        let mut dropped_req = original.clone();
+        dropped_req.args_schema["required"] = json!(["mode"]);
+        assert!(!dropped_req.never_wider_than(&original));
+
+        let mut wider_enum = original.clone();
+        wider_enum.args_schema["properties"]["mode"]["enum"] = json!(["read", "write", "delete"]);
+        assert!(!wider_enum.never_wider_than(&original));
+
+        let mut wider_min = original.clone();
+        wider_min.args_schema["properties"]["limit"]["minimum"] = json!(0);
+        assert!(!wider_min.never_wider_than(&original));
+        let mut wider_max = original.clone();
+        wider_max.args_schema["properties"]["limit"]["maximum"] = json!(101);
+        assert!(!wider_max.never_wider_than(&original));
+
+        let mut wider_type = original.clone();
+        wider_type.args_schema["properties"]["limit"]["type"] = json!("number");
+        assert!(!wider_type.never_wider_than(&original));
+
+        let mut changed_pattern = original.clone();
+        changed_pattern.args_schema["properties"]["label"]["pattern"] = json!("^.*$");
+        assert!(!changed_pattern.never_wider_than(&original));
+        let mut non_unique = original.clone();
+        non_unique.args_schema["properties"]["tags"]["uniqueItems"] = json!(false);
+        assert!(!non_unique.never_wider_than(&original));
+
+        let mut one_of_orig = descriptor_with_code_kind();
+        one_of_orig.args_schema = json!({
+            "oneOf": [
+                { "type": "object", "required": ["a"], "properties": { "a": { "type": "string" } } },
+                { "type": "object", "required": ["b"], "properties": { "b": { "type": "string" } } }
+            ]
+        });
+        let mut one_of_mutated = one_of_orig.clone();
+        one_of_mutated.args_schema["oneOf"][0]["properties"]["a"]["minLength"] = json!(3);
+        assert!(!one_of_mutated.never_wider_than(&one_of_orig));
+
+        let mut unknown_orig = descriptor_with_code_kind();
+        unknown_orig.args_schema = json!({ "type": "object", "x-custom-gate": 1 });
+        let mut unknown_copy = descriptor_with_code_kind();
+        unknown_copy.args_schema = json!({ "type": "object" });
+        assert!(!unknown_copy.never_wider_than(&unknown_orig));
+
+        let mut cyclic_orig = descriptor_with_code_kind();
+        cyclic_orig.args_schema = json!({
+            "$defs": { "loop": { "$ref": "#/$defs/loop" } },
+            "$ref": "#/$defs/loop"
+        });
+        let mut cyclic_copy = descriptor_with_code_kind();
+        cyclic_copy.args_schema = json!({ "type": "object", "additionalProperties": false });
+        assert!(!cyclic_copy.never_wider_than(&cyclic_orig));
+
+        let mut recovery_orig = descriptor_with_code_kind();
+        recovery_orig.process.interrupted_effect_recovery =
+            super::ToolInterruptedEffectRecovery::Indeterminate;
+        let mut recovery_copy = recovery_orig.clone();
+        recovery_copy.process.interrupted_effect_recovery =
+            super::ToolInterruptedEffectRecovery::ReinvokeExactArtifact;
+        assert!(!recovery_copy.never_wider_than(&recovery_orig));
+
+        let mut wider_handler = original.clone();
+        wider_handler.handler_config = json!({ "op": "extra" });
+        assert!(!wider_handler.never_wider_than(&original));
+        let mut wider_authority = original.clone();
+        wider_authority.process.authority.allow_network = true;
+        assert!(!wider_authority.never_wider_than(&original));
+        let mut wider_root_slot = original.clone();
+        wider_root_slot
+            .process
+            .coordinate_root_slots
+            .insert("workspace_root".to_string());
+        assert!(!wider_root_slot.never_wider_than(&original));
+    }
+
+    #[test]
+    fn copy_of_handles_ref_with_sibling_keywords() {
+        let mut copy = descriptor_with_code_kind();
+        copy.args_schema = json!({
+            "$defs": {
+                "entries": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": { "a": { "type": "string" } }
+                }
+            },
+            "$ref": "#/$defs/entries",
+            "required": ["a"]
+        });
+        let mut upgraded = copy.clone();
+        upgraded.args_schema["$defs"]["entries"]["properties"]["b"] = json!({ "type": "integer" });
+        assert!(copy.never_wider_than(&upgraded));
+        assert!(!upgraded.never_wider_than(&copy));
     }
 }

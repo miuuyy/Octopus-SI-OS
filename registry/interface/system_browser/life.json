@@ -14,7 +14,9 @@
           "registry_interface_root",
           "registry_tool_root",
           "registry_worker_environment_kind_root",
-          "repo_root",
+          "repo_root"
+        ],
+        "optional_read_root_slots": [
           "browser_native_host_root"
         ],
         "write_root_slots": [],
@@ -39,7 +41,6 @@
         "registry_tool_root",
         "registry_worker_environment_kind_root",
         "repo_root",
-        "browser_native_host_root",
         "activation_secrets_home"
       ],
       "read_handles": [

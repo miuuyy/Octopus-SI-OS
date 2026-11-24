@@ -1767,3 +1767,259 @@ fn history_query_result_requires_exact_source_and_one_explicit_backend() {
         assert!(request.validate_result(&result, &policy).is_err(), "{field}");
     }
 }
+
+#[test]
+fn browser_door_prep_gates_native_and_cdp_transports_fail_closed() {
+    use super::browser_session::prepare_browser_door_roots_for_descriptor;
+    use octopus_interfaces::InterfaceDescriptor;
+
+    let shipped_path = registry_root().join("interface/system_browser/interface.json");
+    let shipped_raw = std::fs::read(&shipped_path).unwrap();
+    let shipped: InterfaceDescriptor = serde_json::from_slice(&shipped_raw).unwrap();
+    let interface_id = InterfaceId::new(DOOR);
+
+    let temp = tempfile::tempdir().unwrap();
+    let var_dir = temp.path().join("var");
+    std::fs::create_dir_all(&var_dir).unwrap();
+
+    // Shipped browser.native.v1 fails closed when browser_native_host_root is unbound.
+    let roots_without_native = BTreeMap::from([("interface_var_dir".to_string(), var_dir.clone())]);
+    let err = prepare_browser_door_roots_for_descriptor(
+        &interface_id,
+        &shipped,
+        &roots_without_native,
+    )
+    .unwrap_err();
+    assert!(err.contains("native host slot"), "unexpected error: {err}");
+
+    // Shipped browser.native.v1 also fails closed when browser_native_host_root exists but has no host.json/auth.key.
+    let empty_native_root = temp.path().join("empty-native-host");
+    std::fs::create_dir_all(&empty_native_root).unwrap();
+    let roots_with_empty_native = BTreeMap::from([
+        ("interface_var_dir".to_string(), var_dir.clone()),
+        ("browser_native_host_root".to_string(), empty_native_root),
+    ]);
+    assert!(
+        prepare_browser_door_roots_for_descriptor(&interface_id, &shipped, &roots_with_empty_native)
+            .is_err()
+    );
+
+    // Minimal wire: "cdp" succeeds cleanly without browser_native_host_root and does not write native auth.
+    let with_transport = |transport: Value| -> InterfaceDescriptor {
+        let mut value: Value = serde_json::from_slice(&shipped_raw).unwrap();
+        value["interface_driver_config"]["private_config"]["browser_room"]["transport"] = transport;
+        serde_json::from_value(value).unwrap()
+    };
+    let minimal_cdp = with_transport(json!({
+        "wire": "cdp",
+        "discovery_url": "http://127.0.0.1:9222"
+    }));
+    let prepared = prepare_browser_door_roots_for_descriptor(
+        &interface_id,
+        &minimal_cdp,
+        &roots_without_native,
+    )
+    .unwrap();
+    assert_eq!(prepared, roots_without_native);
+    assert!(!var_dir.join("secrets/browser-native-host.auth").exists());
+
+    // Invalid CDP configurations fail closed at door preparation time.
+    for (case, transport) in [
+        ("missing discovery_url", json!({ "wire": "cdp" })),
+        ("malformed discovery_url", json!({ "wire": "cdp", "discovery_url": "not-a-url" })),
+        ("non-loopback http", json!({ "wire": "cdp", "discovery_url": "http://192.0.2.10:9222" })),
+        ("userinfo in discovery_url", json!({ "wire": "cdp", "discovery_url": "http://user:pass@127.0.0.1:9222" })),
+        ("auth_required without auth_env_key", json!({ "wire": "cdp", "discovery_url": "http://127.0.0.1:9222", "auth_required": true })),
+        ("zero request_timeout_ms", json!({ "wire": "cdp", "discovery_url": "http://127.0.0.1:9222", "request_timeout_ms": 0 })),
+        ("invalid allowed_websocket_hosts", json!({ "wire": "cdp", "discovery_url": "http://127.0.0.1:9222", "allowed_websocket_hosts": ["bad host"] })),
+    ] {
+        let invalid = with_transport(transport);
+        assert!(
+            prepare_browser_door_roots_for_descriptor(&interface_id, &invalid, &roots_without_native)
+                .is_err(),
+            "expected CDP door prep failure for {case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cdp_room_runs_minimal_config_without_native_host_auth_and_fails_closed_when_unreachable() {
+    let (cdp_url, server) = spawn_cdp_mock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    let interface_dir = root.join("registry/interface").join(DOOR);
+    std::fs::create_dir_all(&interface_dir).unwrap();
+
+    // Clone the shipped system_browser descriptor and swap only transport to minimal wire: "cdp".
+    let shipped_path = registry_root().join("interface/system_browser/interface.json");
+    let mut descriptor: Value = serde_json::from_slice(&std::fs::read(&shipped_path).unwrap()).unwrap();
+    descriptor["interface_driver_config"]["private_config"]["browser_room"]["transport"] = json!({
+        "wire": "cdp",
+        "discovery_url": cdp_url
+    });
+    std::fs::write(
+        interface_dir.join("interface.json"),
+        serde_json::to_vec(&descriptor).unwrap(),
+    )
+    .unwrap();
+
+    let durable_dir = root.join("durable");
+    std::fs::create_dir_all(&durable_dir).unwrap();
+    let env_without_native_auth = ToolProcessEnvironment {
+        interface: InterfaceId::new(DOOR),
+        interface_dir: interface_dir.clone(),
+        descriptor_snapshot: None,
+        var_dir: root.join("var"),
+        durable_var_dir: Some(durable_dir),
+        private_reads: BTreeMap::new(),
+        root_slots: BTreeMap::new(),
+        host_io_limits: InterfaceHostIoLimits {
+            max_control_frame_bytes: 1_048_576,
+            max_stderr_bytes: 262_144,
+            max_manifest_bytes: 1_048_576,
+            max_payload_bytes: 16_777_216,
+        },
+    };
+    let tools = browser_tools();
+    let (formed, kind) = formation("browser_session", &tools, "browser.navigate");
+    let room = BrowserRoom::load(env_without_native_auth.clone()).unwrap();
+    let recorder = TestWorkerEnvironmentRecorder::default();
+
+    let nav = response(received(
+        room.receive(
+            invocation(
+                &root,
+                1,
+                "browser.navigate",
+                json!({"url": "https://example.com/", "wait_until": "complete", "snapshot": true}),
+                &tools,
+                &formed,
+                &kind,
+            ),
+            &recorder,
+        )
+        .await,
+    ));
+    assert_eq!(nav["ok"], true, "minimal CDP navigate failed: {nav}");
+    assert_eq!(nav["body"]["url"], "https://example.com/");
+
+    let tabs = response(received(
+        room.receive(
+            invocation(&root, 2, "browser.tabs", json!({}), &tools, &formed, &kind),
+            &recorder,
+        )
+        .await,
+    ));
+    assert_eq!(tabs["ok"], true, "minimal CDP tabs failed: {tabs}");
+    let _ = room.receive(
+        invocation(&root, 3, "browser.close", json!({}), &tools, &formed, &kind),
+        &recorder,
+    )
+    .await;
+    drop(room);
+    let _ = server.await;
+
+    // Unreachable local loopback CDP endpoint fails closed cleanly.
+    let dead_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = dead_listener.local_addr().unwrap().port();
+    drop(dead_listener);
+    descriptor["interface_driver_config"]["private_config"]["browser_room"]["transport"] = json!({
+        "wire": "cdp",
+        "discovery_url": format!("http://127.0.0.1:{dead_port}"),
+        "request_timeout_ms": 500
+    });
+    std::fs::write(
+        interface_dir.join("interface.json"),
+        serde_json::to_vec(&descriptor).unwrap(),
+    )
+    .unwrap();
+    let unreachable_room = BrowserRoom::load(env_without_native_auth.clone()).unwrap();
+    let unreachable = unreachable_room
+        .receive(
+            invocation(&root, 4, "browser.tabs", json!({}), &tools, &formed, &kind),
+            &recorder,
+        )
+        .await;
+    match unreachable {
+        Ok(artifact) => {
+            let body = response(artifact);
+            assert_eq!(body["ok"], false, "unreachable CDP unexpectedly succeeded: {body}");
+        }
+        Err(_) => {}
+    }
+
+    // auth_required with an unset env var fails closed at BrowserRoom::load.
+    descriptor["interface_driver_config"]["private_config"]["browser_room"]["transport"] = json!({
+        "wire": "cdp",
+        "discovery_url": "http://127.0.0.1:9222",
+        "auth_required": true,
+        "auth_env_key": "OCTOPUS_TEST_UNSET_CDP_TOKEN_FOR_FAIL_CLOSED_CHECK"
+    });
+    std::fs::write(
+        interface_dir.join("interface.json"),
+        serde_json::to_vec(&descriptor).unwrap(),
+    )
+    .unwrap();
+    assert!(BrowserRoom::load(env_without_native_auth.clone()).is_err());
+
+    // wire: "browser.native.v1" still strictly fails closed without secrets/browser-native-host.auth.
+    let shipped_bytes = std::fs::read(&shipped_path).unwrap();
+    std::fs::write(interface_dir.join("interface.json"), shipped_bytes).unwrap();
+    assert!(BrowserRoom::load(env_without_native_auth).is_err());
+}
+
+#[test]
+fn shipped_system_browser_descriptors_support_headless_cdp_and_optional_native_auth() {
+    let life_path = registry_root().join("interface/system_browser/life.json");
+    let life: Value = serde_json::from_slice(&std::fs::read(&life_path).unwrap()).unwrap();
+    let process = &life["processes"][0];
+    let read_slots = process["authority"]["read_root_slots"].as_array().unwrap();
+    let optional_read_slots = process["authority"]["optional_read_root_slots"]
+        .as_array()
+        .unwrap();
+    let coord_slots = process["coordinate_root_slots"].as_array().unwrap();
+    assert!(
+        !read_slots.iter().any(|slot| slot == "browser_native_host_root"),
+        "browser_native_host_root must not be required in read_root_slots"
+    );
+    assert!(
+        !coord_slots.iter().any(|slot| slot == "browser_native_host_root"),
+        "browser_native_host_root must not be required in coordinate_root_slots"
+    );
+    assert!(
+        optional_read_slots
+            .iter()
+            .any(|slot| slot == "browser_native_host_root"),
+        "browser_native_host_root must remain in optional_read_root_slots"
+    );
+
+    let tools_dir = registry_root().join("tool");
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(&tools_dir).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("browser.") {
+            continue;
+        }
+        let tool = load_tool_descriptor_from_dir(&tools_dir, &name)
+            .unwrap()
+            .unwrap();
+        let auth_entries = tool
+            .process
+            .private_read_subpaths
+            .iter()
+            .filter(|subpath| subpath.path == "secrets/browser-native-host.auth")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            auth_entries.len(),
+            1,
+            "{name} should declare secrets/browser-native-host.auth"
+        );
+        assert!(
+            auth_entries[0].optional,
+            "{name} must mark secrets/browser-native-host.auth as optional for CDP"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 50, "expected all browser.* tool descriptors, checked {checked}");
+}

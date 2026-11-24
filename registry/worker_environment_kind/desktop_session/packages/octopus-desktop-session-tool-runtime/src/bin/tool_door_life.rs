@@ -12,7 +12,9 @@ async fn main() {
                 door_interface: interface,
                 max_in_flight: 16,
                 private_read_max_bytes: 4096,
-                root_slot_transform: Some(octopus_system_gui_env::prepare_private_desktop_host),
+                root_slot_transform: Some(|ctx| {
+                    octopus_system_gui_env::prepare_private_desktop_host(ctx.owner_root_slots())
+                }),
             },
             octopus_system_gui_env::decode_gui_door_artifact,
         )

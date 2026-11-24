@@ -8,7 +8,8 @@
     "bin": "target/debug/octopus-browser-session-tool",
     "private_read_subpaths": [
       {
-        "path": "secrets/browser-native-host.auth"
+        "path": "secrets/browser-native-host.auth",
+        "optional": true
       }
     ],
     "authority": {

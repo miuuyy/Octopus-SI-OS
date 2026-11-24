@@ -458,10 +458,15 @@ function browserToolDescriptorPin(input) {
     const item = object(value); item.within_root_slots = strings(item.within_root_slots); if (item.include_parent === undefined) item.include_parent = false; return item;
   });
   for (const field of ['allow_application_launch', 'allow_sandbox_delegation']) if (authority[field] === undefined) authority[field] = false;
+  if (authority.sandbox_mode === undefined) authority.sandbox_mode = 'enforced';
   for (const field of ['required_files', 'inherit_env', 'inherit_env_from_interface', 'coordinate_root_slots']) process[field] = strings(process[field] === undefined ? [] : process[field]);
   const privateReads = vector(process.private_read_subpaths === undefined ? [] : process.private_read_subpaths).map(object);
-  for (const item of privateReads) if (typeof item.path !== 'string') throw new Error('Invalid private read subpath');
-  process.private_read_subpaths = [...new Map(privateReads.map(item => [canonical(item), item])).values()].sort((a, b) => compare(a.path, b.path));
+  for (const item of privateReads) {
+    if (typeof item.path !== 'string') throw new Error('Invalid private read subpath');
+    if (item.optional !== undefined && typeof item.optional !== 'boolean') throw new Error('Invalid private read subpath optional flag');
+    if (item.optional === false) delete item.optional;
+  }
+  process.private_read_subpaths = [...new Map(privateReads.map(item => [canonical(item), item])).values()].sort((a, b) => compare(a.path, b.path) || Number(Boolean(a.optional)) - Number(Boolean(b.optional)));
   process.args = vector(process.args === undefined ? [] : process.args); process.env = object(process.env === undefined ? {} : process.env);
   if (process.interrupted_effect_recovery === undefined) process.interrupted_effect_recovery = 'indeterminate';
   process.authority = authority; descriptor.process = process;

@@ -12,7 +12,7 @@ mod browser_wait_completion;
 pub use browser_wait_completion::run_browser_wait_completion_tool_process;
 mod native_transport;
 pub use native_transport::prepare_private_native_host;
-pub use browser_session::decode_filechooser_door_artifact;
+pub use browser_session::{decode_filechooser_door_artifact, prepare_browser_door_roots};
 pub use browser_session::{bounded_optional_u64, required_string, url_is_loopback};
 #[cfg(test)]
 mod tests;

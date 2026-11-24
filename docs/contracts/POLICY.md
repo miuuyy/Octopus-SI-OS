@@ -238,7 +238,7 @@ original's, and an interface copy keeps every original policy variable and its
 reducer. Its defaults and values may narrow the original; dropping a variable
 or changing its reduction rule refuses formation. Worker and EE overrides for
 both identities apply together. A tool copy counts as its original only while
-its executable, handler and schema match and its authority stays within the original's. A copy with a contract incompatible with its original is refused; no automatic
+its executable and handler match, its argument schema narrows the original's, and its authority stays within the original's. A copy with a contract incompatible with its original is refused; no automatic
 adoption rewrites it. Research-preview contract changes require a fresh Home.
 
 

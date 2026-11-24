@@ -12,7 +12,7 @@ async fn main() {
                 door_interface: interface,
                 max_in_flight: 16,
                 private_read_max_bytes: 4096,
-                root_slot_transform: Some(octopus_browser_session_env::prepare_private_native_host),
+                root_slot_transform: Some(octopus_browser_session_env::prepare_browser_door_roots),
             },
             octopus_browser_session_env::decode_filechooser_door_artifact,
         )

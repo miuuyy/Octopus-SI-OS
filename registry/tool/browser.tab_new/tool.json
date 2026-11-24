@@ -6,7 +6,7 @@
   },
   "process": {
     "bin": "target/debug/octopus-browser-session-tool",
-    "private_read_subpaths": [{"path": "secrets/browser-native-host.auth"}],
+    "private_read_subpaths": [{"path": "secrets/browser-native-host.auth", "optional": true}],
     "authority": {
       "read_root_slots": [], "write_root_slots": [], "executable_root_slots": [],
       "read_paths": [], "write_paths": [], "executable_paths": [], "executable_commands": [],

@@ -12,7 +12,9 @@ async fn main() {
                 door_interface: interface,
                 max_in_flight: 16,
                 private_read_max_bytes: 4096,
-                root_slot_transform: Some(octopus_git_worktree_tool_runtime::with_git_common_root),
+                root_slot_transform: Some(|ctx| {
+                    octopus_git_worktree_tool_runtime::with_git_common_root(ctx.owner_root_slots())
+                }),
             },
         )
         .expect("owned tool-door configuration is valid"),

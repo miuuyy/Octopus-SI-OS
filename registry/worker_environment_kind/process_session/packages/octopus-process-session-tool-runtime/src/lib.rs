@@ -82,7 +82,7 @@ pub struct ToolDoorOwner {
     pub private_read_max_bytes: u64,
     pub root_slot_transform: Option<
         fn(
-            &std::collections::BTreeMap<String, std::path::PathBuf>,
+            &InterfaceLiftContext,
         ) -> Result<std::collections::BTreeMap<String, std::path::PathBuf>, String>,
     >,
 }
@@ -126,6 +126,9 @@ pub type ToolDoorOutputCallback = Arc<dyn ToolDoorOutputHandler>;
 impl InterfaceLiftContext {
     pub fn owner_root_slot(&self, name: &str) -> Result<&Path, String> {
         self.root_slot(name)
+    }
+    pub fn owner_root_slots(&self) -> &BTreeMap<String, PathBuf> {
+        &self.root_slots
     }
     pub fn owner_descriptor(&self) -> Result<InterfaceDescriptor, String> {
         self.resolved_interface_descriptor()
@@ -277,7 +280,7 @@ impl ToolDoorOwner {
             return Ok(None);
         };
         let mut effective = ctx.clone();
-        effective.root_slots = transform(&ctx.root_slots)?;
+        effective.root_slots = transform(ctx)?;
         Ok(Some(effective))
     }
 
@@ -856,7 +859,9 @@ fn read_tool_process_binding_bytes(
         relative
             .to_str()
             .ok_or("tool-process bound carrier path is not UTF-8")?,
-    )?;
+        false,
+    )?
+    .ok_or_else(|| format!("tool-process bound carrier '{}' is missing", path.display()))?;
     if file.metadata().map_err(|error| format!("tool-process bound carrier '{}' metadata cannot be read: {error}", path.display()))?.len() > maximum {
         return Err("tool-process bound carrier exceeds its byte limit".into());
     }
@@ -6884,7 +6889,8 @@ fn inspect_materialized_private_generation(
 ) -> Result<MaterializedPrivateGeneration, String> {
     let private_root = inspect_private_generation_subdir(published, "private")?;
     let state_dir = inspect_private_generation_subdir(published, "state")?;
-    let observed = private_read_snapshot_hash(&private_root, declarations, max_bytes)?;
+    let (observed, present_paths) =
+        private_read_snapshot_hash_with_presence(&private_root, declarations, max_bytes)?;
     if observed != expected_snapshot_hash {
         return Err(format!(
             "tool process generation '{}' private snapshot does not match its identity",
@@ -6893,6 +6899,7 @@ fn inspect_materialized_private_generation(
     }
     let private_reads = declarations
         .iter()
+        .filter(|declaration| present_paths.contains(&declaration.path))
         .map(|declaration| {
             (
                 declaration.path.clone(),
@@ -6950,7 +6957,17 @@ fn private_read_snapshot_hash(
     declarations: &BTreeSet<ToolProcessPrivateReadSubpath>,
     max_bytes: u64,
 ) -> Result<String, String> {
+    private_read_snapshot_hash_with_presence(interface_var_dir, declarations, max_bytes)
+        .map(|(hash, _)| hash)
+}
+
+fn private_read_snapshot_hash_with_presence(
+    interface_var_dir: &Path,
+    declarations: &BTreeSet<ToolProcessPrivateReadSubpath>,
+    max_bytes: u64,
+) -> Result<(String, BTreeSet<String>), String> {
     let mut snapshot = blake3::Hasher::new();
+    let mut present_paths = BTreeSet::new();
     for declaration in declarations {
         usize::try_from(max_bytes).map_err(|_| {
             format!(
@@ -6958,11 +6975,27 @@ fn private_read_snapshot_hash(
                 declaration.path
             )
         })?;
-        let (digest, size) =
-            hash_private_read_source(interface_var_dir, &declaration.path, max_bytes)?;
-        append_private_read_snapshot_entry(&mut snapshot, declaration, max_bytes, &digest, size);
+        match hash_private_read_source(
+            interface_var_dir,
+            &declaration.path,
+            declaration.optional,
+            max_bytes,
+        )? {
+            Some((digest, size)) => {
+                append_private_read_snapshot_entry(
+                    &mut snapshot,
+                    declaration,
+                    max_bytes,
+                    Some((&digest, size)),
+                );
+                present_paths.insert(declaration.path.clone());
+            }
+            None => {
+                append_private_read_snapshot_entry(&mut snapshot, declaration, max_bytes, None);
+            }
+        }
     }
-    Ok(snapshot.finalize().to_hex().to_string())
+    Ok((snapshot.finalize().to_hex().to_string(), present_paths))
 }
 
 fn materialize_private_read_subpaths(
@@ -6974,15 +7007,26 @@ fn materialize_private_read_subpaths(
     let mut paths = Vec::with_capacity(declarations.len());
     let mut snapshot = blake3::Hasher::new();
     for declaration in declarations {
-        let mut source = open_private_read_source(interface_var_dir, &declaration.path)?;
-        let (path, digest, size) = materialize_private_read_source(
-            process_var_dir,
-            &declaration.path,
-            max_bytes,
-            &mut source,
-        )?;
-        append_private_read_snapshot_entry(&mut snapshot, declaration, max_bytes, &digest, size);
-        paths.push(path);
+        match open_private_read_source(interface_var_dir, &declaration.path, declaration.optional)? {
+            Some(mut source) => {
+                let (path, digest, size) = materialize_private_read_source(
+                    process_var_dir,
+                    &declaration.path,
+                    max_bytes,
+                    &mut source,
+                )?;
+                append_private_read_snapshot_entry(
+                    &mut snapshot,
+                    declaration,
+                    max_bytes,
+                    Some((&digest, size)),
+                );
+                paths.push(path);
+            }
+            None => {
+                append_private_read_snapshot_entry(&mut snapshot, declaration, max_bytes, None);
+            }
+        }
     }
     Ok((paths, snapshot.finalize().to_hex().to_string()))
 }
@@ -6991,22 +7035,32 @@ fn append_private_read_snapshot_entry(
     snapshot: &mut blake3::Hasher,
     declaration: &ToolProcessPrivateReadSubpath,
     max_bytes: u64,
-    digest: &blake3::Hash,
-    size: u64,
+    content: Option<(&blake3::Hash, u64)>,
 ) {
     snapshot.update(&(declaration.path.len() as u64).to_le_bytes());
     snapshot.update(declaration.path.as_bytes());
     snapshot.update(&max_bytes.to_le_bytes());
-    snapshot.update(&size.to_le_bytes());
-    snapshot.update(digest.as_bytes());
+    match content {
+        Some((digest, size)) => {
+            snapshot.update(&[1_u8]);
+            snapshot.update(&size.to_le_bytes());
+            snapshot.update(digest.as_bytes());
+        }
+        None => {
+            snapshot.update(&[0_u8]);
+        }
+    }
 }
 
 fn hash_private_read_source(
     interface_var_dir: &Path,
     declaration: &str,
+    optional: bool,
     max_bytes: u64,
-) -> Result<(blake3::Hash, u64), String> {
-    let mut source = open_private_read_source(interface_var_dir, declaration)?;
+) -> Result<Option<(blake3::Hash, u64)>, String> {
+    let Some(mut source) = open_private_read_source(interface_var_dir, declaration, optional)? else {
+        return Ok(None);
+    };
     let before = source.metadata().map_err(|error| {
         format!(
             "tool process private read path {:?} cannot be inspected: {error}",
@@ -7065,7 +7119,7 @@ fn hash_private_read_source(
             declaration
         ));
     }
-    Ok((digest.finalize(), size))
+    Ok(Some((digest.finalize(), size)))
 }
 
 #[cfg(unix)]
@@ -7123,7 +7177,8 @@ fn open_private_read_root(path: &Path, purpose: &str) -> Result<OwnedFd, String>
 fn open_private_read_source(
     interface_var_dir: &Path,
     declaration: &str,
-) -> Result<std::fs::File, String> {
+    optional: bool,
+) -> Result<Option<std::fs::File>, String> {
     let components = private_read_components(declaration)?;
     let mut directory = open_private_read_root(interface_var_dir, "private source")?;
     for (index, component) in components.iter().enumerate() {
@@ -7141,10 +7196,14 @@ fn open_private_read_source(
         };
         let fd = unsafe { libc::openat(directory.as_raw_fd(), component.as_ptr(), flags) };
         if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if optional && error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
             return Err(format!(
                 "tool process private read path {:?} cannot be opened without following links: {}",
                 declaration,
-                std::io::Error::last_os_error()
+                error
             ));
         }
         let opened = unsafe { OwnedFd::from_raw_fd(fd) };
@@ -7165,7 +7224,7 @@ fn open_private_read_source(
                     declaration
                 ));
             }
-            return Ok(file);
+            return Ok(Some(file));
         }
         directory = opened;
     }
@@ -7179,7 +7238,8 @@ fn open_private_read_source(
 fn open_private_read_source(
     _interface_var_dir: &Path,
     declaration: &str,
-) -> Result<std::fs::File, String> {
+    _optional: bool,
+) -> Result<Option<std::fs::File>, String> {
     Err(format!(
         "tool process private read path {:?} has no no-follow host implementation on this platform",
         declaration
@@ -10294,6 +10354,7 @@ mod tool_process_private_boundary_tests {
         std::fs::write(&auth, b"opaque").unwrap();
         let declared = BTreeSet::from([ToolProcessPrivateReadSubpath {
             path: "secrets/room.auth".to_string(),
+            optional: false,
         }]);
         let process = process_declaration(declared.clone());
         let expected_hash = private_read_snapshot_hash(source.path(), &declared, 64).unwrap();
@@ -10359,6 +10420,7 @@ mod tool_process_private_boundary_tests {
         symlink(outside.path(), secrets.join("linked.auth")).unwrap();
         let linked = BTreeSet::from([ToolProcessPrivateReadSubpath {
             path: "secrets/linked.auth".to_string(),
+            optional: false,
         }]);
         assert!(private_read_snapshot_hash(source.path(), &linked, 64).is_err());
 
@@ -10382,9 +10444,95 @@ mod tool_process_private_boundary_tests {
         std::fs::write(source.path().join("oversized"), b"1234567").unwrap();
         let declared = BTreeSet::from([ToolProcessPrivateReadSubpath {
             path: "oversized".to_string(),
+            optional: false,
         }]);
         let error = private_read_snapshot_hash(source.path(), &declared, 6).unwrap_err();
         assert!(error.contains("exceeds owning life-process ceiling of 6 bytes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optional_private_read_subpaths_skip_missing_files_and_fail_closed_on_links_and_dirs() {
+        use std::os::unix::fs::symlink;
+
+        let source = tempfile::tempdir().unwrap();
+        let generations = tempfile::tempdir().unwrap();
+        let required = BTreeSet::from([ToolProcessPrivateReadSubpath {
+            path: "secrets/room.auth".to_string(),
+            optional: false,
+        }]);
+        assert!(private_read_snapshot_hash(source.path(), &required, 64).is_err());
+
+        let optional = BTreeSet::from([ToolProcessPrivateReadSubpath {
+            path: "secrets/room.auth".to_string(),
+            optional: true,
+        }]);
+        let absent_hash = private_read_snapshot_hash(source.path(), &optional, 64).unwrap();
+        let process = process_declaration(optional.clone());
+        let absent_generation = tool_process_generation_key(
+            &canonical_hash(&process).unwrap(),
+            None,
+            &absent_hash,
+            &tool_process_environment_hash(&BTreeMap::new()),
+            &empty_invocation_authority_hash(),
+            "execution-inputs",
+        )
+        .unwrap();
+        let materialized_absent = materialize_private_read_generation(
+            source.path(),
+            generations.path(),
+            &absent_generation,
+            &optional,
+            64,
+            &absent_hash,
+        )
+        .unwrap();
+        assert!(materialized_absent.private_reads.is_empty());
+        assert!(materialized_absent.exact_paths.is_empty());
+
+        let secrets = source.path().join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        let auth = secrets.join("room.auth");
+        std::fs::write(&auth, b"").unwrap();
+        let empty_hash = private_read_snapshot_hash(source.path(), &optional, 64).unwrap();
+        assert_ne!(absent_hash, empty_hash);
+
+        std::fs::write(&auth, b"present-token").unwrap();
+        let present_hash = private_read_snapshot_hash(source.path(), &optional, 64).unwrap();
+        assert_ne!(absent_hash, present_hash);
+        assert_ne!(empty_hash, present_hash);
+        let present_generation = tool_process_generation_key(
+            &canonical_hash(&process).unwrap(),
+            None,
+            &present_hash,
+            &tool_process_environment_hash(&BTreeMap::new()),
+            &empty_invocation_authority_hash(),
+            "execution-inputs",
+        )
+        .unwrap();
+        let materialized_present = materialize_private_read_generation(
+            source.path(),
+            generations.path(),
+            &present_generation,
+            &optional,
+            64,
+            &present_hash,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&materialized_present.private_reads["secrets/room.auth"]).unwrap(),
+            b"present-token"
+        );
+        assert_eq!(materialized_present.exact_paths.len(), 1);
+
+        std::fs::remove_file(&auth).unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), &auth).unwrap();
+        assert!(private_read_snapshot_hash(source.path(), &optional, 64).is_err());
+
+        std::fs::remove_file(&auth).unwrap();
+        std::fs::create_dir(&auth).unwrap();
+        assert!(private_read_snapshot_hash(source.path(), &optional, 64).is_err());
     }
 
     #[test]
@@ -10394,6 +10542,7 @@ mod tool_process_private_boundary_tests {
         std::fs::write(source.path().join("secret"), b"before").unwrap();
         let declared = BTreeSet::from([ToolProcessPrivateReadSubpath {
             path: "secret".to_string(),
+            optional: false,
         }]);
         let process = process_declaration(declared.clone());
         let expected = private_read_snapshot_hash(source.path(), &declared, 64).unwrap();
@@ -10660,6 +10809,7 @@ mod tool_process_private_boundary_tests {
         std::fs::write(source.path().join("secret"), b"opaque").unwrap();
         let declared = BTreeSet::from([ToolProcessPrivateReadSubpath {
             path: "secret".to_string(),
+            optional: false,
         }]);
         let process = process_declaration(declared.clone());
         let hash = private_read_snapshot_hash(source.path(), &declared, 64).unwrap();
