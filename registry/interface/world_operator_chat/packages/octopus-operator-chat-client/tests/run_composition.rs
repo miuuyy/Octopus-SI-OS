@@ -163,7 +163,7 @@ fn current_selection_amends_a_run_whose_turn_waits_on_a_tool_result() {
     let provider: octopus_descriptors::InterfaceId = composition.provider_interface_id.clone().into();
     let mut selection = current_selection(&request.roots, &current, &provider).unwrap().unwrap();
     selection.external_inputs.push(ExternalInputSeed { checkpoint_id: "amended_trigger".into(), interface_id: "world_test_pulse".into(),
-        artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new() });
+        artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new(), allowed_operations: None });
     let door = composition.authoring.capability_doors["system_room"].clone();
     let writer = composition.authoring.capability_tools["file.write"].clone();
     let bridge = ProviderCapabilityBridge { tool: writer.clone(), correlation_id: "readback".into(),
@@ -197,7 +197,7 @@ fn current_change_retires_a_standing_external_input() {
         write(&root, file, value);
     }
     let pulse = ExternalInputSeed { checkpoint_id: "pulse".into(), interface_id: "world_test_pulse".into(),
-        artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new() };
+        artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new(), allowed_operations: None };
     request.external_inputs.push(pulse.clone());
     let composition = plan_run_composition(&request).unwrap();
     for file in composition_candidate_writes(&composition) {
@@ -730,6 +730,7 @@ fn selected_external_routes_preserve_checkpoints_profiles_and_scoped_dependencie
     request.external_inputs = vec![ExternalInputSeed {
         checkpoint_id: "selected_input".into(), interface_id: "system_worker_unselected".into(),
         artifact_names: Vec::new(), required_verified_artifacts: Vec::new(),
+        allowed_operations: None,
     }];
     request.external_relays = vec![ExternalRelaySeed {
         checkpoint_id: "selected_relay".into(), interface_id: "system_worker_parent".into(),
@@ -1459,6 +1460,7 @@ fn current_change_preserves_delegated_output_selection_and_parent_return_roles()
         interface_id: "world_test_pulse".into(),
         artifact_names: vec!["cron.current_time".into()],
         required_verified_artifacts: Vec::new(),
+        allowed_operations: None,
     });
     let plan = plan_current_run_amendment(
         &request.roots,

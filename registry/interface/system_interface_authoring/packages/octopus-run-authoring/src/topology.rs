@@ -66,6 +66,45 @@ pub fn bound_tool_door(
     }
 }
 
+pub fn provider_operation_allowlist(
+    record: &RunRecord,
+    provider: &InterfaceId,
+    target_interface: &InterfaceId,
+    request_label: &str,
+) -> Result<Option<BTreeSet<String>>, String> {
+    let Some(value) = record
+        .interface_state
+        .get(provider)
+        .and_then(|state| state.get(RUN_AUTHORING_BINDING))
+    else {
+        return Ok(None);
+    };
+    let topology: BoundRunAuthoringTopology = serde_json::from_value(value.clone())
+        .map_err(|error| format!("provider operation topology is malformed: {error}"))?;
+    topology.validate_identity(record, provider)?;
+    let owners = topology
+        .checkpoints
+        .iter()
+        .filter(|checkpoint| {
+            checkpoint.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput
+                && checkpoint.interface() == provider
+                && checkpoint.outbound_interface_bindings.len() == 1
+                && checkpoint.outbound_interfaces().next() == Some(target_interface)
+                && checkpoint.outbound_interface_bindings[0].admits(request_label)
+        })
+        .collect::<Vec<_>>();
+    match owners.as_slice() {
+        [] => Ok(None),
+        [owner] => checkpoint_operation_ids(owner),
+        _ => Err(format!(
+            "provider operation route '{}' -> '{}' has {} exact owners",
+            request_label,
+            target_interface.as_str(),
+            owners.len()
+        )),
+    }
+}
+
 pub fn declared_provider_run_writer(
     record: &RunRecord, provider: &InterfaceId, profile: &RunAuthoringProfile,
 ) -> Result<CheckedRunWriter, String> {

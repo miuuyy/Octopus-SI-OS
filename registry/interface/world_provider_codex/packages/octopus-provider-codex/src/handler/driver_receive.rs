@@ -297,8 +297,10 @@ impl CodexAppServerInterfaceDriver {
         let native_namespace = self.native_tool_namespace()?;
         let run_affordances = RunAffordances::from_invocation(&input, &serde_json::Value::Object(self.interface_private_config.clone()))
             .map_err(InterfaceDriverError::FailedClosed)?;
+        let current_record = octopus_run_record::RunRecord::from_bytes(current_run_record)
+            .map_err(|error| InterfaceDriverError::Protocol(format!("codex interface pinned run record is malformed: {error}")))?;
         let native_catalog =
-            extract_native_affordance_catalog(&input, &hidden_tools, &native_namespace, run_affordances.as_ref(), &self.interface_private_config)?;
+            extract_native_affordance_catalog(&input, Some(&current_record), &hidden_tools, &native_namespace, run_affordances.as_ref(), &self.interface_private_config)?;
         let source_interface = if native_catalog.interface_operations.is_empty() {
             None
         } else {

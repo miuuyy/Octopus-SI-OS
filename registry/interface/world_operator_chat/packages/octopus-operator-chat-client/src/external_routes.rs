@@ -31,6 +31,26 @@ pub(crate) fn validate_external_route_shapes(
             &input.required_verified_artifacts,
             &format!("external input checkpoint '{checkpoint}'"),
         )?;
+        if let Some(operations) = &input.allowed_operations {
+            if operations.is_empty() {
+                return Err(format!(
+                    "external input checkpoint '{checkpoint}' allowed_operations must not be empty"
+                ));
+            }
+            let mut seen = BTreeSet::new();
+            for operation in operations {
+                if operation.is_empty() || operation.trim() != operation || operation.contains(['\r', '\n', '\0']) {
+                    return Err(format!(
+                        "external input checkpoint '{checkpoint}' allowed_operations contains malformed operation '{operation}'"
+                    ));
+                }
+                if !seen.insert(operation.as_str()) {
+                    return Err(format!(
+                        "external input checkpoint '{checkpoint}' allowed_operations repeats '{operation}'"
+                    ));
+                }
+            }
+        }
         external_input_binding(input)?;
         interfaces.insert(interface);
     }

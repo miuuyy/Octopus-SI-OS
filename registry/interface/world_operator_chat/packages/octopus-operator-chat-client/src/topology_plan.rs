@@ -358,7 +358,7 @@ pub(crate) fn plan_operator_chat_topology_files_for_source(
         &selected_context,
         &staged_publication_artifacts,
     )?;
-    let operations = OperationRoutes::load(registry_root, &request.external_inputs,
+    let operations = OperationRoutes::load(registry_root, &topology, &request.external_inputs,
         request.existing_run_record.as_ref().map(|_| previous_authoring_profile.external_inputs.iter()).into_iter().flatten())?;
     for binding in operations.catalog_bindings() {
         if !selected_context.contains(&binding) { selected_context.push(binding); }

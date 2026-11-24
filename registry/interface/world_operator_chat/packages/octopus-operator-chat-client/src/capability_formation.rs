@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use octopus_descriptors::{
-    ArtifactId, DescriptorName, EeId, EeTemplateId, InterfaceId, ToolId, WorkerEnvironmentKindId,
+    ArtifactId, DescriptorName, EeId, EeTemplateId, InterfaceId, MarkId, ToolId,
+    WorkerEnvironmentKindId,
 };
 use octopus_ee::{EeInstance, EeInstancePolicyNarrowing, EeTemplateDescriptor};
 use octopus_interfaces::{
@@ -124,6 +125,7 @@ pub struct FormedCapabilityTopology {
     pub ee_interface_allowance: Option<Vec<InterfaceId>>,
     pub copy_lineage: CopyLineage,
     pub granted_tools: Vec<ToolId>,
+    pub granted_mark_outcomes: BTreeSet<MarkId>,
     pub granted_worker_environment_kinds: Vec<WorkerEnvironmentKindId>,
     pub interface_policies: BTreeMap<InterfaceId, FormedInterfacePolicy>,
     pub tool_bindings: BTreeMap<InterfaceId, ToolCapabilityBinding>,
@@ -515,6 +517,7 @@ fn form_from_registry(
         ee_interface_allowance,
         copy_lineage,
         granted_tools,
+        granted_mark_outcomes: formed.context.mark_outcomes.iter().cloned().collect(),
         granted_worker_environment_kinds: formed.context.wek.iter().cloned().collect(),
         interface_policies,
         tool_bindings,

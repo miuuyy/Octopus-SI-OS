@@ -135,6 +135,7 @@ jobs:
           node registry/interface/world_operator_chat/test_publication.cjs
           node registry/interface/world_operator_chat/test_home_state.cjs
           node registry/interface/world_operator_chat/test_maintenance_client.cjs
+          python3 registry/verifier/operation_call_allowed/tests/test_verify.py
           python3 registry/verifier/tool_result_correspondence/tests/test_verify.py
           python3 registry/interface/world_slack/tests/test_slack_contract.py
           node registry/interface/world_slack/tests/test_connection.cjs

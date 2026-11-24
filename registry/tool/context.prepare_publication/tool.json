@@ -162,6 +162,13 @@
                       "items": {
                         "$ref": "#/$defs/verified_artifact"
                       }
+                    },
+                    "allowed_operations": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "#/$defs/str"
+                      }
                     }
                   }
                 }

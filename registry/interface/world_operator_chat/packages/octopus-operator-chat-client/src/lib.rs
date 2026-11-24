@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use octopus_descriptors::{EeId, InterfaceId, ToolDescriptorId, parse_strict};
+use octopus_descriptors::{EeId, InterfaceId, MarkId, ToolDescriptorId, VerifierId, parse_strict};
 use octopus_ee::EeTemplateDescriptor;
 use octopus_interface_transport::SpawnLifeConfig;
 use octopus_interfaces::{InterfaceDescriptor, interface_is_worker_pin};
@@ -122,6 +122,8 @@ pub struct ExternalInputSeed {
     pub artifact_names: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_verified_artifacts: Vec<RequiredVerifiedArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_operations: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

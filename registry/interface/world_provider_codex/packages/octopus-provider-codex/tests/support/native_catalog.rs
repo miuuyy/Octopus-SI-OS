@@ -18,6 +18,7 @@ fn current_run_catalogs_match_the_typed_authoring_request() {
                     checkpoint_id:"cp_scheduled".into(), interface_id:"world_trigger".into(),
                     artifact_names:vec!["cron.current_time.0123456789abcdef01234567".into()],
                     required_verified_artifacts:vec![],
+                    allowed_operations:None,
                 }],
                 external_relays:vec![],
                 model_outputs:vec![], context_artifact_bindings:vec![], payload_artifact_bindings:vec![],

@@ -214,7 +214,7 @@ pub(crate) fn is_provider_turn_input(
     if manifest.label == OPERATOR_MESSAGE_LABEL { return Ok(true); }
     let mut names = input.interface_affordance_specs()?.iter()
         .map(|spec| spec.name.as_str().to_string()).collect();
-    let operations = extract_interface_operation_affordances(input, &mut names, &mut Vec::new())?;
+    let operations = extract_interface_operation_affordances(input, None, &mut names, &mut Vec::new())?;
     let source = input.metadata()?.checkpoint_binding_policy.as_ref()
         .map(|binding| &binding.inbound.interface);
     if !operations.is_empty() && source.is_none() {

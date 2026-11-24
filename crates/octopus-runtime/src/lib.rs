@@ -2099,6 +2099,28 @@ impl Runtime {
                 ),
             });
         }
+        if active_checkpoints.iter().any(|active| {
+            active
+                .interface_binding
+                .iter()
+                .chain(active.outbound_interface_bindings.iter())
+                .any(|binding| binding.interface == *interface && binding.admits(artifact_name))
+                && active
+                    .required_verified_artifacts
+                    .iter()
+                    .any(|required| required.artifact_label == artifact_name)
+        }) {
+            return Err(RuntimeError::DescriptorDrift {
+                reason: RefusedReason::Policy,
+                detail: format!(
+                    "policy.verification_required: run '{}' checkpoint '{}' cannot emit '{}' to interface '{}' without satisfying required verification",
+                    emitter.run.as_str(),
+                    emitter.checkpoint.as_str(),
+                    artifact_name,
+                    interface.as_str()
+                ),
+            });
+        }
         let resolved_grant = self.resolve_run_record_checkpoint_grant(&record, checkpoint)?;
         ensure_interface_in_grant(
             resolved_grant.grant.as_ref(),
@@ -4273,5 +4295,85 @@ mod tests {
             RefusedReason::NoBinding,
             "the settled run admits no artifact on the resolver path either: empty targets refuse fail-closed, got {err:?}"
         );
+    }
+
+    #[test]
+    fn system_interface_emission_refuses_when_active_checkpoint_requires_verification() {
+        let services = RuntimeServices {
+            interface_catalog: Arc::new(RuntimeInterfaceCatalog::from_classes([
+                (
+                    InterfaceId::new("world_test"),
+                    InterfaceClass::new(
+                        InterfaceType::World,
+                        InterfaceRuntimeDisposition::ExternalReader,
+                    )
+                    .expect("world test interface class forms"),
+                ),
+                (
+                    InterfaceId::new("system_target"),
+                    InterfaceClass::new(
+                        InterfaceType::System,
+                        InterfaceRuntimeDisposition::ExternalReader,
+                    )
+                    .expect("system target interface class forms"),
+                ),
+            ])),
+        };
+        let runtime = Runtime::open(services).unwrap();
+        runtime.set_run_grant_resolver(Arc::new(TestRunAuthorityResolver {
+            gate: runtime.inner.gate.clone(),
+        }));
+        let dir = temp_test_dir("emission-requires-verification");
+        runtime.set_run_records_dir(dir.clone());
+        let grant = grant_with_interfaces(&["world_test", "system_target"], &["mark.allowed"]);
+        runtime.set_run_authority(RunId::new("r1"), grant.clone(), GrantEpoch(0));
+        let record_path = literal_boundary_run_record_fixture_at_checkpoint_with_outbound(
+            &dir,
+            &RunId::new("r1"),
+            &InterfaceId::new("world_test"),
+            &CheckpointId::new("c1"),
+            &grant,
+            &[InterfaceId::new("system_target")],
+        );
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record_path).expect("run record reads"))
+                .expect("run record parses");
+        record["checkpoints"][0]["required_verified_artifacts"] = serde_json::json!([
+            {
+                "mark": "mark.allowed",
+                "artifact_label": "verified.payload",
+                "verifier": "verifier_allowed",
+                "params": {}
+            }
+        ]);
+        write_literal_run_record_fixture(&record_path, &record).expect("run record writes");
+
+        let emitter = SystemInterfaceEmitter {
+            run: &RunId::new("r1"),
+            checkpoint: &CheckpointId::new("c1"),
+            epoch: GrantEpoch(0),
+        };
+        let err = runtime
+            .resolve_system_interface_emission_grant(
+                emitter,
+                &InterfaceId::new("world_test"),
+                &InterfaceId::new("system_target"),
+                "verified.payload",
+            )
+            .expect_err("emission matching a verified checkpoint must fail closed");
+        assert_eq!(err.refused_reason(), RefusedReason::Policy);
+        assert!(
+            err.to_string().contains("policy.verification_required"),
+            "expected policy.verification_required, got {err}"
+        );
+
+        runtime
+            .resolve_system_interface_emission_grant(
+                emitter,
+                &InterfaceId::new("world_test"),
+                &InterfaceId::new("system_target"),
+                "unverified.payload",
+            )
+            .expect("emission for an unverified artifact label remains permitted");
     }
 }

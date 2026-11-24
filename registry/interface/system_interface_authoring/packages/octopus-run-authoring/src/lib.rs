@@ -33,6 +33,8 @@ const INSTRUCTION_TEXT_LABEL: &str = "instruction.text";
 const SESSION_CONTEXT_FIELD: &str = "session_context";
 #[cfg(test)]
 const TOOL_ROUTE_VERIFIER: &str = "tool_call_allowed";
+pub const OPERATION_CALL_MARK: &str = "operation.call.allowed";
+pub const OPERATION_CALL_VERIFIER: &str = "operation_call_allowed";
 const PROVIDER_HANDOFF_COMPLETE_LABEL: &str = "provider.handoff.complete";
 const ONE_SHOT_PROGRESS_FIELD: &str = "provider_handoff_progress";
 pub const PROVIDER_TRANSPORT_DISPATCH_LABEL: &str = "provider.transport.dispatch";

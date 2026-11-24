@@ -241,6 +241,7 @@
                 interface_id: "system_home_project_coordination".to_string(),
                 artifact_names: Vec::new(),
                 required_verified_artifacts: Vec::new(),
+                allowed_operations: None,
             }],
             external_relays: Vec::new(),
             model_outputs: Vec::new(),
@@ -1948,6 +1949,7 @@
                 interface_id: "world_cron".to_string(),
                 artifact_names: vec!["cron.current_time.scheduledprobe".to_string()],
                 required_verified_artifacts: Vec::new(),
+                allowed_operations: None,
             }],
             external_relays: vec![ExternalRelaySeed {
                 checkpoint_id: "cp_project_result_probe".to_string(),
@@ -2224,4 +2226,496 @@
                 .all(|write| !write.tag.starts_with("ee-policy:")),
             "a broad non-narrowing EE does not accumulate private task ids"
         );
+    }
+
+    #[test]
+    fn operation_catalog_allowlist_narrows_routes_respects_policy_and_amends_cleanly() {
+        use crate::run_composition::{CompositionRoots, current_run::*};
+        use octopus_run_authoring::capability_amendment::ProviderCapabilityBridge;
+
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let registry = root.join("registry");
+        copy_planner_descriptors(&repository_registry_root().join("registry"), &registry);
+        let ee = root.join("ee");
+        std::fs::create_dir(&ee).unwrap();
+        boot_operator_space_ee_instances(&ee);
+
+        let connector = "world_connector_exact";
+        let catalog_id = format!("artifact-operation-catalog-{connector}");
+        let connector_dir = registry.join("interface").join(connector);
+        let ops_dir = connector_dir.join("operations");
+        std::fs::create_dir_all(&ops_dir).unwrap();
+        for (op_name, out_label) in [
+            ("connector.list", "connector.list.result"),
+            ("connector.read", "connector.read.result"),
+            ("connector.send", "connector.send.result"),
+        ] {
+            std::fs::write(
+                ops_dir.join(format!("{op_name}.json")),
+                pretty_json(&serde_json::json!({
+                    "id": op_name,
+                    "description": op_name,
+                    "input_schema": { "type": "object", "properties": {} },
+                    "request_label": "connector.operation.request",
+                    "output_label": out_label,
+                    "handler_config": {}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            connector_dir.join("interface.json"),
+            pretty_json(&serde_json::json!({
+                "id": connector,
+                "interface_type": "world",
+                "role": "service",
+                "direction": "bidirectional",
+                "source_names": ["connector"],
+                "interface_driver_ref": "connector_client",
+                "interface_policy": {
+                    "variables": {
+                        "denied_operations": {
+                            "reduce": "deny_union",
+                            "default": []
+                        }
+                    }
+                },
+                "interface_driver_config": {
+                    "private_config": {
+                        "operation_catalog_dir": "operations",
+                        "operation_catalog_label": "connector.operation_catalog",
+                        "operation_request_label": "connector.operation.request"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let catalog_dir = registry.join("artifact").join(&catalog_id);
+        std::fs::create_dir_all(&catalog_dir).unwrap();
+        std::fs::write(
+            catalog_dir.join("artifact.json"),
+            pretty_json(&serde_json::json!({
+                "id": catalog_id,
+                "label": "connector.operation_catalog",
+                "interface": connector,
+                "request_label": "connector.operation.request",
+                "task_input_labels": ["connector.event"],
+                "operations": [
+                    {
+                        "name": "connector.list",
+                        "description": "list items",
+                        "input_schema": { "type": "object", "properties": {} },
+                        "request_label": "connector.operation.request",
+                        "output_label": "connector.list.result"
+                    },
+                    {
+                        "name": "connector.read",
+                        "description": "read one item",
+                        "input_schema": { "type": "object", "properties": {} },
+                        "request_label": "connector.operation.request",
+                        "output_label": "connector.read.result"
+                    },
+                    {
+                        "name": "connector.send",
+                        "description": "send message",
+                        "input_schema": { "type": "object", "properties": {} },
+                        "request_label": "connector.operation.request",
+                        "output_label": "connector.send.result"
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let clone_worker = |name: &str, include_op_mark: bool| {
+            for file in ["interface.json", "policy.json"] {
+                let mut value: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(
+                        registry
+                            .join("interface/system_worker_operator_task")
+                            .join(file),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                value["id"] = serde_json::json!(name);
+                if file == "policy.json" {
+                    let interfaces = value["ceiling"]["interfaces"].as_array_mut().unwrap();
+                    for id in interfaces.iter_mut() {
+                        if id == "system_worker_operator_task" {
+                            *id = serde_json::json!(name);
+                        }
+                    }
+                    interfaces.push(serde_json::json!(connector));
+                    interfaces.push(serde_json::json!("world_cron"));
+                    if !include_op_mark {
+                        value["ceiling"]["mark_outcomes"]
+                            .as_array_mut()
+                            .unwrap()
+                            .retain(|mark| {
+                                mark.as_str() != Some(octopus_run_authoring::OPERATION_CALL_MARK)
+                            });
+                    }
+                }
+                let path = registry.join("interface").join(name).join(file);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, pretty_json(&value).unwrap()).unwrap();
+            }
+        };
+        let worker_with_mark = "system_worker_op_allowlist_test";
+        let worker_without_mark = "system_worker_op_no_mark_test";
+        clone_worker(worker_with_mark, true);
+        clone_worker(worker_without_mark, false);
+
+        let make_request = |chat_id: &str, worker: &str, ee_id: &str, ext: ExternalInputSeed| -> OperatorChatPlanRequest {
+            serde_json::from_value(serde_json::json!({
+                "registry_root": registry,
+                "ee_instances_root": ee,
+                "run_records_root": root.join("runs"),
+                "interface_private_state_root": root.join("private"),
+                "write_hash_algorithm": "sha256",
+                "chat_id": chat_id,
+                "provider_interface_id": "world_provider_codex",
+                "model": "gpt-6.1-sol",
+                "reasoning_effort": "xhigh",
+                "ee_id": ee_id,
+                "worker_interface_id": worker,
+                "client_surface_role": "task",
+                "cycle": "first",
+                "selected_worker_environment_kinds": ["system_room"],
+                "selected_tools": [
+                    {"tool": "file.read", "interface": "system_room", "worker_environment_kind": "system_room"}
+                ],
+                "external_inputs": [ext],
+                "conversation": {
+                    "ledger_offset": 0,
+                    "artifact_bindings": [],
+                    "pinned_artifact_bindings": [],
+                    "pinned_context_items": [],
+                    "continued_from": null
+                }
+            }))
+            .unwrap()
+        };
+
+        let narrowed_seed = ExternalInputSeed {
+            checkpoint_id: "cp_connector_in".into(),
+            interface_id: connector.into(),
+            artifact_names: vec![],
+            required_verified_artifacts: vec![],
+            allowed_operations: Some(vec!["connector.list".into(), "connector.read".into()]),
+        };
+        let plan = plan_operator_chat_topology(&make_request(
+            "op_allowlist_task",
+            worker_with_mark,
+            "ee_existence",
+            narrowed_seed.clone(),
+        ))
+        .unwrap();
+        assert!(
+            plan.interface_writes
+                .iter()
+                .chain(&plan.run_writes)
+                .all(|w| !w.path.to_string_lossy().contains("artifact-operation-catalog-")),
+            "shared operation catalog artifact must not be duplicated per run"
+        );
+        let record = RunRecord::from_bytes(plan.run_record_content.as_bytes()).unwrap();
+        let provider = InterfaceId::new(&plan.model_interface_id);
+        let op_cp = record
+            .checkpoints
+            .iter()
+            .find(|cp| {
+                cp.outbound_interface_bindings
+                    .iter()
+                    .any(|b| b.interface.as_str() == connector)
+            })
+            .expect("operation output checkpoint authored");
+        assert_eq!(op_cp.required_verified_artifacts.len(), 1);
+        assert_eq!(
+            op_cp.required_verified_artifacts[0].mark.as_str(),
+            octopus_run_authoring::OPERATION_CALL_MARK
+        );
+        assert_eq!(
+            op_cp.required_verified_artifacts[0].verifier.as_str(),
+            octopus_run_authoring::OPERATION_CALL_VERIFIER
+        );
+        assert_eq!(
+            op_cp.required_verified_artifacts[0].artifact_label,
+            "connector.operation.request"
+        );
+        assert_eq!(
+            op_cp.required_verified_artifacts[0].params,
+            serde_json::json!({"operations": ["connector.list", "connector.read"]})
+        );
+        let binding_cps = record.interface_state[&provider]["run_authoring_binding"]["checkpoints"]
+            .as_array()
+            .unwrap();
+        let op_template = binding_cps
+            .iter()
+            .find(|cp| cp["role"] == "provider_interface_output")
+            .expect("ProviderInterfaceOutput template");
+        let result_keys: BTreeSet<&str> = op_template["result_receiving"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            result_keys,
+            BTreeSet::from(["connector.list.result", "connector.read.result"]),
+            "result_receiving must narrow to effective operations' output_labels"
+        );
+        assert!(
+            record.checkpoints.iter().any(|cp| {
+                cp.artifact_bindings
+                    .iter()
+                    .any(|b| b.id.as_str() == catalog_id)
+            }),
+            "shared catalog artifact must be bound on the run"
+        );
+
+        // Install plan and verify amend_current_run updates allowed_operations cleanly.
+        for write in plan.interface_writes.iter().chain(&plan.run_writes) {
+            std::fs::create_dir_all(write.path.parent().unwrap()).unwrap();
+            std::fs::write(&write.path, &write.content).unwrap();
+        }
+        std::fs::create_dir_all(root.join("runs")).unwrap();
+        std::fs::write(
+            root.join("runs").join(format!("{}.json", plan.run_id)),
+            &plan.run_record_content,
+        )
+        .unwrap();
+        let roots = CompositionRoots {
+            registry_root: registry.clone(),
+            ee_instances_root: ee.clone(),
+            run_records_root: root.join("runs"),
+            interface_private_state_root: root.join("private"),
+        };
+        let inspected = current_selection(&roots, &record, &provider).unwrap().unwrap();
+        assert_eq!(inspected.external_inputs, vec![narrowed_seed.clone()]);
+        let door = InterfaceId::new(&plan.capability_doors["system_room"]);
+        let bridge = ProviderCapabilityBridge {
+            tool: plan.capability_tools["file.read"].clone(),
+            correlation_id: "op-amend-read".into(),
+            arguments_hash: octopus_ledger::ContentHash::of_bytes(b"{}").to_hex(),
+            return_interface: door.clone(),
+        };
+        let retained = [(plan.capability_tools["file.read"].clone(), door)];
+        // Shrinking accepted operation rights during an in-flight self-amendment fails closed,
+        // matching ProviderToolOutput monotonicity.
+        let shrunk_err = plan_current_run_amendment(
+            &roots,
+            &record,
+            &provider,
+            CurrentRunRequest {
+                amendment_key: "shrink-connector-ops".into(),
+                publications: vec![],
+                selection: None,
+                change: Some(CurrentRunChange {
+                    remove: CurrentRunSelectionEntries {
+                        external_inputs: vec![narrowed_seed.clone()],
+                        ..Default::default()
+                    },
+                    add: CurrentRunSelectionEntries {
+                        external_inputs: vec![ExternalInputSeed {
+                            allowed_operations: Some(vec!["connector.list".into()]),
+                            ..narrowed_seed.clone()
+                        }],
+                        ..Default::default()
+                    },
+                }),
+                authored: None,
+            },
+            bridge.clone(),
+            &retained,
+        )
+        .expect_err("shrinking accepted operation rights in amend_current_run must fail closed");
+        assert!(
+            shrunk_err.contains("removes accepted operation rights"),
+            "unexpected shrink error: {shrunk_err}"
+        );
+        // Monotonically expanding allowed_operations within formed policy succeeds cleanly.
+        let expanded = ExternalInputSeed {
+            allowed_operations: Some(vec![
+                "connector.list".into(),
+                "connector.read".into(),
+                "connector.send".into(),
+            ]),
+            ..narrowed_seed.clone()
+        };
+        let amendment = plan_current_run_amendment(
+            &roots,
+            &record,
+            &provider,
+            CurrentRunRequest {
+                amendment_key: "expand-connector-ops".into(),
+                publications: vec![],
+                selection: None,
+                change: Some(CurrentRunChange {
+                    remove: CurrentRunSelectionEntries {
+                        external_inputs: vec![narrowed_seed.clone()],
+                        ..Default::default()
+                    },
+                    add: CurrentRunSelectionEntries {
+                        external_inputs: vec![expanded],
+                        ..Default::default()
+                    },
+                }),
+                authored: None,
+            },
+            bridge,
+            &retained,
+        )
+        .unwrap();
+        assert!(
+            amendment.validation.safe_to_apply,
+            "{:?}",
+            amendment.validation.regressions
+        );
+        let amended_record = RunRecord::from_bytes(
+            &serde_json::to_vec(&amendment.amendment.after).unwrap(),
+        )
+        .unwrap();
+        let amended_op_cp = amended_record
+            .checkpoints
+            .iter()
+            .find(|cp| {
+                cp.outbound_interface_bindings
+                    .iter()
+                    .any(|b| b.interface.as_str() == connector)
+            })
+            .expect("amended operation output checkpoint");
+        assert_eq!(
+            amended_op_cp.required_verified_artifacts[0].params,
+            serde_json::json!({"operations": ["connector.list", "connector.read", "connector.send"]})
+        );
+        let amended_result_keys: BTreeSet<&str> = amended_record.interface_state[&provider]
+            ["run_authoring_binding"]["checkpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|cp| cp["role"] == "provider_interface_output")
+            .unwrap()["result_receiving"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            amended_result_keys,
+            BTreeSet::from([
+                "connector.list.result",
+                "connector.read.result",
+                "connector.send.result"
+            ])
+        );
+
+        // EE interface_policy narrowing intersects cleanly and blocks denied operations.
+        let ee_policy_path = ee.join("ee_existence.json");
+        let mut ee_policy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&ee_policy_path).unwrap()).unwrap();
+        ee_policy["policy_narrowing"]["interface_policy_overrides"] = serde_json::json!({
+            connector: {
+                "denied_operations": ["connector.send"]
+            }
+        });
+        std::fs::write(&ee_policy_path, pretty_json(&ee_policy).unwrap()).unwrap();
+        let policy_plan = plan_operator_chat_topology(&make_request(
+            "op_allowlist_policy_task",
+            worker_with_mark,
+            "ee_existence",
+            ExternalInputSeed {
+                allowed_operations: None,
+                ..narrowed_seed.clone()
+            },
+        ))
+        .unwrap();
+        let policy_record =
+            RunRecord::from_bytes(policy_plan.run_record_content.as_bytes()).unwrap();
+        let policy_op_cp = policy_record
+            .checkpoints
+            .iter()
+            .find(|cp| {
+                cp.outbound_interface_bindings
+                    .iter()
+                    .any(|b| b.interface.as_str() == connector)
+            })
+            .unwrap();
+        assert_eq!(
+            policy_op_cp.required_verified_artifacts[0].params,
+            serde_json::json!({"operations": ["connector.list", "connector.read"]})
+        );
+        assert!(
+            plan_operator_chat_topology(&make_request(
+                "op_allowlist_denied_task",
+                worker_with_mark,
+                "ee_existence",
+                ExternalInputSeed {
+                    allowed_operations: Some(vec!["connector.send".into()]),
+                    ..narrowed_seed.clone()
+                },
+            ))
+            .unwrap_err()
+            .contains("denied by formed interface_policy")
+        );
+
+        // Fail-closed validation checks.
+        for (label, worker, seed, expected_err) in [
+            (
+                "empty_list",
+                worker_with_mark,
+                ExternalInputSeed {
+                    allowed_operations: Some(vec![]),
+                    ..narrowed_seed.clone()
+                },
+                "must not be empty",
+            ),
+            (
+                "duplicate_op",
+                worker_with_mark,
+                ExternalInputSeed {
+                    allowed_operations: Some(vec!["connector.list".into(), "connector.list".into()]),
+                    ..narrowed_seed.clone()
+                },
+                "repeats",
+            ),
+            (
+                "unknown_op",
+                worker_with_mark,
+                ExternalInputSeed {
+                    allowed_operations: Some(vec!["connector.unknown".into()]),
+                    ..narrowed_seed.clone()
+                },
+                "unknown operation",
+            ),
+            (
+                "non_operation_interface",
+                worker_with_mark,
+                ExternalInputSeed {
+                    checkpoint_id: "cp_cron".into(),
+                    interface_id: "world_cron".into(),
+                    artifact_names: vec!["cron.current_time".into()],
+                    required_verified_artifacts: vec![],
+                    allowed_operations: Some(vec!["connector.list".into()]),
+                },
+                "non-operation interface",
+            ),
+            (
+                "missing_worker_mark",
+                worker_without_mark,
+                narrowed_seed.clone(),
+                octopus_run_authoring::OPERATION_CALL_MARK,
+            ),
+        ] {
+            let err = plan_operator_chat_topology(&make_request(&format!("op_allowlist_err_{label}"), worker, "ee_existence", seed))
+                .expect_err(&format!("expected failure for {label}"));
+            assert!(
+                err.contains(expected_err),
+                "case {label}: expected '{expected_err}' in '{err}'"
+            );
+        }
     }

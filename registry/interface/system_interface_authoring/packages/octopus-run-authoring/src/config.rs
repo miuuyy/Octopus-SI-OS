@@ -189,11 +189,12 @@ impl RunAuthoringConfig {
                         return Err(format!("run_authoring {owner} interface output must have one exact recipient"));
                     };
                     if checkpoint.interface() != &self.provider_interface || target.interface == self.provider_interface
-                        || checkpoint.include_context || !checkpoint.required_verified_artifacts.is_empty()
+                        || checkpoint.include_context
                         || checkpoint.interface_binding.config.artifact_policy != target.config.artifact_policy
                         || !matches!(&target.config.artifact_policy, BindingArtifactPolicy::Allow { names, namespaces } if names.len()==1 && namespaces.is_empty()) {
-                        return Err(format!("run_authoring {owner} interface output must preserve one exact name and declared recipient without context or verifier"));
+                        return Err(format!("run_authoring {owner} interface output must preserve one exact name and declared recipient without context"));
                     }
+                    checkpoint_operation_ids(checkpoint)?;
                 }
                 RunAuthoringCheckpointRole::ProviderToolOutput => {
                     if checkpoint.interface() != &self.provider_interface
@@ -431,8 +432,7 @@ impl RunAuthoringConfig {
                     )),
                 }
             }
-            ProviderHandoffRoute::Interface { interface }
-            | ProviderHandoffRoute::Operation { interface, .. } => {
+            ProviderHandoffRoute::Interface { interface } => {
                 if !granted_interfaces.contains(interface) {
                     return Err(format!(
                         "provider emitted to interface '{}' outside the formed invocation grant",
@@ -459,6 +459,45 @@ impl RunAuthoringConfig {
                     [owner] => Ok((*owner).clone()),
                     _ => Err(format!(
                         "provider emitted interface artifact '{}' to '{}' with {} descriptor-derived output owners",
+                        artifact_label,
+                        interface.as_str(),
+                        owners.len()
+                    )),
+                }
+            }
+            ProviderHandoffRoute::Operation { interface, .. } => {
+                if !granted_interfaces.contains(interface) {
+                    return Err(format!(
+                        "provider emitted to interface '{}' outside the formed invocation grant",
+                        interface.as_str()
+                    ));
+                }
+                let owners = self
+                    .checkpoints
+                    .iter()
+                    .filter(|checkpoint| {
+                        matches!(
+                            checkpoint.role,
+                            RunAuthoringCheckpointRole::ProviderArtifactOutput
+                                | RunAuthoringCheckpointRole::ProviderInterfaceOutput
+                        ) && checkpoint.outbound_interface_bindings.len() == 1
+                            && checkpoint.outbound_interfaces().next() == Some(interface)
+                            && checkpoint.outbound_interface_bindings[0].admits(artifact_label)
+                            && (checkpoint.required_verified_artifacts.is_empty()
+                                || (checkpoint.role
+                                    == RunAuthoringCheckpointRole::ProviderInterfaceOutput
+                                    && checkpoint_operation_ids(checkpoint).is_ok()))
+                    })
+                    .collect::<Vec<_>>();
+                match owners.as_slice() {
+                    [] => Err(format!(
+                        "provider emitted operation artifact '{}' to '{}' with no descriptor-derived output owner",
+                        artifact_label,
+                        interface.as_str()
+                    )),
+                    [owner] => Ok((*owner).clone()),
+                    _ => Err(format!(
+                        "provider emitted operation artifact '{}' to '{}' with {} descriptor-derived output owners",
                         artifact_label,
                         interface.as_str(),
                         owners.len()

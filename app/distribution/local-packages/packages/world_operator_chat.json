@@ -213,6 +213,10 @@
     },
     {
       "registry_kind": "mark",
+      "owner": "operation.call.allowed"
+    },
+    {
+      "registry_kind": "mark",
       "owner": "tool.call.allowed"
     },
     {
@@ -222,6 +226,27 @@
     {
       "registry_kind": "verifier",
       "owner": "tool_result_correspondence",
+      "configuration": [
+        {
+          "path": "verifier.json",
+          "fields": [
+            {
+              "pointer": "/authority/sandbox_mode",
+              "schema": {
+                "type": "string",
+                "enum": [
+                  "enforced",
+                  "disabled"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "registry_kind": "verifier",
+      "owner": "operation_call_allowed",
       "configuration": [
         {
           "path": "verifier.json",

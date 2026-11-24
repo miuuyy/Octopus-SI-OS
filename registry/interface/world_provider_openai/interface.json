@@ -94,7 +94,7 @@
                 },
                 "properties": {
                   "amendment_key": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "selection": {
                     "$ref": "#/$defs/entries",
@@ -122,10 +122,10 @@
                       ],
                       "properties": {
                         "source": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         },
                         "entry_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "revision": {
                           "type": "string",
@@ -194,7 +194,7 @@
                           ],
                           "properties": {
                             "path": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "content": {
                               "type": "string"
@@ -259,30 +259,26 @@
                           ],
                           "properties": {
                             "tool": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "worker_environment_kind": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             }
                           }
                         }
                       },
                       "selected_worker_environment_kinds": {
-                        "type": "array",
-                        "uniqueItems": true,
-                        "items": {
-                          "$ref": "#/$defs/str"
-                        }
+                        "$ref": "#/$defs/ids"
                       },
                       "door_host_slots": {
                         "type": "object",
                         "additionalProperties": {
                           "type": "object",
                           "additionalProperties": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           }
                         }
                       },
@@ -297,23 +293,27 @@
                           ],
                           "properties": {
                             "checkpoint_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "artifact_names": {
                               "type": "array",
                               "minItems": 1,
                               "items": {
-                                "$ref": "#/$defs/str"
+                                "$ref": "#/$defs/s"
                               }
                             },
                             "required_verified_artifacts": {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/verified_artifact"
+                                "$ref": "#/$defs/va"
                               }
+                            },
+                            "allowed_operations": {
+                              "$ref": "#/$defs/ids",
+                              "minItems": 1
                             }
                           }
                         }
@@ -330,21 +330,21 @@
                           ],
                           "properties": {
                             "checkpoint_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "outbound_interface_ids": {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/str"
+                                "$ref": "#/$defs/s"
                               }
                             },
                             "required_verified_artifacts": {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/verified_artifact"
+                                "$ref": "#/$defs/va"
                               }
                             }
                           }
@@ -362,13 +362,13 @@
                           ],
                           "properties": {
                             "checkpoint_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "required_verified_artifact": {
-                              "$ref": "#/$defs/verified_artifact"
+                              "$ref": "#/$defs/va"
                             }
                           }
                         }
@@ -383,7 +383,7 @@
                           ],
                           "properties": {
                             "id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             }
                           }
                         }
@@ -391,12 +391,12 @@
                       "payload_artifact_bindings": {
                         "type": "array",
                         "items": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         }
                       }
                     }
                   },
-                  "verified_artifact": {
+                  "va": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -406,18 +406,18 @@
                     ],
                     "properties": {
                       "mark": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "artifact_label": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "verifier": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "params": {}
                     }
                   },
-                  "artifact_ref": {
+                  "ref": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -441,9 +441,16 @@
                       }
                     }
                   },
-                  "str": {
+                  "s": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "$ref": "#/$defs/s"
+                    }
                   }
                 }
               }
@@ -466,7 +473,7 @@
                 },
                 "properties": {
                   "amendment_key": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "selection": {
                     "$ref": "#/$defs/entries",
@@ -494,10 +501,10 @@
                       ],
                       "properties": {
                         "source": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         },
                         "entry_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "revision": {
                           "type": "string",
@@ -566,7 +573,7 @@
                           ],
                           "properties": {
                             "path": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "content": {
                               "type": "string"
@@ -631,30 +638,26 @@
                           ],
                           "properties": {
                             "tool": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "worker_environment_kind": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             }
                           }
                         }
                       },
                       "selected_worker_environment_kinds": {
-                        "type": "array",
-                        "uniqueItems": true,
-                        "items": {
-                          "$ref": "#/$defs/str"
-                        }
+                        "$ref": "#/$defs/ids"
                       },
                       "door_host_slots": {
                         "type": "object",
                         "additionalProperties": {
                           "type": "object",
                           "additionalProperties": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           }
                         }
                       },
@@ -669,23 +672,27 @@
                           ],
                           "properties": {
                             "checkpoint_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "artifact_names": {
                               "type": "array",
                               "minItems": 1,
                               "items": {
-                                "$ref": "#/$defs/str"
+                                "$ref": "#/$defs/s"
                               }
                             },
                             "required_verified_artifacts": {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/verified_artifact"
+                                "$ref": "#/$defs/va"
                               }
+                            },
+                            "allowed_operations": {
+                              "$ref": "#/$defs/ids",
+                              "minItems": 1
                             }
                           }
                         }
@@ -702,21 +709,21 @@
                           ],
                           "properties": {
                             "checkpoint_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "outbound_interface_ids": {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/str"
+                                "$ref": "#/$defs/s"
                               }
                             },
                             "required_verified_artifacts": {
                               "type": "array",
                               "items": {
-                                "$ref": "#/$defs/verified_artifact"
+                                "$ref": "#/$defs/va"
                               }
                             }
                           }
@@ -734,13 +741,13 @@
                           ],
                           "properties": {
                             "checkpoint_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "interface_id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "required_verified_artifact": {
-                              "$ref": "#/$defs/verified_artifact"
+                              "$ref": "#/$defs/va"
                             }
                           }
                         }
@@ -755,7 +762,7 @@
                           ],
                           "properties": {
                             "id": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             }
                           }
                         }
@@ -763,12 +770,12 @@
                       "payload_artifact_bindings": {
                         "type": "array",
                         "items": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         }
                       }
                     }
                   },
-                  "verified_artifact": {
+                  "va": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -778,18 +785,18 @@
                     ],
                     "properties": {
                       "mark": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "artifact_label": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "verifier": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "params": {}
                     }
                   },
-                  "artifact_ref": {
+                  "ref": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -813,9 +820,16 @@
                       }
                     }
                   },
-                  "str": {
+                  "s": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "$ref": "#/$defs/s"
+                    }
                   }
                 }
               }
@@ -838,45 +852,45 @@
                 },
                 "properties": {
                   "creation_key": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "title": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "text": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "ee_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "worker_template_interface_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "provider_interface_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "model": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "reasoning_effort": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "service_tier": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "client_interface_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "artifacts": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/artifact_ref"
+                      "$ref": "#/$defs/ref"
                     }
                   },
                   "context_artifacts": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/artifact_ref"
+                      "$ref": "#/$defs/ref"
                     }
                   },
                   "worker_environment_kinds": {
@@ -897,13 +911,13 @@
                       ],
                       "properties": {
                         "tool": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "worker_environment_kind": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         }
                       }
                     }
@@ -913,7 +927,7 @@
                     "additionalProperties": {
                       "type": "object",
                       "additionalProperties": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       }
                     }
                   },
@@ -928,23 +942,27 @@
                       ],
                       "properties": {
                         "checkpoint_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "artifact_names": {
                           "type": "array",
                           "minItems": 1,
                           "items": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           }
                         },
                         "required_verified_artifacts": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/verified_artifact"
+                            "$ref": "#/$defs/va"
                           }
+                        },
+                        "allowed_operations": {
+                          "$ref": "#/$defs/ids",
+                          "minItems": 1
                         }
                       }
                     }
@@ -961,21 +979,21 @@
                       ],
                       "properties": {
                         "checkpoint_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "outbound_interface_ids": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           }
                         },
                         "required_verified_artifacts": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/verified_artifact"
+                            "$ref": "#/$defs/va"
                           }
                         }
                       }
@@ -993,13 +1011,13 @@
                       ],
                       "properties": {
                         "checkpoint_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "required_verified_artifact": {
-                          "$ref": "#/$defs/verified_artifact"
+                          "$ref": "#/$defs/va"
                         }
                       }
                     }
@@ -1016,10 +1034,10 @@
                       ],
                       "properties": {
                         "source": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         },
                         "entry_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "revision": {
                           "type": "string",
@@ -1056,7 +1074,7 @@
                     ],
                     "properties": {
                       "run_id": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "writes": {
                         "type": "array",
@@ -1071,7 +1089,7 @@
                           ],
                           "properties": {
                             "path": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "content": {
                               "type": "string"
@@ -1089,7 +1107,7 @@
                       "publication_read_refs": {
                         "type": "array",
                         "items": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         }
                       },
                       "outgoing_bindings": {
@@ -1104,10 +1122,10 @@
                           ],
                           "properties": {
                             "interface": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "artifact_label": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "artifact_bindings": {
                               "$ref": "#/$defs/ids"
@@ -1125,10 +1143,10 @@
                         ],
                         "properties": {
                           "interface_id": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           },
                           "label": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           },
                           "payload": {}
                         }
@@ -1173,7 +1191,7 @@
                   }
                 ],
                 "$defs": {
-                  "verified_artifact": {
+                  "va": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -1183,18 +1201,18 @@
                     ],
                     "properties": {
                       "mark": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "artifact_label": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "verifier": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "params": {}
                     }
                   },
-                  "artifact_ref": {
+                  "ref": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -1222,10 +1240,10 @@
                     "type": "array",
                     "uniqueItems": true,
                     "items": {
-                      "$ref": "#/$defs/str"
+                      "$ref": "#/$defs/s"
                     }
                   },
-                  "str": {
+                  "s": {
                     "type": "string",
                     "minLength": 1
                   }
@@ -1247,7 +1265,7 @@
                 },
                 "properties": {
                   "creation_key": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "title": {
                     "type": "string",
@@ -1265,33 +1283,33 @@
                     "description": "Project EE for the task; omit for the default EE."
                   },
                   "worker_template_interface_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "provider_interface_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "model": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "reasoning_effort": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "service_tier": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "client_interface_id": {
-                    "$ref": "#/$defs/str"
+                    "$ref": "#/$defs/s"
                   },
                   "artifacts": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/artifact_ref"
+                      "$ref": "#/$defs/ref"
                     }
                   },
                   "context_artifacts": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/$defs/artifact_ref"
+                      "$ref": "#/$defs/ref"
                     }
                   },
                   "worker_environment_kinds": {
@@ -1312,13 +1330,13 @@
                       ],
                       "properties": {
                         "tool": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "worker_environment_kind": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         }
                       }
                     }
@@ -1328,7 +1346,7 @@
                     "additionalProperties": {
                       "type": "object",
                       "additionalProperties": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       }
                     }
                   },
@@ -1343,23 +1361,27 @@
                       ],
                       "properties": {
                         "checkpoint_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "artifact_names": {
                           "type": "array",
                           "minItems": 1,
                           "items": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           }
                         },
                         "required_verified_artifacts": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/verified_artifact"
+                            "$ref": "#/$defs/va"
                           }
+                        },
+                        "allowed_operations": {
+                          "$ref": "#/$defs/ids",
+                          "minItems": 1
                         }
                       }
                     }
@@ -1376,21 +1398,21 @@
                       ],
                       "properties": {
                         "checkpoint_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "outbound_interface_ids": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           }
                         },
                         "required_verified_artifacts": {
                           "type": "array",
                           "items": {
-                            "$ref": "#/$defs/verified_artifact"
+                            "$ref": "#/$defs/va"
                           }
                         }
                       }
@@ -1408,13 +1430,13 @@
                       ],
                       "properties": {
                         "checkpoint_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "interface_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "required_verified_artifact": {
-                          "$ref": "#/$defs/verified_artifact"
+                          "$ref": "#/$defs/va"
                         }
                       }
                     }
@@ -1431,10 +1453,10 @@
                       ],
                       "properties": {
                         "source": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         },
                         "entry_id": {
-                          "$ref": "#/$defs/str"
+                          "$ref": "#/$defs/s"
                         },
                         "revision": {
                           "type": "string",
@@ -1471,7 +1493,7 @@
                     ],
                     "properties": {
                       "run_id": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "writes": {
                         "type": "array",
@@ -1486,7 +1508,7 @@
                           ],
                           "properties": {
                             "path": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "content": {
                               "type": "string"
@@ -1504,7 +1526,7 @@
                       "publication_read_refs": {
                         "type": "array",
                         "items": {
-                          "$ref": "#/$defs/artifact_ref"
+                          "$ref": "#/$defs/ref"
                         }
                       },
                       "outgoing_bindings": {
@@ -1519,10 +1541,10 @@
                           ],
                           "properties": {
                             "interface": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "artifact_label": {
-                              "$ref": "#/$defs/str"
+                              "$ref": "#/$defs/s"
                             },
                             "artifact_bindings": {
                               "$ref": "#/$defs/ids"
@@ -1540,10 +1562,10 @@
                         ],
                         "properties": {
                           "interface_id": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           },
                           "label": {
-                            "$ref": "#/$defs/str"
+                            "$ref": "#/$defs/s"
                           },
                           "payload": {}
                         }
@@ -1569,7 +1591,7 @@
                   }
                 ],
                 "$defs": {
-                  "verified_artifact": {
+                  "va": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -1579,18 +1601,18 @@
                     ],
                     "properties": {
                       "mark": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "artifact_label": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "verifier": {
-                        "$ref": "#/$defs/str"
+                        "$ref": "#/$defs/s"
                       },
                       "params": {}
                     }
                   },
-                  "artifact_ref": {
+                  "ref": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
@@ -1618,10 +1640,10 @@
                     "type": "array",
                     "uniqueItems": true,
                     "items": {
-                      "$ref": "#/$defs/str"
+                      "$ref": "#/$defs/s"
                     }
                   },
-                  "str": {
+                  "s": {
                     "type": "string",
                     "minLength": 1
                   }

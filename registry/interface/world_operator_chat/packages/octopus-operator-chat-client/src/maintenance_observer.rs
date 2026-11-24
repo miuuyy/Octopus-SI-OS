@@ -552,6 +552,7 @@ pub fn plan_maintenance_observer(
             interface_id: experience_id.clone(),
             artifact_names: Vec::new(),
             required_verified_artifacts: vec![projected_requirement.clone()],
+            allowed_operations: None,
         }],
         &[],
         &[],

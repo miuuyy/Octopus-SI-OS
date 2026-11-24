@@ -93,7 +93,8 @@ fn same_future_contract(before: &BoundRunAuthoringTopology, after: &BoundRunAuth
 
 fn successors<'a>(prior: &RunAuthoringCheckpoint, after: &'a BoundRunAuthoringTopology) -> Vec<&'a RunAuthoringCheckpoint> {
     after.checkpoints.iter().filter(|next| next.name == prior.name
-        || (prior.role == RunAuthoringCheckpointRole::ProviderToolOutput && next.role == prior.role
+        || (matches!(prior.role, RunAuthoringCheckpointRole::ProviderToolOutput | RunAuthoringCheckpointRole::ProviderInterfaceOutput)
+            && next.role == prior.role
             && next.interface_binding == prior.interface_binding
             && next.outbound_interface_bindings == prior.outbound_interface_bindings)).collect()
 }
@@ -176,6 +177,33 @@ fn validate_templates(record: &RunRecord, before: &BoundRunAuthoringTopology, af
             new.required_verified_artifacts[0].params["tools"] = json!([]);
             if old.result_receiving.is_empty() != new.result_receiving.is_empty()
                 || old.result_receiving.iter().any(|(tool, required)| new.result_receiving.get(tool) != Some(required)) {
+                return Err("capability amendment changes retained result receiving requirements".into());
+            }
+            old.result_receiving.clear();
+            new.result_receiving.clear();
+            new.name = old.name.clone();
+        }
+        if prior.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput {
+            let old_ops = checkpoint_operation_ids(prior)?;
+            let new_ops = checkpoint_operation_ids(next)?;
+            match (&old_ops, &new_ops) {
+                (Some(old_set), Some(new_set)) => {
+                    if !old_set.is_subset(new_set) {
+                        return Err(format!("capability amendment removes accepted operation rights from '{}'", prior.name));
+                    }
+                    old.required_verified_artifacts[0].params["operations"] = json!([]);
+                    new.required_verified_artifacts[0].params["operations"] = json!([]);
+                }
+                (Some(_), None) => {
+                    old.required_verified_artifacts.clear();
+                }
+                (None, Some(_)) => {
+                    return Err(format!("capability amendment removes accepted operation rights from '{}'", prior.name));
+                }
+                (None, None) => {}
+            }
+            if old.result_receiving.is_empty() != new.result_receiving.is_empty()
+                || old.result_receiving.iter().any(|(label, required)| new.result_receiving.get(label) != Some(required)) {
                 return Err("capability amendment changes retained result receiving requirements".into());
             }
             old.result_receiving.clear();

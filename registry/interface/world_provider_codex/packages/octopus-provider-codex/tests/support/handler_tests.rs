@@ -4653,7 +4653,7 @@ while IFS= read -r _; do :; done
             name: "formed_interfaces".to_string(),
             description: "Formed interface tools.".to_string(),
         };
-        let catalog = extract_native_affordance_catalog(&input, &[], &namespace, None, &serde_json::Map::new()).unwrap();
+        let catalog = extract_native_affordance_catalog(&input, None, &[], &namespace, None, &serde_json::Map::new()).unwrap();
         assert_eq!(catalog.specs.len(), 1);
         let DynamicToolSpec::Namespace(presented) = &catalog.specs[0] else {
             panic!("formed affordances must share the descriptor-owned namespace")
@@ -7008,4 +7008,471 @@ while IFS= read -r _; do :; done
         )
         .unwrap();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn operation_catalog_affordances_filter_by_interface_policy_and_run_allowlist() {
+        let connector = "world_connector_exact";
+        let provider = "world_provider_test";
+        let mut input = metadata_input(serde_json::json!([
+            {
+                "name": "artifact.read",
+                "description": "read bound artifact",
+                "input_schema": { "type": "object", "properties": {} }
+            }
+        ]));
+        input.metadata.as_mut().unwrap().grant.interfaces = vec![connector.to_string()];
+        input.metadata.as_mut().unwrap().runtime = Some(RuntimeInvocationMetadata {
+            run: octopus_descriptors::RunId::new("run-op-filter"),
+            ee: octopus_descriptors::EeId::new("ee-op-filter"),
+            worker: InterfaceId::new("system_worker_test"),
+            checkpoint: octopus_descriptors::CheckpointId::new("cp_in"),
+            interface: InterfaceId::new(provider),
+            epoch: 1,
+            run_record_hash: None,
+        });
+        input.artifact_binding_payloads.push(bound(
+            "artifact-operation-catalog-connector",
+            serde_json::json!({
+                "id": "artifact-operation-catalog-connector",
+                "label": "connector.operation_catalog",
+                "interface": connector,
+                "request_label": "connector.operation.request",
+                "task_input_labels": ["connector.event"],
+                "operations": [
+                    {
+                        "name": "connector.list",
+                        "description": "list items",
+                        "input_schema": { "type": "object", "properties": {} },
+                        "request_label": "connector.operation.request",
+                        "output_label": "connector.list.result"
+                    },
+                    {
+                        "name": "connector.read",
+                        "description": "read item",
+                        "input_schema": { "type": "object", "properties": {} },
+                        "request_label": "connector.operation.request",
+                        "output_label": "connector.read.result"
+                    },
+                    {
+                        "name": "connector.send",
+                        "description": "send item",
+                        "input_schema": { "type": "object", "properties": {} },
+                        "request_label": "connector.operation.request",
+                        "output_label": "connector.send.result"
+                    }
+                ]
+            }),
+        ));
+        let namespace = NativeToolNamespace {
+            name: "formed_interfaces".to_string(),
+            description: "Formed interface tools.".to_string(),
+        };
+        let projected_ops = |catalog: &NativeAffordanceCatalog| -> BTreeSet<String> {
+            let DynamicToolSpec::Namespace(ns) = &catalog.specs[0] else {
+                panic!("expected namespaced dynamic tools");
+            };
+            let spec_ops: BTreeSet<String> = ns
+                .tools
+                .iter()
+                .map(|tool| {
+                    let encoded = serde_json::to_value(tool).unwrap();
+                    decode_tool_name(encoded["name"].as_str().unwrap()).unwrap()
+                })
+                .filter(|name| name.starts_with("connector."))
+                .collect();
+            let map_ops: BTreeSet<String> =
+                catalog.interface_operations.keys().cloned().collect();
+            assert_eq!(spec_ops, map_ops, "DynamicToolSpec and interface_operations must agree");
+            spec_ops
+        };
+
+        // Unrestricted: all 3 operations projected.
+        let unrestricted = extract_native_affordance_catalog(
+            &input,
+            None,
+            &[],
+            &namespace,
+            None,
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            projected_ops(&unrestricted),
+            BTreeSet::from([
+                "connector.list".to_string(),
+                "connector.read".to_string(),
+                "connector.send".to_string(),
+            ])
+        );
+
+        // interface_policy denied_operations hides excluded operations.
+        input
+            .metadata
+            .as_mut()
+            .unwrap()
+            .grant
+            .interface_policy
+            .insert(
+                connector.to_string(),
+                BTreeMap::from([(
+                    "denied_operations".to_string(),
+                    serde_json::json!(["connector.send"]),
+                )]),
+            );
+        let policy_filtered = extract_native_affordance_catalog(
+            &input,
+            None,
+            &[],
+            &namespace,
+            None,
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            projected_ops(&policy_filtered),
+            BTreeSet::from(["connector.list".to_string(), "connector.read".to_string()])
+        );
+
+        // RunRecord ProviderInterfaceOutput operation_call_allowed intersects with interface_policy.
+        let provider_in = serde_json::json!({
+            "interface": provider,
+            "config": {
+                "artifact_policy": {
+                    "mode": "allow",
+                    "names": ["connector.operation.request"],
+                    "namespaces": []
+                }
+            }
+        });
+        let connector_out = serde_json::json!({
+            "interface": connector,
+            "config": {
+                "artifact_policy": {
+                    "mode": "allow",
+                    "names": ["connector.operation.request"],
+                    "namespaces": []
+                }
+            }
+        });
+        let make_run = |ops: &[&str]| -> octopus_run_record::RunRecord {
+            let json = serde_json::json!({
+                "id": "run-op-filter",
+                "ee": "ee-op-filter",
+                "worker": "system_worker_test",
+                "trace": "trace-op-filter",
+                "status": "running",
+                "interface_state": {
+                    provider: {
+                        "run_authoring_binding": {
+                            "schema_version": 2,
+                            "run": "run-op-filter",
+                            "worker": "system_worker_test",
+                            "provider_interface": provider,
+                            "authoring_source_interface": provider,
+                            "checkpoints": [
+                                {
+                                    "name": "op_out",
+                                    "role": "provider_interface_output",
+                                    "include_context": false,
+                                    "interface_binding": provider_in,
+                                    "outbound_interface_bindings": [connector_out],
+                                    "required_verified_artifacts": [{
+                                        "mark": octopus_run_authoring::OPERATION_CALL_MARK,
+                                        "artifact_label": "connector.operation.request",
+                                        "verifier": octopus_run_authoring::OPERATION_CALL_VERIFIER,
+                                        "params": { "operations": ops }
+                                    }]
+                                }
+                            ]
+                        }
+                    }
+                },
+                "checkpoints": [],
+                "active_checkpoints": []
+            });
+            octopus_run_record::RunRecord::from_bytes(&serde_json::to_vec(&json).unwrap()).unwrap()
+        };
+
+        // Allowlist ["connector.list", "connector.send"] intersected with denied ["connector.send"] -> ["connector.list"].
+        let run_allowlist = make_run(&["connector.list", "connector.send"]);
+        let intersected = extract_native_affordance_catalog(
+            &input,
+            Some(&run_allowlist),
+            &[],
+            &namespace,
+            None,
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            projected_ops(&intersected),
+            BTreeSet::from(["connector.list".to_string()])
+        );
+
+        // Disjoint intersection projects zero operations without leaking or panicking.
+        let run_only_denied = make_run(&["connector.send"]);
+        let empty = extract_native_affordance_catalog(
+            &input,
+            Some(&run_only_denied),
+            &[],
+            &namespace,
+            None,
+            &serde_json::Map::new(),
+        )
+        .unwrap();
+        assert!(projected_ops(&empty).is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_gate_enforces_operation_call_allowed_on_direct_emission() {
+        use octopus_app_server::{
+            ArrivalError, SharedBlobHandle, SharedBlobs, SpineRootConfig,
+            admit_interface_artifact_arrival, build_embedded_spine,
+        };
+        use octopus_ledger::{InMemoryBlobs, InMemoryLog, LiveMovementLog, MovementKind, MovementLog};
+
+        let repo_registry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../..");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let reg = root.join("registry");
+        let ee_root = root.join("ee_instances");
+        let runs_root = root.join("runs");
+        let artifacts_root = root.join("artifacts");
+        std::fs::create_dir_all(&ee_root).unwrap();
+        std::fs::create_dir_all(&runs_root).unwrap();
+        std::fs::create_dir_all(&artifacts_root).unwrap();
+        for kind in [
+            "artifact",
+            "ee_template",
+            "interface",
+            "mark",
+            "tool",
+            "verifier",
+            "worker_environment_kind",
+        ] {
+            std::fs::create_dir_all(reg.join(kind)).unwrap();
+        }
+
+        // Copy real mark + verifier packages from the repository registry.
+        for rel in [
+            "mark/operation.call.allowed/mark.json",
+            "verifier/operation_call_allowed/verifier.json",
+            "verifier/operation_call_allowed/verify.py",
+        ] {
+            let src = repo_registry.join(rel);
+            let dst = reg.join(rel);
+            std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+            std::fs::copy(&src, &dst).unwrap();
+        }
+        let write_json = |path: PathBuf, value: serde_json::Value| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        };
+        let provider = "world_provider_gate_test";
+        let connector = "world_connector_gate_test";
+        let worker = "system_worker_gate_test";
+        let ee_id = "ee_gate_template";
+        let run_id = "run_gate_test";
+        write_json(
+            reg.join("interface").join(provider).join("interface.json"),
+            serde_json::json!({
+                "id": provider,
+                "interface_type": "world",
+                "role": "service",
+                "direction": "bidirectional",
+                "source_names": ["provider"],
+                "interface_driver_ref": "provider"
+            }),
+        );
+        write_json(
+            reg.join("interface").join(connector).join("interface.json"),
+            serde_json::json!({
+                "id": connector,
+                "interface_type": "world",
+                "role": "service",
+                "direction": "bidirectional",
+                "source_names": ["connector"],
+                "interface_driver_ref": "connector"
+            }),
+        );
+        write_json(
+            reg.join("interface").join(worker).join("interface.json"),
+            serde_json::json!({
+                "id": worker,
+                "interface_type": "system",
+                "role": "worker",
+                "direction": "bidirectional",
+                "source_names": ["worker"]
+            }),
+        );
+        write_json(
+            reg.join("interface").join(worker).join("policy.json"),
+            serde_json::json!({
+                "id": worker,
+                "ceiling": {
+                    "tools": [],
+                    "interfaces": [worker, provider, connector],
+                    "wek": [],
+                    "mark_outcomes": [octopus_run_authoring::OPERATION_CALL_MARK],
+                    "artifact_verbs": ["read"]
+                }
+            }),
+        );
+        write_json(
+            reg.join("ee_template/gate_template/ee_template.json"),
+            serde_json::json!({
+                "id": "gate_template",
+                "goal_class": "gate_template",
+                "allowed_interfaces": [worker, provider, connector],
+                "allowed_worker_environment_kinds": [],
+                "allowed_child_ee_templates": [],
+                "bootstrap_root": true,
+                "allowed_root_slots": []
+            }),
+        );
+        write_json(
+            ee_root.join(format!("{ee_id}.json")),
+            serde_json::json!({
+                "ee_id": ee_id,
+                "name": "Gate Test EE",
+                "template_name": "gate_template",
+                "goal": "gate-test"
+            }),
+        );
+        let provider_in = serde_json::json!({
+            "interface": provider,
+            "config": {
+                "artifact_policy": {
+                    "mode": "allow",
+                    "names": ["connector.operation.request"],
+                    "namespaces": []
+                }
+            }
+        });
+        let connector_out = serde_json::json!({
+            "interface": connector,
+            "config": {
+                "artifact_policy": {
+                    "mode": "allow",
+                    "names": ["connector.operation.request"],
+                    "namespaces": []
+                }
+            }
+        });
+        write_json(
+            runs_root.join(format!("{run_id}.json")),
+            serde_json::json!({
+                "id": run_id,
+                "ee": ee_id,
+                "worker": worker,
+                "trace": "trace:gate:test",
+                "status": "running",
+                "interface_state": {},
+                "checkpoints": [{
+                    "id": "cp_op_out",
+                    "run": run_id,
+                    "trace": "trace:gate:cp_op_out",
+                    "epoch": 0,
+                    "interface_binding": provider_in,
+                    "outbound_interface_bindings": [connector_out],
+                    "artifact_bindings": [],
+                    "required_verified_artifacts": [{
+                        "mark": octopus_run_authoring::OPERATION_CALL_MARK,
+                        "artifact_label": "connector.operation.request",
+                        "verifier": octopus_run_authoring::OPERATION_CALL_VERIFIER,
+                        "params": { "operations": ["connector.list"] }
+                    }]
+                }],
+                "active_checkpoints": ["cp_op_out"]
+            }),
+        );
+
+        let blobs: SharedBlobs = Arc::new(std::sync::Mutex::new(InMemoryBlobs::new()));
+        let embedded = build_embedded_spine(SpineRootConfig {
+            registry_root: reg,
+            run: octopus_descriptors::RunId::new(run_id),
+            blobs: blobs.clone(),
+            interface_artifact_root: artifacts_root.clone(),
+            run_records_root: runs_root,
+            ee_instances_root: ee_root,
+        })
+        .await
+        .expect("embedded spine boots with real operation_call_allowed verifier");
+        let mut log = LiveMovementLog::new(InMemoryLog::new());
+        let mut blob_handle = SharedBlobHandle::new(blobs.clone());
+
+        // 1. Bypassed raw emission for an excluded operation MUST fail verification with zero outbound delivery.
+        let excluded_file = InterfaceArtifactFile::write(
+            root.join("emitted_excluded"),
+            "connector.operation.request",
+            br#"{"operation":"connector.send","arguments":{},"correlation_id":"corr-excluded"}"#,
+        )
+        .unwrap();
+        let excluded_arrival = excluded_file.capture_bounded(1 << 20, 1 << 20).unwrap();
+        let refused = admit_interface_artifact_arrival(
+            &embedded,
+            &mut log,
+            &mut blob_handle,
+            &excluded_arrival,
+            &InterfaceId::new(provider),
+        )
+        .await;
+        match refused {
+            Err(octopus_app_server::InterfaceArtifactArrivalAdmissionError::Arrival(
+                ArrivalError::VerificationFailed(
+                    octopus_runtime::VerifiedArtifactError::VerifierRejected { details, .. },
+                ),
+            )) => {
+                assert_eq!(
+                    details.get("reason").and_then(|v| v.as_str()),
+                    Some("operation_not_allowed"),
+                    "expected operation_not_allowed rejection, got: {:?}",
+                    details
+                );
+            }
+            other => panic!("excluded operation must fail closed at RuntimeGate, got: {other:?}"),
+        }
+        let movements_after_refusal = log.read_from(octopus_ledger::Seq(0));
+        assert!(
+            movements_after_refusal
+                .iter()
+                .any(|m| m.kind == MovementKind::VerificationFailed),
+            "refusal must record a durable VerificationFailed movement"
+        );
+        assert!(
+            !movements_after_refusal.iter().any(|m| {
+                m.kind == MovementKind::InterfaceOutbound
+                    && m.to == octopus_ledger::Endpoint::Interface(InterfaceId::new(connector))
+            }),
+            "excluded operation must produce ZERO outbound delivery to the connector interface"
+        );
+
+        // 2. Allowed operation passes verification and delivers outbound to the connector interface.
+        let allowed_file = InterfaceArtifactFile::write(
+            root.join("emitted_allowed"),
+            "connector.operation.request",
+            br#"{"operation":"connector.list","arguments":{},"correlation_id":"corr-allowed"}"#,
+        )
+        .unwrap();
+        let allowed_arrival = allowed_file.capture_bounded(1 << 20, 1 << 20).unwrap();
+        let admitted = admit_interface_artifact_arrival(
+            &embedded,
+            &mut log,
+            &mut blob_handle,
+            &allowed_arrival,
+            &InterfaceId::new(provider),
+        )
+        .await
+        .expect("allowed operation must pass real operation_call_allowed verifier");
+        assert_eq!(admitted.admission.records.len(), 1);
+        let movements_after_allow = log.read_from(octopus_ledger::Seq(0));
+        assert!(
+            movements_after_allow.iter().any(|m| {
+                m.kind == MovementKind::InterfaceOutbound
+                    && m.to == octopus_ledger::Endpoint::Interface(InterfaceId::new(connector))
+            }),
+            "allowed operation must be delivered outbound to the connector interface"
+        );
     }

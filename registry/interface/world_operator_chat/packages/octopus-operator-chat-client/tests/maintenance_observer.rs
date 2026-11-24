@@ -1784,6 +1784,7 @@ fn amended_external_input_reaches_the_observer_projection_routes() {
     selection.external_inputs.push(ExternalInputSeed {
         checkpoint_id: "amended_trigger".into(), interface_id: "world_test_pulse".into(),
         artifact_names: vec!["cron.current_time".into()], required_verified_artifacts: Vec::new(),
+        allowed_operations: None,
     });
     let door = plan.authoring.capability_doors["system_room"].clone();
     let writer = plan.authoring.capability_tools["file.write"].clone();
@@ -1945,6 +1946,7 @@ fn delegated_output_selection_with_observer_amends_cleanly_and_accepts_unchanged
         interface_id: "world_test_pulse".into(),
         artifact_names: vec!["cron.current_time".into()],
         required_verified_artifacts: Vec::new(),
+        allowed_operations: None,
     });
     let second = plan_current_run_amendment(
         &request.roots,

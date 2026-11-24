@@ -1,0 +1,21 @@
+{
+  "id": "operation_call_allowed",
+  "package": "operation_call_allowed",
+  "script": "verify.py",
+  "authority": {
+    "read_root_slots": [],
+    "write_root_slots": [],
+    "executable_root_slots": [],
+    "read_paths": [],
+    "write_paths": [],
+    "executable_paths": [],
+    "executable_commands": ["/usr/bin/env", "python3"],
+    "read_executable_relative_paths": [{"executable": "python3", "relative_path": "../lib"}],
+    "read_env_paths": [],
+    "write_env_paths": [],
+    "executable_env_paths": [],
+    "allow_network": false,
+    "allow_local_ipc": false
+  },
+  "default_params": {}
+}

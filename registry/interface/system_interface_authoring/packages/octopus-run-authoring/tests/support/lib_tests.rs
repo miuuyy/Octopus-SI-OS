@@ -6177,6 +6177,188 @@
     }
 
 #[test]
+fn provider_operation_allowlist_validates_rearms_and_rejects_unauthorized_mutation() {
+    let mut config = config_with_tool_routes(&[]);
+    let target = InterfaceId::new("world_connector_test");
+    let request_label = "connector.operation.request";
+    let valid_requirement = RequiredVerifiedArtifact {
+        mark: octopus_descriptors::MarkId::new(OPERATION_CALL_MARK),
+        artifact_label: request_label.to_string(),
+        verifier: VerifierId::new(OPERATION_CALL_VERIFIER),
+        params: serde_json::json!({ "operations": ["connector.list", "connector.read"] }),
+    };
+    let mut op_checkpoint: RunAuthoringCheckpoint = serde_json::from_value(serde_json::json!({
+        "name": "connector_output",
+        "role": "provider_interface_output",
+        "interface_binding": names_binding(config.provider_interface.as_str(), &[request_label]),
+        "outbound_interface_bindings": [names_binding(target.as_str(), &[request_label])],
+        "include_context": false,
+        "static_artifact_bindings": [],
+        "required_verified_artifacts": [valid_requirement.clone()],
+    }))
+    .unwrap();
+    config.checkpoints.push(op_checkpoint.clone());
+    config
+        .validate(&config.provider_interface, &config.run)
+        .expect("valid operation allowlist checkpoint passes");
+
+    let granted = BTreeSet::from([config.provider_interface.clone(), target.clone()]);
+    let selected = config
+        .output_checkpoint(
+            &ProviderHandoffRoute::Operation {
+                interface: target.clone(),
+                result_label: "connector.operation.result".into(),
+            },
+            &BTreeSet::new(),
+            &granted,
+            request_label,
+        )
+        .expect("operation route selects verified ProviderInterfaceOutput");
+    assert_eq!(selected.name, "connector_output");
+    assert_eq!(selected.required_verified_artifacts, vec![valid_requirement.clone()]);
+    assert!(
+        config
+            .output_checkpoint(
+                &ProviderHandoffRoute::Interface { interface: target.clone() },
+                &BTreeSet::new(),
+                &granted,
+                request_label,
+            )
+            .is_err(),
+        "plain Interface route must not select a verified operation checkpoint"
+    );
+
+    let rearmed = pending_output_checkpoint(
+        &op_checkpoint,
+        "cp_connector_output_2",
+        request_label,
+        &[],
+        &[],
+    );
+    assert_eq!(
+        rearmed.required_verified_artifacts,
+        vec![valid_requirement.clone()],
+        "cycle rearming must preserve required_verified_artifacts verbatim"
+    );
+
+    let topology = BoundRunAuthoringTopology {
+        schema_version: 2,
+        run: config.run.clone(),
+        worker: config.worker.clone(),
+        provider_interface: config.provider_interface.clone(),
+        authoring_source_interface: config.authoring_source_interface.clone(),
+        payload_artifact_bindings: Vec::new(),
+        checkpoints: config.checkpoints.clone(),
+        writer_run: None,
+    };
+    let mut record: RunRecord = serde_json::from_value(serde_json::json!({
+        "id": config.run.as_str(),
+        "ee": "ee_test",
+        "worker": config.worker.as_str(),
+        "trace": "trace:test",
+        "status": "running",
+        "checkpoints": [materialize_checkpoint(&op_checkpoint, "cp_connector_output_2", &config.run, &[])],
+        "active_checkpoints": ["cp_connector_output_2"],
+        "interface_state": {
+            config.provider_interface.as_str(): {
+                RUN_AUTHORING_BINDING: topology
+            }
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        provider_operation_allowlist(&record, &config.provider_interface, &target, request_label)
+            .unwrap(),
+        Some(BTreeSet::from(["connector.list".to_string(), "connector.read".to_string()]))
+    );
+
+    let mut mutated = topology.clone();
+    mutated.checkpoints.last_mut().unwrap().required_verified_artifacts[0].params =
+        serde_json::json!({ "operations": ["connector.list", "connector.write"] });
+    assert!(
+        !preserves_provider_topology(&topology, &mutated),
+        "mutating operations on an existing ProviderInterfaceOutput must fail topology preservation"
+    );
+
+    let mut appended = topology.clone();
+    let mut extra = op_checkpoint.clone();
+    extra.name = "connector_output_extra".into();
+    appended.checkpoints.push(extra);
+    assert!(
+        !preserves_provider_topology(&topology, &appended),
+        "appending a verified ProviderInterfaceOutput must fail topology preservation"
+    );
+
+    let bad_cases: Vec<(&str, Vec<RequiredVerifiedArtifact>)> = vec![
+        (
+            "wrong_mark",
+            vec![RequiredVerifiedArtifact {
+                mark: octopus_descriptors::MarkId::new("tool.call.allowed"),
+                ..valid_requirement.clone()
+            }],
+        ),
+        (
+            "wrong_verifier",
+            vec![RequiredVerifiedArtifact {
+                verifier: VerifierId::new("tool_call_allowed"),
+                ..valid_requirement.clone()
+            }],
+        ),
+        (
+            "wrong_label",
+            vec![RequiredVerifiedArtifact {
+                artifact_label: "other.request".into(),
+                ..valid_requirement.clone()
+            }],
+        ),
+        (
+            "empty_operations",
+            vec![RequiredVerifiedArtifact {
+                params: serde_json::json!({ "operations": [] }),
+                ..valid_requirement.clone()
+            }],
+        ),
+        (
+            "duplicate_operations",
+            vec![RequiredVerifiedArtifact {
+                params: serde_json::json!({ "operations": ["connector.read", "connector.read"] }),
+                ..valid_requirement.clone()
+            }],
+        ),
+        (
+            "untrimmed_operation",
+            vec![RequiredVerifiedArtifact {
+                params: serde_json::json!({ "operations": [" connector.read"] }),
+                ..valid_requirement.clone()
+            }],
+        ),
+        (
+            "extra_param_key",
+            vec![RequiredVerifiedArtifact {
+                params: serde_json::json!({ "operations": ["connector.read"], "extra": true }),
+                ..valid_requirement.clone()
+            }],
+        ),
+        ("two_requirements", vec![valid_requirement.clone(), valid_requirement.clone()]),
+    ];
+    for (case, reqs) in bad_cases {
+        let mut invalid = config.clone();
+        op_checkpoint.required_verified_artifacts = reqs;
+        *invalid.checkpoints.last_mut().unwrap() = op_checkpoint.clone();
+        assert!(
+            invalid.validate(&invalid.provider_interface, &invalid.run).is_err(),
+            "expected validation failure for {case}"
+        );
+    }
+    record.interface_state.clear();
+    assert_eq!(
+        provider_operation_allowlist(&record, &config.provider_interface, &target, request_label)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
 #[ignore = "requires explicitly selected read-only ledger performance evidence"]
 fn selected_retained_delivery_cost() {
     let home = PathBuf::from(std::env::var("OCTOPUS_BENCH_HOME").unwrap());

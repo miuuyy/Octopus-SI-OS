@@ -691,7 +691,7 @@ pub fn plan_run_composition(request: &RunCompositionRequest) -> Result<RunCompos
         &selected_context,
         &resolved.staged_artifacts,
     )?;
-    let operations = OperationRoutes::load(&roots.registry_root, &request.external_inputs, std::iter::empty())?;
+    let operations = OperationRoutes::load(&roots.registry_root, &topology, &request.external_inputs, std::iter::empty())?;
     for binding in operations.catalog_bindings() {
         if !selected_context.contains(&binding) { selected_context.push(binding); }
     }

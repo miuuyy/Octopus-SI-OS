@@ -251,6 +251,7 @@
       "operator.input.provided",
       "emit.tool_call.present",
       "tool.call.allowed",
+      "operation.call.allowed",
       "tool.result.corresponds",
       "task.summary.received"
     ],

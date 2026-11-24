@@ -721,8 +721,18 @@ pub(crate) fn build_chat_run_record(
                 names: vec![route.request_label.clone()], namespaces: Vec::new(),
             } },
         };
+        let required_verified = if route.attach_verifier {
+            vec![RequiredVerifiedArtifact {
+                mark: MarkId::new(octopus_run_authoring::OPERATION_CALL_MARK),
+                artifact_label: route.request_label.clone(),
+                verifier: VerifierId::new(octopus_run_authoring::OPERATION_CALL_VERIFIER),
+                params: serde_json::json!({ "operations": route.effective_operations }),
+            }]
+        } else {
+            Vec::new()
+        };
         let mut template = bound_checkpoint_template(BoundCheckpointRole::ProviderInterfaceOutput,
-            request(&identity.model_interface_id), vec![request(interface)], Vec::new())?;
+            request(&identity.model_interface_id), vec![request(interface)], required_verified.clone())?;
         template.result_receiving = route.result_labels.iter()
             .map(|label| Ok((label.clone(), result.contract(label)?)))
             .collect::<Result<_, String>>()?;
@@ -731,7 +741,11 @@ pub(crate) fn build_chat_run_record(
             .any(|cp| cp.get("id").and_then(serde_json::Value::as_str) == Some(id.as_str())) {
             return Err("application operation route collides with an existing checkpoint".into());
         }
-        let mut row = checkpoint(id.clone(), None, Vec::new(), &mandatory_role_artifacts, Vec::new());
+        let required_verified_json = required_verified
+            .iter()
+            .map(|required| serde_json::to_value(required).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut row = checkpoint(id.clone(), None, Vec::new(), &mandatory_role_artifacts, required_verified_json);
         row["interface_binding"] = serde_json::to_value(&template.interface_binding).map_err(|e| e.to_string())?;
         row["outbound_interface_bindings"] = serde_json::to_value(&template.outbound_interface_bindings).map_err(|e| e.to_string())?;
         cycle_checkpoints.push(row);

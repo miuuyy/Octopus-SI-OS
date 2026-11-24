@@ -26,12 +26,14 @@ pub(crate) struct InterfaceOperationCatalogEntry {
 
 pub(crate) fn extract_interface_operation_affordances(
     input: &InterfaceInvocationEnvelope,
+    run_record: Option<&octopus_run_record::RunRecord>,
     names: &mut BTreeSet<String>,
     specs: &mut Vec<DynamicToolSpec>,
 ) -> Result<BTreeMap<String, InterfaceOperationAffordance>, InterfaceDriverError> {
-    let allowed_interfaces = input
+    let metadata = input
         .metadata()
-        .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?
+        .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+    let allowed_interfaces = metadata
         .allowed_interfaces()
         .iter()
         .map(String::as_str)
@@ -100,6 +102,27 @@ pub(crate) fn extract_interface_operation_affordances(
                 bound.artifact.id.as_str()
             )));
         }
+        let policy_values = metadata.grant.interface_policy.get(catalog.interface.as_str());
+        let policy_allowed = parse_policy_operation_set(
+            policy_values,
+            "allowed_operations",
+            catalog.interface.as_str(),
+        )?;
+        let policy_denied = parse_policy_operation_set(
+            policy_values,
+            "denied_operations",
+            catalog.interface.as_str(),
+        )?;
+        let checkpoint_allowed = match (run_record, metadata.runtime.as_ref()) {
+            (Some(record), Some(runtime)) => octopus_run_authoring::provider_operation_allowlist(
+                record,
+                &runtime.interface,
+                &catalog.interface,
+                &catalog.request_label,
+            )
+            .map_err(InterfaceDriverError::FailedClosed)?,
+            _ => None,
+        };
         for operation in catalog.operations {
             for (field, value) in [
                 ("name", operation.name.as_str()),
@@ -133,6 +156,18 @@ pub(crate) fn extract_interface_operation_affordances(
                     "bound interface operation '{}' input_schema is not an object",
                     operation.name
                 )));
+            }
+            if !policy_allowed
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(&operation.name))
+                || policy_denied
+                    .as_ref()
+                    .is_some_and(|denied| denied.contains(&operation.name))
+                || !checkpoint_allowed
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.contains(&operation.name))
+            {
+                continue;
             }
             if !names.insert(operation.name.clone()) {
                 return Err(InterfaceDriverError::FailedClosed(format!(
@@ -171,8 +206,37 @@ pub(crate) fn extract_interface_operation_affordances(
     Ok(interface_operations)
 }
 
+fn parse_policy_operation_set(
+    policy_values: Option<&BTreeMap<String, serde_json::Value>>,
+    key: &str,
+    interface: &str,
+) -> Result<Option<BTreeSet<String>>, InterfaceDriverError> {
+    let Some(value) = policy_values.and_then(|values| values.get(key)) else {
+        return Ok(None);
+    };
+    let entries = value.as_array().ok_or_else(|| {
+        InterfaceDriverError::Protocol(format!(
+            "formed interface_policy.{key} on '{interface}' must be an array of strings"
+        ))
+    })?;
+    let mut set = BTreeSet::new();
+    for entry in entries {
+        let name = entry
+            .as_str()
+            .filter(|text| !text.is_empty() && text.trim() == *text)
+            .ok_or_else(|| {
+                InterfaceDriverError::Protocol(format!(
+                    "formed interface_policy.{key} on '{interface}' contains a malformed operation id"
+                ))
+            })?;
+        set.insert(name.to_string());
+    }
+    Ok(Some(set))
+}
+
 pub(crate) fn extract_native_affordance_catalog(
     input: &InterfaceInvocationEnvelope,
+    run_record: Option<&octopus_run_record::RunRecord>,
     hidden_tools: &[String],
     namespace: &NativeToolNamespace,
     run_affordances: Option<&RunAffordances>,
@@ -184,7 +248,8 @@ pub(crate) fn extract_native_affordance_catalog(
         .iter()
         .map(|spec| spec.name.as_str().to_string())
         .collect::<BTreeSet<_>>();
-    let interface_operations = extract_interface_operation_affordances(input, &mut names, &mut specs)?;
+    let interface_operations =
+        extract_interface_operation_affordances(input, run_record, &mut names, &mut specs)?;
     if let Some(affordances) = run_affordances {
         for affordance in affordances.affordances() {
             if !names.insert(affordance.name.as_str().to_string()) {

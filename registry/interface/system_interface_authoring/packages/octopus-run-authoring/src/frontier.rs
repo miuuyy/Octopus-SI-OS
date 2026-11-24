@@ -58,6 +58,91 @@ pub(crate) fn checkpoint_tool_ids(checkpoint: &RunAuthoringCheckpoint) -> Result
     Ok(ids)
 }
 
+pub(crate) fn checkpoint_operation_ids(
+    checkpoint: &RunAuthoringCheckpoint,
+) -> Result<Option<BTreeSet<String>>, String> {
+    if checkpoint.required_verified_artifacts.is_empty() {
+        return Ok(None);
+    }
+    let [required] = checkpoint.required_verified_artifacts.as_slice() else {
+        return Err(format!(
+            "run_authoring checkpoint '{}' interface output accepts at most one verified-artifact requirement",
+            checkpoint.name
+        ));
+    };
+    let BindingArtifactPolicy::Allow { names, namespaces } =
+        &checkpoint.interface_binding.config.artifact_policy
+    else {
+        return Err(format!(
+            "run_authoring checkpoint '{}' interface output must name one exact artifact label",
+            checkpoint.name
+        ));
+    };
+    if names.len() != 1 || !namespaces.is_empty() || required.artifact_label != names[0] {
+        return Err(format!(
+            "run_authoring checkpoint '{}' operation allowlist must verify exact artifact label '{}'",
+            checkpoint.name,
+            names.first().map(String::as_str).unwrap_or("")
+        ));
+    }
+    if required.mark.as_str() != OPERATION_CALL_MARK
+        || required.verifier.as_str() != OPERATION_CALL_VERIFIER
+    {
+        return Err(format!(
+            "run_authoring checkpoint '{}' interface output only permits verifier '{}' with mark '{}'",
+            checkpoint.name, OPERATION_CALL_VERIFIER, OPERATION_CALL_MARK
+        ));
+    }
+    let params = required.params.as_object().ok_or_else(|| {
+        format!(
+            "run_authoring checkpoint '{}' operation route params are not an object",
+            checkpoint.name
+        )
+    })?;
+    if params.len() != 1 || !params.contains_key("operations") {
+        return Err(format!(
+            "run_authoring checkpoint '{}' operation route params must contain only operations",
+            checkpoint.name
+        ));
+    }
+    let operations = params["operations"].as_array().ok_or_else(|| {
+        format!(
+            "run_authoring checkpoint '{}' operation route operations are not an array",
+            checkpoint.name
+        )
+    })?;
+    if operations.is_empty() {
+        return Err(format!(
+            "run_authoring checkpoint '{}' operation route operations are empty",
+            checkpoint.name
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for value in operations {
+        let operation = value.as_str().ok_or_else(|| {
+            format!(
+                "run_authoring checkpoint '{}' operation route contains a non-string operation id",
+                checkpoint.name
+            )
+        })?;
+        let operation = non_empty_string(operation, "checkpoint operation")?;
+        if operation != value.as_str().unwrap_or("") {
+            return Err(format!(
+                "run_authoring checkpoint '{}' operation route contains untrimmed operation '{}'",
+                checkpoint.name,
+                value.as_str().unwrap_or("")
+            ));
+        }
+        if !ids.insert(operation.clone()) {
+            return Err(format!(
+                "run_authoring checkpoint '{}' repeats operation '{}'",
+                checkpoint.name, operation
+            ));
+        }
+    }
+    Ok(Some(ids))
+}
+
 pub(crate) fn pending_output_checkpoint(
     checkpoint: &RunAuthoringCheckpoint,
     id: &str,
@@ -104,13 +189,38 @@ pub(crate) fn pending_output_matches_template(item: &PendingHandoffItem, templat
 
 pub(crate) fn pending_output_serves_template(item: &PendingHandoffItem, template: &RunAuthoringCheckpoint) -> bool {
     if pending_output_matches_template(item, template) { return true; }
-    if template.role != RunAuthoringCheckpointRole::ProviderToolOutput { return false; }
-    let mut extended = template.clone();
-    let ([required], [served]) = (extended.required_verified_artifacts.as_mut_slice(), item.checkpoint.required_verified_artifacts.as_slice()) else { return false; };
-    let (Some(granted), Some(called)) = (required.params["tools"].as_array(), served.params["tools"].as_array()) else { return false; };
-    if !called.iter().all(|tool| granted.contains(tool)) { return false; }
-    required.params["tools"] = served.params["tools"].clone();
-    pending_output_matches_template(item, &extended)
+    match template.role {
+        RunAuthoringCheckpointRole::ProviderToolOutput => {
+            let mut extended = template.clone();
+            let ([required], [served]) = (extended.required_verified_artifacts.as_mut_slice(), item.checkpoint.required_verified_artifacts.as_slice()) else { return false; };
+            let (Some(granted), Some(called)) = (required.params["tools"].as_array(), served.params["tools"].as_array()) else { return false; };
+            if !called.iter().all(|tool| granted.contains(tool)) { return false; }
+            required.params["tools"] = served.params["tools"].clone();
+            pending_output_matches_template(item, &extended)
+        }
+        RunAuthoringCheckpointRole::ProviderInterfaceOutput => {
+            let [served] = item.checkpoint.required_verified_artifacts.as_slice() else { return false; };
+            if served.mark.as_str() != OPERATION_CALL_MARK || served.verifier.as_str() != OPERATION_CALL_VERIFIER {
+                return false;
+            }
+            let Some(called) = served.params["operations"].as_array() else { return false; };
+            let mut extended = template.clone();
+            match extended.required_verified_artifacts.as_mut_slice() {
+                [] => {
+                    extended.required_verified_artifacts = item.checkpoint.required_verified_artifacts.clone();
+                    pending_output_matches_template(item, &extended)
+                }
+                [required] if required.mark.as_str() == OPERATION_CALL_MARK && required.verifier.as_str() == OPERATION_CALL_VERIFIER => {
+                    let Some(granted) = required.params["operations"].as_array() else { return false; };
+                    if !called.iter().all(|op| granted.contains(op)) { return false; }
+                    required.params["operations"] = served.params["operations"].clone();
+                    pending_output_matches_template(item, &extended)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn materialize_pending_checkpoint(

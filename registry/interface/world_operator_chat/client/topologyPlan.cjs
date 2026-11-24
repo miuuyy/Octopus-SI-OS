@@ -406,6 +406,13 @@ function operatorExternalInputs(value) {
       input.requiredVerifiedArtifacts,
       `externalInputs[${index}].requiredVerifiedArtifacts`,
     );
+    const rawAllowedOperations = input.allowedOperations !== undefined
+      ? input.allowedOperations
+      : input.allowed_operations;
+    const allowedOperations = operatorAllowedOperations(
+      rawAllowedOperations,
+      `externalInputs[${index}].allowedOperations`,
+    );
     if (checkpoints.has(checkpointId)) throw new Error(`externalInputs repeats checkpoint '${checkpointId}'`);
     if (interfaces.has(interfaceId)) throw new Error(`externalInputs repeats interface '${interfaceId}'`);
     checkpoints.add(checkpointId);
@@ -417,8 +424,19 @@ function operatorExternalInputs(value) {
       ...(requiredVerifiedArtifacts.length > 0
         ? { required_verified_artifacts: requiredVerifiedArtifacts }
         : {}),
+      ...(allowedOperations !== null ? { allowed_operations: allowedOperations } : {}),
     };
   });
+}
+
+function operatorAllowedOperations(value, field) {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${field} must be a non-empty array`);
+  }
+  const names = value.map((name, index) => safeContractToken(name, `${field}[${index}]`));
+  if (new Set(names).size !== names.length) throw new Error(`${field} repeats an operation name`);
+  return names;
 }
 
 function operatorArtifactNames(value, field) {

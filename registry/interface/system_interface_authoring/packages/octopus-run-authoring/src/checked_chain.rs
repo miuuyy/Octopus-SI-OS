@@ -1235,7 +1235,9 @@ pub(crate) fn preserves_provider_topology(before: &BoundRunAuthoringTopology, af
     let old = before.checkpoints.iter().filter(|cp| !matches!(cp.role, RunAuthoringCheckpointRole::VerifiedInput | RunAuthoringCheckpointRole::ResultInput)).collect::<Vec<_>>();
     let new = after.checkpoints.iter().filter(|cp| !matches!(cp.role, RunAuthoringCheckpointRole::VerifiedInput | RunAuthoringCheckpointRole::ResultInput)).collect::<Vec<_>>();
     prior == next && new.starts_with(&old) && new[old.len()..].iter().all(|checkpoint| {
-        checkpoint.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput && checkpoint.owner_authoring.is_none()
+        checkpoint.role == RunAuthoringCheckpointRole::ProviderInterfaceOutput
+            && checkpoint.owner_authoring.is_none()
+            && checkpoint.required_verified_artifacts.is_empty()
     })
 }
 

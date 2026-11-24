@@ -129,7 +129,7 @@ fn client_continuation_retains_exact_peer_but_removes_selected_capability() {
     assert!(plan_operator_chat_topology(&request).unwrap_err().contains("not an existing exact System ceiling entry"));
     write(worker_path.clone(), &next_policy);
     request.existing_run_record = Some(next_run);
-    request.external_inputs = vec![ExternalInputSeed { checkpoint_id:"client_peer_input".into(),interface_id:peer.into(),artifact_names:vec![],required_verified_artifacts:vec![] }];
+    request.external_inputs = vec![ExternalInputSeed { checkpoint_id:"client_peer_input".into(),interface_id:peer.into(),artifact_names:vec![],required_verified_artifacts:vec![],allowed_operations:None }];
     let client_connected = plan_operator_chat_topology(&request).unwrap();
     apply(&client_connected);
     request.existing_run_record = Some(serde_json::from_str(&client_connected.run_record_content).unwrap());
