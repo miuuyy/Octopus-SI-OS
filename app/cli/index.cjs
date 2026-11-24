@@ -30,7 +30,7 @@ const HELP = `Octopus — your agentic operating system, in the terminal
   octopus export <task> <file>     Save a transcript (new file only)
   octopus download <task> <attachment-id> <file>  Save an admitted attachment
   octopus setup                    Set up a new Home interactively
-  octopus up                       Start or join the shared runtime
+  octopus up [--foreground]        Start or join the shared runtime (or run in foreground)
   octopus down                     Stop the running shared runtime cleanly
   octopus restart                  Restart the running shared runtime in place
   octopus status                   Inspect runtime and Home readiness
@@ -46,6 +46,7 @@ Options:
   --attach <path>                 Attach a file or folder; repeatable
   --access <mode>                 New task access: project_access or full_access
   --json                          JSON results; NDJSON for streamed work
+  --foreground                    Keep 'up' attached in the foreground (for systemd)
   --no-wait                       Return the input admission receipt
   --timeout <seconds>             Stop waiting at a deadline, leave task running
                                   up: omitted or 0 uses the 120-second default
@@ -73,6 +74,7 @@ function argumentsFor(argv) {
       attach: { type: "string", multiple: true, default: [] },
       application: { type: "string", multiple: true, default: [] },
       access: { type: "string" },
+      foreground: { type: "boolean", default: false },
       json: { type: "boolean", default: false }, "no-wait": { type: "boolean", default: false },
       timeout: { type: "string" }, "output-last-message": { type: "string" },
       archived: { type: "boolean", default: false },
@@ -115,12 +117,20 @@ async function main(argv = process.argv.slice(2), io = process) {
     const words = [...parsed.positionals];
     const known = new Set(["chat", "resume", "exec", "send", "watch", "tasks", "history", "inspect", "projects", "models", "answer", "stop", "rename", "archive", "restore", "delete", "export", "setup", "up", "down", "restart", "status", "doctor", "agent", "project", "download"]);
     const command = known.has(words[0]) ? words.shift() : "chat";
+    if (flags.foreground && command !== "up") throw new Error("--foreground is only supported with 'up'.");
     const report = (value) => {
       if (json) io.stdout.write(`${JSON.stringify(value)}\n`);
       else io.stdout.write(`${safeText(presentResult(value))}\n`);
     };
     if (command === "status") { report(await environment.status()); return 0; }
     if (command === "up") {
+      if (words.length) throw new Error("up does not accept positional arguments. See --help.");
+      if (flags.foreground) {
+        if (json) throw new Error("--foreground cannot be combined with --json.");
+        if (flags.timeout !== undefined) throw new Error("--foreground cannot be combined with --timeout.");
+        const result = await environment.startForeground();
+        return result.exitCode;
+      }
       report(await environment.start({ timeoutMs: parsed.timeoutMs > 0 ? parsed.timeoutMs : undefined,
         onProgress: (value) => progress(io, json, value.phase.replaceAll("_", " ")) }));
       return 0;

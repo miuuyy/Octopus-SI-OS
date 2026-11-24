@@ -113,6 +113,7 @@ They use the same user-facing operations as interactive chat.
 
 ```sh
 ./octopus up
+./octopus up --foreground
 ./octopus status --json
 ./octopus doctor
 ./octopus restart
@@ -175,6 +176,11 @@ artifact references, coverage, and any uncertainty in the projection.
 `status --json` reports runtime and client readiness separately. An empty Home
 can have a running runtime before setup creates its client interface. Runtime
 startup logs are under the selected Home's `client/logs/runtime-terminal.log`.
+`up --foreground` runs transaction recovery, starts the runtime attached in the
+foreground with stdout and stderr inherited, forwards `SIGTERM`, `SIGINT`, and
+`SIGHUP`, and fails closed if a runtime is already running for that Home; use it
+for service supervisors such as `systemd` (see
+[Linux](linux.md#run-as-a-systemd-service)).
 `down`, `restart`, and `doctor` forward to the selected runtime binary with the
 same `--home` and `--bundle` resolution; pass `--json` for structured output
 (`command`, `ok`, `exitCode`, `home`, `stdout`, `stderr`) while preserving the

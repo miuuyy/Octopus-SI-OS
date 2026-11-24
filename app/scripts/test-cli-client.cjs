@@ -415,3 +415,123 @@ test("CLI client commands fail closed upfront on an incomplete distribution and 
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("CLI up --foreground validates flags, fails closed if running, forwards signals and preserves OCTOPUS_NODE on PATH", async () => {
+  const { EventEmitter } = require("node:events");
+  const Module = require("node:module");
+  const indexFile = path.resolve(__dirname, "../cli/index.cjs");
+  const envFile = path.resolve(__dirname, "../cli/environment.cjs");
+  const indexSource = await fs.readFile(indexFile, "utf8");
+  const envSource = await fs.readFile(envFile, "utf8");
+
+  const loadIndex = (envStub) => {
+    const unit = new Module(indexFile, module);
+    unit.filename = indexFile;
+    unit.paths = Module._nodeModulePaths(path.dirname(indexFile));
+    const nativeRequire = Module.createRequire(indexFile);
+    unit.require = (id) => id === "./environment.cjs" ? { createEnvironment: () => envStub }
+      : id === "node:fs/promises" ? { ...fs, async access() {} } : nativeRequire(id);
+    unit._compile(indexSource, indexFile);
+    return unit.exports;
+  };
+
+  for (const [args, pattern] of [
+    [["status", "--foreground"], /only supported with 'up'/],
+    [["up", "--foreground", "--json"], /cannot be combined with --json/],
+    [["up", "--foreground", "--timeout", "30"], /cannot be combined with --timeout/],
+    [["up", "extra"], /does not accept positional arguments/],
+  ]) {
+    let stdout = "", stderr = "";
+    const unit = loadIndex({ close() {}, async startForeground() { throw new Error("should not start"); } });
+    const code = await unit.main(args, {
+      stdin: { isTTY: false },
+      stdout: { isTTY: false, write: (text) => { stdout += text; } },
+      stderr: { write: (text) => { stderr += text; } },
+    });
+    assert.equal(code, 1, JSON.stringify({ args, stdout, stderr }));
+    assert.match(stdout + stderr, pattern);
+  }
+
+  let fgCalls = 0;
+  const okUnit = loadIndex({
+    close() {},
+    async startForeground() { fgCalls++; return { ok: true, exitCode: 0 }; },
+  });
+  assert.equal(await okUnit.main(["up", "--foreground"], {
+    stdin: { isTTY: false }, stdout: { isTTY: false, write() {} }, stderr: { write() {} },
+  }), 0);
+  assert.equal(fgCalls, 1);
+
+  const root = await fs.realpath(await fs.mkdtemp("/tmp/oct-cli-fg-"));
+  try {
+    const distRoot = path.join(root, "dist");
+    for (const dir of [
+      "bin",
+      "registry/interface",
+      "local-packages/registry/interface",
+      "local-packages/packages",
+      "local-packages/packs",
+    ]) await fs.mkdir(path.join(distRoot, dir), { recursive: true });
+    for (const marker of ["registry/.octopus-source.json", "local-packages/registry/.octopus-source.json"]) {
+      await fs.writeFile(path.join(distRoot, marker), "{}\n");
+    }
+    const customNodeDir = path.join(root, "custom-node/bin");
+    await fs.mkdir(customNodeDir, { recursive: true });
+    const envDumpFile = path.join(root, "child-env.json");
+    const readyFile = path.join(root, "child-ready");
+    const fakeBin = path.join(distRoot, "bin/octopus");
+    await fs.writeFile(fakeBin, [
+      `#!${process.execPath}`,
+      `const fs = require("node:fs");`,
+      `fs.writeFileSync(${JSON.stringify(envDumpFile)}, JSON.stringify({ argv: process.argv.slice(2), PATH: process.env.PATH, OCTOPUS_HOME: process.env.OCTOPUS_HOME, OCTOPUS_MACHINE_CODEX_AUTH_FILE: process.env.OCTOPUS_MACHINE_CODEX_AUTH_FILE }));`,
+      `process.on("SIGTERM", () => process.exit(0));`,
+      `fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");`,
+      `setInterval(() => {}, 1000);`,
+    ].join("\n") + "\n", { mode: 0o700 });
+
+    let probeResult = { phase: "running", ready: true, pid: 4242, ownership: "external", error: null };
+    const envMod = new Module(envFile, module);
+    envMod.filename = envFile;
+    envMod.paths = Module._nodeModulePaths(path.dirname(envFile));
+    const envRequire = Module.createRequire(envFile);
+    envMod.require = (id) => id === "../electron/runtimeHost.cjs"
+      ? { createRuntimeHost: () => ({ async probe() { return probeResult; } }) }
+      : envRequire(id);
+    envMod._compile(envSource, envFile);
+
+    const env = envMod.exports.createEnvironment({
+      home: path.join(root, "home"),
+      userHome: root,
+      installationRoot: distRoot,
+      env: {
+        OCTOPUS_NODE: path.join(customNodeDir, "node"),
+        PATH: "/usr/bin:/bin",
+        ...(process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE } : {}),
+      },
+    });
+    await assert.rejects(env.startForeground(), /already running.*pid 4242/);
+
+    probeResult = { phase: "unmanaged", ready: false, pid: null, ownership: "none", error: null };
+    const signalTarget = new EventEmitter();
+    const running = env.startForeground({ signalTarget, stdio: ["ignore", "pipe", "pipe"] });
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try { await fs.access(readyFile); break; } catch { await new Promise((r) => setTimeout(r, 25)); }
+    }
+    signalTarget.emit("SIGTERM");
+    const result = await running;
+    assert.equal(result.ok, true);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.forwardedSignal, "SIGTERM");
+    assert.equal(signalTarget.listenerCount("SIGTERM"), 0);
+    const dumped = JSON.parse(await fs.readFile(envDumpFile, "utf8"));
+    assert.deepEqual(dumped.argv, ["up"]);
+    assert.equal(dumped.OCTOPUS_HOME, path.join(root, "home"));
+    assert.equal(dumped.OCTOPUS_MACHINE_CODEX_AUTH_FILE, path.join(root, ".codex/auth.json"));
+    assert.ok(dumped.PATH.split(path.delimiter).includes(customNodeDir), dumped.PATH);
+    assert.ok(dumped.PATH.split(path.delimiter).includes(path.dirname(process.execPath)), dumped.PATH);
+    env.close();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

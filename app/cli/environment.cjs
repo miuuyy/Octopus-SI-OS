@@ -108,6 +108,7 @@ function createEnvironment(options = {}) {
     ...resolved,
     async status(request = {}) { return status(environment, request, () => statusProjection ??= projectionStore(environment)); },
     async start(request = {}) { return start(environment, request); },
+    async startForeground(request = {}) { return startForeground(environment, request); },
     async down(request = {}) { return runRuntimeCommand(environment, "down", request); },
     async restart(request = {}) { return runRuntimeCommand(environment, "restart", request); },
     async doctor(request = {}) { return runRuntimeCommand(environment, "doctor", request); },
@@ -215,19 +216,46 @@ async function start(environment, options = {}) {
   return options.requireEndpoint === true ? waitForClient(environment, options) : status(environment, options);
 }
 
+function runtimeChildEnv(environment) {
+  const baseEnv = privateEnvironments.get(environment)?.childEnv ?? { ...process.env, ...environment.launchEnv };
+  const childEnv = { ...baseEnv };
+  const octopusNode = childEnv.OCTOPUS_NODE || process.env.OCTOPUS_NODE;
+  if (octopusNode) {
+    const nodeDirs = [
+      ...(path.isAbsolute(octopusNode) ? [path.dirname(octopusNode)] : []),
+      path.dirname(process.execPath),
+    ];
+    const parts = (childEnv.PATH ?? "").split(path.delimiter).filter(Boolean);
+    for (const dir of [...nodeDirs].reverse()) {
+      if (!parts.includes(dir)) parts.unshift(dir);
+    }
+    childEnv.PATH = parts.join(path.delimiter);
+  }
+  return childEnv;
+}
+
+async function recoverStoppedTransactions(environment, host, signal) {
+  const assertStopped = async () => {
+    assertNotAborted(signal);
+    const current = await host.probe();
+    if (current.phase !== "unmanaged" || current.ready || current.ownership !== "none" || current.pid !== null || current.error) {
+      throw runtimeError("Close the running Octopus runtime before recovering its interrupted workspace transactions.", environment);
+    }
+  };
+  const releaseGuard = registerLocalPackageMutationGuard({ stateRoot: environment.packageRoots.stateRoot, guard: assertStopped });
+  try {
+    await recoverLocalPackageTransactions(environment.packageRoots);
+    await assertStopped();
+    await recoverWorkspaceTransactions({ octopusHomeRoot: environment.home, registryRoot: environment.packageRoots.activeRegistryRoot,
+      publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) });
+  } finally { releaseGuard(); }
+}
+
 async function runRuntimeCommand(environment, command, options = {}) {
   if (!RUNTIME_COMMANDS.has(command)) throw new Error(`Unsupported runtime command '${command}'.`);
   assertNotAborted(options.signal);
   requireExecutable(environment.runtimeBinary, "release runtime", environment);
-  const baseEnv = privateEnvironments.get(environment)?.childEnv ?? { ...process.env, ...environment.launchEnv };
-  const childEnv = { ...baseEnv };
-  if (childEnv.OCTOPUS_NODE || process.env.OCTOPUS_NODE) {
-    const nodeDir = path.dirname(process.execPath);
-    const currentPath = childEnv.PATH ?? "";
-    if (!currentPath.split(path.delimiter).includes(nodeDir)) {
-      childEnv.PATH = currentPath ? `${nodeDir}${path.delimiter}${currentPath}` : nodeDir;
-    }
-  }
+  const childEnv = runtimeChildEnv(environment);
   const onStdout = typeof options.onStdout === "function" ? options.onStdout : null;
   const onStderr = typeof options.onStderr === "function" ? options.onStderr : null;
   return new Promise((resolve, reject) => {
@@ -292,6 +320,72 @@ async function runRuntimeCommand(environment, command, options = {}) {
   });
 }
 
+async function startForeground(environment, options = {}) {
+  assertNotAborted(options.signal);
+  const host = runtimeHost(environment);
+  const observed = await host.probe();
+  if (observed.error) throw runtimeError(observed.error, environment);
+  if (observed.ready || observed.pid != null || observed.phase !== "unmanaged" || observed.ownership !== "none") {
+    const detail = observed.pid != null ? ` (pid ${observed.pid})` : "";
+    throw runtimeError(`Octopus runtime is already running for '${environment.home}'${detail}. Foreground mode cannot join an existing runtime.`, environment);
+  }
+  requireExecutable(environment.runtimeBinary, "release runtime", environment);
+  requireDistribution(environment);
+  await recoverStoppedTransactions(environment, host, options.signal);
+  assertNotAborted(options.signal);
+  const childEnv = runtimeChildEnv(environment);
+  const signals = options.signals ?? ["SIGTERM", "SIGINT", "SIGHUP"];
+  const signalTarget = options.signalTarget ?? process;
+  const stdio = options.stdio ?? ["ignore", "inherit", "inherit"];
+  return new Promise((resolve, reject) => {
+    const child = spawn(environment.runtimeBinary, ["up"], {
+      cwd: environment.launchCwd,
+      env: childEnv,
+      detached: false,
+      stdio,
+    });
+    let settled = false;
+    let forwardedSignal = null;
+    const listeners = new Map();
+    const cleanup = () => {
+      options.signal?.removeEventListener("abort", onAbort);
+      for (const [sig, fn] of listeners) signalTarget.removeListener(sig, fn);
+      listeners.clear();
+    };
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(result);
+    };
+    const forward = (sig) => {
+      forwardedSignal = sig;
+      try { child.kill(sig); } catch {}
+    };
+    const onAbort = () => forward("SIGTERM");
+    if (options.signal) options.signal.addEventListener("abort", onAbort, { once: true });
+    for (const sig of signals) {
+      const fn = () => forward(sig);
+      listeners.set(sig, fn);
+      signalTarget.on(sig, fn);
+    }
+    child.once("error", (error) => finish(error));
+    child.once("exit", (code, signal) => {
+      const exitCode = typeof code === "number"
+        ? code
+        : (signal && typeof os.constants.signals[signal] === "number" ? 128 + os.constants.signals[signal] : 1);
+      finish(null, {
+        ok: exitCode === 0 && !signal,
+        exitCode,
+        ...(signal ? { signal } : {}),
+        ...(forwardedSignal ? { forwardedSignal } : {}),
+        home: environment.home,
+      });
+    });
+  });
+}
+
 async function launchRuntime(environment, options) {
   const host = runtimeHost(environment);
   let observed = await host.probe();
@@ -301,20 +395,7 @@ async function launchRuntime(environment, options) {
   if (observed.pid == null) {
     requireExecutable(environment.runtimeBinary, "release runtime", environment);
     requireDistribution(environment);
-    const assertStopped = async () => {
-        assertNotAborted(options.signal);
-        const current = await host.probe();
-        if (current.phase !== "unmanaged" || current.ready || current.ownership !== "none" || current.pid !== null || current.error) {
-          throw runtimeError("Close the running Octopus runtime before recovering its interrupted workspace transactions.", environment);
-        }
-      };
-    const releaseGuard = registerLocalPackageMutationGuard({ stateRoot: environment.packageRoots.stateRoot, guard: assertStopped });
-    try {
-      await recoverLocalPackageTransactions(environment.packageRoots);
-      await assertStopped();
-      await recoverWorkspaceTransactions({ octopusHomeRoot: environment.home, registryRoot: environment.packageRoots.activeRegistryRoot,
-        publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) });
-    } finally { releaseGuard(); }
+    await recoverStoppedTransactions(environment, host, options.signal);
     assertNotAborted(options.signal);
     await fsp.mkdir(path.dirname(environment.logPath), { recursive: true, mode: 0o700 });
     const log = await fsp.open(environment.logPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW, 0o600);
@@ -326,7 +407,7 @@ async function launchRuntime(environment, options) {
       options.onProgress({ phase: "starting_runtime", command: `${environment.runtimeBinary} up`, home: environment.home, logPath: environment.logPath });
       child = spawn(environment.runtimeBinary, ["up"], {
         cwd: environment.launchCwd,
-        env: privateEnvironments.get(environment)?.childEnv ?? { ...process.env, ...environment.launchEnv },
+        env: runtimeChildEnv(environment),
         detached: true, stdio: ["ignore", log.fd, log.fd],
       });
       child.once("error", (error) => { exit = { error }; });
@@ -479,4 +560,4 @@ function positiveTimeout(value) {
 function assertNotAborted(signal) { if (signal?.aborted) { const error = new Error("Terminal operation cancelled; any shared runtime already started remains running."); error.code = "ABORT_ERR"; throw error; } }
 function runtimeError(message, environment) { const error = new Error(`${message} Runtime log: ${environment.logPath}`); error.logPath = environment.logPath; return error; }
 
-module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };
+module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, startForeground, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };
