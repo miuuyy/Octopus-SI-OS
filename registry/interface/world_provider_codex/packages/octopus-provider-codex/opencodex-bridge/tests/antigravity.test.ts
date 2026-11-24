@@ -100,3 +100,46 @@ test("Antigravity stderr scanner emits each authorization URL once across split 
   ]);
   expect(diagnostics).toHaveLength(5);
 });
+
+test("Antigravity flushes trailing text while a turn stays open and still suppresses SDK error chunks", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "octopus-acp-flush-"));
+  const runCase = async (scenario: "timer" | "tool-call" | "sdk-error") => {
+    const entered = Promise.withResolvers<void>(), finished = Promise.withResolvers<Record<string, unknown>>(), closed = Promise.withResolvers<number | null>();
+    const connection: AcpConnection = {
+      authenticate: async () => {}, kill: () => closed.resolve(0), closed: closed.promise,
+      onNotification: () => {}, onRequest: () => undefined, onDiagnostic: () => {},
+      request: async (method) => method === "session/new" ? { sessionId: `s-${scenario}` }
+        : method === "session/prompt" ? (entered.resolve(), finished.promise) : {},
+    };
+    const events: AdapterEvent[] = [];
+    const running = runAntigravityConversation(
+      { directory, account: directory, owner: "owner", thread: scenario, serverName: "opencodex", maxRequestBytes: 1048576, idleTimeoutMs: 10000, textHoldMs: 25, start: () => connection },
+      { parsed: parseRequest({ model: "test-model", input: scenario }), systemPrompt: "role", tools: [], wireByName: new Map(), requireToolCall: false, incoming: { headers: new Headers() }, emit: (e) => { events.push(e); } },
+    );
+    await entered.promise;
+    const update = (u: Record<string, unknown>) => connection.onNotification("session/update", { sessionId: `s-${scenario}`, update: u });
+    const texts = () => events.filter((e): e is Extract<AdapterEvent, { type: "text_delta" }> => e.type === "text_delta").map(e => e.text);
+    if (scenario === "timer") {
+      update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "first " } });
+      update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "tail." } });
+      expect(texts()).toEqual(["first "]);
+      await Bun.sleep(60);
+      expect(texts()).toEqual(["first ", "tail."]);
+    } else if (scenario === "tool-call") {
+      update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "calling tool." } });
+      update({ sessionUpdate: "tool_call", toolCallId: "tc-1", status: "in_progress" });
+      expect(texts()).toEqual(["calling tool."]);
+    } else {
+      update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "The input token count exceeds the maximum number of tokens allowed (1048576)" } });
+      connection.onDiagnostic(`E1124 04:20:00.000 12345 server.py:5737] Antigravity SDK error processing prompt for session s-${scenario}`);
+      await Bun.sleep(60);
+      expect(texts()).toEqual([]);
+    }
+    finished.resolve({ stopReason: "end_turn" });
+    await running;
+    if (scenario === "sdk-error") expect(events.find(e => e.type === "error")).toMatchObject({ type: "error", code: "context_length_exceeded" });
+    else if (scenario === "timer") expect(texts()).toEqual(["first ", "tail."]);
+  };
+  try { for (const scenario of ["timer", "tool-call", "sdk-error"] as const) await runCase(scenario); }
+  finally { await closeAntigravityConversations(directory); await rm(directory, { recursive: true, force: true }); }
+});

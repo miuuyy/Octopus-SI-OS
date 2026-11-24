@@ -511,7 +511,21 @@
 }
 
 .home-live-activity__actions > li {
-  justify-content: center;
+  display: block;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.home-live-activity__action-copy {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+}
+
+.home-live-activity__action-icon {
+  display: inline-block;
+  margin-inline-end: 4px;
+  vertical-align: -0.22em;
 }
 
 .home-response-output > div {

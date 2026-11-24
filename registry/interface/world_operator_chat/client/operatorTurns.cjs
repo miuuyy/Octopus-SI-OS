@@ -432,10 +432,11 @@ async function prepareOperatorPayloadArtifactBindings(options, input) {
       throw new Error("operator payload profile differs from its exact run, client or authoring owner");
     }
     const fields = new Set(["ee_id", "worker_choice_interface", "door_host_slots", "external_inputs", "external_relays",
-      "model_outputs", "context_artifact_bindings", "payload_artifact_bindings", "selected_worker_environment_kinds", "selected_tools"]);
+      "model_outputs", "context_artifact_bindings", "payload_artifact_bindings", "selected_worker_environment_kinds",
+      "selected_tools", "publication_evidence"]);
     if (Object.keys(profile).some((field) => !fields.has(field))) throw new Error("operator payload profile has undeclared fields");
     operatorDoorHostSlots(requiredObject(profile.door_host_slots, "authoring_profile.door_host_slots"));
-    for (const field of ["external_inputs", "external_relays", "model_outputs", "context_artifact_bindings", "selected_tools"]) {
+    for (const field of ["external_inputs", "external_relays", "model_outputs", "context_artifact_bindings", "selected_tools", "publication_evidence"]) {
       if (Object.hasOwn(profile, field)) {
         for (const entry of requiredArray(profile[field], `authoring_profile.${field}`)) {
           requiredObject(entry, `authoring_profile.${field} entry`);

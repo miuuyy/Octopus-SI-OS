@@ -3559,7 +3559,7 @@ mark.octopus-thread-find-active {
 .octopus-inline-activity {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   overflow: hidden;
   color: var(--color-token-conversation-body);
@@ -3569,6 +3569,10 @@ mark.octopus-thread-find-active {
 
 .octopus-inline-activity > span {
   min-width: 0;
+}
+
+.octopus-inline-activity > svg:first-child {
+  margin-top: max(0px, calc((1.5em - 16px) / 2));
 }
 
 .octopus-inline-activity > svg:first-child,

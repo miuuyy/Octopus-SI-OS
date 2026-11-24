@@ -130,9 +130,11 @@ function HomeActivityDetail({ message, toolPresentations, turnInProgress }: {
   return (
     <ul className="home-live-activity__actions">
       {actions.map((action) => (
-        <li className="octopus-inline-activity min-w-0" key={action.id}>
-          {action.glyph ? <Glyph aria-hidden="true" className="icon-xs shrink-0" name={action.glyph} /> : null}
-          <CadencedShimmerText active={turnInProgress && homeActivityIsActive(message)}>{action.label}</CadencedShimmerText>
+        <li className="octopus-inline-activity home-live-activity__action min-w-0" key={action.id}>
+          <CadencedShimmerText active={turnInProgress && homeActivityIsActive(message)} className="home-live-activity__action-copy">
+            {action.glyph ? <Glyph aria-hidden="true" className="icon-xs home-live-activity__action-icon" name={action.glyph} /> : null}
+            {action.label}
+          </CadencedShimmerText>
         </li>
       ))}
     </ul>

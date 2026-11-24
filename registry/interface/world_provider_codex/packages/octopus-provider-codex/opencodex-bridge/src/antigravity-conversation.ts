@@ -18,6 +18,7 @@ export type AcpConnection = {
 };
 export type ConversationHost = {
   directory: string; account: string; owner: string; thread: string; serverName: string; maxRequestBytes: number; idleTimeoutMs: number;
+  textHoldMs?: number;
   start(directory: string): AcpConnection;
 };
 export type ConversationInput = {
@@ -33,9 +34,12 @@ export class AcpFailure extends Error {
   }
 }
 
+const TEXT_HOLD_MS = 250;
+
 type Outcome = { call: Call } | { done: Done };
 type Exchange = {
-  input: ConversationInput; chunks: Chunk[]; text?: string; settled: boolean;
+  input: ConversationInput; chunks: Chunk[]; text?: string; lastText?: string;
+  textTimer?: ReturnType<typeof setTimeout>; settled: boolean;
   outcome: ReturnType<typeof Promise.withResolvers<Outcome>>;
 };
 type LiveCall = { call: Call; result: ReturnType<typeof Promise.withResolvers<Row>> };
@@ -89,12 +93,32 @@ class Conversation {
     active.input.emit(chunk);
   }
 
+  private clearTextTimer(active = this.active): void {
+    if (active?.textTimer !== undefined) {
+      clearTimeout(active.textTimer);
+      active.textTimer = undefined;
+    }
+  }
+
   private flushText(): void {
     const active = this.active;
+    this.clearTextTimer(active);
     if (active?.text !== undefined) {
       this.emitChunk({ type: "text_delta", text: active.text });
       active.text = undefined;
     }
+  }
+
+  private scheduleTextFlush(native: Native): void {
+    const active = this.active;
+    if (!active || active.settled || active.text === undefined || native.finished || native.sdkError) return;
+    this.clearTextTimer(active);
+    active.textTimer = setTimeout(() => {
+      active.textTimer = undefined;
+      if (this.native !== native || this.active !== active || active.settled || native.finished || native.sdkError) return;
+      this.flushText();
+    }, this.host.textHoldMs ?? TEXT_HOLD_MS);
+    active.textTimer.unref();
   }
 
   private offerNext(native: Native): void {
@@ -124,6 +148,7 @@ class Conversation {
 
   private async disconnect(): Promise<void> {
     clearTimeout(this.idleTimer);
+    this.clearTextTimer();
     const native = this.native;
     if (!native) return;
     this.native = undefined;
@@ -191,11 +216,17 @@ class Conversation {
         this.active.input.emit({ type: "heartbeat" });
       }
       if (update?.sessionUpdate === "usage_update" && Number.isSafeInteger(update.used) && Number(update.used) > 0) native.used = Number(update.used);
+      if (this.active && !this.active.settled && !native.sdkError
+        && (update?.sessionUpdate === "tool_call" || update?.sessionUpdate === "tool_call_update")) {
+        this.flushText();
+      }
       const content = object(update?.content);
       if (!this.active || this.active.settled || content?.type !== "text" || typeof content.text !== "string") return;
       if (update?.sessionUpdate === "agent_message_chunk") {
         if (!native.sdkError) this.flushText();
         this.active.text = content.text;
+        this.active.lastText = content.text;
+        this.scheduleTextFlush(native);
       } else if (update?.sessionUpdate === "agent_thought_chunk" && !native.sdkError) {
         this.flushText();
         this.emitChunk({ type: "thinking_delta", thinking: content.text });
@@ -204,13 +235,17 @@ class Conversation {
     connection.onDiagnostic = line => {
       // In this release prompt() logs its exception and emits the formatted error as the last message chunk with end_turn.
       const marker = /^E\d{4} [\d:.]+\s+\d+ server\.py:\d+\] (?:Antigravity SDK error processing prompt|Agent connection lost|Failed to rebuild agent) for session ([\w-]+)/.exec(line);
-      if (marker && marker[1] === native.session) native.sdkError = true;
+      if (marker && marker[1] === native.session) {
+        native.sdkError = true;
+        this.clearTextTimer();
+      }
     };
     connection.onRequest = (method, params) => {
       if (method !== "session/request_permission") return undefined;
       const mcp = object(object(object(params.toolCall)?._meta)?.mcp);
       const allowed = this.native === native && !!native.endpoint && !native.finished && native.session === params.sessionId && mcp?.server === this.host.serverName
         && typeof mcp.tool === "string" && wireByName.has(mcp.tool);
+      if (allowed && !native.sdkError) this.flushText();
       const once = allowed && Array.isArray(params.options) ? params.options.map(object).find(option => option?.kind === "allow_once") : undefined;
       return { outcome: once ? { outcome: "selected", optionId: once.optionId } : { outcome: "cancelled" } };
     };
@@ -242,12 +277,13 @@ class Conversation {
     try {
       const result = await native.connection.request("session/prompt", { sessionId: native.session, prompt: blocks });
       native.finished = true;
+      this.clearTextTimer();
       // stdout and stderr are independent pipes. EOF of both fences the server's success/failure verdict.
       native.connection.kill();
       await native.connection.closed;
       if (this.native !== native) return;
       if (native.sdkError) {
-        const message = this.active?.text || "Antigravity's agent failed during this turn.";
+        const message = this.active?.text || this.active?.lastText || "Antigravity's agent failed during this turn.";
         if (/\binput token count(?:\s*\([\d,]+\))? exceeds the maximum number of tokens allowed\b/i.test(message)) {
           throw new AcpFailure(message, "context_length_exceeded", 400);
         }
@@ -364,6 +400,7 @@ class Conversation {
       this.checkAbort(input);
       throw error;
     } finally {
+      this.clearTextTimer(active);
       input.incoming.abortSignal?.removeEventListener("abort", abort);
       this.active = undefined;
     }

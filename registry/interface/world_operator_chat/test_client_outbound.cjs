@@ -2840,6 +2840,7 @@ test("rearmed idle payload staging preserves inherited refs, explicit clearing a
     owner_interface: ACTIVE_CLIENT, surface_role: "home", authoring_profile: {
       ee_id: run.ee, worker_choice_interface: run.interface_state[ACTIVE_CLIENT].worker_choice_interface,
       door_host_slots: {}, payload_artifact_bindings: [first],
+      publication_evidence: [{ pin: { collection: "artifact-system-library", entry_id: "fixture-context", revision: "a".repeat(64) }, entry: { id: "fixture-context" } }],
     },
   };
   fs.writeFileSync(sidecarPath, JSON.stringify(sidecar));
