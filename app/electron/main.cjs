@@ -5004,7 +5004,7 @@ function setAppIdentity() {
   if (iconPath) {
     app.setAboutPanelOptions({
       applicationName: "Octopus",
-      applicationVersion: "0.1.0",
+      applicationVersion: app.getVersion(),
       iconPath,
     });
   }
