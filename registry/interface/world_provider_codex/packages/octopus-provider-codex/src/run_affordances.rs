@@ -1303,38 +1303,32 @@ impl RunAffordances {
                     "activity": observed.source_activity,
                 });
                 if let Some(obj) = source_run.as_object_mut() {
-                    if let Some(title) = observed.source_title {
+                    if let Some(title) = &observed.source_title {
                         obj.insert("title".into(), json!(title));
                     }
-                    if let Some(provider) = observed.source_provider_interface_id {
+                    if let Some(provider) = &observed.source_provider_interface_id {
                         obj.insert("provider_interface_id".into(), json!(provider));
                     }
-                    if let Some(model) = observed.source_model {
+                    if let Some(model) = &observed.source_model {
                         obj.insert("model".into(), json!(model));
                     }
-                    if let Some(effort) = observed.source_reasoning_effort {
+                    if let Some(effort) = &observed.source_reasoning_effort {
                         obj.insert("reasoning_effort".into(), json!(effort));
                     }
                     if !observed.source_external_inputs.is_empty() {
-                        obj.insert("external_inputs".into(), json!(observed.source_external_inputs));
+                        obj.insert("external_inputs".into(), json!(&observed.source_external_inputs));
                     }
                 }
-                let mut result = json!({
-                    "source_run": source_run,
-                    "declared_peer_interfaces": peers.keys().collect::<Vec<_>>(),
-                    "declared_peer_runs": observed.declared_peer_runs,
-                    "receive_interface_id": declared_receive_interface(parent_record, &metadata.runtime.as_ref().ok_or("list requires runtime metadata")?.interface)?,
-                    "source_movement_seq": metadata.source_movement_seq,
-                });
-                if let (Some(other_runs), Some(total), Some(archived)) = (
-                    observed.other_runs,
-                    observed.other_runs_total,
-                    observed.archived_runs_count,
-                ) {
-                    result["other_runs"] = json!(other_runs);
-                    result["other_runs_total"] = json!(total);
-                    result["archived_runs_count"] = json!(archived);
-                }
+                let receive_interface_id = declared_receive_interface(
+                    parent_record,
+                    &metadata.runtime.as_ref().ok_or("list requires runtime metadata")?.interface,
+                )?;
+                let result = crate::run_observation::format_list_runs_response(
+                    source_run,
+                    receive_interface_id,
+                    metadata.source_movement_seq,
+                    &observed,
+                );
                 Ok(NativeStep::Complete { result })
             }
             RunOperation::Wait => {

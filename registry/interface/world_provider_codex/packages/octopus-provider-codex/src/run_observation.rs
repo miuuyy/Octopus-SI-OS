@@ -15,11 +15,15 @@ use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
 
 const MAX_TAIL_MOVEMENTS_PER_RUN: usize = 512;
-const MAX_OTHER_RUNS: usize = 64;
+const MAX_DECLARED_PEER_RUNS: usize = 24;
+const MAX_OTHER_RUNS: usize = 24;
 const MAX_EE_INSTANCES: usize = 48;
+pub(crate) const MAX_LIST_RUNS_BYTES: usize = 16 * 1024;
+const MAX_PEER_INTERFACES_BYTES: usize = 4 * 1024;
 const MAX_DESCRIPTOR_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ERROR_BLOB_BYTES: u64 = 256 * 1024;
 const MAX_EXCERPT_CHARS: usize = 300;
+const MAX_TITLE_CHARS: usize = 96;
 const MAX_GOAL_CHARS: usize = 240;
 const DEFAULT_MAX_ROW_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -191,10 +195,146 @@ pub(crate) struct ObservedRuns {
     pub source_model: Option<String>,
     pub source_reasoning_effort: Option<String>,
     pub source_external_inputs: Vec<String>,
+    pub declared_peer_interfaces: Vec<String>,
+    pub declared_peer_interfaces_total: usize,
     pub declared_peer_runs: Vec<Value>,
+    pub declared_peer_tiers: Vec<u8>,
+    pub declared_peer_runs_total: usize,
     pub other_runs: Option<Vec<Value>>,
+    pub other_tiers: Option<Vec<u8>>,
     pub other_runs_total: Option<usize>,
     pub archived_runs_count: Option<usize>,
+    pub counts_by_phase: BTreeMap<String, usize>,
+}
+
+fn run_priority_tier(phase: &str, has_refusal: bool, has_external_inputs: bool) -> u8 {
+    match phase {
+        "awaiting_tool_result" | "turn_open" => 0,
+        "error" => 1,
+        _ if has_refusal => 1,
+        _ if has_external_inputs => 2,
+        _ => 3,
+    }
+}
+
+pub(crate) fn format_list_runs_response(
+    source_run: Value,
+    receive_interface_id: String,
+    source_movement_seq: Option<u64>,
+    observed: &ObservedRuns,
+) -> Value {
+    let mut interfaces: Vec<String> = Vec::new();
+    let mut iface_bytes: usize = 2;
+    for iface in &observed.declared_peer_interfaces {
+        let cost = iface.len() + 3;
+        if !interfaces.is_empty() && iface_bytes + cost > MAX_PEER_INTERFACES_BYTES {
+            break;
+        }
+        interfaces.push(iface.clone());
+        iface_bytes += cost;
+    }
+
+    let has_other_runs = observed.other_runs.is_some();
+    let mut base = json!({
+        "source_run": source_run,
+        "declared_peer_interfaces": interfaces,
+        "declared_peer_runs": [],
+        "declared_peer_runs_total": observed.declared_peer_runs_total,
+        "receive_interface_id": receive_interface_id,
+        "source_movement_seq": source_movement_seq,
+    });
+    if !observed.counts_by_phase.is_empty() {
+        base["counts_by_phase"] = json!(&observed.counts_by_phase);
+    }
+    if has_other_runs {
+        base["other_runs"] = json!([]);
+        if let Some(total) = observed.other_runs_total {
+            base["other_runs_total"] = json!(total);
+        }
+    }
+    if let Some(archived) = observed.archived_runs_count {
+        base["archived_runs_count"] = json!(archived);
+    }
+
+    const RESERVED_OVERHEAD_BYTES: usize = 256;
+    let base_bytes = serde_json::to_vec(&base).map(|b| b.len()).unwrap_or(MAX_LIST_RUNS_BYTES);
+    let mut remaining = MAX_LIST_RUNS_BYTES.saturating_sub(base_bytes.saturating_add(RESERVED_OVERHEAD_BYTES));
+
+    let mut selected_peers: Vec<(usize, Value)> = Vec::new();
+    let mut selected_others: Vec<(usize, Value)> = Vec::new();
+    let other_slice = observed.other_runs.as_deref().unwrap_or(&[]);
+    let other_tiers = observed.other_tiers.as_deref().unwrap_or(&[]);
+
+    for tier in 0..=3u8 {
+        for (idx, row) in observed.declared_peer_runs.iter().enumerate() {
+            if observed.declared_peer_tiers.get(idx).copied().unwrap_or(3) != tier {
+                continue;
+            }
+            let cost = serde_json::to_vec(row).map(|b| b.len() + 1).unwrap_or(usize::MAX);
+            if cost <= remaining {
+                remaining -= cost;
+                selected_peers.push((idx, row.clone()));
+            }
+        }
+        for (idx, row) in other_slice.iter().enumerate() {
+            if other_tiers.get(idx).copied().unwrap_or(3) != tier {
+                continue;
+            }
+            let cost = serde_json::to_vec(row).map(|b| b.len() + 1).unwrap_or(usize::MAX);
+            if cost <= remaining {
+                remaining -= cost;
+                selected_others.push((idx, row.clone()));
+            }
+        }
+    }
+
+    selected_peers.sort_by_key(|(idx, _)| *idx);
+    selected_others.sort_by_key(|(idx, _)| *idx);
+
+    let mut final_peers: Vec<Value> = selected_peers.into_iter().map(|(_, v)| v).collect();
+    let mut final_others: Vec<Value> = selected_others.into_iter().map(|(_, v)| v).collect();
+
+    loop {
+        let mut candidate = base.clone();
+        candidate["declared_peer_interfaces"] = json!(&interfaces);
+        candidate["declared_peer_runs"] = json!(&final_peers);
+        let peer_omitted = observed.declared_peer_runs_total.saturating_sub(final_peers.len());
+        let iface_omitted = observed.declared_peer_interfaces_total.saturating_sub(interfaces.len());
+        let mut other_omitted = 0usize;
+        if has_other_runs {
+            candidate["other_runs"] = json!(&final_others);
+            other_omitted = observed
+                .other_runs_total
+                .unwrap_or(0)
+                .saturating_sub(final_others.len());
+        }
+        if peer_omitted > 0 {
+            candidate["declared_peer_runs_omitted"] = json!(peer_omitted);
+        }
+        if other_omitted > 0 {
+            candidate["other_runs_omitted"] = json!(other_omitted);
+        }
+        if iface_omitted > 0 {
+            candidate["declared_peer_interfaces_total"] = json!(observed.declared_peer_interfaces_total);
+            candidate["declared_peer_interfaces_omitted"] = json!(iface_omitted);
+        }
+        if peer_omitted > 0 || other_omitted > 0 || iface_omitted > 0 {
+            candidate["truncated"] = json!(true);
+        }
+        let encoded_len = serde_json::to_vec(&candidate).map(|b| b.len()).unwrap_or(0);
+        if encoded_len <= MAX_LIST_RUNS_BYTES {
+            return candidate;
+        }
+        if !final_others.is_empty() {
+            final_others.pop();
+        } else if !final_peers.is_empty() {
+            final_peers.pop();
+        } else if !interfaces.is_empty() {
+            interfaces.pop();
+        } else {
+            return candidate;
+        }
+    }
 }
 
 pub(crate) fn observe_runs_pulse(
@@ -222,24 +362,50 @@ pub(crate) fn observe_runs_pulse(
 
     let mut descriptor_cache = DescriptorCache::new(registry_interface_root.as_deref());
     let mut records_by_id: BTreeMap<String, RunRecord> = BTreeMap::new();
+    let mut bindings_by_id: BTreeMap<String, RunBindingsSummary> = BTreeMap::new();
     records_by_id.insert(source_record.id.as_str().to_string(), source_record.clone());
+    let source_bindings = inspect_run_bindings(source_record, &mut descriptor_cache);
 
-    let mut peer_run_ids = BTreeSet::new();
-    for run_id in declared_peers.values().flatten() {
-        peer_run_ids.insert(run_id.clone());
-        if !records_by_id.contains_key(run_id) {
-            if let Some(root) = run_records_root {
+    let mut all_peer_run_ids = BTreeSet::new();
+    let mut active_peer_entries: Vec<(String, String)> = Vec::new();
+    let mut unresolved_peer_interfaces: Vec<String> = Vec::new();
+    let mut archived_peer_count: usize = 0;
+
+    for (interface_id, maybe_run_id) in declared_peers {
+        let Some(run_id) = maybe_run_id else {
+            unresolved_peer_interfaces.push(interface_id.clone());
+            continue;
+        };
+        all_peer_run_ids.insert(run_id.clone());
+        if let Some(root) = run_records_root.filter(|p| p.is_dir()) {
+            if !records_by_id.contains_key(run_id) {
                 if let Some(record) = load_run_record_file(&root.join(format!("{run_id}.json"))) {
+                    let summary = inspect_run_bindings(&record, &mut descriptor_cache);
+                    bindings_by_id.insert(run_id.clone(), summary);
                     records_by_id.insert(run_id.clone(), record);
                 }
             }
+            if !records_by_id.contains_key(run_id) {
+                archived_peer_count += 1;
+                continue;
+            }
+            let is_archived = if run_id == source_record.id.as_str() {
+                source_bindings.archived
+            } else {
+                bindings_by_id.get(run_id).is_some_and(|summary| summary.archived)
+            };
+            if is_archived {
+                archived_peer_count += 1;
+                continue;
+            }
         }
+        active_peer_entries.push((interface_id.clone(), run_id.clone()));
     }
 
     let mut candidate_other_ids: Vec<String> = Vec::new();
-    let mut archived_count: usize = 0;
+    let mut archived_other_count: usize = 0;
     if include_other_runs {
-        if let Some(root) = run_records_root {
+        if let Some(root) = run_records_root.filter(|p| p.is_dir()) {
             let mut paths: Vec<PathBuf> = std::fs::read_dir(root)
                 .ok()
                 .into_iter()
@@ -253,7 +419,7 @@ pub(crate) fn observe_runs_pulse(
                 let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if stem == source_record.id.as_str() || peer_run_ids.contains(stem) {
+                if stem == source_record.id.as_str() || all_peer_run_ids.contains(stem) {
                     continue;
                 }
                 let Some(record) = load_run_record_file(&path) else {
@@ -261,13 +427,14 @@ pub(crate) fn observe_runs_pulse(
                 };
                 let summary = inspect_run_bindings(&record, &mut descriptor_cache);
                 if summary.archived {
-                    archived_count += 1;
+                    archived_other_count += 1;
                     continue;
                 }
                 if summary.provider_interface_id.is_none() && summary.external_inputs.is_empty() {
                     continue;
                 }
                 let id = record.id.as_str().to_string();
+                bindings_by_id.insert(id.clone(), summary);
                 records_by_id.insert(id.clone(), record);
                 candidate_other_ids.push(id);
             }
@@ -276,13 +443,14 @@ pub(crate) fn observe_runs_pulse(
 
     let mut target_run_ids = BTreeSet::new();
     target_run_ids.insert(source_record.id.as_str().to_string());
-    target_run_ids.extend(peer_run_ids.iter().cloned());
+    for (_, run_id) in &active_peer_entries {
+        target_run_ids.insert(run_id.clone());
+    }
     target_run_ids.extend(candidate_other_ids.iter().cloned());
 
     let ledger_tails = life_ctx.and_then(|ctx| load_tail_movements_by_run(ctx, &target_run_ids));
     let blobs_dir = life_ctx.map(|ctx| ctx.blobs_dir.as_path());
 
-    let source_bindings = inspect_run_bindings(source_record, &mut descriptor_cache);
     let (source_activity, source_phase) = build_run_activity(
         Some(source_record),
         &source_bindings,
@@ -299,18 +467,37 @@ pub(crate) fn observe_runs_pulse(
         "not_observed".to_string()
     };
 
-    let mut declared_peer_runs = Vec::new();
-    for (interface_id, maybe_run_id) in declared_peers {
-        let Some(run_id) = maybe_run_id else { continue };
-        let record = records_by_id.get(run_id);
-        let bindings = record.map(|rec| inspect_run_bindings(rec, &mut descriptor_cache));
-        let (activity, _) = build_run_activity(
+    let mut counts_by_phase: BTreeMap<String, usize> = BTreeMap::new();
+    let mut counted_runs: BTreeSet<String> = BTreeSet::new();
+    let empty_bindings = RunBindingsSummary::empty();
+
+    let mut peer_rows: Vec<(u8, u64, String, String, Value)> = Vec::new();
+    for (interface_id, run_id) in active_peer_entries {
+        let record = records_by_id.get(&run_id);
+        let bindings = if run_id == source_record.id.as_str() {
+            &source_bindings
+        } else {
+            bindings_by_id.get(&run_id).unwrap_or(&empty_bindings)
+        };
+        let (activity, phase) = build_run_activity(
             record,
-            bindings.as_ref().unwrap_or(&RunBindingsSummary::empty()),
-            ledger_tails.as_ref().and_then(|map| map.get(run_id)),
+            bindings,
+            ledger_tails.as_ref().and_then(|map| map.get(&run_id)),
             ledger_tails.is_some(),
             blobs_dir,
             now_ms,
+        );
+        if counted_runs.insert(run_id.clone()) {
+            *counts_by_phase.entry(phase.to_string()).or_insert(0) += 1;
+        }
+        let sort_ts = activity
+            .get("last_movement_at_unix_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let tier = run_priority_tier(
+            phase,
+            activity.get("recent_refusal").is_some(),
+            !bindings.external_inputs.is_empty(),
         );
         let mut entry = json!({
             "interface_id": interface_id,
@@ -318,47 +505,97 @@ pub(crate) fn observe_runs_pulse(
             "activity": activity,
         });
         if let Some(rec) = record {
-            attach_record_metadata(&mut entry, rec, bindings.as_ref().unwrap());
+            attach_record_metadata(&mut entry, rec, bindings);
         }
+        peer_rows.push((tier, sort_ts, run_id, interface_id, entry));
+    }
+    peer_rows.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.3.cmp(&b.3))
+    });
+
+    let mut declared_peer_interfaces: Vec<String> = Vec::new();
+    let mut seen_interfaces: BTreeSet<String> = BTreeSet::new();
+    for (_, _, _, iface_id, _) in &peer_rows {
+        if seen_interfaces.insert(iface_id.clone()) {
+            declared_peer_interfaces.push(iface_id.clone());
+        }
+    }
+    for iface_id in unresolved_peer_interfaces {
+        if seen_interfaces.insert(iface_id.clone()) {
+            declared_peer_interfaces.push(iface_id);
+        }
+    }
+    let declared_peer_interfaces_total = declared_peer_interfaces.len();
+    let declared_peer_runs_total = peer_rows.len();
+    let mut declared_peer_runs = Vec::with_capacity(declared_peer_runs_total.min(MAX_DECLARED_PEER_RUNS));
+    let mut declared_peer_tiers = Vec::with_capacity(declared_peer_runs_total.min(MAX_DECLARED_PEER_RUNS));
+    for (tier, _, _, _, entry) in peer_rows.into_iter().take(MAX_DECLARED_PEER_RUNS) {
+        declared_peer_tiers.push(tier);
         declared_peer_runs.push(entry);
     }
 
-    let (other_runs, other_runs_total, archived_runs_count) = if include_other_runs {
-        let mut rows: Vec<(u64, String, Value)> = Vec::new();
+    let (other_runs, other_tiers, other_runs_total, archived_runs_count) = if include_other_runs {
+        let mut rows: Vec<(u8, u64, String, Value)> = Vec::new();
         for run_id in candidate_other_ids {
             let Some(record) = records_by_id.get(&run_id) else {
                 continue;
             };
-            let bindings = inspect_run_bindings(record, &mut descriptor_cache);
-            let (activity, _) = build_run_activity(
+            let bindings = bindings_by_id.get(&run_id).unwrap_or(&empty_bindings);
+            let (activity, phase) = build_run_activity(
                 Some(record),
-                &bindings,
+                bindings,
                 ledger_tails.as_ref().and_then(|map| map.get(&run_id)),
                 ledger_tails.is_some(),
                 blobs_dir,
                 now_ms,
             );
+            if counted_runs.insert(run_id.clone()) {
+                *counts_by_phase.entry(phase.to_string()).or_insert(0) += 1;
+            }
             let sort_ts = activity
                 .get("last_movement_at_unix_ms")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            let tier = run_priority_tier(
+                phase,
+                activity.get("recent_refusal").is_some(),
+                !bindings.external_inputs.is_empty(),
+            );
             let mut entry = json!({
                 "run_id": run_id,
                 "activity": activity,
             });
-            attach_record_metadata(&mut entry, record, &bindings);
-            rows.push((sort_ts, run_id, entry));
+            attach_record_metadata(&mut entry, record, bindings);
+            rows.push((tier, sort_ts, run_id, entry));
         }
-        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        rows.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
         let total = rows.len();
-        let trimmed: Vec<Value> = rows
-            .into_iter()
-            .take(MAX_OTHER_RUNS)
-            .map(|(_, _, val)| val)
-            .collect();
-        (Some(trimmed), Some(total), Some(archived_count))
+        let mut trimmed = Vec::with_capacity(total.min(MAX_OTHER_RUNS));
+        let mut tiers = Vec::with_capacity(total.min(MAX_OTHER_RUNS));
+        for (tier, _, _, val) in rows.into_iter().take(MAX_OTHER_RUNS) {
+            tiers.push(tier);
+            trimmed.push(val);
+        }
+        (
+            Some(trimmed),
+            Some(tiers),
+            Some(total),
+            Some(archived_peer_count + archived_other_count),
+        )
     } else {
-        (None, None, None)
+        (
+            None,
+            None,
+            None,
+            (archived_peer_count > 0).then_some(archived_peer_count),
+        )
     };
 
     ObservedRuns {
@@ -369,10 +606,16 @@ pub(crate) fn observe_runs_pulse(
         source_model: source_bindings.model,
         source_reasoning_effort: source_bindings.reasoning_effort,
         source_external_inputs: source_bindings.external_inputs,
+        declared_peer_interfaces,
+        declared_peer_interfaces_total,
         declared_peer_runs,
+        declared_peer_tiers,
+        declared_peer_runs_total,
         other_runs,
+        other_tiers,
         other_runs_total,
         archived_runs_count,
+        counts_by_phase,
     }
 }
 
@@ -501,6 +744,9 @@ fn inspect_run_bindings(record: &RunRecord, cache: &mut DescriptorCache<'_>) -> 
         });
 
     let mut summary = RunBindingsSummary::empty();
+    if record.active_checkpoints.is_empty() {
+        summary.archived = true;
+    }
     let mut external_inputs = BTreeSet::new();
 
     for iface_id in &all_interfaces {
@@ -531,7 +777,7 @@ fn inspect_run_bindings(record: &RunRecord, cache: &mut DescriptorCache<'_>) -> 
                             .and_then(Value::as_str)
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
-                            .map(ToOwned::to_owned);
+                            .map(|s| clip_single_line(s, MAX_TITLE_CHARS));
                     }
                     if sidecar.get("archived").and_then(Value::as_bool) == Some(true)
                         || sidecar.get("retired").and_then(Value::as_bool) == Some(true)
@@ -591,22 +837,7 @@ fn build_run_activity(
     now_ms: u64,
 ) -> (Value, &'static str) {
     if !ledger_readable {
-        return (
-            json!({
-                "phase": "unreadable",
-                "last_movement_seq": null,
-                "last_movement_at_unix_ms": null,
-                "seconds_since_last_movement": null,
-                "last_movement_kind": null,
-                "last_artifact_label": null,
-                "last_provider_activity_at_unix_ms": null,
-                "last_provider_artifact_label": null,
-                "pending_tool_calls": [],
-                "recent_refusal": null,
-                "last_error": null,
-            }),
-            "unreadable",
-        );
+        return (json!({ "phase": "unreadable" }), "unreadable");
     }
 
     let empty = VecDeque::new();
@@ -786,22 +1017,40 @@ fn build_run_activity(
     let seconds_since_last_movement =
         last_movement_at_unix_ms.map(|ts| now_ms.saturating_sub(ts) / 1000);
 
-    (
-        json!({
-            "phase": phase,
-            "last_movement_seq": last_movement_seq,
-            "last_movement_at_unix_ms": last_movement_at_unix_ms,
-            "seconds_since_last_movement": seconds_since_last_movement,
-            "last_movement_kind": last_movement_kind,
-            "last_artifact_label": last_artifact_label,
-            "last_provider_activity_at_unix_ms": last_provider_activity_at_unix_ms,
-            "last_provider_artifact_label": last_provider_artifact_label,
-            "pending_tool_calls": pending_tool_calls,
-            "recent_refusal": recent_refusal,
-            "last_error": last_error_json,
-        }),
-        phase,
-    )
+    let mut activity = serde_json::Map::new();
+    activity.insert("phase".into(), json!(phase));
+    if let Some(seq) = last_movement_seq {
+        activity.insert("last_movement_seq".into(), json!(seq));
+    }
+    if let Some(ts) = last_movement_at_unix_ms {
+        activity.insert("last_movement_at_unix_ms".into(), json!(ts));
+    }
+    if let Some(secs) = seconds_since_last_movement {
+        activity.insert("seconds_since_last_movement".into(), json!(secs));
+    }
+    if let Some(kind) = last_movement_kind {
+        activity.insert("last_movement_kind".into(), json!(kind));
+    }
+    if let Some(label) = last_artifact_label {
+        activity.insert("last_artifact_label".into(), json!(label));
+    }
+    if let Some(ts) = last_provider_activity_at_unix_ms {
+        activity.insert("last_provider_activity_at_unix_ms".into(), json!(ts));
+    }
+    if let Some(label) = last_provider_artifact_label {
+        activity.insert("last_provider_artifact_label".into(), json!(label));
+    }
+    if !pending_tool_calls.is_empty() {
+        activity.insert("pending_tool_calls".into(), json!(pending_tool_calls));
+    }
+    if let Some(refusal) = recent_refusal {
+        activity.insert("recent_refusal".into(), refusal);
+    }
+    if let Some(err) = last_error_json {
+        activity.insert("last_error".into(), err);
+    }
+
+    (Value::Object(activity), phase)
 }
 
 fn load_tail_movements_by_run(
@@ -1385,5 +1634,130 @@ mod tests {
         assert_eq!(unreadable.source_provider_activity, "not_observed");
         assert_eq!(unreadable.source_activity["phase"], json!("unreadable"));
         assert_eq!(unreadable.declared_peer_runs[0]["title"], json!("Monitor API"));
+    }
+
+    #[test]
+    fn list_runs_stays_bounded_valid_json_and_prioritizes_active_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = tmp.path().join("registry");
+        let runs = tmp.path().join("runs");
+        let ledger = tmp.path().join("ledger");
+        std::fs::create_dir_all(&ledger).unwrap();
+        let roots = CompositionRoots {
+            registry_root: reg.clone(),
+            ee_instances_root: tmp.path().join("ees"),
+            run_records_root: runs.clone(),
+            interface_private_state_root: tmp.path().join("var"),
+        };
+
+        write_iface(&reg, &json!({
+            "id":"world_provider_p1","interface_type":"world","role":"provider","direction":"bidirectional",
+            "source_names":["p"],"interface_driver_ref":"codex",
+            "interface_driver_config":{"private_config":{"model":"gemini-4-neon","reasoning_effort":"medium"}}
+        }));
+        write_iface(&reg, &json!({"id":"world_watch_s1","interface_type":"world","role":"sensor","direction":"inbound","source_names":["watch.event"],"interface_driver_ref":"world_watch_life"}));
+        write_iface(&reg, &json!({"id":"system_door_ws","interface_type":"system","role":"system","direction":"bidirectional","source_names":["tool"],"interface_driver_ref":""}));
+        write_iface(&reg, &json!({"id":"world_chat_arch","interface_type":"world","role":"user","direction":"bidirectional","source_names":["c"],"interface_driver_ref":"app_server"}));
+        write_json(&reg.join("interface/world_chat_arch/octopus_os.json"), &json!({"archived":true,"presentation":{"name":"Archived Peer"}}));
+
+        let home = write_run(&runs, "run_home", "idle", &[("cp_prov", "world_provider_p1")], &[]);
+        let mut peers = BTreeMap::new();
+
+        for i in 0..170 {
+            let run_id = format!("run_peer_idle_{i:03}");
+            let iface_id = format!("system_service_input_{run_id}");
+            write_run(&runs, &run_id, "idle", &[("cp_prov", "world_provider_p1")], &[]);
+            peers.insert(iface_id, Some(run_id));
+        }
+        write_run(&runs, "run_peer_archived", "idle", &[("cp_prov", "world_provider_p1"), ("cp_chat", "world_chat_arch")], &[]);
+        peers.insert("system_service_input_archived".into(), Some("run_peer_archived".into()));
+        write_run(&runs, "run_peer_retired", "idle", &[], &[]);
+        peers.insert("system_service_input_retired".into(), Some("run_peer_retired".into()));
+        write_run(&runs, "run_peer_active", "running", &[("cp_prov", "world_provider_p1")], &[("cp_prov", "system_door_ws")]);
+        peers.insert("system_service_input_zzz_active".into(), Some("run_peer_active".into()));
+        write_run(&runs, "run_peer_error", "idle", &[("cp_prov", "world_provider_p1")], &[]);
+        peers.insert("system_service_input_zzz_error".into(), Some("run_peer_error".into()));
+        write_run(&runs, "run_peer_standing", "idle", &[("cp_prov", "world_provider_p1"), ("cp_w", "world_watch_s1")], &[]);
+        peers.insert("system_service_input_zzz_standing".into(), Some("run_peer_standing".into()));
+
+        for i in 0..170 {
+            let run_id = format!("run_other_idle_{i:03}");
+            write_run(&runs, &run_id, "idle", &[("cp_prov", "world_provider_p1")], &[]);
+        }
+        write_run(&runs, "run_other_active", "running", &[("cp_prov", "world_provider_p1")], &[]);
+
+        let mut log = DurableLog::open(ledger.join("movements.jsonl")).unwrap();
+        let mut blobs = DurableBlobs::open(ledger.join("blobs")).unwrap();
+        let ok_hash = blobs.try_put(b"{}").unwrap();
+        let err_hash = blobs.try_put(br#"{"message":"tool failed"}"#).unwrap();
+
+        log.try_append(MovementDraft {
+            trace: TraceId("t_act".into()),
+            kind: MovementKind::InterfaceOutbound,
+            from: Endpoint::Interface(InterfaceId::new("world_provider_p1")),
+            to: Endpoint::Interface(InterfaceId::new("system_door_ws")),
+            artifact: Some(artifact_with_hash("tool.call.request", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_peer_active", "system_door_ws", DeliveryVerdict::Admitted { seq: 0 })),
+            causal_floor: None,
+        }).unwrap();
+        log.try_append(MovementDraft {
+            trace: TraceId("t_err".into()),
+            kind: MovementKind::InterfaceArrival,
+            from: Endpoint::Interface(InterfaceId::new("world_provider_p1")),
+            to: Endpoint::Interface(InterfaceId::new("system_worker_operator_task")),
+            artifact: Some(artifact_with_hash("turn.error", err_hash)),
+            invocation_metadata: Some(runtime_meta("run_peer_error", "world_provider_p1", DeliveryVerdict::Admitted { seq: 1 })),
+            causal_floor: None,
+        }).unwrap();
+        log.try_append(MovementDraft {
+            trace: TraceId("t_oth".into()),
+            kind: MovementKind::InterfaceArrival,
+            from: Endpoint::Interface(InterfaceId::new("world_provider_p1")),
+            to: Endpoint::Interface(InterfaceId::new("system_worker_operator_task")),
+            artifact: Some(artifact_with_hash("turn.started", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_other_active", "world_provider_p1", DeliveryVerdict::Admitted { seq: 2 })),
+            causal_floor: None,
+        }).unwrap();
+
+        let (arrivals, _rx) = tokio::sync::mpsc::channel(1);
+        let ctx = InterfaceLiftContext::unprivileged(
+            InterfaceId::new("world_provider_p1"),
+            tmp.path().into(),
+            None,
+            tmp.path().into(),
+            ledger.join("movements.jsonl"),
+            ledger.join("blobs"),
+            ledger.join("index.sqlite"),
+            Default::default(),
+            arrivals,
+            tokio_util::sync::CancellationToken::new(),
+        );
+
+        let observed = observe_runs_pulse(&home, &peers, Some(&roots), Some(&ctx), true);
+        let response = format_list_runs_response(
+            json!({"run_id": "run_home", "recorded_status": "idle", "activity": observed.source_activity}),
+            "system_worker_operator_task".into(),
+            Some(9),
+            &observed,
+        );
+        let encoded = serde_json::to_vec(&response).unwrap();
+        assert!(encoded.len() <= MAX_LIST_RUNS_BYTES, "encoded size {} exceeded {}", encoded.len(), MAX_LIST_RUNS_BYTES);
+        let decoded: Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded["truncated"], json!(true));
+        assert_eq!(decoded["archived_runs_count"], json!(2));
+        assert_eq!(decoded["declared_peer_runs_total"], json!(173));
+        assert_eq!(decoded["other_runs_total"], json!(171));
+        assert_eq!(decoded["counts_by_phase"]["awaiting_tool_result"], json!(1));
+        assert_eq!(decoded["counts_by_phase"]["turn_open"], json!(1));
+        assert_eq!(decoded["counts_by_phase"]["error"], json!(1));
+
+        let peer_rows = decoded["declared_peer_runs"].as_array().unwrap();
+        assert_eq!(peer_rows[0]["run_id"], json!("run_peer_active"));
+        assert_eq!(peer_rows[1]["run_id"], json!("run_peer_error"));
+        assert_eq!(peer_rows[2]["run_id"], json!("run_peer_standing"));
+        assert!(!peer_rows.iter().any(|r| r["run_id"] == "run_peer_archived" || r["run_id"] == "run_peer_retired"));
+
+        let other_rows = decoded["other_runs"].as_array().unwrap();
+        assert_eq!(other_rows[0]["run_id"], json!("run_other_active"));
     }
 }
