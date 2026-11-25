@@ -17,6 +17,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-DCEBFA?style=flat-square" alt="MIT license"></a>
 </p>
 
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
+</p>
+
 ![Octopus OS](assets/octopus-os.gif)
 
 Octopus is an operating system for persistent agent work. Goals, permissions,
