@@ -1205,7 +1205,9 @@ pub fn validate_checked_provider_transition(transition: &CheckedRunTransition) -
     });
     next_config.validate(provider, &after.id)?;
     result_inputs::validate_transition(&before, &after, &next_config)?;
-    if pending.source_movement_seq >= transition.call.seq.0 || after.status != serde_json::json!(if pending.terminal { "idle" } else { "running" }) {
+    if pending.source_movement_seq >= transition.call.seq.0
+        || after.status != serde_json::json!(result_inputs::expected_run_status(pending.terminal, &next_topology))
+    {
         return Err("checked provider write has invalid source timing or status".into());
     }
     let stable = |state: &BTreeMap<String,serde_json::Value>| {

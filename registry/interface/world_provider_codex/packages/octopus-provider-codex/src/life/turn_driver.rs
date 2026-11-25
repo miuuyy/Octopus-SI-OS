@@ -206,13 +206,22 @@ pub(crate) async fn drive_turn_with_retries_inner(
                     turn.seq
                 )
             })?;
+            let terminal = status
+                .get("interface_state")
+                .and_then(|states| states.get(ctx.interface.as_str()))
+                .and_then(|state| state.get("pending_handoff"))
+                .and_then(|pending| pending.get("terminal"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or_else(|| {
+                    status.get("status").and_then(serde_json::Value::as_str) == Some("idle")
+                });
             handoff
                 .hand_observation(
                     ProviderEmission {
                         artifact,
                         route: ProviderEmissionRoute::ClientProjection,
                     },
-                    status.get("status").and_then(serde_json::Value::as_str) == Some("idle"),
+                    terminal,
                 )
                 .await?;
             control.finish();

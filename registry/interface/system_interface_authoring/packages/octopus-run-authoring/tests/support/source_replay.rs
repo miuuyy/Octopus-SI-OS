@@ -2536,12 +2536,23 @@ async fn a_terminal_call_rides_one_write_until_its_result_is_consumed() {
     assert!(call.pending_handoff.deferred_publication && call.pending_handoff.context_publication.is_some());
     let call_id = call.pending_handoff.items[0].artifact_id.clone();
     let record = fixture.reload_definition();
+    assert_eq!(record.status, serde_json::json!("running"), "an active ResultInput keeps run status running across the tool wait");
     let receipt = fixture.handoff.config.checkpoints.iter().find(|cp| cp.role == RunAuthoringCheckpointRole::ResultInput).unwrap().clone();
     assert!(!receipt.static_artifact_bindings.contains(&call_id), "the awaited call is context, not hidden evidence");
     let receiving = record.checkpoints.iter().find(|cp| checkpoint_record_matches_template(cp, &receipt, &record.id)).unwrap().clone();
     assert!(receiving.artifact_bindings.iter().any(|binding| binding.id == call_id));
     assert!(!provider_context_bindings(&record, &"provider".into()).unwrap().iter().any(|binding| binding.id == call_id));
     let written = std::fs::read(&fixture.handoff.run_path).unwrap();
+    let profile = RunAuthoringProfile {
+        file_write_tool: "write".into(),
+        file_write_label: "tool.call".into(),
+        file_write_result_label: "write.result".into(),
+    };
+    let writer = declared_provider_run_writer(&record, &"provider".into(), &profile).unwrap();
+    let retirement = prepare_definition_edit(fixture.handoff.run_path.clone(), &written, &writer, &[receiving.id.clone()], None).unwrap();
+    let retired = RunRecord::from_bytes(retirement.content.as_bytes()).unwrap();
+    assert_eq!(retired.status, serde_json::json!("idle"), "retiring the last ResultInput returns run status to idle");
+    result_inputs::validate_saved(&fixture.handoff.ctx, &record, &retired, &fixture.handoff.config).unwrap();
     {
         let mut state = fixture.handoff.state.try_lock().unwrap().clone();
         state.run_record_bytes = written.clone();
@@ -2568,6 +2579,7 @@ async fn a_terminal_call_rides_one_write_until_its_result_is_consumed() {
         verified_inputs:Vec::new(),
     }], true, None, false, true, &[]).unwrap();
     let consumed = RunRecord::from_bytes(next.content.as_bytes()).unwrap();
+    assert_eq!(consumed.status, serde_json::json!("idle"), "consuming the last ResultInput with a terminal output returns status to idle");
     assert!(!next.pending_handoff.deferred_publication);
     assert!(consumed.checkpoint(&receiving.id).is_none());
     assert!(current_context_artifacts(&consumed, &fixture.handoff.config).unwrap().contains(&call_id),

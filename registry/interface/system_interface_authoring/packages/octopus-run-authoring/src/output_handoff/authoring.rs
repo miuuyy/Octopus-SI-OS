@@ -311,7 +311,7 @@ impl ProviderOutputHandoff {
         })?;
         root.insert(
             "status".to_string(),
-            serde_json::json!(if terminal { "idle" } else { "running" }),
+            serde_json::json!(result_inputs::expected_run_status(terminal, &next_topology)),
         );
         replace_owned_frontier(root, &previous_frontier, next_frontier, &next_frontier_ids)?;
         if refresh_context {

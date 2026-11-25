@@ -153,6 +153,21 @@ pub fn awaits_call_result(
     Ok(Some(false))
 }
 
+pub(crate) fn expected_run_status(
+    terminal: bool,
+    topology: &BoundRunAuthoringTopology,
+) -> &'static str {
+    let awaiting_results = topology
+        .checkpoints
+        .iter()
+        .any(|checkpoint| checkpoint.role == RunAuthoringCheckpointRole::ResultInput);
+    if terminal && !awaiting_results {
+        "idle"
+    } else {
+        "running"
+    }
+}
+
 pub(super) fn enabled(config: &RunAuthoringConfig) -> bool {
     config.checkpoints.iter().any(|template| {
         template.role == RunAuthoringCheckpointRole::ResultInput
@@ -354,6 +369,11 @@ pub(crate) fn definition_value(
     value["interface_state"][writer.owner.as_str()][RUN_AUTHORING_BINDING] =
         serde_json::to_value(&topology).map_err(|error| error.to_string())?;
     value["interface_state"][writer.owner.as_str()]["authoring_generation"] = generation.into();
+    if context.is_none() {
+        if let Some(pending) = persisted_pending_handoff(&record, &writer.owner)? {
+            value["status"] = serde_json::json!(expected_run_status(pending.terminal, &topology));
+        }
+    }
     if config.writer_run.is_none() {
         for role in [
             RunAuthoringCheckpointRole::AuthoringCall,

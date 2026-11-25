@@ -486,6 +486,14 @@ impl ProviderOutputHandoff {
         let mut value: serde_json::Value = serde_json::from_str(&authored.content).map_err(|error| error.to_string())?;
         value["interface_state"][self.config.provider_interface.as_str()]["pending_handoff"] = serde_json::to_value(&authored.pending_handoff).map_err(|error| error.to_string())?;
         result_inputs::cancel_pending_inputs(&mut value, &self.config, &proof.predecessor)?;
+        let updated_topology: BoundRunAuthoringTopology = serde_json::from_value(
+            value["interface_state"][self.config.provider_interface.as_str()][RUN_AUTHORING_BINDING].clone(),
+        )
+        .map_err(|error| error.to_string())?;
+        value["status"] = serde_json::json!(result_inputs::expected_run_status(
+            authored.pending_handoff.terminal,
+            &updated_topology,
+        ));
         let prefix = checkpoint_prefix(&record.id, &authored.pending_handoff.items[0].artifact_id, correlation_generation(&record.id, &authored.correlation_id)?);
         let bindings = provider_context_bindings(&record, &self.config.provider_interface)?.iter().map(serde_json::to_value).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         replace_context_checkpoints(value.as_object_mut().ok_or("withdrawal is not an object")?, &self.config, &record.id, &prefix, &bindings)?;
