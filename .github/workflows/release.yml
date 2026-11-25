@@ -104,23 +104,105 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  linux-headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential pkg-config libssl-dev libsqlite3-dev libasound2-dev
+
+      - name: Install Node toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Release tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          expected="v$(node -p "require('./app/package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match app/package.json ($expected)" >&2
+            exit 1
+          fi
+
+      - name: Install client dependencies without native rebuild
+        run: npm ci --prefix app --ignore-scripts
+
+      - name: Build Linux headless CLI runtime
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: node app/scripts/build-cli.cjs --runtime --target=x86_64-unknown-linux-gnu
+
+      - name: Package and verify Linux headless tarball
+        run: node app/scripts/release-linux.cjs
+
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: octopus-linux-x64
+          path: app/build/release-linux/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   publish:
-    needs: macos
+    needs: [macos, linux-headless]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download release assets
+      - name: Download macOS release assets
         uses: actions/download-artifact@v4
         with:
           name: octopus-macos
-          path: release-assets
+          path: release-assets/macos
+
+      - name: Download Linux headless release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: octopus-linux-x64
+          path: release-assets/linux
+
+      - name: Assemble and verify per-platform checksums
+        run: |
+          set -eu
+          (cd release-assets/macos/release && sha256sum -c checksums.txt)
+          (cd release-assets/linux && sha256sum -c checksums.txt && sha256sum -c Octopus-*-linux-*.tar.gz.sha256)
+          mkdir -p release-assets/release
+          for file in release-assets/macos/release/* release-assets/linux/*; do
+            base="$(basename "$file")"
+            [ "$base" = checksums.txt ] && continue
+            if [ -e "release-assets/release/$base" ]; then
+              echo "Duplicate release asset name: $base" >&2
+              exit 1
+            fi
+            cp -p "$file" "release-assets/release/$base"
+          done
+          cat release-assets/macos/release/checksums.txt release-assets/linux/checksums.txt \
+            | LC_ALL=C sort -k2,2 > release-assets/release/checksums.txt
+          cp -p release-assets/macos/release-notes.md release-assets/release-notes.md
 
       - name: Verify checksums
         working-directory: release-assets/release
         run: |
           test -s checksums.txt
+          test -s install.sh
+          test -s install-linux.sh
+          sh -n install.sh
+          sh -n install-linux.sh
           sha256sum -c checksums.txt
           for file in *; do
             [ "$file" = checksums.txt ] && continue

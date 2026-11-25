@@ -104,7 +104,7 @@ jobs:
           node --test scripts/support/native-publication.test.cjs
           node scripts/test-local-packages.cjs --consent-recipe
           node scripts/test-safe-self-update.cjs
-          node --test scripts/test-cli-target.cjs scripts/test-cli-package.cjs
+          node --test scripts/test-cli-target.cjs scripts/test-cli-package.cjs scripts/test-release-linux.cjs scripts/test-install-linux.cjs
           node scripts/test-client-extensions.cjs
           node scripts/test-client-extension-authoring.cjs
 
@@ -319,6 +319,16 @@ jobs:
         run: |
           cargo test --locked -p octopus-mcp-client --lib every_remote_mcp_operation_is_interface_local_and_strictly_loadable
           cargo test --locked -p octopus-operator-chat-client --lib every_registry_provider_catalog_admits_its_default_model_and_effort
+
+      - name: Linux local package dedup, offline Home bootstrap, and CLI setup contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          npm --prefix app ci --ignore-scripts
+          cargo build --locked -p octopus-operator-chat-client --bin octopus-operator-chat-topology
+          cargo test --locked -p octopus-app --bin octopus tests::offline_home_bootstrap_initializes_empty_home_idempotently_without_daemon -- --exact
+          node app/scripts/test-local-packages.cjs --dedup
+          npm --prefix app run test:cli
 
   native-client:
     runs-on: macos-latest

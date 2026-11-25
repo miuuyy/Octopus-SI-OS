@@ -33,7 +33,7 @@ test("CLI projection readers leave publication recovery to its owning mutation",
       const pending = (await fs.readdir(transactions)).filter(name => name !== ".octopus-publication");
       assert.equal(pending.length, 1);
       const journal = JSON.parse(await fs.readFile(path.join(transactions, pending[0], "journal.json")));
-      const calls = [], source = environment.packageRoots.publication;
+      const calls = [], source = require("./support/native-publication.cjs").nativePublication();
       environment.packageRoots.publication = Object.fromEntries(Object.keys(source).map(method => [method, async (...args) => {
         calls.push(method); return source[method](...args);
       }]));
@@ -411,6 +411,25 @@ test("CLI client commands fail closed upfront on an incomplete distribution and 
     assert.equal(result.ok, true);
     assert.equal(result.stdout.trim(), "ok:doctor");
     env.close();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveTopologyBinary honors OCTOPUS_TOPOLOGY_BINARY and falls back cleanly", async () => {
+  const { resolveTopologyBinary } = require("./support/native-publication.cjs");
+  const root = await fs.realpath(await fs.mkdtemp("/tmp/oct-topology-resolve-"));
+  try {
+    assert.equal(resolveTopologyBinary("/custom/bin/octopus-operator-chat-topology", { repoRoot: root }), "/custom/bin/octopus-operator-chat-topology");
+    assert.equal(resolveTopologyBinary("", { repoRoot: root }), path.join(root, "target/debug/octopus-operator-chat-topology"));
+    const releaseBin = path.join(root, "target/release/octopus-operator-chat-topology");
+    await fs.mkdir(path.dirname(releaseBin), { recursive: true });
+    await fs.writeFile(releaseBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    assert.equal(resolveTopologyBinary("", { repoRoot: root }), releaseBin);
+    const debugBin = path.join(root, "target/debug/octopus-operator-chat-topology");
+    await fs.mkdir(path.dirname(debugBin), { recursive: true });
+    await fs.writeFile(debugBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    assert.equal(resolveTopologyBinary("", { repoRoot: root }), debugBin);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

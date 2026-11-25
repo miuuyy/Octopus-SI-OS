@@ -4,9 +4,14 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { bundles, buildInfo, swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
-  packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions,
-  readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService, terminateProcess, runtimeEnv } = require("./safe-self-update.cjs");
+const { spawnSync } = require("node:child_process");
+const { bundles, buildInfo, buildStaging, verifyStaging, isValidRuntimeUsageOutput, checkCliLayoutParity, status,
+  checkBuildDiskSpace, resolveMinFreeGb, pruneBuildArtifacts,
+  swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
+  packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions, resolveRestartTimeoutMs,
+  readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService,
+  parseSystemctlShow, parseSystemctlExecStart, parseSystemctlEnvironment, inspectSystemdService,
+  isSystemdUnitFailedOrCrashLooping, terminateProcess, runtimeEnv } = require("./safe-self-update.cjs");
 
 const tmpBase = process.platform === "darwin" ? "/private/tmp" : os.tmpdir();
 const roots = [];
@@ -659,6 +664,242 @@ async function main() {
     } finally {
       if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = prevCodexHome;
+    }
+  }
+
+  // Space-separated value options, restart timeout, disk preflight, and safe prune contracts.
+  assert.deepEqual(
+    parseArgs(["restart", "--home", "/tmp/h", "--install-dir", "/opt/oct", "--service", "octopus.service", "--user-service", "--timeout", "180", "--min-free-gb", "20"]),
+    { positional: ["restart"], options: { home: "/tmp/h", installDir: "/opt/oct", service: "octopus.service", userService: true, timeout: "180", minFreeGb: "20" } },
+  );
+  assert.throws(() => parseArgs(["prune", "--target-dir"]), /requires a value/);
+  assert.equal(resolveRestartTimeoutMs({ timeout: "45" }), 45_000);
+  assert.throws(() => resolveRestartTimeoutMs({ timeout: "0" }), /between 1 and 3600/);
+
+  assert.equal(resolveMinFreeGb(undefined, undefined), 15);
+  assert.equal(resolveMinFreeGb("8", "20"), 8);
+  assert.equal(resolveMinFreeGb(undefined, "12.5"), 12.5);
+  assert.throws(() => resolveMinFreeGb("0", null), /positive number/);
+  const lowStatfs = () => ({ bavail: 1024, bsize: 4096 });
+  const highStatfs = () => ({ bavail: 10 * 1024 * 1024, bsize: 4096 });
+  assert.equal(checkBuildDiskSpace(tempRoot(), { minFreeGb: 5, statfs: lowStatfs }).ok, false);
+  assert.equal(checkBuildDiskSpace(tempRoot(), { minFreeGb: 5, statfs: highStatfs }).ok, true);
+  {
+    const diskLayout = fakeLayout();
+    assert.equal(buildStaging(diskLayout, { dryRun: true, minFreeGb: 5, statfs: lowStatfs }).ok, false);
+    assert.throws(() => buildStaging(diskLayout, { minFreeGb: 5, statfs: lowStatfs }), /insufficient free disk space/);
+  }
+  {
+    const ws = tempRoot();
+    fs.writeFileSync(path.join(ws, "Cargo.toml"), "[workspace]\n");
+    const pruneLayout = bundles(path.join(ws, "app", "build"));
+    const pruneHome = path.join(ws, "home");
+    fakeBundle(pruneLayout.live, "live");
+    fakeBundle(pruneLayout.staging, "staging");
+    fakeBundle(pruneLayout.prev, "prev");
+    fs.mkdirSync(path.join(ws, "target"), { recursive: true });
+    fs.writeFileSync(path.join(ws, "target", "a.bin"), Buffer.alloc(2048));
+    fs.mkdirSync(pruneHome, { recursive: true });
+    const dry = pruneBuildArtifacts(pruneLayout, pruneHome, { dryRun: true, sourceRoot: ws });
+    assert.equal(dry.applied, false);
+    assert.ok(dry.candidates.some((c) => c.label === "rust_target"));
+    assert.ok(dry.candidates.some((c) => c.label === "staging_bundle"));
+    assert.equal(dry.candidates.some((c) => c.label === "previous_bundle"), false);
+    const applied = pruneBuildArtifacts(pruneLayout, pruneHome, { sourceRoot: ws });
+    assert.equal(applied.applied, true);
+    assert.equal(fs.existsSync(pruneLayout.live), true);
+    assert.equal(fs.existsSync(pruneLayout.prev), true);
+    assert.equal(fs.existsSync(pruneLayout.staging), false);
+    assert.equal(fs.existsSync(path.join(ws, "target")), false);
+    assert.throws(() => pruneBuildArtifacts(pruneLayout, pruneHome, { targetDir: pruneLayout.live, sourceRoot: ws }), /overlaps protected live_bundle/);
+    assert.throws(() => pruneBuildArtifacts(pruneLayout, pruneHome, { targetDir: pruneHome, sourceRoot: ws }), /overlaps protected octopus_home/);
+    const otherDir = path.join(ws, "other-dir");
+    fs.mkdirSync(otherDir, { recursive: true });
+    const symTarget = path.join(ws, "sym-target");
+    fs.symlinkSync(otherDir, symTarget);
+    assert.throws(() => pruneBuildArtifacts(pruneLayout, pruneHome, { targetDir: symTarget, sourceRoot: ws }), /symlinked rust_target/);
+  }
+
+  // Linux headless CLI + systemd parity checks (cross-platform with mocked systemctl/spawn).
+  function fakeCliBundle(bundleDir, version, { mode = "checkout", platform = "linux", includeAuthority = true, badSha = false } = {}) {
+    const cliDir = mode === "standalone" ? path.join(bundleDir, "app", "build", "cli") : bundleDir;
+    const runtimeRoot = path.join(cliDir, "runtime");
+    const binDir = path.join(runtimeRoot, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(cliDir, "shared.cjs"), "module.exports = {};\n");
+    const octBin = path.join(binDir, "octopus");
+    fs.writeFileSync(octBin, "#!/bin/sh\necho 'usage: octopus <up|doctor>' >&2\nexit 2\n", { mode: 0o755 });
+    const bins = [{ path: "bin/octopus", file: octBin }];
+    if (includeAuthority) {
+      const authBin = path.join(binDir, "octopus-linux-process-authority");
+      fs.writeFileSync(authBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      bins.push({ path: "bin/octopus-linux-process-authority", file: authBin });
+    }
+    const receiptBins = bins.map(({ path: rel, file }) => {
+      const bytes = fs.readFileSync(file);
+      return { path: rel, bytes: bytes.length, sha256: badSha ? "0".repeat(64) : crypto.createHash("sha256").update(bytes).digest("hex") };
+    });
+    fs.writeFileSync(path.join(runtimeRoot, "runtime-build-receipt.json"), JSON.stringify({
+      schema: "octopus.cli_runtime_distribution", schema_version: 1, package_version: version,
+      platform, arch: "x64", binaries: receiptBins,
+    }));
+    if (mode === "standalone") {
+      fs.mkdirSync(path.join(bundleDir, "app", "cli"), { recursive: true });
+      fs.writeFileSync(path.join(bundleDir, "app", "cli", "index.cjs"), "console.log('octopus cli');\n");
+      fs.writeFileSync(path.join(bundleDir, "octopus"), "#!/bin/sh\necho 'Octopus CLI'\nexit 0\n", { mode: 0o755 });
+    }
+    for (const dir of [bundleDir, path.join(bundleDir, "app"), path.join(bundleDir, "app", "build"), cliDir, runtimeRoot, binDir]) {
+      if (fs.existsSync(dir)) fs.chmodSync(dir, 0o755);
+    }
+  }
+
+  {
+    const cliRoot = tempRoot();
+    const installDir = path.join(cliRoot, "opt-octopus");
+    const cliLayout = bundles(path.join(cliRoot, "build"), { platform: "linux", installDir });
+    assert.equal(cliLayout.kind, "linux-cli");
+    assert.equal(cliLayout.live, installDir);
+    assert.equal(cliLayout.staging, `${installDir}.staging`);
+    assert.equal(cliLayout.prev, `${installDir}.prev`);
+
+    const parsedExec = parseSystemctlExecStart("{ path=/opt/octopus/octopus ; argv[]=/opt/octopus/octopus up --foreground --bundle /opt/octopus ; }");
+    assert.equal(parsedExec.path, "/opt/octopus/octopus");
+    assert.equal(parsedExec.bundleArg, "/opt/octopus");
+    assert.equal(parseSystemctlEnvironment("OCTOPUS_HOME=/var/lib/oct PATH=/usr/bin").OCTOPUS_HOME, "/var/lib/oct");
+    const parsedShow = parseSystemctlShow("LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=4242\nNRestarts=0\nExecStart={ path=/opt/octopus/octopus ; argv[]=/opt/octopus/octopus up ; }\nEnvironment=OCTOPUS_HOME=/var/lib/oct\n");
+    assert.equal(parsedShow.mainPid, 4242);
+    assert.equal(parsedShow.octopusHome, "/var/lib/oct");
+
+    assert.equal(isValidRuntimeUsageOutput({ status: 2, stderr: "Usage: octopus <up|doctor>" }), true);
+    assert.equal(isValidRuntimeUsageOutput({ status: 2, stderr: "unrecognized error" }), false);
+
+    // Standalone verifyStaging + layout parity + fail-closed checks + standalone prune skipping default rust_target.
+    const cliHome = path.join(cliRoot, "home");
+    fs.mkdirSync(cliHome, { recursive: true });
+    fakeCliBundle(cliLayout.live, "0.1.0", { mode: "standalone" });
+    fakeCliBundle(cliLayout.staging, "0.1.1", { mode: "standalone" });
+    const mockSystemctl = (activeAuth = "active", homeOverride = cliHome) => (args) => {
+      if (args[0] === "show" && args[1].includes("authority")) {
+        return { status: 0, stdout: `LoadState=loaded\nActiveState=${activeAuth}\nSubState=running\nMainPID=500\n`, stderr: "" };
+      }
+      if (args[0] === "show") {
+        return { status: 0, stdout: `LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=600\nNRestarts=0\nExecStart={ path=${cliLayout.live}/octopus ; argv[]=${cliLayout.live}/octopus up ; }\nEnvironment=OCTOPUS_HOME=${homeOverride}\n`, stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const verified = await verifyStaging(cliLayout, cliHome, { platform: "linux", systemctl: mockSystemctl() });
+    assert.equal(verified.ok, true, JSON.stringify(verified.checks));
+
+    // Layout parity fails closed when checkout staging is paired against standalone live install.
+    fs.rmSync(cliLayout.staging, { recursive: true, force: true });
+    fakeCliBundle(cliLayout.staging, "0.1.1", { mode: "checkout" });
+    assert.equal(checkCliLayoutParity(cliLayout, inspectSystemdService(cliLayout, cliHome, { platform: "linux", systemctl: mockSystemctl() })).ok, false);
+    // Corrupt sha256 fails closed.
+    fs.rmSync(cliLayout.staging, { recursive: true, force: true });
+    fakeCliBundle(cliLayout.staging, "0.1.1", { mode: "standalone", badSha: true });
+    const corrupt = await verifyStaging(cliLayout, cliHome, { platform: "linux", systemctl: mockSystemctl() });
+    assert.equal(corrupt.ok, false);
+    assert.equal(corrupt.checks.find((c) => c.name === "receipt_binaries").ok, false);
+
+    // Standalone bundle prune skips default rust_target (no Cargo.toml & overlaps live_bundle), while explicit --target-dir fails closed.
+    fs.mkdirSync(path.join(cliLayout.live, "target"), { recursive: true });
+    fs.writeFileSync(path.join(cliLayout.live, "target", "keep.txt"), "keep");
+    const standalonePrune = pruneBuildArtifacts(cliLayout, cliHome, { dryRun: true, includeCli: true, sourceRoot: cliLayout.live });
+    assert.equal(standalonePrune.ok, true);
+    assert.ok(standalonePrune.skipped.some((s) => s.label === "cli_build" && s.reason === "protected_live_bundle"));
+    assert.ok(standalonePrune.skipped.some((s) => s.label === "rust_target" && s.reason === "protected_live_bundle"));
+    assert.throws(() => pruneBuildArtifacts(cliLayout, cliHome, { targetDir: path.join(cliLayout.live, "target"), sourceRoot: cliLayout.live }), /overlaps protected live_bundle/);
+    const cliStatus = await status(cliLayout, cliHome, { platform: "linux", systemctl: mockSystemctl() });
+    assert.equal(cliStatus.kind, "linux-cli");
+    assert.equal(cliStatus.systemd.matchesTarget, true);
+  }
+
+  // Linux systemd restart --swap: mismatch refusal, authority refusal, permission-denied rollback, happy swap, and crash-loop rollback.
+  {
+    const base = tempRoot();
+    const installDir = path.join(base, "octopus");
+    const cliLayout = bundles(path.join(base, "build"), { platform: "linux", installDir });
+    const resetBundles = () => {
+      for (const dir of [cliLayout.live, cliLayout.staging, cliLayout.prev, cliLayout.failed]) fs.rmSync(dir, { recursive: true, force: true });
+      fakeCliBundle(cliLayout.live, "live-v1", { mode: "standalone" });
+      fakeCliBundle(cliLayout.staging, "stage-v2", { mode: "standalone" });
+    };
+    resetBundles();
+    const rt = await fakeRuntime([]);
+    try {
+      // Mismatch refusal & requireAuthority refusal
+      const mismatch = await restartRuntime(cliLayout, rt.home, {
+        ...options, swap: true, readTurns: idle, platform: "linux",
+        systemctl: () => ({ status: 0, stdout: `LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\nExecStart={ path=/other/octopus ; }\nEnvironment=OCTOPUS_HOME=${rt.home}\n`, stderr: "" }),
+      });
+      assert.equal(mismatch.refused, "systemd_service_mismatch");
+      const noAuth = await restartRuntime(cliLayout, rt.home, {
+        ...options, swap: true, readTurns: idle, platform: "linux", requireAuthority: true,
+        systemctl: (args) => args[1].includes("authority")
+          ? { status: 0, stdout: "LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\n", stderr: "" }
+          : { status: 0, stdout: `LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\nExecStart={ path=${cliLayout.live}/octopus ; }\nEnvironment=OCTOPUS_HOME=${rt.home}\n`, stderr: "" },
+      });
+      assert.equal(noAuth.refused, "process_authority_inactive");
+
+      // Permission denied on systemctl restart -> rolls back swapped bundle without sudo.
+      const permDenied = await restartRuntime(cliLayout, rt.home, {
+        ...options, swap: true, readTurns: idle, platform: "linux", userService: false,
+        systemctl: (args) => {
+          if (args[0] === "restart") return { status: 1, stdout: "", stderr: "Interactive authentication required." };
+          return { status: 0, stdout: `LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\nExecStart={ path=${cliLayout.live}/octopus ; }\nEnvironment=OCTOPUS_HOME=${rt.home}\n`, stderr: "" };
+        },
+      });
+      assert.equal(permDenied.ok, false);
+      assert.equal(permDenied.rolled_back, true);
+      assert.match(permDenied.error, /never invokes sudo/);
+      assert.equal(buildInfo(cliLayout.live, cliLayout).package_version, "live-v1");
+
+      // Happy path swap + systemctl --user restart.
+      resetBundles();
+      const restartCalls = [];
+      const happy = await restartRuntime(cliLayout, rt.home, {
+        ...options, swap: true, readTurns: idle, platform: "linux", userService: true, statusPollMs: 15,
+        systemctl: (args, opts) => {
+          if (args[0] === "restart") {
+            restartCalls.push({ args, userService: opts?.userService });
+            rt.state.started += 1;
+            return { status: 0, stdout: "", stderr: "" };
+          }
+          return { status: 0, stdout: `LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\nNRestarts=0\nExecStart={ path=${cliLayout.live}/octopus ; }\nEnvironment=OCTOPUS_HOME=${rt.home}\n`, stderr: "" };
+        },
+      });
+      assert.equal(happy.ok, true);
+      assert.equal(restartCalls.length, 1);
+      assert.equal(restartCalls[0].userService, true);
+      assert.equal(buildInfo(cliLayout.live, cliLayout).package_version, "stage-v2");
+      assert.equal(buildInfo(cliLayout.prev, cliLayout).package_version, "live-v1");
+
+      // Crash-loop short-circuit rollback (succeeds far before 60s timeout).
+      resetBundles();
+      let restartCount = 0;
+      const startedAt = Date.now();
+      const crashLoop = await restartRuntime(cliLayout, rt.home, {
+        timeoutMs: 60_000, statusPollMs: 15, swap: true, readTurns: idle, platform: "linux", userService: true,
+        systemctl: (args) => {
+          if (args[0] === "restart") {
+            restartCount += 1;
+            if (restartCount === 2) rt.state.started += 1;
+            return { status: 0, stdout: "", stderr: "" };
+          }
+          const sub = restartCount === 1 ? "auto-restart" : "running";
+          const active = restartCount === 1 ? "activating" : "active";
+          return { status: 0, stdout: `LoadState=loaded\nActiveState=${active}\nSubState=${sub}\nMainPID=42\nNRestarts=${restartCount === 1 ? 2 : 0}\nExecStart={ path=${cliLayout.live}/octopus ; }\nEnvironment=OCTOPUS_HOME=${rt.home}\n`, stderr: "" };
+        },
+      });
+      assert.equal(crashLoop.ok, false);
+      assert.equal(crashLoop.rolled_back, true);
+      assert.equal(crashLoop.recovered, true);
+      assert.equal(restartCount, 2);
+      assert.ok(Date.now() - startedAt < 5000, "crash-loop must abort readiness wait immediately");
+      assert.equal(buildInfo(cliLayout.live, cliLayout).package_version, "live-v1");
+      assert.equal(buildInfo(cliLayout.failed, cliLayout).package_version, "stage-v2");
+    } finally {
+      await rt.close();
     }
   }
 

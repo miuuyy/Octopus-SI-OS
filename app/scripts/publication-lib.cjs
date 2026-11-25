@@ -188,9 +188,14 @@ function validatePublicPayload(relativePath, body, options = {}) {
   if (containsUnapprovedPrivateKey(text, normalized)) {
     throw new Error(`publication payload contains private-key material at '${normalized}'`);
   }
-  const userHome = `${path.resolve(os.homedir())}${path.sep}`;
-  if (text.includes(userHome) || text.includes(userHome.split(path.sep).join("/"))) {
-    throw new Error(`publication payload contains an absolute user-home path at '${normalized}'`);
+  const resolvedHome = path.resolve(options.userHome ?? os.homedir());
+  const normalizedHome = resolvedHome.split(path.sep).join("/");
+  if (normalizedHome !== "/" && normalizedHome !== "/root") {
+    const userHome = resolvedHome.endsWith(path.sep) ? resolvedHome : `${resolvedHome}${path.sep}`;
+    const posixUserHome = normalizedHome.endsWith("/") ? normalizedHome : `${normalizedHome}/`;
+    if (text.includes(userHome) || text.includes(posixUserHome)) {
+      throw new Error(`publication payload contains an absolute user-home path at '${normalized}'`);
+    }
   }
   for (const privateRoot of options.privateRoots ?? publicationPrivateRoots()) {
     if (text.includes(privateRoot) || text.includes(privateRoot.split(path.sep).join("/"))) {

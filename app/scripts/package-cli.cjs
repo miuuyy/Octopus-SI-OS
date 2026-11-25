@@ -1,18 +1,24 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { copyTree, copyFile } = require("./package-copy.cjs");
+const { copyTree, copyFile, deduplicateRegularFiles } = require("./package-copy.cjs");
 const { createRuntimePackager } = require("./runtime-package.cjs");
 const { SUPPORTED_TARGETS, resolveCliTarget, takeTargetArgument } = require("./cli-target.cjs");
 
-function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = null } = {}) {
+function createPublicStageDir(parent, prefix) {
+  const stage = fs.mkdtempSync(path.join(parent, prefix));
+  fs.chmodSync(stage, 0o755);
+  return stage;
+}
+
+function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = null, outputDir = process.env.OCTOPUS_CLI_BUILD_DIR || null } = {}) {
   const cli = resolveCliTarget({ target });
   appRoot = fs.realpathSync(appRoot);
   const repoRoot = path.dirname(appRoot);
-  const outputParent = path.join(appRoot, "build", "cli");
+  const outputParent = outputDir ? path.resolve(outputDir) : path.join(appRoot, "build", "cli");
   const outputRoot = path.join(outputParent, "runtime");
   fs.mkdirSync(outputParent, { recursive: true });
-  const stage = fs.mkdtempSync(path.join(outputParent, ".runtime-stage-"));
+  const stage = createPublicStageDir(outputParent, ".runtime-stage-");
   let previous = null;
   try {
     if (cli.components.client_filesystem) {
@@ -59,6 +65,7 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = n
       managed.sealSigning(managedSigning);
       packager.sealProviderSigningInputs(providerSigning);
     }
+    const deduplication = deduplicateRegularFiles(stage);
     packager.validateBundledLayout([baseline, packages], installationBinaries, ownerExecutables);
     const receipt = {
       schema: "octopus.cli_runtime_distribution", schema_version: 1,
@@ -76,10 +83,22 @@ function packageCliRuntime({ appRoot = path.resolve(__dirname, ".."), target = n
       fs.rmdirSync(previous);
       fs.renameSync(outputRoot, previous);
     }
+    fs.chmodSync(stage, 0o755);
     try { fs.renameSync(stage, outputRoot); }
     catch (error) { if (previous) fs.renameSync(previous, outputRoot); previous = null; throw error; }
     if (previous) fs.rmSync(previous, { recursive: true });
-    return { outputRoot, target: cli.triple, binaryCount: installationBinaries.length, ownerExecutableCount: ownerExecutables.size };
+    return {
+      outputRoot,
+      target: cli.triple,
+      binaryCount: installationBinaries.length,
+      ownerExecutableCount: ownerExecutables.size,
+      deduplication: {
+        linkedFiles: deduplication.linkedFiles,
+        deduplicatedFiles: deduplication.deduplicatedFiles,
+        savedBytes: deduplication.savedBytes,
+        deduplicatedGroups: deduplication.deduplicatedGroups,
+      },
+    };
   } finally {
     if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true });
   }
@@ -97,4 +116,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { packageCliRuntime };
+module.exports = { packageCliRuntime, createPublicStageDir };

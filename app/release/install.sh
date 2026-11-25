@@ -10,7 +10,113 @@ fail() {
   exit 1
 }
 
-[ "$(uname -s)" = "Darwin" ] || fail "Octopus is released for macOS only."
+OS="$(uname -s)"
+if [ "$OS" = "Linux" ]; then
+  SCRIPT_DIR=""
+  case "${0:-}" in
+    ""|sh|-sh|*/sh|dash|-dash|*/dash|bash|-bash|*/bash) ;;
+    *)
+      if [ -f "$0" ]; then
+        SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+      fi
+      ;;
+  esac
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/install-linux.sh" ]; then
+    exec sh "$SCRIPT_DIR/install-linux.sh" "$@"
+  fi
+
+  printf '%s\n' "$REPOSITORY" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || fail "Invalid GitHub repository: $REPOSITORY"
+
+  LINUX_VERSION="$VERSION"
+  prev_arg=""
+  for arg in "$@"; do
+    if [ "$prev_arg" = "--version" ]; then
+      LINUX_VERSION="$arg"
+      prev_arg=""
+      continue
+    fi
+    case "$arg" in
+      --version) prev_arg="--version" ;;
+      --version=*) LINUX_VERSION="${arg#--version=}" ;;
+    esac
+  done
+
+  if command -v curl >/dev/null 2>&1; then
+    LINUX_DL="curl"
+  elif command -v wget >/dev/null 2>&1; then
+    LINUX_DL="wget"
+  else
+    fail "Could not fetch install-linux.sh: neither curl nor wget is available."
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    LINUX_SHA="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    LINUX_SHA="shasum"
+  else
+    fail "Could not verify install-linux.sh: neither sha256sum nor shasum is available."
+  fi
+
+  if [ -n "${OCTOPUS_RELEASE_BASE_URL:-}" ]; then
+    LINUX_BASE_URL="${OCTOPUS_RELEASE_BASE_URL%/}"
+  else
+    if [ -z "$LINUX_VERSION" ]; then
+      if [ "$LINUX_DL" = "curl" ]; then
+        LATEST="$(curl -fsSLI --retry 3 --connect-timeout 15 --max-time 60 -o /dev/null -w '%{url_effective}' \
+          "https://github.com/$REPOSITORY/releases/latest")" || fail "Could not reach the releases of $REPOSITORY."
+      else
+        LATEST="$(wget --spider --max-redirect=10 -S "https://github.com/$REPOSITORY/releases/latest" 2>&1 \
+          | awk '/^[[:space:]]*[Ll]ocation:/ { loc = $2 } END { gsub(/\r/, "", loc); print loc }')"
+        [ -n "$LATEST" ] || fail "Could not reach the releases of $REPOSITORY."
+      fi
+      LINUX_VERSION="${LATEST##*/tag/}"
+      [ "$LINUX_VERSION" != "$LATEST" ] || fail "Could not resolve the latest Octopus release of $REPOSITORY."
+    fi
+    LINUX_VERSION="${LINUX_VERSION#v}"
+    case "$LINUX_VERSION" in
+      ''|*[!0-9.]*) fail "Invalid Octopus release version: $LINUX_VERSION" ;;
+    esac
+    LINUX_BASE_URL="https://github.com/$REPOSITORY/releases/download/v$LINUX_VERSION"
+  fi
+
+  LINUX_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/octopus-linux-dispatch.XXXXXX")"
+  cleanup_linux() {
+    rm -rf "$LINUX_TEMP_DIR" || true
+  }
+  trap cleanup_linux EXIT
+  trap 'exit 1' HUP INT TERM
+
+  if [ "$LINUX_DL" = "curl" ]; then
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 "$LINUX_BASE_URL/checksums.txt" -o "$LINUX_TEMP_DIR/checksums.txt" \
+      || fail "Could not download checksums.txt from $LINUX_BASE_URL."
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 "$LINUX_BASE_URL/install-linux.sh" -o "$LINUX_TEMP_DIR/install-linux.sh" \
+      || fail "Could not download install-linux.sh from $LINUX_BASE_URL."
+  else
+    wget -q --tries=3 --timeout=30 -O "$LINUX_TEMP_DIR/checksums.txt" "$LINUX_BASE_URL/checksums.txt" \
+      || fail "Could not download checksums.txt from $LINUX_BASE_URL."
+    wget -q --tries=3 --timeout=30 -O "$LINUX_TEMP_DIR/install-linux.sh" "$LINUX_BASE_URL/install-linux.sh" \
+      || fail "Could not download install-linux.sh from $LINUX_BASE_URL."
+  fi
+
+  EXPECTED_LINUX="$(awk '{ name = $2; sub(/^\*/, "", name); if (name == "install-linux.sh") { print $1; exit } }' "$LINUX_TEMP_DIR/checksums.txt" | LC_ALL=C tr 'A-F' 'a-f')"
+  printf '%s\n' "$EXPECTED_LINUX" | grep -Eq '^[0-9a-f]{64}$' \
+    || fail "Release checksums.txt has no valid SHA-256 entry for install-linux.sh."
+  if [ "$LINUX_SHA" = "sha256sum" ]; then
+    ACTUAL_LINUX="$(sha256sum "$LINUX_TEMP_DIR/install-linux.sh" | awk '{ print $1 }' | LC_ALL=C tr 'A-F' 'a-f')"
+  else
+    ACTUAL_LINUX="$(shasum -a 256 "$LINUX_TEMP_DIR/install-linux.sh" | awk '{ print $1 }' | LC_ALL=C tr 'A-F' 'a-f')"
+  fi
+  [ "$ACTUAL_LINUX" = "$EXPECTED_LINUX" ] || fail "SHA-256 verification failed for install-linux.sh."
+
+  if [ -n "$LINUX_VERSION" ] && [ -z "${OCTOPUS_VERSION:-}" ]; then
+    OCTOPUS_VERSION="$LINUX_VERSION" sh "$LINUX_TEMP_DIR/install-linux.sh" "$@"
+  else
+    sh "$LINUX_TEMP_DIR/install-linux.sh" "$@"
+  fi
+  exit $?
+fi
+
+[ "$OS" = "Darwin" ] || fail "Unsupported operating system: $OS. Octopus supports macOS 14+ and Linux x86_64."
 case "$(uname -m)" in
   arm64) ARCH="arm64" ;;
   x86_64)

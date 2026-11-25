@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -9,41 +10,179 @@ const { setTimeout: delay } = require("node:timers/promises");
 const appRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(appRoot, "..");
 
-function bundles(buildRoot = path.join(appRoot, "build")) {
+const VALID_PLATFORMS = new Set(["darwin", "linux"]);
+const VALID_TARGETS = new Set(["app", "cli"]);
+const VALID_LAYOUTS = new Set(["app", "cli", "macos-app", "linux-cli"]);
+
+function resolveLayoutOptions(options = {}) {
+  const platform = options.platform !== undefined ? options.platform : undefined;
+  const target = options.target !== undefined ? options.target : undefined;
+  const layout = options.layout !== undefined ? options.layout : undefined;
+  const installDir = options.installDir !== undefined ? options.installDir : undefined;
+  if (platform !== undefined && (typeof platform !== "string" || !VALID_PLATFORMS.has(platform))) {
+    throw Object.assign(new Error(`--platform must be one of: ${[...VALID_PLATFORMS].join(", ")}`), { usage: true });
+  }
+  if (target !== undefined && (typeof target !== "string" || !VALID_TARGETS.has(target))) {
+    throw Object.assign(new Error(`--target must be one of: ${[...VALID_TARGETS].join(", ")}`), { usage: true });
+  }
+  if (layout !== undefined && (typeof layout !== "string" || !VALID_LAYOUTS.has(layout))) {
+    throw Object.assign(new Error(`--layout must be one of: ${[...VALID_LAYOUTS].join(", ")}`), { usage: true });
+  }
+  if (installDir !== undefined && (typeof installDir !== "string" || !installDir.trim())) {
+    throw Object.assign(new Error("--install-dir requires a directory path"), { usage: true });
+  }
+  const wantsCli = target === "cli" || layout === "cli" || layout === "linux-cli";
+  const wantsApp = target === "app" || layout === "app" || layout === "macos-app";
+  if (wantsCli && wantsApp) {
+    throw Object.assign(new Error("--target and --layout conflict between app and cli"), { usage: true });
+  }
+  if (installDir && wantsApp) {
+    throw Object.assign(new Error("--install-dir is supported only for the Linux CLI layout"), { usage: true });
+  }
+  const kind = (installDir || wantsCli || (!wantsApp && platform === "linux")) ? "linux-cli" : "macos-app";
+  return { kind, platform: platform ?? (kind === "linux-cli" ? "linux" : "darwin"), installDir: installDir ? path.resolve(installDir) : null };
+}
+
+function bundles(buildRoot = path.join(appRoot, "build"), options = {}) {
+  const resolved = resolveLayoutOptions(options);
+  if (resolved.kind === "linux-cli") {
+    if (resolved.installDir) {
+      const live = resolved.installDir;
+      const parent = path.dirname(live);
+      const base = path.basename(live);
+      if (!base || live === path.parse(live).root) {
+        throw Object.assign(new Error(`--install-dir cannot be a filesystem root: ${live}`), { usage: true });
+      }
+      const atParent = (suffix) => path.join(parent, `${base}${suffix}`);
+      return { kind: "linux-cli", buildRoot: parent, installDir: live, live, staging: atParent(".staging"), prev: atParent(".prev"), failed: atParent(".failed") };
+    }
+    const atCli = (name) => path.join(buildRoot, name);
+    return { kind: "linux-cli", buildRoot, installDir: atCli("cli"), live: atCli("cli"), staging: atCli("cli.staging"), prev: atCli("cli.prev"), failed: atCli("cli.failed") };
+  }
   const at = (name) => path.join(buildRoot, name);
-  return { buildRoot, live: at("Octopus.app"), staging: at("Octopus.staging.app"), prev: at("Octopus.prev.app"), failed: at("Octopus.failed.app") };
-}
-const installation = (bundle) => path.join(bundle, "Contents", "Resources", "app");
-const runtimeBinary = (bundle) => path.join(installation(bundle), "bin", "octopus");
-
-function buildInfo(bundle) {
-  try { return JSON.parse(fs.readFileSync(path.join(installation(bundle), "build-info.json"), "utf8")); } catch { return null; }
+  return { kind: "macos-app", buildRoot, live: at("Octopus.app"), staging: at("Octopus.staging.app"), prev: at("Octopus.prev.app"), failed: at("Octopus.failed.app") };
 }
 
-function requireBundle(bundle) {
-  if (!fs.statSync(bundle, { throwIfNoEntry: false })?.isDirectory() || !buildInfo(bundle)) {
+const isCliLayout = (layout) => layout?.kind === "linux-cli";
+
+function isStandaloneCliTarget(layout) {
+  if (!isCliLayout(layout)) return false;
+  if (fs.existsSync(layout.live)) {
+    return resolveCliBundlePaths(layout.live).mode === "standalone";
+  }
+  return Boolean(layout.installDir)
+    && normalizeFsPath(layout.live) !== normalizeFsPath(path.join(appRoot, "build", "cli"));
+}
+
+function resolveCliBundlePaths(bundle) {
+  const standaloneCli = path.join(bundle, "app", "build", "cli");
+  const standaloneReceipt = path.join(standaloneCli, "runtime", "runtime-build-receipt.json");
+  const standaloneShared = path.join(standaloneCli, "shared.cjs");
+  if (fs.existsSync(standaloneReceipt) || fs.existsSync(standaloneShared) || fs.existsSync(standaloneCli)) {
+    return {
+      mode: "standalone",
+      cliDir: standaloneCli,
+      runtimeRoot: path.join(standaloneCli, "runtime"),
+      electronDir: path.join(bundle, "app", "electron"),
+      launcher: path.join(bundle, "octopus"),
+      sharedEntry: standaloneShared,
+    };
+  }
+  return {
+    mode: "checkout",
+    cliDir: bundle,
+    runtimeRoot: path.join(bundle, "runtime"),
+    electronDir: fs.existsSync(path.join(bundle, "electron")) ? path.join(bundle, "electron") : path.join(appRoot, "electron"),
+    launcher: fs.existsSync(path.join(bundle, "octopus")) ? path.join(bundle, "octopus") : path.join(repoRoot, "octopus"),
+    sharedEntry: path.join(bundle, "shared.cjs"),
+  };
+}
+
+function cliReceipt(bundle) {
+  try {
+    const receiptPath = path.join(resolveCliBundlePaths(bundle).runtimeRoot, "runtime-build-receipt.json");
+    const parsed = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || parsed.schema !== "octopus.cli_runtime_distribution") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isCliBundle(bundle, layout = null) {
+  if (isCliLayout(layout)) return true;
+  if (fs.existsSync(path.join(bundle, "Contents", "Resources", "app", "build-info.json"))) return false;
+  return cliReceipt(bundle) !== null;
+}
+
+const installation = (bundle, layout = null) => (
+  isCliBundle(bundle, layout)
+    ? resolveCliBundlePaths(bundle).runtimeRoot
+    : path.join(bundle, "Contents", "Resources", "app")
+);
+const electronRoot = (bundle, layout = null) => (
+  isCliBundle(bundle, layout)
+    ? resolveCliBundlePaths(bundle).electronDir
+    : path.join(installation(bundle, layout), "electron")
+);
+const runtimeBinary = (bundle, layout = null) => path.join(installation(bundle, layout), "bin", "octopus");
+
+function buildInfo(bundle, layout = null) {
+  if (!isCliLayout(layout)) {
+    try {
+      const macInfo = JSON.parse(fs.readFileSync(path.join(bundle, "Contents", "Resources", "app", "build-info.json"), "utf8"));
+      if (macInfo && typeof macInfo === "object") return macInfo;
+    } catch {}
+  }
+  const receipt = cliReceipt(bundle);
+  if (!receipt) return null;
+  return {
+    schema: receipt.schema,
+    schema_version: receipt.schema_version ?? 1,
+    kind: "linux-cli",
+    package_version: receipt.package_version ?? null,
+    platform: receipt.platform ?? null,
+    architecture: receipt.architecture ?? null,
+    target: receipt.target ?? null,
+    revision: receipt.revision ?? receipt.package_version ?? null,
+    modifiedSource: typeof receipt.modifiedSource === "boolean" ? receipt.modifiedSource : false,
+    built_at_unix_ms: receipt.built_at_unix_ms ?? null,
+    binaries_count: Array.isArray(receipt.binaries) ? receipt.binaries.length : 0,
+  };
+}
+
+function liveBundleIdentity(layout) {
+  const marker = isCliLayout(layout)
+    ? path.join(resolveCliBundlePaths(layout.live).runtimeRoot, "runtime-build-receipt.json")
+    : path.join(installation(layout.live, layout), "build-info.json");
+  const stat = fs.statSync(marker, { throwIfNoEntry: false });
+  return stat ? `${stat.ino}:${stat.mtimeMs}:${stat.size}` : null;
+}
+
+function requireBundle(bundle, layout = null) {
+  if (!fs.statSync(bundle, { throwIfNoEntry: false })?.isDirectory() || !buildInfo(bundle, layout)) {
     throw new Error(`${bundle} is not a packaged Octopus bundle`);
   }
   return bundle;
 }
 
 function swapBundles(layout, { dryRun = false } = {}) {
-  requireBundle(layout.staging);
+  requireBundle(layout.staging, layout);
   const hadLive = fs.existsSync(layout.live);
   const plan = [`remove ${layout.prev}`, ...(hadLive ? [`rename ${layout.live} -> ${layout.prev}`] : []), `rename ${layout.staging} -> ${layout.live}`];
   if (dryRun) return { applied: false, plan };
   if (hadLive) {
-    requireBundle(layout.live);
+    requireBundle(layout.live, layout);
     fs.rmSync(layout.prev, { recursive: true, force: true });
     fs.renameSync(layout.live, layout.prev);
   }
   try { fs.renameSync(layout.staging, layout.live); }
   catch (error) { if (hadLive) fs.renameSync(layout.prev, layout.live); throw error; }
-  return { applied: true, plan, revision: buildInfo(layout.live).revision };
+  return { applied: true, plan, revision: buildInfo(layout.live, layout).revision };
 }
 
 function rollbackBundles(layout, { dryRun = false } = {}) {
-  requireBundle(layout.prev);
+  requireBundle(layout.prev, layout);
   const hadLive = fs.existsSync(layout.live);
   const plan = [`remove ${layout.failed}`, ...(hadLive ? [`rename ${layout.live} -> ${layout.failed}`] : []), `rename ${layout.prev} -> ${layout.live}`];
   if (dryRun) return { applied: false, plan };
@@ -51,7 +190,7 @@ function rollbackBundles(layout, { dryRun = false } = {}) {
   if (hadLive) fs.renameSync(layout.live, layout.failed);
   try { fs.renameSync(layout.prev, layout.live); }
   catch (error) { if (hadLive) fs.renameSync(layout.failed, layout.live); throw error; }
-  return { applied: true, plan, revision: buildInfo(layout.live).revision };
+  return { applied: true, plan, revision: buildInfo(layout.live, layout).revision };
 }
 
 function control(home, request, timeoutMs = 5000) {
@@ -75,17 +214,23 @@ function control(home, request, timeoutMs = 5000) {
 const isReady = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
   && Array.isArray(status.interface_failures) && status.interface_failures.length === 0;
 
-async function waitForStatus(home, accept, timeoutMs, pollMs = 250) {
+async function waitForStatus(home, accept, timeoutMs, pollMs = 250, { abortCheck = null } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const status = await control(home, "status", 2000);
     if (accept(status)) return { ok: true, status };
+    if (typeof abortCheck === "function") {
+      const abort = await abortCheck(status);
+      if (abort) return { ok: false, aborted: true, abort, status };
+    }
     if (Date.now() >= deadline) return { ok: false, status };
     await delay(pollMs);
   }
 }
 
 const DEFAULT_LAUNCHD_SERVICE_LABEL = "app.octopus.runtime";
+const DEFAULT_SYSTEMD_SERVICE = "octopus.service";
+const DEFAULT_SYSTEMD_AUTHORITY_SERVICE = "octopus-process-authority.service";
 const DEFAULT_TERMINATE_GRACE_MS = 5_000;
 const DEFAULT_TERMINATE_POLL_MS = 100;
 
@@ -203,6 +348,280 @@ function inspectLaunchdService(layout, home, {
     };
   }
   return { loaded: true, matchesTarget: true, target, ...parsed, reason: null };
+}
+
+function defaultSystemctl(args, { userService = false } = {}) {
+  const fullArgs = userService ? ["--user", ...args] : args;
+  const result = spawnSync("systemctl", fullArgs, { encoding: "utf8", timeout: 15_000 });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error ? result.error.message : null,
+  };
+}
+
+function tokenizeShellWords(text) {
+  const tokens = [];
+  let current = "";
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === "\\" && quote === "\"" && i + 1 < text.length) { current += text[++i]; continue; }
+      if (ch === quote) { quote = null; continue; }
+      current += ch;
+      continue;
+    }
+    if (ch === "\"" || ch === "'") { quote = ch; continue; }
+    if (/\s/.test(ch)) {
+      if (current.length) { tokens.push(current); current = ""; }
+      continue;
+    }
+    if (ch === "\\" && i + 1 < text.length) { current += text[++i]; continue; }
+    current += ch;
+  }
+  if (current.length) tokens.push(current);
+  return tokens;
+}
+
+function parseSystemctlExecStart(raw) {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) return { path: null, argv: [], homeArg: null, bundleArg: null };
+  let execPath = null;
+  let argv = [];
+  if (text.startsWith("{")) {
+    const pathMatch = /\bpath=([^;]+?)(?:\s*;|\s*})/.exec(text);
+    const argvMatch = /\bargv\[\]=([^;]+?)(?:\s*;|\s*})/.exec(text);
+    if (pathMatch) execPath = pathMatch[1].trim();
+    if (argvMatch) argv = tokenizeShellWords(argvMatch[1].trim());
+    if (!execPath && argv.length) execPath = argv[0];
+  } else {
+    argv = tokenizeShellWords(text);
+    execPath = argv[0] ?? null;
+  }
+  let homeArg = null;
+  let bundleArg = null;
+  for (let i = 1; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--home" || arg === "--state-dir") {
+      if (i + 1 < argv.length) { homeArg = argv[++i]; }
+    } else if (arg.startsWith("--home=")) {
+      homeArg = arg.slice("--home=".length);
+    } else if (arg.startsWith("--state-dir=")) {
+      homeArg = arg.slice("--state-dir=".length);
+    } else if (arg === "--bundle") {
+      if (i + 1 < argv.length) { bundleArg = argv[++i]; }
+    } else if (arg.startsWith("--bundle=")) {
+      bundleArg = arg.slice("--bundle=".length);
+    }
+  }
+  return { path: execPath, argv, homeArg, bundleArg };
+}
+
+function parseSystemctlEnvironment(raw) {
+  const env = {};
+  if (typeof raw !== "string" || !raw.trim()) return env;
+  for (const token of tokenizeShellWords(raw)) {
+    const eq = token.indexOf("=");
+    if (eq > 0) env[token.slice(0, eq)] = token.slice(eq + 1);
+  }
+  return env;
+}
+
+function parseSystemctlShow(stdout) {
+  const props = {};
+  for (const line of (typeof stdout === "string" ? stdout : "").split(/\r?\n/)) {
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    props[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+  }
+  const mainPidNum = props.MainPID ? Number(props.MainPID) : 0;
+  const nRestartsNum = props.NRestarts !== undefined && props.NRestarts !== "" ? Number(props.NRestarts) : null;
+  const execMainStatusNum = props.ExecMainStatus !== undefined && props.ExecMainStatus !== "" ? Number(props.ExecMainStatus) : null;
+  const execInfo = parseSystemctlExecStart(props.ExecStart);
+  const envMap = parseSystemctlEnvironment(props.Environment);
+  return {
+    loadState: props.LoadState || null,
+    activeState: props.ActiveState || null,
+    subState: props.SubState || null,
+    unitFileState: props.UnitFileState || null,
+    mainPid: Number.isSafeInteger(mainPidNum) && mainPidNum > 0 ? mainPidNum : null,
+    nRestarts: Number.isSafeInteger(nRestartsNum) && nRestartsNum >= 0 ? nRestartsNum : null,
+    result: props.Result || null,
+    execMainStatus: Number.isSafeInteger(execMainStatusNum) ? execMainStatusNum : null,
+    execStart: execInfo.path,
+    argv: execInfo.argv,
+    homeArg: execInfo.homeArg,
+    bundleArg: execInfo.bundleArg,
+    environment: envMap,
+    octopusHome: execInfo.homeArg || envMap.OCTOPUS_HOME || null,
+    workingDirectory: props.WorkingDirectory || null,
+    fragmentPath: props.FragmentPath || null,
+  };
+}
+
+function inspectSystemdService(layout, home, {
+  platform = process.platform,
+  serviceName = DEFAULT_SYSTEMD_SERVICE,
+  authorityServiceName = DEFAULT_SYSTEMD_AUTHORITY_SERVICE,
+  userService = false,
+  systemctl = defaultSystemctl,
+} = {}) {
+  if (platform !== "linux" && !isCliLayout(layout)) {
+    return { loaded: false, matchesTarget: false, service: serviceName, userService, reason: "non_linux" };
+  }
+  if (!nonempty(serviceName)) {
+    return { loaded: false, matchesTarget: false, service: null, userService, reason: "invalid_service_name" };
+  }
+  const props = "LoadState,ActiveState,SubState,UnitFileState,MainPID,NRestarts,Result,ExecMainStatus,ExecStart,Environment,WorkingDirectory,FragmentPath";
+  const result = systemctl(["show", serviceName, "--no-pager", `--property=${props}`], { userService });
+  if (!result || result.status !== 0) {
+    return {
+      loaded: false,
+      matchesTarget: false,
+      service: serviceName,
+      userService,
+      reason: result?.error ? `systemctl_error: ${result.error}` : (lastLines(result ?? {}) || "systemctl_failed"),
+    };
+  }
+  const parsed = parseSystemctlShow(result.stdout);
+  let authorityService = null;
+  if (nonempty(authorityServiceName)) {
+    const authRes = systemctl(["show", authorityServiceName, "--no-pager", "--property=LoadState,ActiveState,SubState,MainPID"], { userService: false });
+    if (authRes && authRes.status === 0) {
+      const authParsed = parseSystemctlShow(authRes.stdout);
+      authorityService = {
+        service: authorityServiceName,
+        loaded: authParsed.loadState === "loaded",
+        loadState: authParsed.loadState,
+        activeState: authParsed.activeState,
+        subState: authParsed.subState,
+        pid: authParsed.mainPid,
+      };
+    } else {
+      authorityService = {
+        service: authorityServiceName,
+        loaded: false,
+        activeState: "unknown",
+        reason: authRes?.error || lastLines(authRes ?? {}) || "systemctl_failed",
+      };
+    }
+  }
+  if (parsed.loadState !== "loaded") {
+    return {
+      loaded: false,
+      matchesTarget: false,
+      service: serviceName,
+      userService,
+      loadState: parsed.loadState,
+      activeState: parsed.activeState,
+      subState: parsed.subState,
+      unitFileState: parsed.unitFileState,
+      authorityService,
+      reason: parsed.loadState === "not-found" ? "not_found" : "not_loaded",
+    };
+  }
+  const expectedHome = normalizeFsPath(home);
+  if (parsed.octopusHome && normalizeFsPath(parsed.octopusHome) !== expectedHome) {
+    return {
+      loaded: true,
+      matchesTarget: false,
+      service: serviceName,
+      userService,
+      ...parsed,
+      pid: parsed.mainPid,
+      authorityService,
+      reason: `systemd service OCTOPUS_HOME (${parsed.octopusHome}) does not match ${home}`,
+    };
+  }
+  const expectedLive = normalizeFsPath(layout.live);
+  const cliPaths = resolveCliBundlePaths(layout.live);
+  const expectedRuntimeRoot = normalizeFsPath(cliPaths.runtimeRoot);
+  const expectedRuntimeBin = normalizeFsPath(runtimeBinary(layout.live, layout));
+  const expectedLauncher = normalizeFsPath(cliPaths.launcher);
+  const expectedRepoLauncher = normalizeFsPath(path.join(repoRoot, "octopus"));
+  const isCheckoutLive = normalizeFsPath(layout.live) === normalizeFsPath(path.join(appRoot, "build", "cli"));
+  if (parsed.bundleArg) {
+    const normBundle = normalizeFsPath(parsed.bundleArg);
+    const bundleOk = normBundle === expectedLive || normBundle === expectedRuntimeRoot
+      || normBundle.startsWith(`${expectedLive}${path.sep}`);
+    if (!bundleOk) {
+      return {
+        loaded: true,
+        matchesTarget: false,
+        service: serviceName,
+        userService,
+        ...parsed,
+        pid: parsed.mainPid,
+        authorityService,
+        reason: `systemd service --bundle (${parsed.bundleArg}) does not match ${layout.live}`,
+      };
+    }
+  } else if (parsed.execStart) {
+    const normExec = normalizeFsPath(parsed.execStart);
+    const execOk = normExec === expectedRuntimeBin || normExec === expectedLauncher
+      || normExec.startsWith(`${expectedLive}${path.sep}`)
+      || (isCheckoutLive && normExec === expectedRepoLauncher);
+    if (!execOk) {
+      return {
+        loaded: true,
+        matchesTarget: false,
+        service: serviceName,
+        userService,
+        ...parsed,
+        pid: parsed.mainPid,
+        authorityService,
+        reason: `systemd service ExecStart (${parsed.execStart}) does not target ${layout.live}`,
+      };
+    }
+  }
+  return {
+    loaded: true,
+    matchesTarget: true,
+    service: serviceName,
+    userService,
+    ...parsed,
+    pid: parsed.mainPid,
+    authorityService,
+    reason: null,
+  };
+}
+
+const isPermissionError = (text) => /interactive authentication required|access denied|permission denied|polkit|authentication is required|must be root|operation not permitted/i.test(text || "");
+
+function isSystemdUnitFailedOrCrashLooping(unit) {
+  if (!unit || (!unit.loaded && unit.loadState !== "loaded")) return null;
+  const label = unit.service || "systemd unit";
+  if (unit.activeState === "failed" || unit.subState === "failed") {
+    return `systemd unit ${label} entered failed state (${unit.activeState}/${unit.subState}${unit.result ? `, result=${unit.result}` : ""})`;
+  }
+  if (unit.subState === "auto-restart") {
+    return `systemd unit ${label} entered crash-loop (${unit.activeState}/${unit.subState}${Number.isSafeInteger(unit.nRestarts) ? `, restarts=${unit.nRestarts}` : ""})`;
+  }
+  if (Number.isSafeInteger(unit.nRestarts) && unit.nRestarts >= 1) {
+    return `systemd unit ${label} restarted unexpectedly (NRestarts=${unit.nRestarts}${unit.result ? `, result=${unit.result}` : ""})`;
+  }
+  return null;
+}
+
+function restartSystemdService(serviceName, { userService = false, systemctl = defaultSystemctl } = {}) {
+  const result = systemctl(["restart", serviceName], { userService });
+  if (result && result.status === 0) {
+    return { ok: true, service: serviceName, userService, permissionDenied: false };
+  }
+  const detail = result?.error || lastLines(result ?? {}) || `exit status ${result?.status}`;
+  const permissionDenied = isPermissionError(detail);
+  return {
+    ok: false,
+    service: serviceName,
+    userService,
+    status: result?.status ?? null,
+    permissionDenied,
+    error: permissionDenied
+      ? `systemctl restart ${serviceName} refused due to missing privileges (safe-self-update never invokes sudo automatically): ${detail}`
+      : `systemctl restart ${serviceName} failed: ${detail}`,
+  };
 }
 
 async function terminateProcess(pid, {
@@ -359,8 +778,8 @@ async function recoverRolledBackRuntime(layout, home, { before, first, current, 
   };
 }
 
-function runtimeEnv(bundle, home) {
-  const root = installation(bundle), user = os.userInfo().username;
+function runtimeEnv(bundle, home, layout = null) {
+  const root = installation(bundle, layout), user = os.userInfo().username;
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   return {
     HOME: os.homedir(), USER: user, LOGNAME: user, TMPDIR: os.tmpdir(),
@@ -369,25 +788,26 @@ function runtimeEnv(bundle, home) {
     OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE: path.join(codexHome, "auth.lock"),
     PATH: [path.join(root, "bin"), "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":"),
     OCTOPUS_HOME: home, OCTOPUS_INSTALLATION_ROOT: root,
-    OCTOPUS_SOURCE_REGISTRY: path.join(root, "registry"), OCTOPUS_RUNTIME_BIN: runtimeBinary(bundle),
+    OCTOPUS_SOURCE_REGISTRY: path.join(root, "registry"), OCTOPUS_RUNTIME_BIN: runtimeBinary(bundle, layout),
   };
 }
 
-function octopus(bundle, home, args, options = {}) {
-  return spawnSync(runtimeBinary(bundle), args, { env: runtimeEnv(bundle, home), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+function octopus(bundle, home, args, options = {}, layout = null) {
+  return spawnSync(runtimeBinary(bundle, layout), args, { env: runtimeEnv(bundle, home, layout), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
 }
 
-async function readClientTurns(bundle, home) {
-  const root = installation(bundle);
-  const { createProjectionStore } = require(path.join(root, "electron", "projection.cjs"));
-  const { projectionReadRequest } = require(path.join(root, "electron", "projectionReadContract.cjs"));
+async function readClientTurns(bundle, home, layout = null) {
+  const root = installation(bundle, layout);
+  const electronDir = electronRoot(bundle, layout);
+  const { createProjectionStore } = require(path.join(electronDir, "projection.cjs"));
+  const { projectionReadRequest } = require(path.join(electronDir, "projectionReadContract.cjs"));
   const store = createProjectionStore({
     resolveRepoRoot: () => repoRoot,
     sourceRegistry: () => path.join(root, "registry"),
     localPackageRegistry: () => path.join(root, "local-packages", "registry"),
     localPackageLibrary: () => path.join(root, "local-packages"),
     octopusHome: () => home,
-    projectEePolicies: async () => JSON.parse(octopus(bundle, home, ["project-ee-policies"]).stdout),
+    projectEePolicies: async () => JSON.parse(octopus(bundle, home, ["project-ee-policies"], {}, layout).stdout),
   });
   try {
     const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
@@ -410,7 +830,7 @@ async function readClientTurns(bundle, home) {
   } finally { await store.close?.(); }
 }
 
-const readChatTurns = async (bundle, home) => (await readClientTurns(bundle, home)).chats;
+const readChatTurns = async (bundle, home, layout = null) => (await readClientTurns(bundle, home, layout)).chats;
 
 const TURN_DISPATCH_LABEL = "provider.transport.dispatch";
 const TURN_STARTED_LABEL = "turn.started";
@@ -581,8 +1001,8 @@ async function readLedgerTurns(home, { sinceUnixMs = 0, skipRuns = [] } = {}) {
   }));
 }
 
-async function readTurnsInFlight(bundle, home, { sinceUnixMs = 0 } = {}) {
-  const { chats, clientRunIds } = await readClientTurns(bundle, home);
+async function readTurnsInFlight(bundle, home, { sinceUnixMs = 0, layout = null } = {}) {
+  const { chats, clientRunIds } = await readClientTurns(bundle, home, layout);
   const background = await readLedgerTurns(home, { sinceUnixMs, skipRuns: clientRunIds });
   return [...chats.map((chat) => ({ ...chat, source: "client" })), ...background];
 }
@@ -600,30 +1020,243 @@ function newInterfaceFailures(before, after) {
 
 const lastLines = (result) => `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ");
 
-function buildStaging(layout, { dryRun = false } = {}) {
-  const { node } = JSON.parse(fs.readFileSync(path.join(appRoot, "native", "runtime.json"), "utf8"));
-  const env = { ...process.env, OCTOPUS_PACKAGE_BUNDLE: layout.staging,
-    OCTOPUS_NATIVE_NODE_HEADERS: process.env.OCTOPUS_NATIVE_NODE_HEADERS || path.join(layout.buildRoot, `node-v${node}`, "include", "node") };
-  const command = [process.execPath, path.join(__dirname, "package-macos.cjs")];
-  if (dryRun) return { applied: false, command, bundle: layout.staging };
-  const identity = () => {
-    const stat = fs.statSync(path.join(installation(layout.live), "build-info.json"), { throwIfNoEntry: false });
-    return stat ? `${stat.ino}:${stat.mtimeMs}` : null;
-  };
-  const before = identity();
-  const result = spawnSync(command[0], command.slice(1), { cwd: repoRoot, env, stdio: ["ignore", 2, 2] });
-  if (result.status !== 0) throw new Error(`packaging failed with status ${result.status}; ${layout.live} was not touched`);
-  if (identity() !== before) throw new Error(`${layout.live} changed during the staging build`);
-  return { applied: true, bundle: layout.staging, build: buildInfo(layout.staging), live_untouched: true };
+const GIB = 1024 ** 3;
+const DEFAULT_MIN_FREE_GB = 15;
+const roundGb = (bytes) => Math.round((bytes / GIB) * 100) / 100;
+
+function resolveMinFreeGb(rawFlag, envValue = process.env.OCTOPUS_SELF_UPDATE_MIN_FREE_GB) {
+  const chosen = rawFlag !== undefined ? rawFlag : envValue;
+  if (chosen === undefined || chosen === null || chosen === "") return DEFAULT_MIN_FREE_GB;
+  if (typeof chosen === "boolean") {
+    throw Object.assign(new Error("--min-free-gb requires a positive number of GiB"), { usage: true });
+  }
+  const parsed = Number(chosen);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 10_000) {
+    throw Object.assign(new Error("--min-free-gb / OCTOPUS_SELF_UPDATE_MIN_FREE_GB must be a positive number up to 10000 GiB"), { usage: true });
+  }
+  return parsed;
 }
 
-function packageRoots(bundle, home) {
-  const root = installation(bundle), sourceRegistryRoot = path.join(root, "local-packages", "registry");
-  const { createPackageStoragePublisher } = require(path.join(root, "electron", "packageStorage.cjs"));
+function existingAncestor(targetPath) {
+  let cursor = path.resolve(targetPath);
+  for (;;) {
+    if (fs.existsSync(cursor)) return cursor;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return cursor;
+    cursor = parent;
+  }
+}
+
+function checkBuildDiskSpace(targetPath, { minFreeGb = DEFAULT_MIN_FREE_GB, statfs = fs.statfsSync } = {}) {
+  const requiredGb = resolveMinFreeGb(minFreeGb, null);
+  const probePath = existingAncestor(targetPath);
+  const stats = statfs(probePath);
+  const availableBytes = Number(stats?.bavail) * Number(stats?.bsize);
+  if (!Number.isFinite(availableBytes) || availableBytes < 0) {
+    throw new Error(`unable to determine available disk space for ${probePath}`);
+  }
+  const requiredBytes = Math.ceil(requiredGb * GIB);
+  return {
+    ok: availableBytes >= requiredBytes,
+    path: probePath,
+    available_bytes: availableBytes,
+    available_gb: roundGb(availableBytes),
+    required_bytes: requiredBytes,
+    required_gb: roundGb(requiredBytes),
+  };
+}
+
+function buildStaging(layout, { dryRun = false, minFreeGb = undefined, cliTarget = null, statfs = fs.statfsSync, spawn = spawnSync, populateStandalone = null } = {}) {
+  const disk = checkBuildDiskSpace(layout.buildRoot, { minFreeGb: resolveMinFreeGb(minFreeGb), statfs });
+  let env;
+  let command;
+  const standaloneCli = isStandaloneCliTarget(layout);
+  if (isCliLayout(layout)) {
+    const cliBuildDir = standaloneCli ? path.join(layout.staging, "app", "build", "cli") : layout.staging;
+    env = { ...process.env, OCTOPUS_CLI_BUILD_DIR: cliBuildDir };
+    command = [process.execPath, path.join(__dirname, "build-cli.cjs"), "--runtime", ...(nonempty(cliTarget) ? [`--target=${cliTarget}`] : [])];
+  } else {
+    const { node } = JSON.parse(fs.readFileSync(path.join(appRoot, "native", "runtime.json"), "utf8"));
+    env = { ...process.env, OCTOPUS_PACKAGE_BUNDLE: layout.staging,
+      OCTOPUS_NATIVE_NODE_HEADERS: process.env.OCTOPUS_NATIVE_NODE_HEADERS || path.join(layout.buildRoot, `node-v${node}`, "include", "node") };
+    command = [process.execPath, path.join(__dirname, "package-macos.cjs")];
+  }
+  if (dryRun) return { ok: disk.ok, applied: false, command, bundle: layout.staging, ...(isCliLayout(layout) ? { standalone: standaloneCli } : {}), disk };
+  if (!disk.ok) {
+    throw new Error(
+      `insufficient free disk space on ${disk.path}: ${disk.available_gb} GiB available, ${disk.required_gb} GiB required; `
+      + "run 'node app/scripts/safe-self-update.cjs prune' to reclaim rebuildable artifacts or adjust --min-free-gb",
+    );
+  }
+  const before = liveBundleIdentity(layout);
+  if (standaloneCli) {
+    fs.rmSync(layout.staging, { recursive: true, force: true });
+    fs.mkdirSync(path.join(layout.staging, "app", "build", "cli"), { recursive: true });
+  }
+  const result = spawn(command[0], command.slice(1), { cwd: repoRoot, env, stdio: ["ignore", 2, 2] });
+  if (result.status !== 0) throw new Error(`packaging failed with status ${result.status}; ${layout.live} was not touched`);
+  if (standaloneCli) {
+    const populate = populateStandalone ?? require("./release-linux.cjs").populateStandaloneLinuxDir;
+    populate(layout.staging, { appRoot, repoRoot, copyCliRuntime: false });
+  }
+  if (liveBundleIdentity(layout) !== before) throw new Error(`${layout.live} changed during the staging build`);
+  const staged = buildInfo(layout.staging, layout);
+  if (!staged) throw new Error(`staging build finished without a readable Octopus bundle at ${layout.staging}`);
+  return { applied: true, bundle: layout.staging, ...(isCliLayout(layout) ? { standalone: standaloneCli } : {}), build: staged, live_untouched: true, disk };
+}
+
+function pathOverlaps(candidate, protectedPath) {
+  const a = normalizeFsPath(candidate);
+  const b = normalizeFsPath(protectedPath);
+  return a === b || a.startsWith(`${b}${path.sep}`) || b.startsWith(`${a}${path.sep}`);
+}
+
+function entryBytes(rootPath) {
+  const seenInodes = new Set();
+  let total = 0;
+  const walk = (current) => {
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(current)) walk(path.join(current, name));
+      return;
+    }
+    if (stat.isFile()) {
+      const key = `${stat.dev}:${stat.ino}`;
+      if (!seenInodes.has(key)) {
+        seenInodes.add(key);
+        total += stat.size;
+      }
+    }
+  };
+  walk(rootPath);
+  return total;
+}
+
+function findProtectedOverlap(resolvedPath, protectedRoots) {
+  const normalized = normalizeFsPath(resolvedPath);
+  for (const guard of protectedRoots) {
+    const guardNorm = normalizeFsPath(guard.path);
+    const isStrictChildOfRepoOrBuild = (guard.label === "repo_root" || guard.label === "build_root")
+      && normalized.startsWith(`${guardNorm}${path.sep}`);
+    if (isStrictChildOfRepoOrBuild) continue;
+    if (pathOverlaps(normalized, guardNorm)) {
+      return guard;
+    }
+  }
+  return null;
+}
+
+function hasCargoWorkspace(rootDir) {
+  return Boolean(fs.statSync(path.join(rootDir, "Cargo.toml"), { throwIfNoEntry: false })?.isFile());
+}
+
+function pruneBuildArtifacts(layout, home, {
+  dryRun = false,
+  includePrev = false,
+  includeCli = false,
+  targetDir = undefined,
+  sourceRoot = repoRoot,
+} = {}) {
+  const effectiveSourceRoot = path.resolve(sourceRoot);
+  const protectedRoots = [
+    { label: "live_bundle", path: layout.live },
+    { label: "octopus_home", path: home },
+    { label: "repo_root", path: effectiveSourceRoot },
+    { label: "build_root", path: layout.buildRoot },
+  ];
+  const skipped = [];
+  if (includeCli && isCliLayout(layout)) {
+    skipped.push({ label: "cli_build", path: path.resolve(layout.live), reason: "protected_live_bundle" });
+  }
+  const hasExplicitTargetDir = targetDir !== undefined;
+  let rustTargetCandidate = null;
+  if (hasExplicitTargetDir) {
+    if (targetDir) {
+      rustTargetCandidate = { label: "rust_target", path: path.resolve(targetDir) };
+    }
+  } else {
+    const defaultTarget = path.resolve(effectiveSourceRoot, "target");
+    const overlap = findProtectedOverlap(defaultTarget, protectedRoots);
+    if (overlap) {
+      skipped.push({ label: "rust_target", path: defaultTarget, reason: `protected_${overlap.label}` });
+    } else if (!hasCargoWorkspace(effectiveSourceRoot)) {
+      skipped.push({ label: "rust_target", path: defaultTarget, reason: "no_cargo_workspace" });
+    } else {
+      rustTargetCandidate = { label: "rust_target", path: defaultTarget };
+    }
+  }
+  const targets = [
+    { label: "staging_bundle", path: layout.staging },
+    { label: "failed_bundle", path: layout.failed },
+    ...(rustTargetCandidate ? [rustTargetCandidate] : []),
+    ...(includePrev ? [{ label: "previous_bundle", path: layout.prev }] : []),
+    ...(includeCli && !isCliLayout(layout) ? [{ label: "cli_build", path: path.join(layout.buildRoot, "cli") }] : []),
+  ];
+  const actionable = [];
+  const seenTargets = new Set();
+  for (const item of targets) {
+    const resolved = path.resolve(item.path);
+    if (resolved === path.parse(resolved).root) {
+      throw new Error(`refusing to prune filesystem root for ${item.label}: ${resolved}`);
+    }
+    const normalized = normalizeFsPath(resolved);
+    if (seenTargets.has(normalized)) continue;
+    seenTargets.add(normalized);
+    const overlap = findProtectedOverlap(resolved, protectedRoots);
+    if (overlap) {
+      throw new Error(`refusing to prune ${item.label} (${resolved}): overlaps protected ${overlap.label} (${overlap.path})`);
+    }
+    const stat = fs.lstatSync(resolved, { throwIfNoEntry: false });
+    if (!stat) {
+      skipped.push({ label: item.label, path: resolved, reason: "absent" });
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`refusing to prune symlinked ${item.label}: ${resolved}`);
+    }
+    actionable.push({ label: item.label, path: resolved, bytes: entryBytes(resolved) });
+  }
+  if (dryRun) {
+    const wouldReclaim = actionable.reduce((sum, entry) => sum + entry.bytes, 0);
+    return {
+      ok: true,
+      applied: false,
+      dry_run: true,
+      would_reclaim_bytes: wouldReclaim,
+      reclaimed_bytes: 0,
+      candidates: actionable,
+      skipped,
+    };
+  }
+  const beforeLive = liveBundleIdentity(layout);
+  const removed = [];
+  let reclaimedBytes = 0;
+  for (const entry of actionable) {
+    fs.rmSync(entry.path, { recursive: true, force: false });
+    removed.push(entry);
+    reclaimedBytes += entry.bytes;
+  }
+  if (liveBundleIdentity(layout) !== beforeLive) {
+    throw new Error(`${layout.live} changed during prune`);
+  }
+  return {
+    ok: true,
+    applied: true,
+    reclaimed_bytes: reclaimedBytes,
+    removed,
+    skipped,
+    live_untouched: true,
+  };
+}
+
+function packageRoots(bundle, home, layout = null) {
+  const root = installation(bundle, layout), sourceRegistryRoot = path.join(root, "local-packages", "registry");
+  const { createPackageStoragePublisher } = require(path.join(electronRoot(bundle, layout), "packageStorage.cjs"));
   return { sourceRegistryRoot, activeRegistryRoot: path.join(home, "registry"), libraryRoot: path.join(root, "local-packages"),
     stateRoot: path.join(home, "client", "package-state"), publication: createPackageStoragePublisher(sourceRegistryRoot, root) };
 }
-const localPackages = (bundle) => require(path.join(installation(bundle), "electron", "localPackages.cjs"));
+const localPackages = (bundle, layout = null) => require(path.join(electronRoot(bundle, layout), "localPackages.cjs"));
 const CHAT_CLIENT_PACKAGE = "world_operator_chat";
 
 function packageAction(entry) {
@@ -717,8 +1350,158 @@ async function smokeTest(bundle, packageIds) {
   return rows;
 }
 
-async function verifyStaging(layout, home, { smoke = true, allowModifiedSource = false, smokePackages = [CHAT_CLIENT_PACKAGE, "world_provider_codex"] } = {}) {
-  const bundle = requireBundle(layout.staging), checks = [];
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function isValidRuntimeUsageOutput(result) {
+  if (!result || result.error || result.signal) return false;
+  if (result.status === 0) return true;
+  if (result.status === 2) {
+    const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    return /\boctopus\b/i.test(text) && /\bup\b/.test(text) && /\bdoctor\b/.test(text);
+  }
+  return false;
+}
+
+function checkCliLayoutParity(layout, systemd = null) {
+  const stagingPaths = resolveCliBundlePaths(layout.staging);
+  if (fs.existsSync(layout.live) && buildInfo(layout.live, layout)) {
+    const livePaths = resolveCliBundlePaths(layout.live);
+    if (livePaths.mode !== stagingPaths.mode) {
+      return {
+        ok: false,
+        detail: `staging layout (${stagingPaths.mode}) does not match live install layout (${livePaths.mode})`,
+      };
+    }
+  }
+  if (systemd?.loaded && systemd?.matchesTarget && nonempty(systemd.execStart)) {
+    const normLive = normalizeFsPath(layout.live);
+    const normExec = normalizeFsPath(systemd.execStart);
+    if (normExec.startsWith(`${normLive}${path.sep}`)) {
+      const relExec = path.relative(normLive, normExec);
+      const stagedExec = path.join(layout.staging, relExec);
+      const stat = fs.statSync(stagedExec, { throwIfNoEntry: false });
+      if (!stat || !stat.isFile() || !(stat.mode & 0o111)) {
+        return {
+          ok: false,
+          detail: `staged bundle is missing executable ExecStart target ${relExec}`,
+        };
+      }
+    }
+  }
+  return {
+    ok: true,
+    detail: `mode=${stagingPaths.mode}${systemd?.loaded && systemd?.matchesTarget && nonempty(systemd.execStart) ? `, ExecStart parity ok` : ""}`,
+  };
+}
+
+function verifyCliStaging(layout, home, {
+  spawn = spawnSync,
+  platform = "linux",
+  serviceName = DEFAULT_SYSTEMD_SERVICE,
+  authorityServiceName = DEFAULT_SYSTEMD_AUTHORITY_SERVICE,
+  userService = false,
+  systemctl = defaultSystemctl,
+} = {}) {
+  const bundle = requireBundle(layout.staging, layout), checks = [];
+  const check = (name, ok, detail = "") => checks.push({ name, ok, detail });
+  const cliPaths = resolveCliBundlePaths(bundle);
+  const receipt = cliReceipt(bundle);
+  const info = buildInfo(bundle, layout);
+  const systemd = inspectSystemdService(layout, home, { platform, serviceName, authorityServiceName, userService, systemctl });
+  check("receipt_schema", Boolean(receipt && receipt.schema === "octopus.cli_runtime_distribution" && receipt.schema_version === 1
+    && nonempty(receipt.package_version) && Array.isArray(receipt.binaries) && receipt.binaries.length > 0),
+    receipt ? `schema=${receipt.schema} v${receipt.schema_version} package=${receipt.package_version} binaries=${receipt.binaries?.length ?? 0}` : "missing receipt");
+  check("platform", receipt?.platform === "linux", `receipt platform=${receipt?.platform ?? "unknown"}`);
+  check("shared_entry", Boolean(fs.statSync(cliPaths.sharedEntry, { throwIfNoEntry: false })?.isFile()), cliPaths.sharedEntry);
+  if (cliPaths.mode === "standalone") {
+    const launcherStat = fs.statSync(cliPaths.launcher, { throwIfNoEntry: false });
+    const cliIndex = path.join(bundle, "app", "cli", "index.cjs");
+    const cliIndexStat = fs.statSync(cliIndex, { throwIfNoEntry: false });
+    const launcherOk = Boolean(launcherStat?.isFile() && (launcherStat.mode & 0o111) && cliIndexStat?.isFile());
+    check("standalone_launcher", launcherOk, launcherOk
+      ? `${cliPaths.launcher} + app/cli/index.cjs`
+      : `missing executable standalone launcher (${cliPaths.launcher}) or app/cli/index.cjs`);
+  }
+  const parity = checkCliLayoutParity(layout, systemd);
+  check("layout_parity", parity.ok, parity.detail);
+  const permDirs = [...new Set([bundle, cliPaths.cliDir, cliPaths.runtimeRoot, path.join(cliPaths.runtimeRoot, "bin")])]
+    .filter((dir) => fs.existsSync(dir));
+  const badDirs = permDirs.filter((dir) => (fs.statSync(dir).mode & 0o777) !== 0o755)
+    .map((dir) => `${dir} (0${(fs.statSync(dir).mode & 0o777).toString(8)})`);
+  check("directory_permissions", badDirs.length === 0, badDirs.length ? `expected 0755: ${badDirs.join(", ")}` : `${permDirs.length} directories 0755`);
+  const binaryErrors = [];
+  const seenPaths = new Set();
+  for (const entry of Array.isArray(receipt?.binaries) ? receipt.binaries : []) {
+    if (!nonempty(entry?.path) || !nonempty(entry?.sha256) || !Number.isSafeInteger(entry?.bytes)) {
+      binaryErrors.push("malformed receipt binary entry");
+      continue;
+    }
+    seenPaths.add(entry.path);
+    const absPath = path.join(cliPaths.runtimeRoot, entry.path);
+    const stat = fs.statSync(absPath, { throwIfNoEntry: false });
+    if (!stat || !stat.isFile()) {
+      binaryErrors.push(`${entry.path}: missing`);
+      continue;
+    }
+    if (stat.size !== entry.bytes) {
+      binaryErrors.push(`${entry.path}: size ${stat.size} != ${entry.bytes}`);
+      continue;
+    }
+    if ((stat.mode & 0o755) !== 0o755) {
+      binaryErrors.push(`${entry.path}: mode 0${(stat.mode & 0o777).toString(8)} missing 0755`);
+      continue;
+    }
+    const actualHash = sha256File(absPath);
+    if (actualHash !== entry.sha256) {
+      binaryErrors.push(`${entry.path}: sha256 mismatch`);
+    }
+  }
+  check("receipt_binaries", binaryErrors.length === 0, binaryErrors.length ? binaryErrors.join("; ") : `${seenPaths.size} binaries verified`);
+  const requiredCore = ["bin/octopus", "bin/octopus-linux-process-authority"];
+  const missingCore = requiredCore.filter((rel) => !seenPaths.has(rel) || !fs.statSync(path.join(cliPaths.runtimeRoot, rel), { throwIfNoEntry: false })?.isFile());
+  check("core_binaries", missingCore.length === 0, missingCore.length ? `missing ${missingCore.join(", ")}` : requiredCore.join(", "));
+  const bin = runtimeBinary(bundle, layout);
+  const env = runtimeEnv(bundle, home, layout);
+  const runtimeHelp = spawn(bin, ["--help"], { env, encoding: "utf8", timeout: 15_000 });
+  const runtimeHelpOk = isValidRuntimeUsageOutput(runtimeHelp);
+  if (cliPaths.mode === "standalone") {
+    const launcherHelp = spawn(cliPaths.launcher, ["--help"], {
+      env: { ...env, OCTOPUS_NODE: process.env.OCTOPUS_NODE || process.execPath },
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    const launcherHelpOk = Boolean(launcherHelp && !launcherHelp.error && !launcherHelp.signal && launcherHelp.status === 0);
+    const helpDetail = !launcherHelpOk
+      ? `standalone launcher --help failed (status=${launcherHelp?.status ?? "err"}): ${launcherHelp?.error ? launcherHelp.error.message : lastLines(launcherHelp ?? {})}`
+      : !runtimeHelpOk
+        ? `runtime bin/octopus usage check failed (status=${runtimeHelp?.status ?? "err"}): ${runtimeHelp?.error ? runtimeHelp.error.message : lastLines(runtimeHelp ?? {})}`
+        : `launcher --help ok (0); runtime bin/octopus usage ok (${runtimeHelp.status})`;
+    check("cli_help", launcherHelpOk && runtimeHelpOk, helpDetail);
+  } else {
+    check("cli_help", runtimeHelpOk, runtimeHelp?.error ? runtimeHelp.error.message : `status=${runtimeHelp?.status ?? "err"}: ${lastLines(runtimeHelp ?? {})}`);
+  }
+  if (fs.existsSync(path.join(home, "registry"))) {
+    const doctor = spawn(bin, ["doctor"], { env: runtimeEnv(bundle, home, layout), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    check("doctor_home", doctor?.status === 0, doctor?.error ? doctor.error.message : lastLines(doctor ?? {}));
+  }
+  return { ok: checks.every((row) => row.ok), kind: layout.kind, bundle, build: info, checks };
+}
+
+async function verifyStaging(layout, home, {
+  smoke = true,
+  allowModifiedSource = false,
+  smokePackages = [CHAT_CLIENT_PACKAGE, "world_provider_codex"],
+  spawn = spawnSync,
+  platform = "linux",
+  serviceName = DEFAULT_SYSTEMD_SERVICE,
+  authorityServiceName = DEFAULT_SYSTEMD_AUTHORITY_SERVICE,
+  userService = false,
+  systemctl = defaultSystemctl,
+} = {}) {
+  if (isCliLayout(layout)) return verifyCliStaging(layout, home, { spawn, platform, serviceName, authorityServiceName, userService, systemctl });
+  const bundle = requireBundle(layout.staging, layout), checks = [];
   const check = (name, ok, detail = "") => checks.push({ name, ok, detail });
   if (process.platform === "darwin") {
     const signed = spawnSync("codesign", ["--verify", "--deep", "--strict", bundle], { encoding: "utf8" });
@@ -754,21 +1537,47 @@ function positiveMs(value, label) {
 async function restartRuntime(layout, home, options = {}) {
   const { callerRun = null, allowInFlightRuns = [], dryRun = false, force = false, swap = false, rollback = true,
     timeoutMs = 300_000, waitQuietMs = 0, quietWindowMs = waitQuietMs > 0 ? DEFAULT_QUIET_WINDOW_MS : 0,
-    pollIntervalMs = DEFAULT_QUIET_POLL_MS, statusPollMs = 250, readTurns = readTurnsInFlight } = options;
+    pollIntervalMs = DEFAULT_QUIET_POLL_MS, statusPollMs = 250, readTurns = readTurnsInFlight,
+    serviceName = DEFAULT_SYSTEMD_SERVICE, authorityServiceName = DEFAULT_SYSTEMD_AUTHORITY_SERVICE,
+    userService = false, requireAuthority = false, systemctl = defaultSystemctl } = options;
   const waitBudgetMs = nonNegativeMs(waitQuietMs, "waitQuietMs");
   const settleMs = nonNegativeMs(quietWindowMs, "quietWindowMs");
   const pollMs = positiveMs(pollIntervalMs, "pollIntervalMs");
   const statusPoll = positiveMs(statusPollMs, "statusPollMs");
   const before = await control(home, "status");
   if (before?.outcome !== "status") throw new Error(`no runtime answers for Home ${home} (${before?.error}); only a running runtime is restarted`);
-  if (swap) requireBundle(layout.staging);
-  const plan = [...(swap ? swapBundles(layout, { dryRun: true }).plan : []), "restart through the control socket", "wait for a ready successor",
-    rollback ? `on failure: restore ${layout.prev} and recover runtime` : "on failure: report only"];
+  if (swap) requireBundle(layout.staging, layout);
+  const systemd = isCliLayout(layout)
+    ? inspectSystemdService(layout, home, { platform: options.platform ?? "linux", serviceName, authorityServiceName, userService, systemctl })
+    : null;
+  const refreshSystemd = () => (isCliLayout(layout)
+    ? inspectSystemdService(layout, home, { platform: options.platform ?? "linux", serviceName, authorityServiceName, userService, systemctl })
+    : null);
+  const useSystemdRestart = Boolean(systemd?.loaded && systemd?.matchesTarget);
+  const plan = [...(swap ? swapBundles(layout, { dryRun: true }).plan : []),
+    useSystemdRestart ? `restart systemd unit ${serviceName}` : "restart through the control socket",
+    "wait for a ready successor",
+    rollback ? `on failure: restore ${layout.prev} and ${useSystemdRestart ? `restart systemd unit ${serviceName}` : "recover runtime"}` : "on failure: report only"];
   const refuse = (refused, extra = {}) => ({ ok: false, applied: false, refused, plan, ...extra });
   const usable = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
     && sequence(status.started_at_unix_ms) && status.started_at_unix_ms > 0 && sequence(status.pid) && status.pid > 0
     && Array.isArray(status.interface_failures);
   if (!usable(before)) return refuse("runtime_not_ready");
+  if (systemd?.loaded && !systemd.matchesTarget) {
+    return refuse("systemd_service_mismatch", { systemd, error: systemd.reason });
+  }
+  if (isCliLayout(layout) && requireAuthority && systemd?.authorityService?.activeState !== "active") {
+    return refuse("process_authority_inactive", {
+      systemd,
+      error: `${authorityServiceName} is not active (${systemd?.authorityService?.activeState ?? "unknown"})`,
+    });
+  }
+  if (swap && isCliLayout(layout)) {
+    const parity = checkCliLayoutParity(layout, systemd);
+    if (!parity.ok) {
+      return refuse("staging_layout_mismatch", { ...(systemd ? { systemd } : {}), error: parity.detail });
+    }
+  }
   const checkRuntime = async () => {
     const now = await control(home, "status");
     if (now?.outcome !== "status") return refuse("runtime_unreachable", { error: now?.error });
@@ -780,7 +1589,7 @@ async function restartRuntime(layout, home, options = {}) {
   };
   const inspect = async () => {
     const stamp = readTurns === readTurnsInFlight ? ledgerStamp(home) : null;
-    const turns = await readTurns(layout.live, home, { sinceUnixMs: before.started_at_unix_ms });
+    const turns = await readTurns(layout.live, home, { sinceUnixMs: before.started_at_unix_ms, layout });
     if (stamp !== null && ledgerStamp(home) !== stamp) throw transientLedgerError("movement ledger changed during turn inspection");
     return { turns, stamp };
   };
@@ -856,15 +1665,64 @@ async function restartRuntime(layout, home, options = {}) {
       await delay(Math.min(pollMs, remaining, untilSettle));
     }
   }
-  if (dryRun) return { ok: true, applied: false, blocking, plan, runtime: before, ...(waitSummary ?? {}) };
+  if (dryRun) return { ok: true, applied: false, blocking, plan, runtime: before, ...(systemd ? { systemd } : {}), ...(waitSummary ?? {}) };
   if (swap) swapBundles(layout);
   const healthy = (status) => status?.outcome === "status" && status.phase === "ready" && status.stopping === null
     && Array.isArray(status.interface_failures) && newInterfaceFailures(before, status).length === 0;
-  await control(home, "restart");
-  const first = await waitForStatus(home, (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms, timeoutMs, statusPoll);
-  if (first.ok) return { ok: true, applied: true, swapped: swap, previous: before, runtime: first.status, revision: buildInfo(layout.live)?.revision ?? null, ...(waitSummary ?? {}) };
+  if (useSystemdRestart) {
+    const restartRes = restartSystemdService(serviceName, { userService, systemctl });
+    if (!restartRes.ok) {
+      let rolledBack = false;
+      if (swap && rollback && fs.existsSync(layout.prev)) {
+        rollbackBundles(layout);
+        rolledBack = true;
+      }
+      const afterFailedRestart = await control(home, "status", 2000);
+      const stillHealthy = healthy(afterFailedRestart);
+      const afterSystemd = refreshSystemd() ?? systemd;
+      return {
+        ok: false,
+        applied: true,
+        swapped: swap,
+        rolled_back: rolledBack,
+        recovered: stillHealthy,
+        permission_denied: restartRes.permissionDenied === true,
+        error: restartRes.error,
+        systemd: afterSystemd,
+        runtime: afterFailedRestart,
+        ...(waitSummary ?? {}),
+      };
+    }
+  } else {
+    await control(home, "restart");
+  }
+  let lastUnitCheckAt = 0;
+  const unitCheckIntervalMs = Math.min(1000, Math.max(statusPoll, 25));
+  const crashAbortCheck = useSystemdRestart ? () => {
+    const now = Date.now();
+    if (lastUnitCheckAt !== 0 && now - lastUnitCheckAt < unitCheckIntervalMs) return null;
+    lastUnitCheckAt = now;
+    const probed = refreshSystemd();
+    const reason = isSystemdUnitFailedOrCrashLooping(probed);
+    return reason ? { reason, systemd: probed } : null;
+  } : null;
+  const first = await waitForStatus(
+    home,
+    (status) => healthy(status) && status.started_at_unix_ms !== before.started_at_unix_ms,
+    timeoutMs,
+    statusPoll,
+    { abortCheck: crashAbortCheck },
+  );
+  if (first.ok) {
+    const afterSystemd = refreshSystemd() ?? systemd;
+    return { ok: true, applied: true, swapped: swap, previous: before, runtime: first.status, revision: buildInfo(layout.live, layout)?.revision ?? null, ...(afterSystemd ? { systemd: afterSystemd } : {}), ...(waitSummary ?? {}) };
+  }
   const regressed = newInterfaceFailures(before, first.status);
-  if (!rollback || !fs.existsSync(layout.prev)) return { ok: false, applied: true, swapped: swap, rolled_back: false, new_interface_failures: regressed, runtime: first.status, ...(waitSummary ?? {}) };
+  const crashMeta = first.aborted ? { crash_detected: true, abort_reason: first.abort.reason } : {};
+  if (!rollback || !fs.existsSync(layout.prev)) {
+    const afterSystemd = first.abort?.systemd ?? refreshSystemd() ?? systemd;
+    return { ok: false, applied: true, swapped: swap, rolled_back: false, ...crashMeta, new_interface_failures: regressed, runtime: first.status, ...(afterSystemd ? { systemd: afterSystemd } : {}), ...(waitSummary ?? {}) };
+  }
   rollbackBundles(layout);
   const current = await control(home, "status");
   const staleStartedAt = new Set([
@@ -872,6 +1730,46 @@ async function restartRuntime(layout, home, options = {}) {
     first.status?.outcome === "status" ? first.status.started_at_unix_ms : null,
     current?.outcome === "status" ? current.started_at_unix_ms : null,
   ].filter(sequence));
+  if (useSystemdRestart) {
+    const rbRestart = restartSystemdService(serviceName, { userService, systemctl });
+    if (!rbRestart.ok) {
+      const afterSystemd = refreshSystemd() ?? systemd;
+      return {
+        ok: false,
+        applied: true,
+        swapped: swap,
+        rolled_back: true,
+        recovered: false,
+        permission_denied: rbRestart.permissionDenied === true,
+        ...crashMeta,
+        new_interface_failures: regressed,
+        failed: first.status,
+        runtime: current,
+        systemd: afterSystemd,
+        error: rbRestart.error,
+        recovery: { mechanism: "systemd", service: serviceName, user_service: userService, restarted: false, error: rbRestart.error },
+        ...(waitSummary ?? {}),
+      };
+    }
+    const waited = await waitForStatus(home, (status) => healthy(status) && sequence(status.started_at_unix_ms)
+      && !staleStartedAt.has(status.started_at_unix_ms), options.recoveryTimeoutMs ?? timeoutMs, statusPoll);
+    const afterSystemd = refreshSystemd() ?? systemd;
+    return {
+      ok: false,
+      applied: true,
+      swapped: swap,
+      rolled_back: true,
+      recovered: waited.ok,
+      ...crashMeta,
+      new_interface_failures: regressed,
+      failed: first.status,
+      runtime: waited.status,
+      systemd: afterSystemd,
+      ...(waited.ok ? {} : { error: `runtime did not become ready for Home ${home} after rollback and systemctl restart ${serviceName}` }),
+      recovery: { mechanism: "systemd", service: serviceName, user_service: userService, restarted: true },
+      ...(waitSummary ?? {}),
+    };
+  }
   let second = null;
   if (current?.outcome === "status") {
     const restartAck = await control(home, "restart");
@@ -897,30 +1795,70 @@ async function restartRuntime(layout, home, options = {}) {
   };
 }
 
-async function status(layout, home) {
-  const describe = (bundle) => (fs.existsSync(bundle) ? buildInfo(bundle) : null);
+async function status(layout, home, options = {}) {
+  const describe = (bundle) => (fs.existsSync(bundle) ? buildInfo(bundle, layout) : null);
   const runtime = await control(home, "status");
   let turns = null;
   try {
-    turns = (await readTurnsInFlight(layout.live, home, { sinceUnixMs: runtime.outcome === "status" ? runtime.started_at_unix_ms : 0 }))
+    turns = (await readTurnsInFlight(layout.live, home, { sinceUnixMs: runtime.outcome === "status" ? runtime.started_at_unix_ms : 0, layout }))
       .filter((turn) => turn.turn_open);
   } catch (error) { turns = { error: error.message }; }
-  return { home, head: spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim(), runtime,
-    bundles: { live: describe(layout.live), staging: describe(layout.staging), prev: describe(layout.prev) }, turns_in_flight: turns };
+  const systemd = isCliLayout(layout)
+    ? inspectSystemdService(layout, home, {
+      platform: options.platform ?? "linux",
+      serviceName: options.serviceName ?? DEFAULT_SYSTEMD_SERVICE,
+      authorityServiceName: options.authorityServiceName ?? DEFAULT_SYSTEMD_AUTHORITY_SERVICE,
+      userService: options.userService === true,
+      systemctl: options.systemctl ?? defaultSystemctl,
+    })
+    : null;
+  return { home, kind: layout.kind ?? "macos-app", install_dir: layout.live,
+    head: spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim(), runtime,
+    ...(systemd ? { systemd } : {}),
+    bundles: { live: describe(layout.live), staging: describe(layout.staging), prev: describe(layout.prev), failed: describe(layout.failed) },
+    turns_in_flight: turns };
 }
 
 const USAGE = `Usage: node app/scripts/safe-self-update.cjs <command> [options]
   status                          live runtime, bundle revisions, turns in flight (every run)
-  build [--dry-run]               package into app/build/Octopus.staging.app
+  build [--dry-run] [--min-free-gb=<GiB>] [--cli-target=<triple>]
+                                  check free disk space (default ${DEFAULT_MIN_FREE_GB} GiB / OCTOPUS_SELF_UPDATE_MIN_FREE_GB) and stage into Octopus.staging.app or cli.staging
+  prune [--dry-run] [--include-prev] [--include-cli] [--target-dir=<dir>]
+                                  remove rebuildable staging/failed/Rust target artifacts without touching live install or ~/.octopus
   verify [--no-smoke] [--allow-modified-source]
   packages status | packages sync [--dry-run] [--with-chat-client] [--only=a,b]
-  swap [--dry-run]                Octopus.app -> Octopus.prev.app, staging -> Octopus.app
-  restart [--swap] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--wait-quiet[=<seconds>]] [--quiet-for=<seconds>] [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
+  swap [--dry-run]                live -> prev, staging -> live
+  restart [--swap] [--timeout=<seconds>] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--wait-quiet[=<seconds>]] [--quiet-for=<seconds>] [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
                                   refuses on untrusted turn evidence, a changing frontier, or a blocking turn
-  rollback [--dry-run]            Octopus.prev.app -> Octopus.app
-Common: --home=<Octopus Home, default $OCTOPUS_HOME or ~/.octopus> --build-root=<dir>`;
+  rollback [--dry-run]            prev -> live, live -> failed
+Common: --home=<Octopus Home, default $OCTOPUS_HOME or ~/.octopus> [--state-dir=<dir>] --build-root=<dir>
+Linux CLI / systemd: --platform=linux|darwin --target=cli|app --layout=cli|app --install-dir=<dir>
+  --service=<unit, default ${DEFAULT_SYSTEMD_SERVICE}> --authority-service=<unit, default ${DEFAULT_SYSTEMD_AUTHORITY_SERVICE}> [--user-service] [--require-authority]
+Note: value-taking options accept both --flag=value and --flag value.`;
 
 const REPEATABLE_VALUE_OPTIONS = new Set(["allow-in-flight-run"]);
+const VALUE_OPTIONS = new Set([
+  "home",
+  "state-dir",
+  "build-root",
+  "platform",
+  "target",
+  "layout",
+  "install-dir",
+  "service",
+  "authority-service",
+  "min-free-gb",
+  "cli-target",
+  "target-dir",
+  "caller-run",
+  "quiet-for",
+  "only",
+  "log",
+  "timeout",
+  "timeout-seconds",
+]);
+const OPTIONAL_NUMERIC_OPTIONS = new Set(["wait-quiet"]);
+const DEFAULT_RESTART_TIMEOUT_MS = 300_000;
 
 function parseSecondsOption(raw, name, { min, max }) {
   if (typeof raw !== "string" || !raw.trim()) throw Object.assign(new Error(`--${name} requires seconds between ${min} and ${max}`), { usage: true });
@@ -943,6 +1881,19 @@ function resolveQuietWaitOptions(options) {
   return { waitQuietMs, quietWindowMs };
 }
 
+function resolveRestartTimeoutMs(options) {
+  if (options.timeout !== undefined && options.timeoutSeconds !== undefined && options.timeout !== options.timeoutSeconds) {
+    throw Object.assign(new Error("--timeout and --timeout-seconds conflict"), { usage: true });
+  }
+  if (options.timeout !== undefined) {
+    return parseSecondsOption(options.timeout, "timeout", { min: 1, max: 3600 });
+  }
+  if (options.timeoutSeconds !== undefined) {
+    return parseSecondsOption(options.timeoutSeconds, "timeout-seconds", { min: 1, max: 3600 });
+  }
+  return DEFAULT_RESTART_TIMEOUT_MS;
+}
+
 function parseArgs(argv) {
   const positional = [], options = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -956,6 +1907,24 @@ function parseArgs(argv) {
       (options[key] ??= []).push(value);
       continue;
     }
+    if (VALUE_OPTIONS.has(name)) {
+      const value = rest.length ? rest.join("=") : argv[++index];
+      if (typeof value !== "string" || !value || (!rest.length && value.startsWith("--"))) {
+        throw Object.assign(new Error(`--${name} requires a value`), { usage: true });
+      }
+      options[key] = value;
+      continue;
+    }
+    if (OPTIONAL_NUMERIC_OPTIONS.has(name)) {
+      if (rest.length) {
+        options[key] = rest.join("=");
+      } else if (index + 1 < argv.length && /^\d+(?:\.\d+)?$/.test(argv[index + 1])) {
+        options[key] = argv[++index];
+      } else {
+        options[key] = true;
+      }
+      continue;
+    }
     options[key] = rest.length ? rest.join("=") : true;
   }
   return { positional, options };
@@ -963,12 +1932,43 @@ function parseArgs(argv) {
 
 async function main(argv) {
   const { positional, options } = parseArgs(argv);
-  const layout = bundles(options.buildRoot ? path.resolve(options.buildRoot) : undefined);
-  const home = path.resolve(options.home || process.env.OCTOPUS_HOME || path.join(os.homedir(), ".octopus"));
+  const layout = bundles(
+    options.buildRoot ? path.resolve(options.buildRoot) : undefined,
+    {
+      platform: options.platform !== undefined ? options.platform : process.platform,
+      target: options.target,
+      layout: options.layout,
+      installDir: options.installDir,
+    },
+  );
+  const home = path.resolve(options.home || options.stateDir || process.env.OCTOPUS_HOME || path.join(os.homedir(), ".octopus"));
+  const serviceName = typeof options.service === "string" && options.service ? options.service : DEFAULT_SYSTEMD_SERVICE;
+  const authorityServiceName = typeof options.authorityService === "string" && options.authorityService ? options.authorityService : DEFAULT_SYSTEMD_AUTHORITY_SERVICE;
+  const userService = options.userService === true;
   const dryRun = options.dryRun === true, [command, sub] = positional;
-  if (command === "status") return status(layout, home);
-  if (command === "build") return buildStaging(layout, { dryRun });
-  if (command === "verify") return verifyStaging(layout, home, { smoke: options.noSmoke !== true, allowModifiedSource: options.allowModifiedSource === true });
+  if (command === "status") return status(layout, home, { platform: options.platform ?? (isCliLayout(layout) ? "linux" : process.platform), serviceName, authorityServiceName, userService });
+  if (command === "build") return buildStaging(layout, { dryRun, minFreeGb: options.minFreeGb, cliTarget: typeof options.cliTarget === "string" ? options.cliTarget : null });
+  if (command === "prune") {
+    if (options.targetDir === true || options.targetDir === "") {
+      throw Object.assign(new Error("--target-dir requires a directory path"), { usage: true });
+    }
+    return pruneBuildArtifacts(layout, home, {
+      dryRun,
+      includePrev: options.includePrev === true,
+      includeCli: options.includeCli === true,
+      ...(typeof options.targetDir === "string" ? { targetDir: options.targetDir } : {}),
+    });
+  }
+  if (command === "verify") {
+    return verifyStaging(layout, home, {
+      smoke: options.noSmoke !== true,
+      allowModifiedSource: options.allowModifiedSource === true,
+      platform: options.platform ?? (isCliLayout(layout) ? "linux" : process.platform),
+      serviceName,
+      authorityServiceName,
+      userService,
+    });
+  }
   if (command === "packages" && sub === "status") return { packages: await packageStatus(layout.live, home), baseline: baselineDrift(layout.live, home) };
   if (command === "packages" && sub === "sync") {
     return syncPackages(layout.live, home, { dryRun, withChatClient: options.withChatClient === true, only: typeof options.only === "string" ? options.only.split(",") : null });
@@ -977,6 +1977,7 @@ async function main(argv) {
   if (command === "rollback") return rollbackBundles(layout, { dryRun });
   if (command === "restart") {
     const { waitQuietMs, quietWindowMs } = resolveQuietWaitOptions(options);
+    const timeoutMs = resolveRestartTimeoutMs(options);
     if (options.detach === true && !dryRun) {
       if (typeof options.log !== "string") throw new Error("--detach requires --log=<file>");
       const log = fs.openSync(path.resolve(options.log), "a");
@@ -991,14 +1992,20 @@ async function main(argv) {
     return restartRuntime(layout, home, { callerRun: typeof options.callerRun === "string" ? options.callerRun : null, dryRun,
       allowInFlightRuns: Array.isArray(options.allowInFlightRun) ? options.allowInFlightRun : [],
       force: options.force === true, swap: options.swap === true, rollback: options.noRollback !== true,
-      waitQuietMs, quietWindowMs });
+      timeoutMs, waitQuietMs, quietWindowMs, serviceName, authorityServiceName, userService,
+      requireAuthority: options.requireAuthority === true,
+      platform: options.platform ?? (isCliLayout(layout) ? "linux" : process.platform) });
   }
   throw Object.assign(new Error(USAGE), { usage: true });
 }
 
-module.exports = { bundles, buildInfo, swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
-  newInterfaceFailures, packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions,
-  readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService, terminateProcess, runtimeEnv, main };
+module.exports = { bundles, resolveLayoutOptions, isCliLayout, isStandaloneCliTarget, resolveCliBundlePaths, cliReceipt, electronRoot, runtimeBinary,
+  buildInfo, buildStaging, verifyStaging, isValidRuntimeUsageOutput, checkCliLayoutParity, status, checkBuildDiskSpace, resolveMinFreeGb, pruneBuildArtifacts,
+  swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
+  newInterfaceFailures, packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions, resolveRestartTimeoutMs,
+  readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService,
+  parseSystemctlShow, parseSystemctlExecStart, parseSystemctlEnvironment, inspectSystemdService, isSystemdUnitFailedOrCrashLooping, restartSystemdService,
+  terminateProcess, runtimeEnv, main };
 
 if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {

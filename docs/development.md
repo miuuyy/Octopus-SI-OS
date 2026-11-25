@@ -228,8 +228,12 @@ staged-file inventory. It does not establish asset provenance or runtime accepta
 
 ## Releases
 
-A release is the packaged app as a disk image,
-`Octopus-<version>-macos-<arch>.dmg`, with `install.sh` and `checksums.txt`.
+A release bundles:
+
+- macOS desktop app: `Octopus-<version>-macos-<arch>.dmg` and `install.sh`
+- Linux `x86_64` headless CLI: `Octopus-<version>-linux-x64.tar.gz`, `Octopus-<version>-linux-x64.tar.gz.sha256`, and `install-linux.sh`
+- Unified `checksums.txt` covering every release asset
+
 The version is `version` in `app/package.json`; the packager writes it into
 the bundle, and the release tag is `v<version>`. The packager and release script
 require three numeric components (currently `0.1.0`), not an `-alpha` suffix.
@@ -248,6 +252,21 @@ After `npm --prefix app run package:mac`, build the release assets locally with:
 node app/scripts/release-macos.cjs
 ```
 
+On a Linux `x86_64` host after `node app/scripts/build-cli.cjs --runtime --target=x86_64-unknown-linux-gnu`,
+package and verify the headless CLI release tarball locally with:
+
+```sh
+node app/scripts/release-linux.cjs
+```
+
+`release-linux.cjs` verifies `app/build/cli/runtime/runtime-build-receipt.json` and
+every receipt binary SHA-256, stages the standalone CLI launcher, runtime,
+`linux-process-authority` installer assets, and pure-JS runtime dependencies
+into `Octopus-<version>-linux-<arch>.tar.gz`, copies `install-linux.sh`, writes
+the matching `.sha256` and `checksums.txt` in `app/build/release-linux/`, and
+extracts the tarball to test `./octopus --version` and distribution resolution
+before finishing.
+
 The script checks the bundle (version, identifier, minimum macOS,
 architecture, managed Codex receipt, code signature), then builds the disk
 image on an APFS sparse image in which byte-identical files are clones of one
@@ -258,7 +277,9 @@ verifies the signature inside the image, and writes `app/build/release/` and
 `app/build/release-notes.md` from [app/release](../app/release). Nothing is
 uploaded.
 
-The `release` workflow does the same on a hosted macOS runner. **Run workflow**
+The `release` workflow runs both the `macos` and `linux-headless` jobs on hosted
+runners and merges their verified assets into a unified `checksums.txt` in
+`publish`. **Run workflow**
 is a dry run whose assets stay on the run for seven days. Pushing a tag that
 matches `app/package.json` builds the assets and creates a **draft** GitHub
 release; it becomes public only when a maintainer publishes the draft. Asset
@@ -268,8 +289,9 @@ For a first release, run `quality` on the exact commit, then dispatch `release`
 on `main`. Confirm the macOS job completed the mounted-image comparison and
 asset upload before pushing a matching version tag. The tag run also checks the
 version and creates the draft with the workflow's `contents: write` token; manual
-dispatch never publishes. Review the draft, its three assets (disk image,
-installer, checksums), and the successful uploaded-digest check before publishing.
+dispatch never publishes. Review the draft, its release assets (disk image,
+Linux headless CLI tarball and `.sha256`, `install.sh`, `install-linux.sh`,
+and unified `checksums.txt`), and the successful uploaded-digest check before publishing.
 Dispatching requires GitHub Actions write permission; creating or publishing a
 release requires Contents write permission. A credential's actual API result,
 not its description, establishes access.
@@ -300,7 +322,8 @@ node app/scripts/safe-self-update.cjs restart --swap --wait-quiet --detach --log
 | Command | What it does |
 | --- | --- |
 | `status` | The runtime's control-socket status, the revisions of the live, staged and previous bundles, and the turns in flight of every run. |
-| `build` | Runs `package-macos.cjs` with `OCTOPUS_PACKAGE_BUNDLE` set to `Octopus.staging.app` and checks that `Octopus.app` did not change. |
+| `build` | Checks available disk space (default `15` GiB, configurable via `--min-free-gb=<GiB>` or `OCTOPUS_SELF_UPDATE_MIN_FREE_GB`), fails closed with an actionable error if below threshold, then runs `package-macos.cjs` with `OCTOPUS_PACKAGE_BUNDLE` set to `Octopus.staging.app` and checks that `Octopus.app` did not change. |
+| `prune` | Safely removes rebuildable staging/failed bundles (`Octopus.staging.app`, `Octopus.failed.app`) and Rust `target/` (and optionally `Octopus.prev.app` with `--include-prev`, `app/build/cli` with `--include-cli`), reporting `reclaimed_bytes`. Never touches `Octopus.app` or `~/.octopus`, and refuses symlinks or overlapping protected paths. |
 | `verify` | Code signature; `build-info.json` equals `HEAD` with unmodified source (`--allow-modified-source` relaxes this); `octopus doctor` from the staged bundle against the Home; then a smoke test in a disposable Home under `/private/tmp`: install the chat and Codex packages with their dependencies, `doctor`, `up`, `restart`, `down`. `--no-smoke` skips the last part. |
 | `packages status` | Installed packages compared with the live bundle's package library, and baseline registry files that differ from the bundle. Read-only. |
 | `packages sync` | Repairs every installed package whose source changed and that has no local changes, through the client's own `repairLocalPackages`. Packages with local changes or errors are listed, never forced. `world_operator_chat` is repaired only with `--with-chat-client`; relaunch the client afterwards. `--only=a,b` narrows the set. |
@@ -313,10 +336,16 @@ and how much is free on its volume. A build takes a lot of space: `target/` and
 the staged or previous bundles in `app/build/` are build output and can be
 deleted when you need the space back.
 
-`build`, `swap`, `rollback`, `restart` and `packages sync` accept `--dry-run`,
+`build`, `prune`, `swap`, `rollback`, `restart` and `packages sync` accept `--dry-run`,
 which prints the plan and changes nothing. Every command prints JSON and exits
 1 when its result is not `ok`. `--home` selects another Home (default
 `$OCTOPUS_HOME` or `~/.octopus`).
+
+On headless Linux hosts, the same script automatically targets the CLI layout
+(`app/build/cli` or `--install-dir=<dir>`) and integrates with `systemd`
+(`--service`, `--authority-service`, `--user-service`, `--require-authority`)
+without invoking `sudo`; see
+[Staged self-update for systemd installations](linux.md#staged-self-update-for-systemd-installations).
 
 What the tool relies on, and its limits:
 

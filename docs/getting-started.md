@@ -14,7 +14,8 @@ For the terminal client and its independent build command, see
 
 The [release workflow](../.github/workflows/release.yml) builds a disk image
 for Apple Silicon, `Octopus-<version>-macos-arm64.dmg`, with `checksums.txt`
-and `install.sh`. A version tag creates a **draft** release; it is not an
+and `install.sh`, alongside the Linux `x86_64` headless CLI tarball and
+`install-linux.sh`. A version tag creates a **draft** release; it is not an
 available download until a maintainer publishes it on
 [GitHub Releases](https://github.com/miuuyy/Octopus-SI-OS/releases).
 Check that a published release and its assets are available before using the
@@ -44,6 +45,9 @@ image against `checksums.txt`, and copies `Octopus.app` to `/Applications`
 (`~/Applications` when `/Applications` is not writable). Set
 `OCTOPUS_VERSION=<version>` to install a specific release, or
 `OCTOPUS_APPLICATIONS_DIR` to choose the folder.
+On Linux, `install.sh` dispatches to `install-linux.sh` (verified against
+`checksums.txt` when fetched remotely); see
+[Linux headless installer and host preflight](linux.md#headless-release-installer-and-host-preflight).
 
 To install by hand, download the disk image, drag Octopus to Applications,
 and run this once before the first launch:

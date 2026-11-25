@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createStoragePublisher } = require("../../../registry/interface/world_operator_chat/publication.cjs");
@@ -17,7 +18,21 @@ function resolveNativePublicationTimeoutMs(value = process.env.OCTOPUS_NATIVE_PU
   throw new Error(`Invalid OCTOPUS_NATIVE_PUBLICATION_TIMEOUT_MS: expected positive integer milliseconds, got ${JSON.stringify(value)}`);
 }
 
-function nativePublication(binary = process.env.OCTOPUS_TOPOLOGY_BINARY ?? path.resolve(__dirname, "../../../target/debug/octopus-operator-chat-topology"), execute = execFileSync, options = {}) {
+function resolveTopologyBinary(explicit = process.env.OCTOPUS_TOPOLOGY_BINARY, { repoRoot = path.resolve(__dirname, "../../..") } = {}) {
+  if (typeof explicit === "string" && explicit.trim()) return explicit;
+  const candidates = [
+    path.join(repoRoot, "target/debug/octopus-operator-chat-topology"),
+    path.join(repoRoot, "target/release/octopus-operator-chat-topology"),
+    path.join(repoRoot, "app/build/cli/runtime/bin/octopus-operator-chat-topology"),
+  ];
+  for (const candidate of candidates) {
+    const stat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+    if (stat && stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o111) !== 0) return candidate;
+  }
+  return candidates[0];
+}
+
+function nativePublication(binary = resolveTopologyBinary(), execute = execFileSync, options = {}) {
   const timeout = resolveNativePublicationTimeoutMs(options.timeoutMs);
   return createStoragePublisher(binary, (executable, mode, request, maxBuffer) => {
     const input = JSON.stringify(request), started = Date.now();
@@ -45,5 +60,6 @@ module.exports = {
   DEFAULT_NATIVE_PUBLICATION_TIMEOUT_MS,
   nativePublication,
   resolveNativePublicationTimeoutMs,
+  resolveTopologyBinary,
   transactionEntries,
 };

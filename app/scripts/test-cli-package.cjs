@@ -4,6 +4,17 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { createRuntimePackager, stripArgsForPlatform, isOpenCodexBridgeCurrent } = require("./runtime-package.cjs");
+const { createPublicStageDir } = require("./package-cli.cjs");
+
+test("createPublicStageDir promotes mkdtempSync staging directory from 0700 to 0755", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-cli-stage-mode-"));
+  try {
+    const stage = createPublicStageDir(root, ".runtime-stage-");
+    assert.equal(fs.lstatSync(stage).mode & 0o777, 0o755);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("CLI and desktop share exact owner executable materialization", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "octopus-cli-package-"));

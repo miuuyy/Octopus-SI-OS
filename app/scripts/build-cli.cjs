@@ -6,10 +6,10 @@ const { SUPPORTED_TARGETS, resolveCliTarget, takeTargetArgument } = require("./c
 
 const USAGE = `Usage: node app/scripts/build-cli.cjs [--runtime] [--target=<${SUPPORTED_TARGETS.join("|")}>]`;
 
-async function buildCli({ runtime = false, target = null } = {}) {
+async function buildCli({ runtime = false, target = null, outputDir = process.env.OCTOPUS_CLI_BUILD_DIR || null } = {}) {
   const cli = resolveCliTarget({ target });
   const appRoot = path.resolve(__dirname, "..");
-  const outdir = path.join(appRoot, "build", "cli");
+  const outdir = outputDir ? path.resolve(outputDir) : path.join(appRoot, "build", "cli");
   await fs.mkdir(outdir, { recursive: true });
   if (cli.components.client_filesystem && !runtime) require("../native/build.cjs").buildClientFilesystem();
   await build({
@@ -44,7 +44,7 @@ async function buildCli({ runtime = false, target = null } = {}) {
     packager.materializeProviderLife(provider, "octopus-provider-opencodex-life");
     packager.materializeProviderLife(path.join(provider, "intake"), "octopus-input-intake-life");
     packager.validateOpenCodexOwnerAssets(provider);
-    require("./package-cli.cjs").packageCliRuntime({ appRoot, target: cli.triple });
+    require("./package-cli.cjs").packageCliRuntime({ appRoot, target: cli.triple, outputDir: outdir });
   }
   return outdir;
 }
