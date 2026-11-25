@@ -733,6 +733,19 @@ fn verifier_environment() -> Result<BTreeMap<String, OsString>, String> {
     Ok(BTreeMap::from([("PATH".to_string(), path)]))
 }
 
+fn terminate_verifier_process(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
+            if pgid > 0 {
+                let _ = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_process_with_timeout(
     prepared: PreparedProcess,
     environment: &BTreeMap<String, OsString>,
@@ -742,7 +755,13 @@ fn run_process_with_timeout(
     stdin_bytes: Option<&[u8]>,
 ) -> Result<(bool, String, String), serde_json::Value> {
     let executable = prepared.executable.display().to_string();
-    let mut child = prepared.command()
+    let mut command = prepared.command();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .env_clear()
         .envs(&prepared.environment)
         .envs(environment)
@@ -793,8 +812,7 @@ fn run_process_with_timeout(
         let status = match status {
             Ok(status) => status,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_verifier_process(&mut child);
                 return Err(error);
             }
         };
@@ -820,8 +838,7 @@ fn run_process_with_timeout(
             }))
         };
         if let Some(error) = ended {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_verifier_process(&mut child);
             return Err(error);
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -848,16 +865,20 @@ mod tests {
     }
 
     fn package_ctx(id: &str) -> VerifierPackageContext {
+        let mut authority = ProcessAuthoritySpec {
+            executable_commands: std::collections::BTreeSet::from(["/bin/sh".to_string()]),
+            ..ProcessAuthoritySpec::default()
+        };
+        if !enforced_sandbox_available() {
+            authority.sandbox_mode = octopus_descriptors::ProcessSandboxMode::Disabled;
+        }
         VerifierPackageContext {
             descriptor: VerifierDescriptor {
                 id: VerifierId::new(id),
                 package: id.to_string(),
                 script: "verify.py".to_string(),
                 timeout_ms: None,
-                authority: ProcessAuthoritySpec {
-                    executable_commands: std::collections::BTreeSet::from(["/bin/sh".to_string()]),
-                    ..ProcessAuthoritySpec::default()
-                },
+                authority,
                 default_params: serde_json::Value::Null,
             },
             package_dir: None,
@@ -865,6 +886,15 @@ mod tests {
             scratch_root: std::env::temp_dir()
                 .join(format!("octopus-verifier-test-{}", std::process::id())),
         }
+    }
+
+    fn enforced_sandbox_available() -> bool {
+        #[cfg(target_os = "macos")]
+        return true;
+        #[cfg(target_os = "linux")]
+        return Path::new(crate::process_authority::linux::CONTROL_SOCKET).exists();
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        return false;
     }
 
     fn blob(bytes: &[u8]) -> (InMemoryBlobs, ArtifactRef) {
@@ -932,19 +962,23 @@ mod tests {
         std::fs::set_permissions(&script_path, permissions).unwrap();
 
         let (_, artifact) = blob(b"hello from artifact");
+        let mut authority = ProcessAuthoritySpec {
+            executable_commands: std::collections::BTreeSet::from([
+                "/bin/cat".to_string(),
+                "/bin/sh".to_string(),
+            ]),
+            ..ProcessAuthoritySpec::default()
+        };
+        if !enforced_sandbox_available() {
+            authority.sandbox_mode = octopus_descriptors::ProcessSandboxMode::Disabled;
+        }
         let ctx = VerifierPackageContext {
             descriptor: VerifierDescriptor {
                 id: VerifierId::new("script_probe"),
                 package: "script_probe".to_string(),
                 script: "verify.sh".to_string(),
                 timeout_ms: None,
-                authority: ProcessAuthoritySpec {
-                    executable_commands: std::collections::BTreeSet::from([
-                        "/bin/cat".to_string(),
-                        "/bin/sh".to_string(),
-                    ]),
-                    ..ProcessAuthoritySpec::default()
-                },
+                authority,
                 default_params: serde_json::Value::Null,
             },
             package_dir: Some(package_dir.clone()),
@@ -1239,5 +1273,59 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("package script file is missing")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verifier_termination_reaps_grandchild_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (package, scratch, pid_dir) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let pid_file = pid_dir.path().join("grandchild.pid");
+        let script = package.path().join("verify.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > '{}'\nwait\n", pid_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut ctx = package_ctx("grandchild_reap_probe");
+        ctx.descriptor.script = "verify.sh".to_string();
+        ctx.descriptor.authority.sandbox_mode = octopus_descriptors::ProcessSandboxMode::Disabled;
+        ctx.descriptor.authority.executable_commands = ["/bin/sh", "sleep"].into_iter().map(str::to_string).collect();
+        ctx.package_dir = Some(package.path().to_path_buf());
+        ctx.repository_root = package.path().to_path_buf();
+        ctx.scratch_root = scratch.path().to_path_buf();
+
+        let pinned = pin_verifier_package(&ctx).unwrap();
+        let (_, artifact) = blob(b"{}");
+        let input = test_input(artifact, serde_json::json!({"timeout_ms": 5000}));
+        let verdict = run_pinned_verifier_process_until(&pinned, &input, b"{}".to_vec(), &|| {
+            std::fs::read_to_string(&pid_file).is_ok_and(|content| content.ends_with('\n'))
+        });
+        assert!(!verdict.passed && verdict.details["error"] == "verifier process was cancelled");
+
+        let grandchild_pid: libc::pid_t = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        assert!(grandchild_pid > 0);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut reaped = false;
+        while Instant::now() < deadline {
+            if unsafe { libc::kill(grandchild_pid, 0) } == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if !reaped {
+            let _ = unsafe { libc::kill(grandchild_pid, libc::SIGKILL) };
+        }
+        assert!(reaped, "grandchild pid {grandchild_pid} was not reaped");
     }
 }

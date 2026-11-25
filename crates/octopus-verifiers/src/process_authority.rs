@@ -27,6 +27,7 @@ pub struct ProcessAuthority {
     writable_exact: BTreeSet<PathBuf>,
     executable_exact: BTreeSet<PathBuf>,
     executable_links: BTreeSet<PathBuf>,
+    quiet_deny_write_exact: BTreeSet<PathBuf>,
     allow_network: bool,
     allow_local_ipc: bool,
     allow_application_launch: bool,
@@ -135,6 +136,7 @@ impl ProcessAuthority {
             writable_exact,
             executable_exact,
             executable_links: BTreeSet::new(),
+            quiet_deny_write_exact: BTreeSet::new(),
             allow_network,
             allow_local_ipc,
             allow_application_launch,
@@ -157,6 +159,21 @@ impl ProcessAuthority {
 
     pub fn writable(&self) -> &BTreeSet<PathBuf> {
         &self.writable
+    }
+
+    pub fn with_quiet_deny_write_exact(
+        mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Result<Self, String> {
+        for path in paths {
+            self.quiet_deny_write_exact
+                .insert(normalize_declared_exact_path(path)?);
+        }
+        Ok(self)
+    }
+
+    pub fn quiet_deny_write_exact(&self) -> &BTreeSet<PathBuf> {
+        &self.quiet_deny_write_exact
     }
 
     fn with_executable_links(mut self, links: BTreeSet<PathBuf>) -> Self {

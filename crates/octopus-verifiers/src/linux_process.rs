@@ -1,5 +1,5 @@
 use crate::process_authority::linux::{
-    FileAccess, FileSelector, LinuxProcessPolicy, CONTROL_SOCKET, MAX_REQUEST_BYTES,
+    FileAccess, FileSelector, LinuxProcessPolicy, CONTROL_SOCKET,
 };
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Write};
@@ -92,14 +92,9 @@ impl LinuxLease {
                 "control connection is not served by root".into(),
             ));
         }
-        let payload = serde_json::to_vec(policy).map_err(|error| error.to_string())?;
-        if payload.len() as u64 > MAX_REQUEST_BYTES {
-            return Err("Linux process policy exceeds its transport limit".into());
-        }
+        let frame = policy.encode_prepare_frame()?;
         owner
-            .write_all(b"PREPARE ")
-            .and_then(|_| owner.write_all(&payload))
-            .and_then(|_| owner.write_all(b"\n"))
+            .write_all(&frame)
             .map_err(|error| unavailable(error.to_string()))?;
         let mut reader = BufReader::new(owner);
         let mut response = String::new();

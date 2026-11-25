@@ -116,15 +116,7 @@ fn handle(host: &Host, stream: UnixStream) -> Result<(), String> {
         return Err("process authority cannot be delegated across user namespaces".into());
     }
     let mut reader = BufReader::new(stream);
-    let mut frame = String::new();
-    reader
-        .by_ref()
-        .take(MAX_REQUEST_BYTES + 10)
-        .read_line(&mut frame)
-        .map_err(display)?;
-    if frame.len() as u64 > MAX_REQUEST_BYTES + 9 || !frame.ends_with('\n') {
-        return Err("request exceeds its frame limit or is incomplete".into());
-    }
+    let frame = read_request_frame(&mut reader)?;
     if let Some(body) = frame.strip_prefix("PREPARE ") {
         let result = serde_json::from_str::<LinuxProcessPolicy>(body)
             .map_err(display)
@@ -599,13 +591,43 @@ fn enforced_profile_name(label: &str) -> Option<&str> {
     Some(name)
 }
 
+fn read_request_frame(reader: &mut impl BufRead) -> Result<String, String> {
+    let mut frame = String::new();
+    let limit = MAX_REQUEST_BYTES + 9;
+    reader
+        .by_ref()
+        .take(limit + 1)
+        .read_line(&mut frame)
+        .map_err(display)?;
+    if frame.len() as u64 > limit {
+        return Err(format!(
+            "request exceeds its frame limit ({} bytes > {} bytes)",
+            frame.len(),
+            limit
+        ));
+    }
+    if !frame.ends_with('\n') {
+        return Err(format!(
+            "request exceeds its frame limit or is incomplete ({} bytes, limit {} bytes)",
+            frame.len(),
+            limit
+        ));
+    }
+    Ok(frame)
+}
+
 fn display(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::enforced_profile_name;
+    use super::{enforced_profile_name, read_request_frame};
+    use octopus_verifiers::process_authority::linux::{
+        FileAccess, FileRule, FileSelector, LinuxProcessPolicy, MAX_REQUEST_BYTES,
+    };
+    use std::io::Cursor;
+    use std::path::PathBuf;
 
     #[test]
     fn accepts_plain_and_unconfined_stacked_enforced_labels() {
@@ -633,5 +655,38 @@ mod tests {
             enforced_profile_name(&format!("{profile}//&other//&unconfined (enforce)")),
             None
         );
+    }
+
+    #[test]
+    fn accepts_large_prepare_frame_and_rejects_oversized_or_incomplete() {
+        let policy = LinuxProcessPolicy {
+            files: (0..12_000usize)
+                .map(|i| FileRule {
+                    selector: FileSelector::Exact {
+                        path: PathBuf::from(format!("/var/lib/octopus/registry/interface/iface_{i:05}/descriptor_payload_entry.json")),
+                        directory: false,
+                    },
+                    access: FileAccess::Write,
+                })
+                .collect(),
+            read_only: Vec::new(),
+            quiet_deny_write_exact: Vec::new(),
+            allow_network: false,
+            allow_local_ipc: false,
+            allow_application_launch: false,
+            allow_sandbox_delegation: false,
+            allow_process_signals: false,
+        };
+        let frame = policy.encode_prepare_frame().unwrap();
+        assert!(frame.len() > 1024 * 1024 + 9);
+        let read = read_request_frame(&mut Cursor::new(frame)).unwrap();
+        let body = read.strip_prefix("PREPARE ").and_then(|l| l.strip_suffix('\n')).unwrap();
+        assert_eq!(serde_json::from_str::<LinuxProcessPolicy>(body).unwrap(), policy);
+
+        let mut oversized = vec![b'x'; (MAX_REQUEST_BYTES as usize) + 10];
+        oversized.push(b'\n');
+        let err = read_request_frame(&mut Cursor::new(oversized)).unwrap_err();
+        assert!(err.contains("request exceeds its frame limit") && err.contains(&(MAX_REQUEST_BYTES + 9).to_string()));
+        assert!(read_request_frame(&mut Cursor::new(b"PREPARE {}".to_vec())).unwrap_err().contains("incomplete"));
     }
 }

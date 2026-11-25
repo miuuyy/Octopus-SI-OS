@@ -1700,4 +1700,21 @@ mod tests {
         assert_eq!(row.runtime_checkpoint, None);
         assert_eq!(row.runtime_interface, None);
     }
+
+    #[test]
+    fn open_materializes_wal_shm_index_on_reopen_for_readonly_readers() {
+        let (_dir, path) = temp_db();
+        let mut shm = path.as_os_str().to_os_string();
+        shm.push("-shm");
+        let shm_path = std::path::PathBuf::from(shm);
+        let index = LedgerSqliteIndex::open(&path).unwrap();
+        assert!(shm_path.exists());
+        drop(index);
+        assert!(!shm_path.exists());
+        let reopened = LedgerSqliteIndex::open(&path).unwrap();
+        assert!(shm_path.exists());
+        let reader = LedgerSqliteReader::open(&path).unwrap();
+        assert_eq!(reader.bounded_interface_delivery_candidate("world_operator_chat", 0, 1).unwrap(), None);
+        drop((reader, reopened));
+    }
 }

@@ -3266,7 +3266,7 @@ fn spawn_process_command_life(
         let resolved_interface_descriptor = ctx.resolved_interface_descriptor()?;
         let additional = octopus_interfaces::additional_host_root_paths(&resolved_interface_descriptor, &ctx.root_slots)?;
         let (authority, authority_roots) = octopus_interfaces::expand_host_root_authority(&command_config.authority, &ctx.root_slots, &additional)?;
-        let resolved = authority.resolve(
+        let mut resolved = authority.resolve(
             &executable_base,
             &authority_roots,
             &environment,
@@ -3275,6 +3275,13 @@ fn spawn_process_command_life(
             std::iter::empty(),
             readable_exact,
         )?;
+        if let Some(path) = &ledger_index_path {
+            resolved.authority = resolved.authority.with_quiet_deny_write_exact([
+                path.clone(),
+                path_with_suffix(path, "-wal"),
+                path_with_suffix(path, "-shm"),
+            ])?;
+        }
         let host_io_limits = command_config.io_limits;
         host_io_limits.validate()?;
         let interface_host_slots = resolved_interface_descriptor
@@ -5929,8 +5936,9 @@ mod tests {
                     );
                 }
                 assert!(
-                    !auth.executable_commands.contains("security"),
-                    "interface '{id}' process '{}' declares macOS-only required command 'security'; move it to optional_executable_commands",
+                    !auth.executable_commands.contains("security")
+                        && !auth.executable_commands.contains("zsh"),
+                    "interface '{id}' process '{}' declares non-universal command in required executable_commands; move it to optional_executable_commands",
                     process.bin
                 );
                 for env_subpath in auth
@@ -5944,6 +5952,28 @@ mod tests {
                         "interface '{id}' process '{}' declares macOS-only required env subpath '{}'; move it to optional_read_env_subpaths",
                         process.bin,
                         env_subpath.relative_path
+                    );
+                }
+            }
+        }
+
+        for entry in std::fs::read_dir(registry.join("tool")).unwrap() {
+            let entry = entry.unwrap();
+            let tool_json = entry.path().join("tool.json");
+            if !tool_json.is_file() {
+                continue;
+            }
+            let id = entry.file_name().into_string().unwrap();
+            let descriptor: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&tool_json).unwrap()).unwrap();
+            if let Some(commands) = descriptor
+                .pointer("/process/authority/executable_commands")
+                .and_then(serde_json::Value::as_array)
+            {
+                for forbidden in ["security", "zsh"] {
+                    assert!(
+                        !commands.iter().any(|item| item.as_str() == Some(forbidden)),
+                        "tool '{id}' declares non-universal command '{forbidden}' in required executable_commands"
                     );
                 }
             }
