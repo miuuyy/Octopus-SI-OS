@@ -12,6 +12,7 @@ const { normalizeRuntimeLaunchEnvironment } = require("./sidecars.cjs");
 const { arrayValue, stringValue } = require("./values.cjs");
 
 function configurationProjection(store) {
+  const SCOPED_PACKAGE_INVENTORY_CACHE_MAX = 64;
   let configurationProjectionGeneration = 1;
   let configurationProjectionBuild = null;
   let policyProjectionBuild = null;
@@ -24,8 +25,43 @@ function configurationProjection(store) {
   let applicationCatalogGeneration = 1;
   let applicationOwnerScope = null;
   let applicationOwners = null;
+  const scopedPackageInventoryCache = new Map();
+  const scopedProjectionViews = new WeakMap();
   const runRecordCache = new Map();
   const packageProjectionStates = new WeakMap();
+
+  function normalizeScopedPackageFilter(scopedFilter) {
+    if (!scopedFilter || typeof scopedFilter !== "object") return null;
+    const packageIds = [...new Set(arrayValue(scopedFilter.packageIds).map(stringValue).filter(Boolean))].sort();
+    const includeApplications = scopedFilter.includeApplications === true;
+    const applicationIds = includeApplications
+      ? [...new Set(arrayValue(scopedFilter.applicationIds).map(stringValue).filter(Boolean))].sort()
+      : [];
+    return {
+      packageIds,
+      includeApplications,
+      applicationIds,
+      key: JSON.stringify({ packageIds, includeApplications, applicationIds }),
+    };
+  }
+
+  function scopedPackageOwnersChanged(owner) {
+    const currentScope = store.fileProjectionScope(store.resolveRepoRoot());
+    for (const entry of scopedPackageInventoryCache.values()) {
+      if (entry.scope !== currentScope) continue;
+      if (!entry.packageOwners || entry.packageOwners.has(owner)) return true;
+    }
+    return false;
+  }
+
+  function scopedApplicationOwnersChanged(interfaceId) {
+    const currentScope = store.fileProjectionScope(store.resolveRepoRoot());
+    for (const entry of scopedPackageInventoryCache.values()) {
+      if (entry.scope !== currentScope || !entry.includeApplications) continue;
+      if (!entry.applicationOwners || entry.applicationOwners.has(interfaceId)) return true;
+    }
+    return false;
+  }
 
   async function cachedPackageCatalog(repoRoot) {
     const scope = store.fileProjectionScope(repoRoot);
@@ -76,7 +112,8 @@ function configurationProjection(store) {
     if (segments.length < 3 || !packageOwners
       || packageOwnerScope !== store.fileProjectionScope(store.resolveRepoRoot())
       || path.resolve(store.resolveLocalPackageRegistry()) === path.join(store.octopusHome(), "registry")) return true;
-    return packageOwners.has(`${segments[1]}/${segments[2]}`);
+    const owner = `${segments[1]}/${segments[2]}`;
+    return packageOwners.has(owner) || scopedPackageOwnersChanged(owner);
   }
 
   function applicationInputsChanged(filename) {
@@ -85,7 +122,9 @@ function configurationProjection(store) {
     if (segments[0] !== "registry" || segments[1] !== "interface") return false;
     if (segments.length < 3 || !applicationOwners
       || applicationOwnerScope !== store.fileProjectionScope(store.resolveRepoRoot())) return true;
-    return segments[3] === "application.json" || applicationOwners.has(segments[2]);
+    return segments[3] === "application.json"
+      || applicationOwners.has(segments[2])
+      || scopedApplicationOwnersChanged(segments[2]);
   }
 
   async function cachedApplicationPackageCatalog(configuration) {
@@ -324,7 +363,111 @@ function configurationProjection(store) {
     };
   }
 
-  async function withFileProjectionPackages(projection, includeLedger = false) {
+  async function readScopedPackageInventory(configuration, filter) {
+    const applicationNames = filter.applicationIds.length ? new Set(filter.applicationIds) : null;
+    const applicationWarnings = [];
+    const [packageRead, applicationRead] = await Promise.allSettled([
+      readLocalPackageCatalog({
+        sourceRegistryRoot: store.resolveLocalPackageRegistry(),
+        activeRegistryRoot: path.join(store.octopusHome(), "registry"),
+        libraryRoot: store.resolveLocalPackageLibrary(),
+        stateRoot: path.join(store.octopusHome(), "client", "package-state"),
+        publication: store.localPackagePublication(),
+        packageIds: filter.packageIds,
+      }),
+      filter.includeApplications
+        ? readApplicationPackageCatalog(
+          configuration.registryRoot,
+          configuration.localPackageRegistryRoot,
+          applicationWarnings,
+          applicationNames,
+        )
+        : Promise.resolve({ active: [], sources: [], source_conflicts: {} }),
+    ]);
+    if (packageRead.status === "rejected") throw packageRead.reason;
+    if (applicationRead.status === "rejected") throw applicationRead.reason;
+    return {
+      localPackages: packageRead.value,
+      applicationPackages: applicationRead.value,
+      applicationWarnings,
+    };
+  }
+
+  async function cachedScopedPackageInventory(configuration, filter) {
+    const scope = store.fileProjectionScope(configuration.repoRoot);
+    const cacheKey = `${scope}\0${filter.key}`;
+    for (;;) {
+      if (scope !== store.fileProjectionScope(configuration.repoRoot)) {
+        throw new Error("Projection Home changed during package read");
+      }
+      let build = scopedPackageInventoryCache.get(cacheKey);
+      if (
+        !build
+        || build.scope !== scope
+        || build.packageGeneration !== packageCatalogGeneration
+        || (filter.includeApplications && build.applicationGeneration !== applicationCatalogGeneration)
+      ) {
+        build = {
+          scope,
+          packageGeneration: packageCatalogGeneration,
+          applicationGeneration: applicationCatalogGeneration,
+          includeApplications: filter.includeApplications,
+          packageOwners: null,
+          applicationOwners: null,
+          promise: readScopedPackageInventory(configuration, filter),
+        };
+        if (scopedPackageInventoryCache.has(cacheKey)) scopedPackageInventoryCache.delete(cacheKey);
+        else if (scopedPackageInventoryCache.size >= SCOPED_PACKAGE_INVENTORY_CACHE_MAX) {
+          scopedPackageInventoryCache.delete(scopedPackageInventoryCache.keys().next().value);
+        }
+        scopedPackageInventoryCache.set(cacheKey, build);
+      } else {
+        scopedPackageInventoryCache.delete(cacheKey);
+        scopedPackageInventoryCache.set(cacheKey, build);
+      }
+      try {
+        const inventory = await build.promise;
+        if (scope !== store.fileProjectionScope(configuration.repoRoot)) {
+          throw new Error("Projection Home changed during package read");
+        }
+        build.packageOwners = new Set(arrayValue(inventory.localPackages.packages).flatMap((entry) => (
+          arrayValue(entry.members).map((member) => `${member.registry_kind}/${member.owner}`)
+        )));
+        if (filter.includeApplications) {
+          build.applicationOwners = new Set([
+            ...arrayValue(inventory.applicationPackages.active),
+            ...arrayValue(inventory.applicationPackages.sources),
+          ].flatMap((entry) => arrayValue(entry.manifest?.interfaces)));
+        }
+        if (
+          build.packageGeneration === packageCatalogGeneration
+          && (!filter.includeApplications || build.applicationGeneration === applicationCatalogGeneration)
+        ) {
+          return {
+            packageGeneration: build.packageGeneration,
+            applicationGeneration: build.applicationGeneration,
+            localPackages: structuredClone(inventory.localPackages),
+            applicationPackages: structuredClone(inventory.applicationPackages),
+            applicationWarnings: [...inventory.applicationWarnings],
+          };
+        }
+      } catch (error) {
+        const stillCurrent = build.packageGeneration === packageCatalogGeneration
+          && (!filter.includeApplications || build.applicationGeneration === applicationCatalogGeneration);
+        if (stillCurrent) {
+          if (scopedPackageInventoryCache.get(cacheKey) === build) {
+            scopedPackageInventoryCache.delete(cacheKey);
+          }
+          throw error;
+        }
+      }
+      if (scopedPackageInventoryCache.get(cacheKey) === build) {
+        scopedPackageInventoryCache.delete(cacheKey);
+      }
+    }
+  }
+
+  async function withFileProjectionPackages(projection, includeLedger = false, scopedFilter = null) {
     for (;;) {
       const state = packageProjectionStates.get(projection);
       if (!state) throw new Error("File projection has no configuration package source");
@@ -334,6 +477,54 @@ function configurationProjection(store) {
         continue;
       }
       if (projection.localPackages && projection.applicationPackages) return projection;
+      if (scopedFilter) {
+        const filter = normalizeScopedPackageFilter(scopedFilter);
+        let views = scopedProjectionViews.get(projection);
+        const cachedView = views?.get(filter.key);
+        if (
+          cachedView
+          && cachedView.packageGeneration === packageCatalogGeneration
+          && (!filter.includeApplications || cachedView.applicationGeneration === applicationCatalogGeneration)
+        ) {
+          return cachedView.projection;
+        }
+        let inventory;
+        try {
+          inventory = await cachedScopedPackageInventory(projection, filter);
+        } catch (error) {
+          if (state.generation === configurationProjectionGeneration) throw error;
+        }
+        if (state.scope !== store.fileProjectionScope(state.repoRoot)) throw new Error("Projection Home changed during package read");
+        if (state.generation !== configurationProjectionGeneration) {
+          projection = await store.cachedFileProjection(state.repoRoot, includeLedger);
+          continue;
+        }
+        const warnings = [...projection.warnings];
+        warnings.splice(state.applicationWarningOffset, 0, ...inventory.applicationWarnings);
+        warnings.splice(state.packageWarningOffset, 0, ...arrayValue(inventory.localPackages.errors));
+        const scopedProjection = {
+          ...projection,
+          localPackages: inventory.localPackages,
+          applicationPackages: inventory.applicationPackages,
+          warnings,
+          structureMemo: new Map(),
+        };
+        if (
+          inventory.packageGeneration === packageCatalogGeneration
+          && (!filter.includeApplications || inventory.applicationGeneration === applicationCatalogGeneration)
+        ) {
+          if (!views) {
+            views = new Map();
+            scopedProjectionViews.set(projection, views);
+          }
+          views.set(filter.key, {
+            packageGeneration: inventory.packageGeneration,
+            applicationGeneration: inventory.applicationGeneration,
+            projection: scopedProjection,
+          });
+        }
+        return scopedProjection;
+      }
       const promise = state.promise ??= readPackageInventory(projection);
       let inventory;
       try {
@@ -431,8 +622,16 @@ function configurationProjection(store) {
 
   function invalidateConfigurationProjection(configurationChanged, policyChanged, filename) {
     if (configurationChanged) configurationProjectionGeneration += 1;
-    if (configurationChanged && packageInputsChanged(filename)) packageCatalogGeneration += 1;
-    if (configurationChanged && applicationInputsChanged(filename)) applicationCatalogGeneration += 1;
+    if (configurationChanged && packageInputsChanged(filename)) {
+      packageCatalogGeneration += 1;
+      scopedPackageInventoryCache.clear();
+    }
+    if (configurationChanged && applicationInputsChanged(filename)) {
+      applicationCatalogGeneration += 1;
+      for (const [key, entry] of scopedPackageInventoryCache.entries()) {
+        if (entry.includeApplications) scopedPackageInventoryCache.delete(key);
+      }
+    }
     if (policyChanged) policyProjectionGeneration += 1;
   }
 
@@ -444,6 +643,7 @@ function configurationProjection(store) {
     applicationCatalogBuild = null;
     applicationOwners = null;
     applicationOwnerScope = null;
+    scopedPackageInventoryCache.clear();
     runRecordCache.clear();
   }
 

@@ -23,6 +23,29 @@ pub fn sync_ordered(file: &File) -> io::Result<()> {
     }
 }
 
+pub fn sync_filesystem_ordered(file: &File) -> io::Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::syncfs(file.as_raw_fd()) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(libc::ENOSYS | libc::EPERM | libc::EOPNOTSUPP | libc::EINVAL)
+        ) {
+            return Ok(false);
+        }
+        Err(error)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = file;
+        Ok(false)
+    }
+}
+
 pub fn sync_directory_ordered(path: &Path) -> io::Result<()> {
     sync_ordered(&File::open(path)?)
 }

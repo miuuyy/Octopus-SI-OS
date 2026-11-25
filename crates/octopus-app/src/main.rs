@@ -139,6 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     match command.as_deref() {
         Some("up") => run_up(),
+        Some("bootstrap") => bootstrap(),
         Some("down") => down(),
         Some("restart") => restart(),
         Some("doctor") => block_on(doctor())?,
@@ -314,6 +315,7 @@ async fn shutdown_signal() {
 fn usage() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("octopus");
     eprintln!("  up      boot the OS: synchronize the registry, open state, wake every interface");
+    eprintln!("  bootstrap initialize an empty Home's registry, host manifest, ledger and bootstrap EEs without starting the daemon");
     eprintln!("  down    stop the running instance cleanly through its control socket");
     eprintln!("  restart stop the running instance cleanly and start it again from its own executable");
     eprintln!("  doctor  scan the active registry and declared life probes without booting");
@@ -422,6 +424,141 @@ fn restart() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+struct BootstrappedHome {
+    registry_root_path: PathBuf,
+    durable_root: PathBuf,
+    runs_dir: PathBuf,
+    ee_instances_dir: PathBuf,
+    interface_artifact_root: PathBuf,
+    copied: usize,
+}
+
+fn bootstrap_home_storage(
+    octopus_home: &Path,
+    source_registry_root: &Path,
+    durable_root: &Path,
+    boot: &mut boot_report::BootReport,
+    mut on_phase: impl FnMut(&str) -> Result<(), Box<dyn std::error::Error>>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<BootstrappedHome>, Box<dyn std::error::Error>> {
+    boot.stage(
+        "registry",
+        format_args!(
+            "opening Home registry with source {}",
+            source_registry_root.display()
+        ),
+    );
+    let registry_install = registry_install::install_registry_with_progress(
+        source_registry_root,
+        &octopus_home.join("registry"),
+        &mut |event| match event {
+            registry_install::RegistrySyncProgress::Scanned { files } => {
+                boot.stage("registry", format_args!("{files} source descriptors"));
+            }
+            registry_install::RegistrySyncProgress::Applying {
+                done,
+                total,
+                relative,
+            } => {
+                boot.progress("registry", done, total, relative);
+            }
+        },
+    )?;
+    if cancelled() {
+        return Ok(None);
+    }
+    let registry_root_path = registry_install.root;
+    on_phase("registry_ready")?;
+    boot.stage(
+        "registry",
+        format_args!(
+            "ready at {} · installed {} files",
+            registry_root_path.display(),
+            registry_install.copied
+        ),
+    );
+    octopus_file_storage::publication::create_dir_all(durable_root)?;
+    let durable_root = std::fs::canonicalize(durable_root)?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(durable_root.join("movements.jsonl"))?;
+    let _blobs = DurableBlobs::open(durable_root.join("blobs"))?;
+    let state_root = octopus_home.join("state");
+    boot.stage("state", format_args!("opening {}", state_root.display()));
+    let default_runs_dir = state_root.join("runs");
+    let default_ee_instances_dir = state_root.join("ee_instances");
+    let interface_artifact_root = state_root.join("interface-artifacts");
+    let source_root = source_registry_root
+        .parent()
+        .ok_or("source registry root has no parent")?;
+    let host_roots = daemon::ensure_host_manifest(
+        octopus_home,
+        &registry_root_path,
+        source_root,
+        &default_runs_dir,
+        &default_ee_instances_dir,
+    )?;
+    on_phase("state_ready")?;
+    let runs_dir = host_roots
+        .get("run_records_root")
+        .ok_or("host.json resolved no run_records_root")?
+        .to_path_buf();
+    octopus_file_storage::publication::create_dir_all(&runs_dir)?;
+    let runs_dir = std::fs::canonicalize(runs_dir)?;
+    let ee_instances_dir = host_roots
+        .get("ee_instances_root")
+        .ok_or("host.json resolved no ee_instances_root")?
+        .to_path_buf();
+    bootstrap_ees::ensure_bootstrap_ee_instances(&registry_root_path, &ee_instances_dir)
+        .map_err(std::io::Error::other)?;
+    let ee_instances_dir = std::fs::canonicalize(ee_instances_dir)?;
+    octopus_file_storage::publication::create_dir_all(&interface_artifact_root)?;
+    let interface_artifact_root = std::fs::canonicalize(interface_artifact_root)?;
+    Ok(Some(BootstrappedHome {
+        registry_root_path,
+        durable_root,
+        runs_dir,
+        ee_instances_dir,
+        interface_artifact_root,
+        copied: registry_install.copied,
+    }))
+}
+
+fn bootstrap() -> Result<(), Box<dyn std::error::Error>> {
+    let octopus_home = octopus_home_dir();
+    let mut boot = boot_report::BootReport::new();
+    boot.banner("octopus");
+    boot.stage("home", octopus_home.display());
+    let mut runtime_instance = runtime_instance::RuntimeInstance::acquire(&octopus_home)?;
+    runtime_instance.set_phase("installing_registry")?;
+    let runtime_installation_root = runtime_installation_root()?;
+    let source_registry_root = installed_source_registry_root(&runtime_installation_root)?;
+    let durable_root = spine_durable_root();
+    let Some(home) = bootstrap_home_storage(
+        &octopus_home,
+        &source_registry_root,
+        &durable_root,
+        &mut boot,
+        |phase| runtime_instance.set_phase(phase),
+        || false,
+    )?
+    else {
+        return Ok(());
+    };
+    boot.done(
+        "bootstrapped",
+        format_args!(
+            "· registry {} ({} files installed) · state {}",
+            home.registry_root_path.display(),
+            home.copied,
+            home.ee_instances_dir.display()
+        ),
+    );
+    drop(runtime_instance);
+    Ok(())
+}
+
 async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
     let octopus_home = octopus_home_dir();
     let mut boot = boot_report::BootReport::new();
@@ -447,72 +584,26 @@ async fn up(restart: Arc<std::sync::atomic::AtomicBool>) -> Result<(), Box<dyn s
     runtime_instance.set_phase("installing_registry")?;
     let runtime_installation_root = runtime_installation_root()?;
     let source_registry_root = installed_source_registry_root(&runtime_installation_root)?;
-    boot.stage(
-        "registry",
-        format_args!("opening Home registry with source {}", source_registry_root.display()),
-    );
-    let registry_install = registry_install::install_registry_with_progress(
-        &source_registry_root,
-        &octopus_home.join("registry"),
-        &mut |event| match event {
-            registry_install::RegistrySyncProgress::Scanned { files } => {
-                boot.stage("registry", format_args!("{files} source descriptors"));
-            }
-            registry_install::RegistrySyncProgress::Applying {
-                done,
-                total,
-                relative,
-            } => {
-                boot.progress("registry", done, total, relative);
-            }
-        },
-    )?;
-    if cancel.is_cancelled() {
-        return Ok(());
-    }
-    let registry_root_path = registry_install.root;
-    runtime_instance.set_phase("registry_ready")?;
-    boot.stage(
-        "registry",
-        format_args!(
-            "ready at {} · installed {} files",
-            registry_root_path.display(),
-            registry_install.copied
-        ),
-    );
     let durable_root = spine_durable_root();
-    octopus_file_storage::publication::create_dir_all(&durable_root)?;
-    let durable_root = std::fs::canonicalize(durable_root)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(durable_root.join("movements.jsonl"))?;
-    let state_root = octopus_home.join("state");
-    boot.stage("state", format_args!("opening {}", state_root.display()));
-    let default_runs_dir = state_root.join("runs");
-    let default_ee_instances_dir = state_root.join("ee_instances");
-    let interface_artifact_root = state_root.join("interface-artifacts");
-    let source_root = source_registry_root
-        .parent()
-        .ok_or("source registry root has no parent")?;
-    let host_roots = daemon::ensure_host_manifest(
+    let Some(bootstrapped) = bootstrap_home_storage(
         &octopus_home,
-        &registry_root_path,
-        source_root,
-        &default_runs_dir,
-        &default_ee_instances_dir,
-    )?;
-    runtime_instance.set_phase("state_ready")?;
-    let runs_dir = host_roots
-        .get("run_records_root")
-        .ok_or("host.json resolved no run_records_root")?
-        .to_path_buf();
-    octopus_file_storage::publication::create_dir_all(&runs_dir)?;
-    let runs_dir = std::fs::canonicalize(runs_dir)?;
-    let ee_instances_dir = host_roots
-        .get("ee_instances_root")
-        .ok_or("host.json resolved no ee_instances_root")?
-        .to_path_buf();
+        &source_registry_root,
+        &durable_root,
+        &mut boot,
+        |phase| runtime_instance.set_phase(phase),
+        || cancel.is_cancelled(),
+    )?
+    else {
+        return Ok(());
+    };
+    let BootstrappedHome {
+        registry_root_path,
+        durable_root,
+        runs_dir,
+        ee_instances_dir,
+        interface_artifact_root,
+        ..
+    } = bootstrapped;
     let blobs: octopus_app_server::SharedBlobs = Arc::new(std::sync::Mutex::new(
         DurableBlobs::open(durable_root.join("blobs"))?,
     ));
@@ -830,5 +921,66 @@ mod tests {
         })
         .expect("missing OCTOPUS_RUNTIME_BIN should use initial current_exe");
         assert_eq!(resolved, PathBuf::from("/srv/octopus/runtime/bin/octopus"));
+    }
+
+    #[test]
+    fn offline_home_bootstrap_initializes_empty_home_idempotently_without_daemon() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let source_registry = root.join("dist/registry");
+        let home = root.join("empty-home");
+        std::fs::create_dir_all(source_registry.join("ee_template/existence")).unwrap();
+        std::fs::create_dir_all(source_registry.join("ee_template/project")).unwrap();
+        std::fs::create_dir_all(source_registry.join("interface")).unwrap();
+        std::fs::create_dir_all(source_registry.join("tool")).unwrap();
+        std::fs::write(
+            source_registry.join(".octopus-source.json"),
+            r#"{"schema_version":1,"id":"test-bootstrap-source"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source_registry.join("ee_template/existence/ee_template.json"),
+            r#"{"id":"existence","goal_class":"existence","allowed_interfaces":null,"allowed_worker_environment_kinds":["system_room"],"allowed_child_ee_templates":["project"],"bootstrap_root":true,"allowed_root_slots":["run_records_root","ee_instances_root"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source_registry.join("ee_template/project/ee_template.json"),
+            r#"{"id":"project","goal_class":"project","allowed_interfaces":null,"allowed_worker_environment_kinds":["system_room"],"allowed_child_ee_templates":[],"bootstrap_root":false,"allowed_root_slots":["run_records_root","ee_instances_root"]}"#,
+        )
+        .unwrap();
+
+        let mut boot = super::boot_report::BootReport::new();
+        let first = super::bootstrap_home_storage(
+            &home,
+            &source_registry,
+            &home.join("ledger"),
+            &mut boot,
+            |_| Ok(()),
+            || false,
+        )
+        .unwrap()
+        .expect("bootstrap should complete");
+        assert_eq!(first.copied, 2);
+        assert!(home.join("registry/.octopus-source-manifest.json").is_file());
+        assert!(home.join("registry/ee_template/existence/ee_template.json").is_file());
+        assert!(home.join("registry/ee_template/project/ee_template.json").is_file());
+        assert!(home.join("host.json").is_file());
+        assert!(home.join("ledger/movements.jsonl").is_file());
+        assert!(home.join("state/runs").is_dir());
+        assert!(home.join("state/ee_instances/ee_existence.json").is_file());
+        assert!(home.join("state/interface-artifacts").is_dir());
+        assert!(!home.join("state/runtime-instance").exists());
+
+        let second = super::bootstrap_home_storage(
+            &home,
+            &source_registry,
+            &home.join("ledger"),
+            &mut boot,
+            |_| Ok(()),
+            || false,
+        )
+        .unwrap()
+        .expect("second bootstrap should complete");
+        assert_eq!(second.copied, 0);
     }
 }

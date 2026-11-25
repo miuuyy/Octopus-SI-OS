@@ -7,6 +7,8 @@ const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
 const {
   applyLocalApplicationPack,
+  copySnapshot,
+  deduplicateInstalledRegistryFiles,
   inspectLocalPackageInstallation,
   installLocalPackages,
   readLocalPackageCatalog,
@@ -16,6 +18,7 @@ const {
   repairLocalPackages,
   removeLocalPackages,
 } = require("../electron/localPackages.cjs");
+const { WORKER_HASH_MIN_BYTES, hashVerifiedRegularFile } = require("../electron/parallelFileHash.cjs");
 const { runClientDoctor } = require("../electron/clientDoctor.cjs");
 const { createProjectionStore, mutateOctopusOsWorkspace } = require("../electron/projection.cjs");
 
@@ -975,20 +978,220 @@ async function unconfiguredHomeDoctorFixture() {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 
+async function intraHomeHardlinkDeduplicationFixture() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-dedup-")));
+  try {
+    const roots = rootsFor(root);
+    const sharedBinary = Buffer.alloc(8192, 0x5a);
+    const smallFile = Buffer.from("tiny-note\n");
+    const largeJson = Buffer.from(`${JSON.stringify({ padding: "x".repeat(6000) })}\n`);
+    const mutableData = Buffer.alloc(8192, 0x3c);
+    for (const [pkgId, owner] of [["application.dedup_alpha", "world_dedup_alpha"], ["application.dedup_beta", "world_dedup_beta"]]) {
+      const ownerDir = path.join(roots.sourceRegistryRoot, "interface", owner);
+      await writeJson(path.join(ownerDir, "interface.json"), {
+        id: owner, interface_type: "world", role: "service", direction: "bidirectional", source_names: [owner],
+      });
+      await fs.mkdir(path.join(ownerDir, "bin"), { recursive: true });
+      await fs.mkdir(path.join(ownerDir, "cache"), { recursive: true });
+      await fs.writeFile(path.join(ownerDir, "bin", "helper.bin"), sharedBinary, { mode: 0o755 });
+      await fs.writeFile(path.join(ownerDir, "bin", "small.txt"), smallFile, { mode: 0o644 });
+      await fs.writeFile(path.join(ownerDir, "bin", "large.json"), largeJson, { mode: 0o644 });
+      await fs.writeFile(path.join(ownerDir, "cache", "state.bin"), mutableData, { mode: 0o644 });
+      await writeJson(path.join(roots.libraryRoot, "packages", `${pkgId}.json`), {
+        schema: "octopus.local_package", schema_version: 1, id: pkgId, version: "1.0.0",
+        product_kind: "application", product_id: owner, release_status: "optional",
+        display: { name: pkgId, description: "Dedup fixture", developer: "Octopus", category: "plugin" },
+        members: [{ registry_kind: "interface", owner, primary: true, data_directories: ["cache"] }],
+      });
+    }
+    const catalog = await readLocalPackageCatalog(roots);
+    const digests = Object.fromEntries(catalog.packages.map((pkg) => [pkg.id, pkg.source_digest]));
+    await installLocalPackages({
+      ...roots, operationId: "dedup_install_001",
+      packageIds: ["application.dedup_alpha", "application.dedup_beta"],
+      expectedSourceDigests: digests, deduplicate: false,
+    });
+    const alphaDir = path.join(roots.activeRegistryRoot, "interface", "world_dedup_alpha");
+    const betaDir = path.join(roots.activeRegistryRoot, "interface", "world_dedup_beta");
+    const preA = await fs.lstat(path.join(alphaDir, "bin", "helper.bin"));
+    const preB = await fs.lstat(path.join(betaDir, "bin", "helper.bin"));
+    assert.equal(preA.nlink, 1);
+    assert.equal(preB.nlink, 1);
+    assert.notEqual(preA.ino, preB.ino);
+
+    const exdev = await deduplicateInstalledRegistryFiles(roots, {
+      linkFile: async () => { throw Object.assign(new Error("EXDEV"), { code: "EXDEV" }); },
+    });
+    assert.equal(exdev.linked, 0);
+    assert.ok(exdev.skipped >= 1);
+
+    const dedup = await deduplicateInstalledRegistryFiles(roots);
+    assert.equal(dedup.linked, 1);
+    assert.equal(dedup.savedBytes, sharedBinary.length);
+    const srcStat = await fs.lstat(path.join(roots.sourceRegistryRoot, "interface", "world_dedup_alpha", "bin", "helper.bin"));
+    const postA = await fs.lstat(path.join(alphaDir, "bin", "helper.bin"));
+    const postB = await fs.lstat(path.join(betaDir, "bin", "helper.bin"));
+    assert.equal(postA.dev, postB.dev);
+    assert.equal(postA.ino, postB.ino);
+    assert.equal(postA.nlink, 2);
+    assert.notEqual(postA.ino, srcStat.ino, "source-to-Home isolation must remain unbroken");
+    for (const rel of ["bin/small.txt", "bin/large.json", "cache/state.bin"]) {
+      assert.equal((await fs.lstat(path.join(alphaDir, rel))).nlink, 1, `${rel} must not be hardlinked`);
+      assert.equal((await fs.lstat(path.join(betaDir, rel))).nlink, 1, `${rel} must not be hardlinked`);
+    }
+    const instA = await inspectLocalPackageInstallation({ ...roots, packageId: "application.dedup_alpha" });
+    const instB = await inspectLocalPackageInstallation({ ...roots, packageId: "application.dedup_beta" });
+    assert.equal(instA.receipt_state, "valid");
+    assert.equal(instB.receipt_state, "valid");
+    await removeLocalPackages({
+      ...roots, operationId: "dedup_remove_beta_001", packageIds: ["application.dedup_beta"],
+      expectedInstalledDigests: { "application.dedup_beta": instB.installed_digest },
+    });
+    assert.equal((await fs.lstat(path.join(alphaDir, "bin", "helper.bin"))).nlink, 1);
+    assert.deepEqual(await fs.readFile(path.join(alphaDir, "bin", "helper.bin")), sharedBinary);
+    assert.equal((await inspectLocalPackageInstallation({ ...roots, packageId: "application.dedup_alpha" })).receipt_state, "valid");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function batchedMovesAndLinuxCopyFixture() {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "octopus-batch-copy-")));
+  const originalCopyFile = fs.copyFile;
+  try {
+    const roots = rootsFor(root);
+    const writeMultiPkg = async (id, owners) => {
+      for (const owner of owners) {
+        await writeJson(path.join(roots.sourceRegistryRoot, "interface", owner, "interface.json"), {
+          id: owner, interface_type: "world", role: "service", direction: "bidirectional", source_names: [owner],
+        });
+      }
+      await writeJson(path.join(roots.libraryRoot, "packages", `${id}.json`), {
+        schema: "octopus.local_package", schema_version: 1, id, version: "1.0.0",
+        product_kind: "application", product_id: owners[0], release_status: "optional",
+        display: { name: id, description: "Batch fixture", developer: "Octopus", category: "plugin" },
+        members: owners.map((owner, idx) => ({ registry_kind: "interface", owner, primary: idx === 0 })),
+      });
+    };
+    await writeMultiPkg("application.batch_a", ["world_ba0", "world_ba1", "world_ba2", "world_ba3"]);
+    await writeMultiPkg("application.batch_b", ["world_bb0", "world_bb1"]);
+    await writeMultiPkg("application.batch_fail", ["world_bf0", "world_bf1", "world_bf2"]);
+
+    const scoped = await readLocalPackageCatalog({ ...roots, packageIds: ["application.batch_a"] });
+    assert.deepEqual(scoped.packages.map((pkg) => pkg.id), ["application.batch_a"]);
+    const full = await readLocalPackageCatalog(roots);
+    const byId = new Map(full.packages.map((pkg) => [pkg.id, pkg]));
+
+    const native = roots.publication;
+    const movesLog = [], filesLog = [];
+    const spyPub = {
+      ...native,
+      publishDirectoryMoves: (op, moves) => { movesLog.push({ op, count: moves.length }); return native.publishDirectoryMoves(op, moves); },
+      publishFiles: (writes, condition) => { filesLog.push({ count: writes.length }); return native.publishFiles(writes, condition); },
+    };
+    await installLocalPackages({
+      ...roots, publication: spyPub, operationId: "batch_install_001", deduplicate: false,
+      packageIds: ["application.batch_a", "application.batch_b"],
+      expectedSourceDigests: {
+        "application.batch_a": byId.get("application.batch_a").source_digest,
+        "application.batch_b": byId.get("application.batch_b").source_digest,
+      },
+    });
+    assert.equal(movesLog.filter((row) => row.op.includes(":stage:")).length, 1);
+    assert.equal(movesLog.find((row) => row.op.includes(":stage:")).count, 6);
+    assert.equal(movesLog.filter((row) => row.op.includes(":commit:")).length, 1);
+    assert.equal(movesLog.find((row) => row.op.includes(":commit:")).count, 6);
+    assert.equal(filesLog.length, 1);
+    assert.equal(filesLog[0].count, 2);
+
+    const conflictDir = path.join(roots.activeRegistryRoot, "interface", "world_bf1");
+    let injected = false;
+    await assert.rejects(installLocalPackages({
+      ...roots,
+      publication: {
+        ...native,
+        async publishDirectoryMoves(op, moves) {
+          if (!injected && op.includes(":commit:")) {
+            injected = true;
+            await fs.mkdir(conflictDir, { recursive: true });
+            await fs.writeFile(path.join(conflictDir, "sentinel.txt"), "conflict\n");
+          }
+          return native.publishDirectoryMoves(op, moves);
+        },
+      },
+      operationId: "batch_fail_commit_001", deduplicate: false,
+      packageIds: ["application.batch_fail"],
+      expectedSourceDigests: { "application.batch_fail": byId.get("application.batch_fail").source_digest },
+    }));
+    assert.equal(injected, true);
+    assert.equal(await fs.readFile(path.join(conflictDir, "sentinel.txt"), "utf8"), "conflict\n");
+    await assert.rejects(fs.lstat(path.join(roots.activeRegistryRoot, "interface", "world_bf0")));
+    await assert.rejects(fs.lstat(path.join(roots.activeRegistryRoot, "interface", "world_bf2")));
+    assert.deepEqual(await transactionEntries(roots), []);
+    assert.equal((await inspectLocalPackageInstallation({ ...roots, packageId: "application.batch_a" })).receipt_state, "valid");
+
+    // Linux reflink EOPNOTSUPP memoization + parallelFileHash worker & tamper check.
+    const srcDir = path.join(root, "linux-src"), dstA = path.join(root, "linux-dst-a"), dstB = path.join(root, "linux-dst-b");
+    await fs.mkdir(srcDir, { recursive: true });
+    const bigBytes = Buffer.alloc(WORKER_HASH_MIN_BYTES + 1024, 0x42);
+    const smallBytes = Buffer.from("small-body\n");
+    const bigPath = path.join(srcDir, "big.bin"), smallPath = path.join(srcDir, "small.txt");
+    await fs.writeFile(bigPath, bigBytes, { mode: 0o755 });
+    await fs.writeFile(smallPath, smallBytes, { mode: 0o644 });
+    const [bigStat, smallStat] = await Promise.all([fs.lstat(bigPath, { bigint: true }), fs.lstat(smallPath, { bigint: true })]);
+    const bigHash = await hashVerifiedRegularFile(bigPath, bigStat);
+    assert.equal(bigHash.size, bigBytes.length);
+    assert.equal((await hashVerifiedRegularFile(bigPath, bigStat, { useVerifiedCache: true })).sha256, bigHash.sha256);
+    await assert.rejects(
+      hashVerifiedRegularFile(bigPath, { ...bigStat, size: bigStat.size + 1n }, { changedLabel: "tampered" }),
+      /tampered/,
+    );
+    const snap = {
+      directories: [""],
+      files: [
+        { relative_path: "big.bin", path: bigPath, mode: 0o755, size: bigBytes.length, sha256: bigHash.sha256 },
+        { relative_path: "small.txt", path: smallPath, mode: 0o644, size: smallBytes.length, sha256: (await hashVerifiedRegularFile(smallPath, smallStat)).sha256 },
+      ],
+    };
+    let copyFileCalls = 0;
+    fs.copyFile = async () => { copyFileCalls += 1; throw Object.assign(new Error("EOPNOTSUPP"), { code: "EOPNOTSUPP" }); };
+    const copyState = { reflinkUnsupported: false };
+    await copySnapshot(snap, dstA, () => {}, { platform: "linux", copyState });
+    await copySnapshot(snap, dstB, () => {}, { platform: "linux", copyState });
+    assert.equal(copyFileCalls, 1, "EOPNOTSUPP must be memoized after the first FICLONE attempt");
+    assert.equal(copyState.reflinkUnsupported, true);
+    assert.deepEqual(await fs.readFile(path.join(dstB, "big.bin")), bigBytes);
+    assert.equal((await fs.lstat(path.join(dstB, "big.bin"))).mode & 0o777, 0o755);
+  } finally {
+    fs.copyFile = originalCopyFile;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[2] === "--child") {
   crashChild(process.argv[3], process.argv[4]).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exitCode = 1;
   });
 } else {
-  (process.argv[2] === "--consent-recipe" ? consentRecipeFixture() : process.argv[2] === "--clone-isolation" ? cloneIsolationFixture() : run()).then(async () => {
-    if (!process.argv[2]) await editableInstalledOwnerFixture();
-    if (!process.argv[2]) await applicationHostFixture();
-    if (!process.argv[2]) await offeredWorkersHostApplications();
-    if (!process.argv[2]) await unconfiguredHomeDoctorFixture();
-    if (!process.argv[2]) await cloneIsolationFixture();
-    if (!process.argv[2]) await require("./test-package-ownership.cjs").runPackageOwnership();
-    if (!process.argv[2]) await require("./test-configuration-diagnostics.cjs").runConfigurationDiagnostics();
+  const mode = process.argv[2];
+  const entry = mode === "--consent-recipe"
+    ? consentRecipeFixture()
+    : mode === "--clone-isolation"
+      ? cloneIsolationFixture()
+      : mode === "--dedup"
+        ? intraHomeHardlinkDeduplicationFixture()
+        : run();
+  entry.then(async () => {
+    if (!mode) await editableInstalledOwnerFixture();
+    if (!mode) await applicationHostFixture();
+    if (!mode) await offeredWorkersHostApplications();
+    if (!mode) await unconfiguredHomeDoctorFixture();
+    if (!mode) await cloneIsolationFixture();
+    if (!mode) await intraHomeHardlinkDeduplicationFixture();
+    if (!mode) await batchedMovesAndLinuxCopyFixture();
+    if (!mode) await require("./test-package-ownership.cjs").runPackageOwnership();
+    if (!mode) await require("./test-configuration-diagnostics.cjs").runConfigurationDiagnostics();
     process.stdout.write("local package lifecycle contract passed\n");
   }).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);

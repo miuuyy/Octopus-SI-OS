@@ -379,22 +379,56 @@ pub fn install_registry_with_progress(
         }
     }
     let mut prepared = Vec::with_capacity(pending.len());
+    let batch_mode = pending.len() > 1;
     for relative in pending {
         let relative_path = safe_relative_path(relative)?;
-        let copy = prepare_copy(
+        let copy = prepare_copy_with_sync(
             &source_registry.join(&relative_path),
             &active_registry.join(&relative_path),
             &source_files[relative],
+            !batch_mode,
         )?;
         prepared.push((relative, copy));
     }
+    if batch_mode {
+        let active_dir = File::open(&active_registry).map_err(|source| RegistryInstallError::ActiveRoot {
+            path: active_registry.clone(),
+            source,
+        })?;
+        let fs_synced = octopus_file_storage::sync_filesystem_ordered(&active_dir).map_err(|source| {
+            RegistryInstallError::ActiveRoot {
+                path: active_registry.clone(),
+                source,
+            }
+        })?;
+        if !fs_synced {
+            for (_, copy) in &prepared {
+                let file = File::open(&copy.staged).map_err(|source| RegistryInstallError::WriteFile {
+                    path: copy.staged.clone(),
+                    source,
+                })?;
+                octopus_file_storage::sync_ordered(&file).map_err(|source| {
+                    RegistryInstallError::WriteFile {
+                        path: copy.staged.clone(),
+                        source,
+                    }
+                })?;
+            }
+        }
+    }
     materialize_source_kind_roots(&active_registry, &source_kind_roots)?;
-    for (index, (relative, copy)) in prepared.iter().enumerate() {
-        let target = active_registry.join(safe_relative_path(relative)?);
-        commit_prepared_copy(copy, &target, None)?;
-        progress(RegistrySyncProgress::Applying {
-            done: index + 1, total: prepared.len(), relative,
-        });
+    if batch_mode {
+        commit_prepared_batch(&active_registry, &prepared, progress)?;
+    } else {
+        for (index, (relative, copy)) in prepared.iter().enumerate() {
+            let target = active_registry.join(safe_relative_path(relative)?);
+            commit_prepared_copy(copy, &target, None)?;
+            progress(RegistrySyncProgress::Applying {
+                done: index + 1,
+                total: prepared.len(),
+                relative,
+            });
+        }
     }
     let copied = prepared.len();
     drop(prepared);
@@ -771,10 +805,20 @@ fn load_source_identity(source_registry: &Path) -> Result<String, RegistryInstal
     Ok(identity.id)
 }
 
+#[cfg(test)]
 fn prepare_copy(
     source: &Path,
     target: &Path,
     expected: &InstalledFile,
+) -> Result<PreparedCopy, RegistryInstallError> {
+    prepare_copy_with_sync(source, target, expected, true)
+}
+
+fn prepare_copy_with_sync(
+    source: &Path,
+    target: &Path,
+    expected: &InstalledFile,
+    sync: bool,
 ) -> Result<PreparedCopy, RegistryInstallError> {
     let mut source_file =
         File::open(source).map_err(|source_error| RegistryInstallError::ReadFile {
@@ -805,13 +849,22 @@ fn prepare_copy(
             actual_mode: actual.mode,
         });
     }
-    prepare_bytes(target, &bytes, Some(&source_metadata))
+    prepare_bytes_with_sync(target, &bytes, Some(&source_metadata), sync)
 }
 
 fn prepare_bytes(
     target: &Path,
     bytes: &[u8],
     source_metadata: Option<&std::fs::Metadata>,
+) -> Result<PreparedCopy, RegistryInstallError> {
+    prepare_bytes_with_sync(target, bytes, source_metadata, true)
+}
+
+fn prepare_bytes_with_sync(
+    target: &Path,
+    bytes: &[u8],
+    source_metadata: Option<&std::fs::Metadata>,
+    sync: bool,
 ) -> Result<PreparedCopy, RegistryInstallError> {
     let parent = target
         .parent()
@@ -845,11 +898,13 @@ fn prepare_bytes(
         if let Some(metadata) = source_metadata {
             apply_source_permissions(metadata, &temp)?;
         }
-        file.sync_all()
-            .map_err(|source| RegistryInstallError::WriteFile {
-                path: temp.clone(),
-                source,
-            })?;
+        if sync {
+            file.sync_all()
+                .map_err(|source| RegistryInstallError::WriteFile {
+                    path: temp.clone(),
+                    source,
+                })?;
+        }
         let metadata = file
             .metadata()
             .map_err(|source| RegistryInstallError::EntryType {
@@ -907,6 +962,103 @@ fn installed_bytes(bytes: &[u8], metadata: &std::fs::Metadata) -> InstalledFile 
         sha256,
         mode: file_mode(metadata),
     }
+}
+
+fn commit_prepared_batch(
+    active_registry: &Path,
+    prepared: &[(&String, PreparedCopy)],
+    progress: &mut dyn FnMut(RegistrySyncProgress<'_>),
+) -> Result<(), RegistryInstallError> {
+    let total = prepared.len();
+    let mut done = 0usize;
+    for chunk in prepared.chunks(64) {
+        let mut targets = Vec::with_capacity(chunk.len());
+        let mut payloads = Vec::with_capacity(chunk.len());
+        for (relative, copy) in chunk {
+            let target = active_registry.join(safe_relative_path(relative)?);
+            if !std::fs::symlink_metadata(&copy.staged)
+                .map_err(|source| RegistryInstallError::ReadFile {
+                    path: copy.staged.clone(),
+                    source,
+                })?
+                .is_file()
+            {
+                return Err(RegistryInstallError::UnsupportedEntry {
+                    path: copy.staged.clone(),
+                });
+            }
+            let mut file =
+                File::open(&copy.staged).map_err(|source| RegistryInstallError::ReadFile {
+                    path: copy.staged.clone(),
+                    source,
+                })?;
+            let metadata = file
+                .metadata()
+                .map_err(|source| RegistryInstallError::EntryType {
+                    path: copy.staged.clone(),
+                    source,
+                })?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|source| RegistryInstallError::ReadFile {
+                    path: copy.staged.clone(),
+                    source,
+                })?;
+            if installed_bytes(&bytes, &metadata) != copy.installed
+                || bytes.len() as u64 != copy.bytes
+            {
+                return Err(RegistryInstallError::Conflict {
+                    path: copy.staged.clone(),
+                    reason: "the prepared source bytes or permissions changed before publication"
+                        .to_string(),
+                });
+            }
+            targets.push(target);
+            payloads.push(bytes);
+        }
+        let requests: Vec<publication::BatchPublish<'_>> = chunk
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, copy))| publication::BatchPublish {
+                path: &targets[idx],
+                operation_id: &copy.operation_id,
+                expected_before: None,
+                bytes: &payloads[idx],
+                algorithm: DigestAlgorithm::Sha256,
+                retained_stage: Some(&copy.staged),
+            })
+            .collect();
+        let receipts = publication::publish_batch(&requests).map_err(|source| {
+            RegistryInstallError::WriteFile {
+                path: active_registry.to_path_buf(),
+                source,
+            }
+        })?;
+        if receipts.len() != chunk.len() {
+            return Err(RegistryInstallError::Conflict {
+                path: active_registry.to_path_buf(),
+                reason: "batched registry publication stopped early on a conflict".to_string(),
+            });
+        }
+        for ((idx, (relative, copy)), receipt) in chunk.iter().enumerate().zip(receipts.into_iter())
+        {
+            check_publication(
+                receipt,
+                &targets[idx],
+                &copy.operation_id,
+                None,
+                Some(&copy.installed),
+                copy.bytes,
+            )?;
+            done += 1;
+            progress(RegistrySyncProgress::Applying {
+                done,
+                total,
+                relative,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn commit_prepared_copy(

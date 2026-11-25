@@ -48,6 +48,7 @@ Options:
   --access <mode>                 New task access: project_access or full_access
   --json                          JSON results; NDJSON for streamed work
   --foreground                    Keep 'up' attached in the foreground (for systemd)
+  --no-start                      Provision packages and Home without starting the runtime daemon
   --no-wait                       Return the input admission receipt
   --timeout <seconds>             Stop waiting at a deadline, leave task running
                                   up: omitted or 0 uses the 120-second default
@@ -76,6 +77,7 @@ function argumentsFor(argv) {
       application: { type: "string", multiple: true, default: [] },
       access: { type: "string" },
       foreground: { type: "boolean", default: false },
+      "no-start": { type: "boolean", default: false },
       json: { type: "boolean", default: false }, "no-wait": { type: "boolean", default: false },
       timeout: { type: "string" }, "output-last-message": { type: "string" },
       archived: { type: "boolean", default: false },
@@ -119,6 +121,7 @@ async function main(argv = process.argv.slice(2), io = process) {
     const known = new Set(["chat", "resume", "exec", "send", "watch", "tasks", "history", "inspect", "projects", "models", "answer", "stop", "rename", "archive", "restore", "delete", "export", "setup", "connect", "up", "down", "restart", "status", "doctor", "agent", "project", "download"]);
     const command = known.has(words[0]) ? words.shift() : "chat";
     if (flags.foreground && command !== "up") throw new Error("--foreground is only supported with 'up'.");
+    if (flags["no-start"] && command !== "setup") throw new Error("--no-start is only supported with 'setup'.");
     const report = (value) => {
       if (json) io.stdout.write(`${JSON.stringify(value)}\n`);
       else io.stdout.write(`${safeText(presentResult(value))}\n`);
@@ -191,18 +194,38 @@ async function main(argv = process.argv.slice(2), io = process) {
       if (!io.stdin.isTTY || !io.stdout.isTTY) {
         if (!(command === "setup" && flags["non-interactive"])) throw new Error("Interactive Octopus needs a terminal. Use 'exec', 'send', or '--non-interactive' setup for automation.");
       }
-      terminal = require("./terminal.cjs");
+      if (!(command === "setup" && flags["non-interactive"])) terminal = require("./terminal.cjs");
     }
     if (command === "setup") {
-      const ui = terminal?.createSetupUI ? terminal.createSetupUI({ input: io.stdin, output: io.stdout }) : setupUI(io);
+      const ui = flags["non-interactive"]
+        ? {
+            openExternal(url) {
+              (json ? io.stderr : io.stdout).write(safeText(`\nOpen this address to sign in:\n${url}\n`));
+            },
+            close() {},
+          }
+        : (terminal?.createSetupUI ? terminal.createSetupUI({ input: io.stdin, output: io.stdout }) : setupUI(io));
+      let lastProgressLine = "";
+      const onProgress = (value) => {
+        const line = formatSetupProgress(value);
+        if (!line || line === lastProgressLine) return;
+        lastProgressLine = line;
+        progress(io, json, line);
+      };
       try {
-        report(await environment.setup({
+        const result = await environment.setup({
           ui, nonInteractive: flags["non-interactive"], packId: flags.pack,
           workspaceName: flags["workspace-name"], projectName: flags["project-name"],
           providerId: flags.provider,
           model: flags.model, reasoningEffort: flags.effort, serviceTier: flags["service-tier"],
           signIn: flags["non-interactive"] ? flags["sign-in"] : true, recommended: [],
-        }));
+          noStart: Boolean(flags["no-start"]),
+          onProgress,
+        });
+        report(result);
+        if (!json && result?.runtime?.skipped === true) {
+          progress(io, false, "Runtime daemon not started (--no-start). Start with 'octopus up' or your service manager.");
+        }
       } finally { ui.close?.(); }
       return 0;
     }
@@ -444,8 +467,24 @@ function commandHelp(words) {
   if (words[0] === "project") return `Octopus Projects\n\n  octopus project create "Project name" [--project <parent-id>] [--policy <id>]\n  octopus project policies [--project <parent-id>] [--json]\n  octopus project folders <project-id> <folder>... [--json]\n\nNew Projects use their parent's policy unless an allowed policy is selected.\nThe first folder is the Project's Primary folder; editing folders affects future tasks.\nUse 'octopus projects' to find existing Project IDs.\n`;
   if (words[0] === "agent") return `Octopus Agents\n\n  octopus agent create "Agent name" --project <id> --provider <id> --model <id> --effort <level> [--application <id>]...\n\nUse 'octopus projects --json' for Project IDs and 'octopus models --project <id> --json'\nfor the exact permitted provider, model, and reasoning choices.\nThe Agent uses that Project's configured Drivers and its default Applications;\n--application selects the Applications explicitly instead.\n`;
   if (words[0] === "connect") return `Octopus connect\n\n  octopus connect <application-id> [interface-id] [--home <path>] [--json]\n  octopus connect status <application-id> [interface-id] [--home <path>] [--json]\n  octopus connect disconnect <application-id> [interface-id] [--home <path>] [--json]\n\nConnects, checks, or disconnects an installed client_connection Application (for example world_provider_antigravity).\nProgress and sign-in addresses are written to stderr.\n`;
-  if (words[0] === "setup") return `Octopus setup\n\n  octopus setup [--home <path>]\n  octopus setup --home <path> --non-interactive --pack <id> --workspace-name <name>\n    --project-name <name> [--provider <id>] --model <id> --effort <level>\n\nInteractive setup lists installed choices and guides provider sign-in or credentials.\nNoninteractive setup requires existing provider sign-in or credentials (for API-key providers, via the provider's auth_env_key or saved private environment.json). Configured Homes are preserved.\n`;
+  if (words[0] === "setup") return `Octopus setup\n\n  octopus setup [--home <path>]\n  octopus setup --home <path> --non-interactive --pack <id> --workspace-name <name>\n    --project-name <name> [--provider <id>] --model <id> --effort <level> [--no-start]\n\nInteractive setup lists installed choices and guides provider sign-in or credentials.\nNoninteractive setup requires existing provider sign-in or credentials (for API-key providers, via the provider's auth_env_key or saved private environment.json). Configured Homes are preserved.\nUse --no-start to provision packages, provider credentials, and Home without starting the runtime daemon (for systemd/service managers).\n`;
   return HELP;
+}
+
+function formatSetupProgress(value) {
+  if (!value || typeof value !== "object") return value ? `[setup] ${String(value)}` : "";
+  if (value.packageId) {
+    const phase = value.phase ? String(value.phase).replaceAll("_", " ") : "working";
+    const percent = Number.isFinite(value.percent) ? ` (${value.percent}%)` : "";
+    return `[setup] packages: ${phase} ${value.packageId}${percent}`;
+  }
+  if (value.step) {
+    const phase = value.phase ? String(value.phase).replaceAll("_", " ") : "working";
+    return `[setup] ${value.step}: ${phase}`;
+  }
+  if (value.label) return `[setup] ${value.label}`;
+  if (value.phase) return `[setup] ${String(value.phase).replaceAll("_", " ")}`;
+  return "";
 }
 
 function presentResult(value) {
@@ -498,4 +537,4 @@ function taskAccess(value) {
   throw new Error("--access must be project_access or full_access.");
 }
 
-module.exports = { main, argumentsFor, HELP, createEventRenderer };
+module.exports = { main, argumentsFor, HELP, createEventRenderer, formatSetupProgress };

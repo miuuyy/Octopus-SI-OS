@@ -1,7 +1,7 @@
 use super::*;
 use std::ffi::{OsStr, OsString};
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NodeState {
     pub(super) identity: FileIdentity,
     pub(super) kind: DirectoryEntryKind,

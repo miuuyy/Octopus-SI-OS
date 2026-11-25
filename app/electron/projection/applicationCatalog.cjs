@@ -1,40 +1,21 @@
 module.exports = { readApplicationPackageCatalog, readApplicationPackageSource, scanApplicationPackageRoot, snapshotApplicationPackageDirectory };
 
-const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { readOptionalRegularJsonDocument, readRegularJsonDocument, requirePlainDirectory, stableJson } = require("./jsonFiles.cjs");
+const { hashVerifiedRegularFile } = require("../parallelFileHash.cjs");
 const { readApplicationLogoAsset } = require("./privateConfiguration.cjs");
 const { parseApplicationManifest } = require("./sidecars.cjs");
 const { isPathInside, mapConcurrentOrdered, requiredSafeRegistryId, stringValue } = require("./values.cjs");
 
-const HASH_CHUNK_BYTES = 1024 * 1024;
 const APPLICATION_SNAPSHOT_CACHE_MAX = 1024;
 const applicationSnapshotCache = new Map();
 
-async function hashApplicationFile(entryPath) {
-  const handle = await fs.open(entryPath, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
-  const hash = crypto.createHash("sha256");
-  const buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
-  let size = 0;
-  try {
-    for (;;) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      hash.update(buffer.subarray(0, bytesRead));
-      size += bytesRead;
-    }
-  } finally {
-    await handle.close();
-  }
-  return { sha256: hash.digest("hex"), size };
-}
-
-async function readApplicationPackageCatalog(activeRegistryRoot, localRegistryRoot, warnings) {
+async function readApplicationPackageCatalog(activeRegistryRoot, localRegistryRoot, warnings, names = null) {
   const [active, local] = await Promise.all([
-    scanApplicationPackageRoot(activeRegistryRoot, "active", warnings, true),
-    scanApplicationPackageRoot(localRegistryRoot, "local", warnings, false),
+    scanApplicationPackageRoot(activeRegistryRoot, "active", warnings, true, names),
+    scanApplicationPackageRoot(localRegistryRoot, "local", warnings, false, names),
   ]);
   return {
     active,
@@ -163,7 +144,7 @@ async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, s
     for (const entry of entries) {
       const entryPath = path.join(current, entry.name);
       const relativePath = path.join(relativeDirectory, entry.name);
-      const stat = await fs.lstat(entryPath);
+      const stat = await fs.lstat(entryPath, { bigint: true });
       if (stat.isSymbolicLink()) {
         throw new Error(`${sourceKind} application package contains a symbolic link: ${entryPath}`);
       }
@@ -184,12 +165,12 @@ async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, s
     directories,
     files: inventory.map(({ relative_path, stat }) => ({
       path: relative_path,
-      dev: stat.dev,
-      ino: stat.ino,
-      size: stat.size,
-      mode: stat.mode,
-      mtime: stat.mtimeMs,
-      ctime: stat.ctimeMs,
+      dev: String(stat.dev),
+      ino: String(stat.ino),
+      size: Number(stat.size),
+      mode: Number(stat.mode),
+      mtimeNs: String(stat.mtimeNs),
+      ctimeNs: String(stat.ctimeNs),
     })),
   })).digest("hex");
   const cached = cacheKey ? applicationSnapshotCache.get(cacheKey) : null;
@@ -203,30 +184,34 @@ async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, s
       files: cached.snapshot.files.map((file) => ({ ...file })),
     };
   }
-  for (const { relative_path: relativePath, path: entryPath, stat: before } of inventory) {
-    const content = await hashApplicationFile(entryPath);
-    const after = await fs.lstat(entryPath);
+  const hashed = await mapConcurrentOrdered(inventory, 8, async ({ relative_path: relativePath, path: entryPath, stat: before }) => {
+    const content = await hashVerifiedRegularFile(entryPath, before, {
+      changedLabel: `${sourceKind} application package changed while it was inspected`,
+      useVerifiedCache: !options.fresh,
+    });
+    const after = await fs.lstat(entryPath, { bigint: true });
     if (
       after.isSymbolicLink()
       || !after.isFile()
-      || content.size !== before.size
+      || content.size !== Number(before.size)
       || before.dev !== after.dev
       || before.ino !== after.ino
       || before.size !== after.size
       || before.mode !== after.mode
-      || before.mtimeMs !== after.mtimeMs
-      || before.ctimeMs !== after.ctimeMs
+      || before.mtimeNs !== after.mtimeNs
+      || before.ctimeNs !== after.ctimeNs
     ) {
       throw new Error(`${sourceKind} application package changed while it was inspected: ${entryPath}`);
     }
-    files.push({
+    return {
       relative_path: relativePath,
       path: entryPath,
       sha256: content.sha256,
-      mode: before.mode & 0o777,
-      size: before.size,
-    });
-  }
+      mode: Number(before.mode) & 0o777,
+      size: Number(before.size),
+    };
+  });
+  files.push(...hashed);
   const snapshot = { interface_id: interfaceId, directory: resolved, directories, files };
   if (cacheKey) {
     if (applicationSnapshotCache.size >= APPLICATION_SNAPSHOT_CACHE_MAX) {

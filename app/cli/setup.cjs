@@ -4,7 +4,7 @@ const { createHash, randomUUID } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
 const { createClientSetupStore } = require("../electron/clientSetup.cjs");
 const { initializeWorkspace, readWorkspaceSetupState, workspaceInitializeRequestDigest } = require("../electron/workspaceSetup.cjs");
-const { applyLocalApplicationPack, installLocalPackages, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
+const { applyLocalApplicationPack, readLocalPackageCatalog, withLocalPackageInstallation, withInstalledAgentPreset } = require("../electron/localPackages.cjs");
 const { createOperatorChatClientLoader } = require("../electron/operatorChatClientContract.cjs");
 const { createApplicationConnectionHost, createRegistryConnectionTargets } = require("../electron/applicationConnection.cjs");
 const { createClientProviderMetadata, validateProviderModelSelection, providerSetupRequiredState, readProviderDescriptor } = require("../electron/clientProviderMetadata.cjs");
@@ -19,6 +19,19 @@ const DIGEST = /^[a-f0-9]{64}$/;
 async function setupEnvironment(environment, options = {}) {
   if (options.workspaceRoot !== undefined) throw new Error("Workspace paths belong to Project/Agent driver configuration. Setup does not accept workspaceRoot.");
   const progress = typeof options.onProgress === "function" ? options.onProgress : () => {};
+  const noStart = options.noStart === true;
+  const prepareRuntime = async () => {
+    if (noStart) {
+      if (typeof environment.bootstrap === "function") {
+        progress({ phase: "bootstrapping_home" });
+        await environment.bootstrap({ signal: options.signal });
+      } else if (typeof environment.recoverStoppedTransactions === "function") {
+        await environment.recoverStoppedTransactions({ signal: options.signal });
+      }
+      return;
+    }
+    await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+  };
   checkCancelled(options.signal);
   requireDistribution(environment);
   const registryRoot = environment.packageRoots.activeRegistryRoot;
@@ -38,7 +51,7 @@ async function setupEnvironment(environment, options = {}) {
       ? await readWorkspaceSetupState(roots)
       : { status: "not_configured", receipt: null, errors: [] };
     if (workspace.status === "degraded") {
-      await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+      await prepareRuntime();
       workspace = await readWorkspaceSetupState(roots);
       if (workspace.status === "degraded") throw new Error(`Workspace setup needs repair: ${workspace.errors.join("; ")}`);
     }
@@ -47,7 +60,7 @@ async function setupEnvironment(environment, options = {}) {
       if (options.operationId && current.operationId !== options.operationId) throw new Error(`Setup '${current.operationId}' is in progress. Resume it before choosing another plan.`);
       if (workspace.status === "configured" && workspace.receipt.operation_id !== current.operationId) throw new Error("The unfinished setup and Home receipt belong to different operations.");
       assertSavedChoices(options, current.plan);
-      await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+      await prepareRuntime();
       progress({ phase: "resuming_setup", operationId: current.operationId });
       await store.resume(current.operationId, { onProgress: progress });
       return finishSetup(environment, store, current.operationId, options);
@@ -63,20 +76,26 @@ async function setupEnvironment(environment, options = {}) {
           await ensureSignIn(environment, options);
         }
       }
-      await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+      if (!noStart) {
+        await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+      }
+      const runtimeStatus = await environment.status({ interfaceId: workspace.receipt.home_interface_id });
       return {
         status: "configured", changed: false, home: environment.home,
         workspace, setup: current,
-        runtime: await environment.status({ interfaceId: workspace.receipt.home_interface_id }),
+        runtime: noStart ? { ...runtimeStatus, started: false, skipped: true } : runtimeStatus,
       };
     }
     if (current) throw new Error("The completed client setup has no matching configured Home. Repair its evidence before continuing.");
-    const catalog = await readLocalPackageCatalog(environment.packageRoots);
+    const catalogFilter = options.packId
+      ? { packId: options.packId, ...(options.providerId ? { providerId: options.providerId } : {}) }
+      : {};
+    const catalog = await readLocalPackageCatalog({ ...environment.packageRoots, ...catalogFilter });
     const pack = await choosePack(catalog, options);
     const choices = await collectChoices(environment, catalog, pack, options);
     const plan = compileSetupPlan(pack, choices);
     await verifySetupPlan(environment, plan);
-    await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
+    await prepareRuntime();
     progress({ phase: "setup_plan_ready", operationId: choices.operationId, pack: pack.name, workspace: choices.workspaceName });
     await store.begin({ operationId: choices.operationId, plan });
     await store.resume(choices.operationId, { onProgress: progress });
@@ -92,6 +111,17 @@ async function finishSetup(environment, store, operationId, options) {
     || workspace.receipt.operation_id !== operationId || workspace.receipt.request_digest !== setup.plan.workspace.request_digest) {
     throw new Error("Setup did not produce matching client and workspace receipts.");
   }
+  if (options?.noStart === true) {
+    const runtimeStatus = await environment.status({ interfaceId: workspace.receipt.home_interface_id });
+    return {
+      status: "configured",
+      changed: true,
+      home: environment.home,
+      workspace,
+      setup,
+      runtime: { ...runtimeStatus, started: false, skipped: true },
+    };
+  }
   const runtime = await environment.start({ requireEndpoint: true, interfaceId: workspace.receipt.home_interface_id,
     timeoutMs: options.timeoutMs, signal: options.signal, onProgress: options.onProgress });
   return { status: "configured", changed: true, home: environment.home, workspace, setup, runtime };
@@ -102,11 +132,13 @@ function createSetupOwners(environment, options = {}) {
   const roots = { octopusHomeRoot: environment.home, registryRoot,
     publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) };
   const loader = createOperatorChatClientLoader({
-    packageRoots: () => environment.packageRoots,
+    packageRoots: () => ({ ...environment.packageRoots, reuseVerifiedCache: true }),
     clientPath: () => path.join(registryRoot, "interface", "world_operator_chat", "client.cjs"),
   });
   let projection = null;
   const getProjection = () => projection ??= projectionStore(environment);
+  let lastWorkspaceProjectionFingerprint = null;
+  let cachedTriggers = null;
   let connectionHost = null;
   const getConnectionHost = () => connectionHost ??= createApplicationConnectionHost({
     resolveTargets: createRegistryConnectionTargets({
@@ -140,7 +172,7 @@ function createSetupOwners(environment, options = {}) {
   }
 
   async function packagePlanner(packageId, owner, relativeFile, exported, request) {
-    return withLocalPackageInstallation({ ...environment.packageRoots, packageId }, async (installation) => {
+    return withLocalPackageInstallation({ ...environment.packageRoots, packageId, reuseVerifiedCache: true }, async (installation) => {
       const member = installation.member_states?.find((row) => row.registry_kind === "worker_environment_kind" && row.owner === owner);
       if (!installation.available || !installation.installed || installation.receipt_state !== "valid"
         || !DIGEST.test(installation.receipt_digest) || !member?.materialized) {
@@ -155,7 +187,7 @@ function createSetupOwners(environment, options = {}) {
   }
 
   async function agentPlanner({ choice, projectEeId, operationId, eeInstancesRoot }) {
-    return withInstalledAgentPreset(environment.packageRoots, { ...choice, home: environment.home }, async (source) => {
+    return withInstalledAgentPreset({ ...environment.packageRoots, reuseVerifiedCache: true }, { ...choice, home: environment.home }, async (source) => {
       const token = hash(`${operationId}\0${projectEeId}\0${choice.presetId}`).slice(0, 32);
       const surface = await planSurface({ eeInstancesRoot, request: {
         chatId: `agent_preflight_${token}`, cycle: `agent_preflight_${token}`,
@@ -186,12 +218,19 @@ function createSetupOwners(environment, options = {}) {
       || state.receipt.request_digest !== plan.workspace.request_digest) return null;
     const references = [setupReference("workspace_receipt", context.operationId, state.receipt)];
     if (plan.workspace.project_defaults.length) {
-      getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
-    }
-    for (const entry of plan.workspace.project_defaults) {
-      const context = await projectDefaultContext(getProjection(), entry, state.receipt);
-      if (!context.proven) return null;
-      references.push(projectDefaultReference(entry, context));
+      const fingerprint = await workspaceProjectionDiskFingerprint(environment, registryRoot, state.receipt);
+      if (fingerprint !== lastWorkspaceProjectionFingerprint) {
+        getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
+      }
+      const defaultContexts = await readAllProjectDefaultContexts(getProjection(), plan.workspace.project_defaults, state.receipt);
+      for (const { entry, context: defaultContext } of defaultContexts) {
+        if (!defaultContext.proven) {
+          lastWorkspaceProjectionFingerprint = null;
+          return null;
+        }
+        references.push(projectDefaultReference(entry, defaultContext));
+      }
+      lastWorkspaceProjectionFingerprint = fingerprint;
     }
     const triggers = await setupTriggerProof(registryRoot, environment.home, await triggerEntries(plan));
     if (!triggers) return null;
@@ -200,8 +239,25 @@ function createSetupOwners(environment, options = {}) {
   }
 
   async function triggerEntries(plan) {
+    const packFile = path.join(environment.packageRoots.libraryRoot, "packs", `${plan.pack.id}.json`);
+    const liveManifestDigest = await fileSha256OrMissing(packFile);
+    const selectedKey = stableJson(plan.pack.selected_recommended);
+    if (cachedTriggers
+      && cachedTriggers.packId === plan.pack.id
+      && cachedTriggers.manifestDigest === plan.pack.manifest_digest
+      && liveManifestDigest === plan.pack.manifest_digest
+      && cachedTriggers.selectedKey === selectedKey) {
+      return cachedTriggers.entries;
+    }
     const catalog = await verifySetupPlan(environment, plan);
-    return setupTriggerEntries(catalog.packs.find((row) => row.id === plan.pack.id), plan.pack.selected_recommended);
+    const entries = setupTriggerEntries(catalog.packs.find((row) => row.id === plan.pack.id), plan.pack.selected_recommended);
+    cachedTriggers = {
+      packId: plan.pack.id,
+      manifestDigest: plan.pack.manifest_digest,
+      selectedKey,
+      entries,
+    };
+    return entries;
   }
 
   return {
@@ -227,18 +283,19 @@ function createSetupOwners(environment, options = {}) {
           .filter((row) => row.selection === "included" || plan.pack.selected_recommended.includes(row.package_id))
           .map((row) => row.package_id));
         const digestById = new Map(plan.packages.map((row) => [row.id, row.source_digest]));
+        const extraIds = plan.packages.filter((row) => !packPackageIds.has(row.id)).map((row) => row.id);
+        const extraClosureIds = extraIds.length
+          ? packageClosureIds(catalog.packages, extraIds).filter((id) => !packPackageIds.has(id))
+          : [];
+        const allIds = [...new Set([...packPackageIds, ...extraClosureIds])];
         await applyLocalApplicationPack({ ...environment.packageRoots, operationId: context.operationId,
           packId: plan.pack.id, selectedRecommended: plan.pack.selected_recommended,
-          expectedSourceDigests: Object.fromEntries([...packPackageIds].map((id) => [id, digestById.get(id)])),
+          ...(extraClosureIds.length ? { extraPackageIds: extraClosureIds } : {}),
+          expectedSourceDigests: Object.fromEntries(allIds.map((id) => [id, digestById.get(id)])),
+          reuseVerifiedSourceCache: true,
           assertMutable: loader.assertMutationAllowed, onProgress: options.onProgress });
-        const extraIds = plan.packages.filter((row) => !packPackageIds.has(row.id)).map((row) => row.id);
-        if (extraIds.length) {
-          const closureIds = packageClosureIds(catalog.packages, extraIds);
-          await installLocalPackages({ ...environment.packageRoots, operationId: context.operationId,
-            packageIds: closureIds,
-            expectedSourceDigests: Object.fromEntries(closureIds.map((id) => [id, digestById.get(id)])),
-            assertMutable: loader.assertMutationAllowed, packId: plan.pack.id, onProgress: options.onProgress });
-        }
+        lastWorkspaceProjectionFingerprint = null;
+        cachedTriggers = null;
         projection?.invalidate();
       },
     },
@@ -269,23 +326,32 @@ function createSetupOwners(environment, options = {}) {
             || state.receipt.request_digest !== plan.workspace.request_digest) throw new Error("Another setup already owns this Home, or workspace evidence is degraded.");
           const configured = await readWorkspaceSetupState(roots);
           if (plan.workspace.project_defaults.length) {
+            lastWorkspaceProjectionFingerprint = null;
             getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
-          }
-          for (const entry of plan.workspace.project_defaults) {
-            const target = await projectDefaultContext(getProjection(), entry, configured.receipt);
-            if (target.proven) continue;
-            const request = entry.product_kind === "application"
-              ? { action: "configure_application", applicationId: entry.product_id,
-                projects: target.targets.map((row) => ({ eeId: row.eeId, expectedDigest: row.recordDigest,
-                  available: true, selectedByDefault: entry.default_for_new_tasks })) }
-              : { action: "configure_driver", driverName: entry.product_id,
-                projects: target.targets.map((row) => ({ eeId: row.eeId, expectedDigest: row.recordDigest,
-                  available: true, selectedByDefault: entry.default_for_new_tasks, hostSlots: row.hostSlots })) };
-            await mutateOctopusOsWorkspace(registryRoot, environment.home, target.scope, request, {
-              commitClientAuthoring: (request) => commitProjectionClientAuthoring(environment.home, registryRoot, request,
-                { publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) }),
-            });
-            getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
+            const allContexts = await readAllProjectDefaultContexts(getProjection(), plan.workspace.project_defaults, configured.receipt);
+            const pendingEntries = [];
+            let targetScope = null;
+            for (const { entry, context: target } of allContexts) {
+              if (target.proven) continue;
+              targetScope ??= target.scope;
+              pendingEntries.push(entry.product_kind === "application"
+                ? { action: "configure_application", applicationId: entry.product_id,
+                  projects: target.targets.map((row) => ({ eeId: row.eeId, expectedDigest: row.recordDigest,
+                    available: true, selectedByDefault: entry.default_for_new_tasks })) }
+                : { action: "configure_driver", driverName: entry.product_id,
+                  projects: target.targets.map((row) => ({ eeId: row.eeId, expectedDigest: row.recordDigest,
+                    available: true, selectedByDefault: entry.default_for_new_tasks, hostSlots: row.hostSlots })) });
+            }
+            if (pendingEntries.length) {
+              await mutateOctopusOsWorkspace(registryRoot, environment.home, targetScope,
+                { action: "configure_project_defaults", entries: pendingEntries },
+                {
+                  commitClientAuthoring: (request) => commitProjectionClientAuthoring(environment.home, registryRoot, request,
+                    { publication: environment.packageRoots.publication, retirementBarrier: taskRetirementBarrier(environment) }),
+                });
+              lastWorkspaceProjectionFingerprint = null;
+              getProjection().invalidate(true, "structure", "state/ee_instances/workspace.json");
+            }
           }
           const entries = await triggerEntries(plan);
           await armSetupTriggers(registryRoot, environment.home, entries, {
@@ -355,29 +421,124 @@ function createSetupOwners(environment, options = {}) {
   };
 }
 
-async function projectDefaultContext(store, entry, receipt) {
+async function readAllProjectDefaultContexts(store, entries, receipt) {
+  if (!entries.length) return [];
   const scope = await store.read(projectionReadRequest("projection.operator.os.scope"));
   if (scope.status !== "ready" || scope.root_ee_id !== receipt.root_ee_id || scope.home_run_id !== receipt.home_run_id
     || scope.home_interface_id !== receipt.home_interface_id) throw new Error("Project defaults require the exact configured Home scope.");
   const projectIds = new Map(receipt.project_ee_ids.map((row) => [row.key, row.ee_id]));
-  const ids = [receipt.root_ee_id, ...entry.project_keys.map((key) => {
-    if (!projectIds.has(key)) throw new Error(`Project default references unknown Project '${key}'.`);
-    return projectIds.get(key);
-  })];
   const environments = new Map([scope.root_environment, ...(scope.projects ?? [])].filter(Boolean).map((row) => [row.ee_id, row]));
-  const projection = await store.read(projectionReadRequest(entry.product_kind === "application"
-    ? "projection.operator.os.applications" : "projection.operator.os.drivers"));
-  const capability = (entry.product_kind === "application" ? projection.applications : projection.drivers)
-    .find((row) => (entry.product_kind === "application" ? row.id : row.name) === entry.product_id);
-  if (!capability?.installed) throw new Error(`Project default '${entry.product_id}' is not installed.`);
-  const states = new Map((capability.project_states ?? []).map((row) => [row.ee_id, row]));
-  const targets = ids.map((eeId) => {
-    const environment = environments.get(eeId), state = states.get(eeId);
-    if (!environment || !state || state.record_digest !== environment.record_digest) throw new Error("Project default state is stale or missing.");
-    return { eeId, recordDigest: environment.record_digest, policyAllowed: state.policy_allowed === true,
-      selectedByDefault: state.selected_by_default === true, hostSlots: entry.product_kind === "driver" ? state.host_slots ?? {} : {} };
+  const applicationEntries = entries.filter((entry) => entry.product_kind === "application");
+  const driverEntries = entries.filter((entry) => entry.product_kind === "driver");
+  const appPackageIds = [...new Set(applicationEntries.map((entry) => entry.package_id).filter(Boolean))];
+  const appProductIds = [...new Set(applicationEntries.map((entry) => entry.product_id).filter(Boolean))];
+  const driverPackageIds = [...new Set(driverEntries.map((entry) => entry.package_id).filter(Boolean))];
+  const [applicationsProjection, driversProjection] = await Promise.all([
+    applicationEntries.length
+      ? store.read(projectionReadRequest(
+        "projection.operator.os.applications",
+        appPackageIds.length ? { package_ids: appPackageIds, ...(appProductIds.length ? { application_ids: appProductIds } : {}) } : {},
+      ))
+      : Promise.resolve(null),
+    driverEntries.length
+      ? store.read(projectionReadRequest(
+        "projection.operator.os.drivers",
+        driverPackageIds.length ? { package_ids: driverPackageIds } : {},
+      ))
+      : Promise.resolve(null),
+  ]);
+  return entries.map((entry) => {
+    const ids = [receipt.root_ee_id, ...entry.project_keys.map((key) => {
+      if (!projectIds.has(key)) throw new Error(`Project default references unknown Project '${key}'.`);
+      return projectIds.get(key);
+    })];
+    const capability = (entry.product_kind === "application" ? applicationsProjection.applications : driversProjection.drivers)
+      .find((row) => (entry.product_kind === "application" ? row.id : row.name) === entry.product_id);
+    if (!capability?.installed) throw new Error(`Project default '${entry.product_id}' is not installed.`);
+    const states = new Map((capability.project_states ?? []).map((row) => [row.ee_id, row]));
+    const targets = ids.map((eeId) => {
+      const environment = environments.get(eeId), state = states.get(eeId);
+      if (!environment || !state || state.record_digest !== environment.record_digest) throw new Error("Project default state is stale or missing.");
+      return { eeId, recordDigest: environment.record_digest, policyAllowed: state.policy_allowed === true,
+        selectedByDefault: state.selected_by_default === true, hostSlots: entry.product_kind === "driver" ? state.host_slots ?? {} : {} };
+    });
+    return {
+      entry,
+      context: { scope, targets, proven: targets.every((row) => row.policyAllowed && row.selectedByDefault === entry.default_for_new_tasks) },
+    };
   });
-  return { scope, targets, proven: targets.every((row) => row.policyAllowed && row.selectedByDefault === entry.default_for_new_tasks) };
+}
+
+async function fileSha256OrMissing(filePath) {
+  try {
+    const bytes = await fs.readFile(filePath);
+    return createHash("sha256").update(bytes).digest("hex");
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return "missing";
+    throw error;
+  }
+}
+
+async function directoryFilesDigest(dirPath, filterSuffix = ".json") {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return "missing";
+    throw error;
+  }
+  const names = entries
+    .filter((entry) => !filterSuffix || entry.name.endsWith(filterSuffix))
+    .map((entry) => ({ name: entry.name, isFile: entry.isFile(), isDirectory: entry.isDirectory() }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const parts = await Promise.all(names.map(async (entry) => {
+    if (!entry.isFile) return `${entry.name}:nonfile`;
+    const digest = await fileSha256OrMissing(path.join(dirPath, entry.name));
+    return `${entry.name}:${digest}`;
+  }));
+  return hash(parts.join("\n"));
+}
+
+async function registryDescriptorKindDigest(registryRoot, kindDir, descriptorName) {
+  const root = path.join(registryRoot, kindDir);
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return "missing";
+    throw error;
+  }
+  const names = entries
+    .map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory() }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const parts = await Promise.all(names.map(async (entry) => {
+    if (!entry.isDirectory) return `${entry.name}:non_dir`;
+    const digest = await fileSha256OrMissing(path.join(root, entry.name, descriptorName));
+    return `${entry.name}:${digest}`;
+  }));
+  return hash(parts.join("\n"));
+}
+
+async function workspaceProjectionDiskFingerprint(environment, registryRoot, receipt) {
+  const receiptsRoot = environment.packageRoots.receiptsRoot
+    ?? path.join(environment.home, "client-state", "local-packages", "receipts");
+  const [eeDigest, receiptsDigest, homeRunDigest, ifaceDigest, kindDigest, toolDigest] = await Promise.all([
+    directoryFilesDigest(path.join(environment.home, "state", "ee_instances"), ".json"),
+    directoryFilesDigest(receiptsRoot, ".json"),
+    fileSha256OrMissing(path.join(environment.home, "state", "runs", `${receipt.home_run_id}.json`)),
+    registryDescriptorKindDigest(registryRoot, "interface", "interface.json"),
+    registryDescriptorKindDigest(registryRoot, "worker_environment_kind", "worker_environment_kind.json"),
+    registryDescriptorKindDigest(registryRoot, "tool", "tool.json"),
+  ]);
+  return hash(stableJson({
+    receipt,
+    eeDigest,
+    receiptsDigest,
+    homeRunDigest,
+    ifaceDigest,
+    kindDigest,
+    toolDigest,
+  }));
 }
 
 function projectDefaultReference(entry, context) {
@@ -540,7 +701,12 @@ function compileSetupPlan(pack, choices) {
 }
 
 async function verifySetupPlan(environment, plan) {
-  const catalog = await readLocalPackageCatalog(environment.packageRoots);
+  const catalog = await readLocalPackageCatalog({
+    ...environment.packageRoots,
+    packId: plan.pack.id,
+    providerId: plan.workspace.request.home.providerInterfaceId,
+    packageIds: plan.packages.map((row) => row.id),
+  });
   const pack = catalog.packs.find((row) => row.id === plan.pack.id);
   if (!pack || pack.manifest_digest !== plan.pack.manifest_digest) throw new Error("Application Pack changed after the setup choices were saved.");
   const request = plan.workspace.request;

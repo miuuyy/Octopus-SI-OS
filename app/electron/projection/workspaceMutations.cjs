@@ -2,7 +2,7 @@ module.exports = { mutateOctopusOsWorkspace };
 
 const path = require("node:path");
 const { createOctopusOsAgentTemplate, mutateOctopusOsAgentTemplate, requiredAgentName } = require("./agentTemplates.cjs");
-const { configureOctopusOsApplication, configureOctopusOsDriver } = require("./applicationConfiguration.cjs");
+const { configureOctopusOsApplication, configureOctopusOsDriver, configureOctopusOsProjectDefaults } = require("./applicationConfiguration.cjs");
 const { readRegularJsonDocument } = require("./jsonFiles.cjs");
 const { mutateLocalPackageInventory, requireOctopusOsScope, workspaceProjectMutationScope } = require("./localPackageInventory.cjs");
 const { parseOctopusOsSidecar } = require("./sidecars.cjs");
@@ -36,6 +36,7 @@ async function mutateOctopusOsWorkspace(registryRoot, octopusHomeRoot, scope, re
     "remove_driver",
     "configure_application",
     "configure_driver",
+    "configure_project_defaults",
     "configure_task_application",
   ].includes(action)) {
     throw new Error("Octopus OS workspace mutation action is invalid");
@@ -149,6 +150,15 @@ async function mutateOctopusOsWorkspace(registryRoot, octopusHomeRoot, scope, re
     }
     if (action === "configure_driver") {
       return configureOctopusOsDriver(
+        registryRoot,
+        octopusHomeRoot,
+        snapshot,
+        request,
+        hooks.commitClientAuthoring,
+      );
+    }
+    if (action === "configure_project_defaults") {
+      return configureOctopusOsProjectDefaults(
         registryRoot,
         octopusHomeRoot,
         snapshot,

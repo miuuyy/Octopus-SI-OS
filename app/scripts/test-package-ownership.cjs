@@ -168,7 +168,7 @@ async function sourceBoundaryFixture(root, repoRoot) {
   assert.deepEqual(await fs.readFile(executable), body);
 }
 async function packageExportFixture(root, repoRoot) {
-  for (const relative of ["LICENSE", "app/electron/localPackages.cjs", "app/scripts/export-public-package.cjs", "app/scripts/publication-lib.cjs",
+  for (const relative of ["LICENSE", "app/electron/localPackages.cjs", "app/electron/parallelFileHash.cjs", "app/scripts/export-public-package.cjs", "app/scripts/publication-lib.cjs",
     ...["package_publication", "local_package_manifest", "local_application_pack", "local_package_receipt", "local_package_transaction"].map((name) => `app/schemas/${name}.schema.json`)]) {
     await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
     await fs.copyFile(path.join(repoRoot, relative), path.join(root, relative));

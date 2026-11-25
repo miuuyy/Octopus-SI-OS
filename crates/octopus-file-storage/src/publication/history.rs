@@ -234,7 +234,7 @@ pub(super) fn find_reclaim(path: &Path, publication: &DirectoryMoveReceipt) -> i
     Ok(found)
 }
 
-fn save(root: &Path, original: RetainedReceipt) -> io::Result<()> {
+fn ensure_history_directory(root: &Path) -> io::Result<PathBuf> {
     validate_coordination_root(root)?;
     let directory = root.join("history");
     let mut builder = std::fs::DirBuilder::new();
@@ -245,14 +245,33 @@ fn save(root: &Path, original: RetainedReceipt) -> io::Result<()> {
         Err(error) => return Err(error),
     }
     validate_coordination_root(&directory)?;
-    let key = match &original {
-        RetainedReceipt::File(receipt) => file_key(&receipt.path, &receipt.operation_id)?,
-        RetainedReceipt::Directory(receipt) => directory_key(&receipt.movement.source, &receipt.operation_id, receipt.index)?,
-        RetainedReceipt::Reclaim(receipt) => format!("reclaim-{}.json", reclaim::key(&receipt.tombstone, &receipt.publication)?),
-    };
+    Ok(directory)
+}
+
+fn retained_key(original: &RetainedReceipt) -> io::Result<String> {
+    match original {
+        RetainedReceipt::File(receipt) => file_key(&receipt.path, &receipt.operation_id),
+        RetainedReceipt::Directory(receipt) => directory_key(&receipt.movement.source, &receipt.operation_id, receipt.index),
+        RetainedReceipt::Reclaim(receipt) => Ok(format!("reclaim-{}.json", reclaim::key(&receipt.tombstone, &receipt.publication)?)),
+    }
+}
+
+fn save(root: &Path, original: RetainedReceipt) -> io::Result<()> {
+    let directory = ensure_history_directory(root)?;
+    let key = retained_key(&original)?;
     let record = RetainedRecord { schema_version: 1, original };
     validate(&record, &key)?;
     write_record_once_bounded(&directory.join(key), &record, DIRECTORY_LIMIT)
+}
+
+pub(super) fn stage_directory(root: &Path, receipt: &DirectoryMoveReceipt) -> io::Result<(Option<StagedRecord>, PathBuf)> {
+    let directory = ensure_history_directory(root)?;
+    let original = RetainedReceipt::Directory(receipt.clone());
+    let key = retained_key(&original)?;
+    let record = RetainedRecord { schema_version: 1, original };
+    validate(&record, &key)?;
+    let staged = stage_record_once_bounded(&directory.join(key), &record, DIRECTORY_LIMIT)?;
+    Ok((staged, directory))
 }
 
 pub(super) fn save_directory(root: &Path, receipt: &DirectoryMoveReceipt) -> io::Result<()> {
@@ -263,8 +282,9 @@ pub(super) fn save_reclaim(root: &Path, receipt: &reclaim::ReclaimReceipt) -> io
     save(root, RetainedReceipt::Reclaim(receipt.clone()))
 }
 
-pub(super) fn export_tree(source: &Path, identity: &FileIdentity, destination_root: &Path) -> io::Result<()> {
+pub(super) fn export_tree(source: &Path, identity: &FileIdentity, destination_root: &Path) -> io::Result<bool> {
     let directory = native::pinned_directory(source, identity)?;
+    let mut exported = false;
     for name in native::names(&directory, 16384)? {
         let state = native::state(&directory, &name)?;
         let path = source.join(&name);
@@ -274,11 +294,12 @@ pub(super) fn export_tree(source: &Path, identity: &FileIdentity, destination_ro
             }
             let _metadata = native::pinned_directory(&path, &state.identity)?;
             export_metadata(&path, destination_root)?;
+            exported = true;
         } else if state.kind == DirectoryEntryKind::Directory {
-            export_tree(&path, &state.identity, destination_root)?;
+            exported |= export_tree(&path, &state.identity, destination_root)?;
         }
     }
-    Ok(())
+    Ok(exported)
 }
 
 fn export_metadata(root: &Path, destination_root: &Path) -> io::Result<()> {
@@ -306,6 +327,26 @@ fn export_metadata(root: &Path, destination_root: &Path) -> io::Result<()> {
         }
     }
     reclaim::validate_metadata(root)?;
+    let mut destination_history: Option<PathBuf> = None;
+    let mut staged_records: Vec<StagedRecord> = Vec::new();
+    let mut touched_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut stage_retained = |original: RetainedReceipt| -> io::Result<()> {
+        let directory = match &destination_history {
+            Some(directory) => directory,
+            None => {
+                let created = ensure_history_directory(destination_root)?;
+                touched_dirs.insert(created.clone());
+                destination_history.insert(created)
+            }
+        };
+        let key = retained_key(&original)?;
+        let record = RetainedRecord { schema_version: 1, original };
+        validate(&record, &key)?;
+        if let Some(staged) = stage_record_once_bounded(&directory.join(key), &record, DIRECTORY_LIMIT)? {
+            staged_records.push(staged);
+        }
+        Ok(())
+    };
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -328,19 +369,29 @@ fn export_metadata(root: &Path, destination_root: &Path) -> io::Result<()> {
                     RetainedReceipt::Directory(receipt) => receipt.outcome == PublicationOutcome::Uncertain,
                     RetainedReceipt::Reclaim(_) => false,
                 } { return Err(invalid("uncertain history prevents ancestor publication")); }
-                save(destination_root, record.original)?;
+                stage_retained(record.original)?;
             }
         } else if name.ends_with(".receipt") {
             let receipt: PublicationReceipt = read_record(&entry.path())?.ok_or_else(|| invalid("receipt disappeared during export"))?;
             validate_file(&receipt)?;
             if !receipt_names(&receipt.path, &receipt.operation_id).iter().any(|key| key == name)
                 || receipt.outcome == PublicationOutcome::Uncertain { return Err(invalid("child receipt cannot be exported as settled history")); }
-            save(destination_root, RetainedReceipt::File(receipt))?;
+            stage_retained(RetainedReceipt::File(receipt))?;
         } else if !internal_filename(name) || !std::fs::symlink_metadata(entry.path())?.is_file() {
             return Err(invalid("publication metadata contains an unknown entry"));
         }
     }
-    sync_directory(destination_root)
+    if !staged_records.is_empty() {
+        let barrier_files: Vec<&File> = staged_records.iter().map(|item| &item.file).collect();
+        sync_batch_barrier(&barrier_files, &BTreeSet::new())?;
+        drop(barrier_files);
+        for staged in staged_records {
+            commit_staged_record(staged)?;
+        }
+    }
+    touched_dirs.insert(destination_root.to_path_buf());
+    sync_batch_barrier(&[], &touched_dirs)?;
+    Ok(())
 }
 
 fn internal_filename(name: &str) -> bool {

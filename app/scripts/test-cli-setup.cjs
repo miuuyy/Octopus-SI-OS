@@ -9,6 +9,7 @@ const { execFile } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
 const { resolveEnvironment, createEnvironment } = require("../cli/environment.cjs");
 const { compileSetupPlan, setupReference, ensureSignIn } = require("../cli/setup.cjs");
+const { main: runCli, argumentsFor, HELP, formatSetupProgress } = require("../cli/index.cjs");
 const { createClientSetupStore } = require("../electron/clientSetup.cjs");
 const { readWorkspaceSetupState } = require("../electron/workspaceSetup.cjs");
 const { recoverWorkspaceTransactions } = require("../electron/workspaceSetup.cjs");
@@ -28,6 +29,7 @@ async function main() {
     await fixtureRuntime(root);
     await setupEvidence(root);
     await signInContract();
+    await setupNoStartAndProgressContract(root);
     if (process.argv[2]) {
       assert.equal(process.argv[2], "--runtime-root");
       assert.ok(path.isAbsolute(process.argv[3]));
@@ -208,6 +210,271 @@ async function signInContract() {
   assert.equal(typeof observedUrl, "function");
   await ensureSignIn(environment, { nonInteractive: true });
   assert.equal(starts, 1);
+}
+
+async function setupNoStartAndProgressContract(root) {
+  assert.match(HELP, /--no-start/);
+  const parsedArgs = argumentsFor(["setup", "--no-start", "--non-interactive", "--json"]);
+  assert.deepEqual(parsedArgs.positionals, ["setup"]);
+  assert.equal(parsedArgs.values["no-start"], true);
+  assert.equal(parsedArgs.values["non-interactive"], true);
+  assert.equal(parsedArgs.values.json, true);
+  assert.equal(formatSetupProgress({ packageId: "core.pkg", phase: "staging_package", percent: 40 }), "[setup] packages: staging package core.pkg (40%)");
+  assert.equal(formatSetupProgress({ step: "workspace", phase: "running" }), "[setup] workspace: running");
+  assert.equal(formatSetupProgress({ phase: "setup_plan_ready" }), "[setup] setup plan ready");
+
+  const captureIo = () => {
+    let stdout = "", stderr = "";
+    return {
+      io: {
+        stdout: { write: (chunk) => { stdout += String(chunk); }, isTTY: false },
+        stderr: { write: (chunk) => { stderr += String(chunk); }, isTTY: false },
+        stdin: { isTTY: false },
+      },
+      read: () => ({ stdout, stderr }),
+    };
+  };
+  const badFlag = captureIo();
+  const badExit = await runCli(["status", "--no-start"], badFlag.io);
+  assert.equal(badExit, 1);
+  assert.match(badFlag.read().stderr, /--no-start is only supported with 'setup'/);
+
+  // Offline empty-Home setup --no-start --json + progress + idempotent repeat run.
+  const installationRoot = path.join(root, "offline-dist");
+  const emptyHome = path.join(root, "offline-home");
+  const nativePubPath = path.resolve(__dirname, "support/native-publication.cjs");
+  for (const dir of [
+    "bin", "registry/interface", "registry/tool", "registry/ee_template/existence", "registry/ee_template/project",
+    "local-packages/registry/interface/world_operator_chat", "local-packages/registry/interface/world_provider_fixture",
+    "local-packages/registry/interface/system_worker_home_fixture", "local-packages/registry/interface/system_worker_task_fixture",
+    "local-packages/packages", "local-packages/packs",
+  ]) {
+    await fs.mkdir(path.join(installationRoot, dir), { recursive: true });
+  }
+  for (const file of ["registry/.octopus-source.json", "local-packages/registry/.octopus-source.json"]) {
+    await json(path.join(installationRoot, file), { schema_version: 1, id: "offline-fixture" });
+  }
+  const repoRoot = path.resolve(__dirname, "../..");
+  for (const template of ["existence", "project"]) {
+    await fs.copyFile(
+      path.join(repoRoot, "registry/ee_template", template, "ee_template.json"),
+      path.join(installationRoot, "registry/ee_template", template, "ee_template.json"),
+    );
+  }
+  await json(path.join(installationRoot, "local-packages/registry/interface/world_operator_chat/interface.json"), {
+    id: "world_operator_chat", interface_type: "world", role: "channel", direction: "bidirectional", source_names: ["operator_chat"],
+  });
+  await json(path.join(installationRoot, "local-packages/registry/interface/world_operator_chat/life.json"), {
+    processes: [{ bin: "owner://bin/client" }],
+  });
+  await json(path.join(installationRoot, "local-packages/registry/interface/world_operator_chat/client.json"), {
+    schema_version: 2, interface: "world_operator_chat",
+    run: { ee: "ee_existence", worker: "system_worker_home_fixture", context_artifact_bindings: [] },
+  });
+  await fs.writeFile(path.join(installationRoot, "local-packages/registry/interface/world_operator_chat/client.cjs"), `
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const { nativePublication } = require(${JSON.stringify(nativePubPath)});
+exports.loadStoragePublisher = () => nativePublication();
+exports.withOperatorWorkspaceTopologyLock = async (_home, fn) => fn();
+exports.loadOperatorTaskLifecycle = async () => ({
+  retirementBarrier: { verifyBefore: async () => {}, withHeldProof: async (_ctx, fn) => fn() },
+});
+exports.planOperatorChatSurface = async ({ octopusHome, registryRoot, eeInstancesRoot }, request) => {
+  const homeRoot = octopusHome(), regRoot = registryRoot(), eeRoot = eeInstancesRoot();
+  const rootRecord = JSON.parse(await fs.readFile(path.join(eeRoot, \`\${request.eeId}.json\`), "utf8"));
+  const clientSurfaceRole = request.clientSurfaceRole ?? "home";
+  if (clientSurfaceRole === "home") {
+    assert.equal(rootRecord.parent_ee_id, null);
+    const tpl = JSON.parse(await fs.readFile(path.join(regRoot, "ee_template", rootRecord.template_name, "ee_template.json"), "utf8"));
+    assert.equal(tpl.bootstrap_root, true);
+  }
+  const runId = \`run_operator_chat_\${request.chatId}\`;
+  const chatInterfaceId = \`world_operator_chat_\${request.chatId}\`;
+  const modelInterfaceId = \`\${request.providerInterfaceId}_\${request.chatId}\`;
+  const workerChoiceInterfaceId = request.workerInterfaceId;
+  const workerInterfaceId = \`\${workerChoiceInterfaceId}_\${request.chatId}\`;
+  const toolId = \`file.write__authoring_\${request.chatId}\`;
+  const pid = crypto.createHash("sha256").update(request.chatId).digest("hex").slice(0, 24);
+  const intakeId = \`system_service_input_\${pid}\`, writerId = \`system_input_writer_\${pid}\`, inputToolId = \`file.write.input_\${pid}\`;
+  const requiredInterfaceIds = [chatInterfaceId, modelInterfaceId, workerInterfaceId, intakeId, writerId].sort();
+  const requiredToolIds = [toolId, inputToolId].sort();
+  const authoringProfile = { ee_id: request.eeId, worker_choice_interface: workerChoiceInterfaceId, door_host_slots: request.doorHostSlots ?? {} };
+  const ifaceDir = path.join(regRoot, "interface", chatInterfaceId);
+  const sidecar = { schema_version: 1, workspace: "octopus_os", interface: chatInterfaceId, owner_interface: chatInterfaceId,
+    component: "client", surface_role: clientSurfaceRole, provider_choice_interface: request.providerInterfaceId,
+    worker_choice_interface: workerChoiceInterfaceId, authoring_profile: authoringProfile };
+  const bind = (id) => ({ interface: id, config: { artifact_policy: { mode: "all" } } });
+  const cp = (id, inbound, outbound) => ({ id, run: runId, trace: \`trace:\${runId}:\${id}\`, epoch: 0,
+    interface_binding: bind(inbound), outbound_interface_bindings: outbound.map(bind), artifact_bindings: [], required_verified_artifacts: [] });
+  const checkpoints = [cp("cp_home_input", chatInterfaceId, [modelInterfaceId]), cp("cp_worker_input", workerInterfaceId, [modelInterfaceId]),
+    cp("cp_home_output", modelInterfaceId, [chatInterfaceId]), cp("cp_intake_input", intakeId, [modelInterfaceId]),
+    cp("cp_intake_call", intakeId, [writerId]), cp("cp_intake_result", writerId, [intakeId])];
+  checkpoints[4].required_verified_artifacts = [{ artifact_label: "tool.call", mark: "tool.call.allowed", verifier: "tool_call_allowed",
+    params: { tools: [inputToolId], metadata_matches: [{ payload: "/arguments/expected_before_hash", metadata: "/runtime/run_record_hash" }] } }];
+  const runRecord = { id: runId, ee: request.eeId, worker: workerInterfaceId, trace: \`trace:\${runId}\`, status: "running",
+    interface_state: { [chatInterfaceId]: { client_surface_role: clientSurfaceRole, provider_choice_interface: request.providerInterfaceId,
+      provider_runtime_interface: modelInterfaceId, worker_choice_interface: workerChoiceInterfaceId } },
+    checkpoints, active_checkpoints: checkpoints.map((row) => row.id) };
+  const w = (filePath, content, tag) => ({ filePath, content, tag, expectedBeforeHash: null });
+  return {
+    runId, chatInterfaceId, modelInterfaceId, providerModel: request.providerModel, workerInterfaceId, clientSurfaceRole,
+    reasoningEffort: request.reasoningEffort ?? "low", serviceTier: request.serviceTier ?? "", authoringProfile, requiredInterfaceIds, requiredToolIds,
+    writes: [
+      w(path.join(ifaceDir, "interface.json"), JSON.stringify({ id: chatInterfaceId }) + "\\n", \`interface:\${chatInterfaceId}\`),
+      w(path.join(ifaceDir, "octopus_os.json"), JSON.stringify(sidecar) + "\\n", \`octopus-os:\${chatInterfaceId}\`),
+      w(path.join(regRoot, "interface", modelInterfaceId, "interface.json"), JSON.stringify({ id: modelInterfaceId, interface_driver_config: { private_config: { model: request.providerModel } } }) + "\\n", \`interface:\${modelInterfaceId}\`),
+      w(path.join(regRoot, "interface", workerInterfaceId, "interface.json"), JSON.stringify({ id: workerInterfaceId }) + "\\n", \`interface:\${workerInterfaceId}\`),
+      w(path.join(regRoot, "interface", workerInterfaceId, "policy.json"), JSON.stringify({ id: workerInterfaceId, ceiling: { interfaces: requiredInterfaceIds, tools: requiredToolIds } }) + "\\n", \`policy:\${workerInterfaceId}\`),
+      w(path.join(regRoot, "interface", intakeId, "interface.json"), JSON.stringify({ id: intakeId, role: "service" }) + "\\n", \`interface:\${intakeId}\`),
+      w(path.join(regRoot, "interface", intakeId, "life.json"), "{}\\n", \`life:\${intakeId}\`),
+      w(path.join(regRoot, "interface", writerId, "interface.json"), JSON.stringify({ id: writerId, role: "system" }) + "\\n", \`interface:\${writerId}\`),
+      w(path.join(regRoot, "tool", toolId, "tool.json"), JSON.stringify({ id: toolId, interface: writerId }) + "\\n", \`tool:\${toolId}\`),
+      w(path.join(regRoot, "tool", inputToolId, "tool.json"), JSON.stringify({ id: inputToolId, interface: writerId }) + "\\n", \`tool:\${inputToolId}\`),
+      w(path.join(homeRoot, "state", "runs", \`\${runId}.json\`), JSON.stringify(runRecord) + "\\n", \`run:\${runId}\`),
+    ],
+    ledgerOffset: 0,
+  };
+};
+exports.readOperatorChatArtifacts = async () => ({ artifacts: [] });
+exports.submitOperatorTurn = async () => ({});
+`);
+  await json(path.join(installationRoot, "local-packages/registry/interface/world_provider_fixture/interface.json"), {
+    id: "world_provider_fixture", interface_type: "world", role: "provider", direction: "bidirectional", source_names: ["fixture"],
+    interface_policy: { variables: { models: { default: ["fixture-model"] } } },
+    interface_driver_config: {
+      transport: { auth_env_key: "OCTOPUS_FIXTURE_API_KEY" },
+      private_config: {
+        model: "fixture-model",
+        model_catalog: [{ model: "fixture-model", display_name: "Fixture Model", default_reasoning_effort: "low", supported_reasoning_efforts: ["low"], show_in_picker: true }],
+      },
+    },
+  });
+  await json(path.join(installationRoot, "local-packages/registry/interface/world_provider_fixture/application.json"), {
+    schema_version: 3, id: "world_provider_fixture", name: "Fixture Provider", description: "Fixture provider",
+    category: "provider", developer: "Octopus", version: "1.0.0", icon: "sparkles", logo: "application-logo.svg",
+    interfaces: ["world_provider_fixture"], setup: { fields: [] },
+  });
+  await fs.writeFile(path.join(installationRoot, "local-packages/registry/interface/world_provider_fixture/application-logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+  for (const workerId of ["system_worker_home_fixture", "system_worker_task_fixture"]) {
+    await json(path.join(installationRoot, "local-packages/registry/interface", workerId, "interface.json"), {
+      id: workerId, interface_type: "system", role: "worker", direction: "bidirectional", source_names: [workerId],
+    });
+    await json(path.join(installationRoot, "local-packages/registry/interface", workerId, "policy.json"), {
+      id: workerId, ceiling: { interfaces: [], tools: [] },
+    });
+  }
+  await json(path.join(installationRoot, "local-packages/packages/world_operator_chat.json"), {
+    schema: "octopus.local_package", schema_version: 1, id: "world_operator_chat", version: "1.0.0",
+    product_kind: "application", product_id: "world_operator_chat", release_status: "optional",
+    display: { name: "Operator Chat", description: "Fixture", developer: "Octopus", category: "core" },
+    members: [{ registry_kind: "interface", owner: "world_operator_chat", primary: true }],
+  });
+  await json(path.join(installationRoot, "local-packages/packages/world_provider_fixture.json"), {
+    schema: "octopus.local_package", schema_version: 1, id: "world_provider_fixture", version: "1.0.0",
+    product_kind: "application", product_id: "world_provider_fixture", release_status: "optional",
+    display: { name: "Fixture Provider", description: "Fixture", developer: "Octopus", category: "provider" },
+    members: [
+      { registry_kind: "interface", owner: "world_provider_fixture", primary: true },
+      { registry_kind: "interface", owner: "system_worker_home_fixture", primary: false },
+      { registry_kind: "interface", owner: "system_worker_task_fixture", primary: false },
+    ],
+  });
+  await json(path.join(installationRoot, "local-packages/packs/fixture.json"), {
+    schema: "octopus.local_application_pack", schema_version: 1, id: "fixture", version: "1.0.0",
+    name: "Fixture Pack", description: "Minimal offline setup pack",
+    components: [
+      { package_id: "world_operator_chat", selection: "included", reason: "Chat client" },
+      { package_id: "world_provider_fixture", selection: "included", reason: "Provider" },
+    ],
+    workspace_setup: {
+      selection: "included",
+      home: { provider_interface_id: "world_provider_fixture", worker_interface_id: "system_worker_home_fixture",
+        default_model: "fixture-model", default_reasoning_effort: "low", context_artifact_bindings: [], selected_worker_environment_kinds: [] },
+      task: { worker_interface_id: "system_worker_task_fixture", context_artifact_bindings: [], selected_worker_environment_kinds: [] },
+      project_defaults: [],
+    },
+  });
+  await fs.writeFile(path.join(installationRoot, "bin/octopus"), `#!${process.execPath}
+const fs = require("node:fs"), path = require("node:path");
+const home = process.env.OCTOPUS_HOME, srcReg = process.env.OCTOPUS_SOURCE_REGISTRY, cmd = process.argv[2];
+if (cmd === "project-ee-policies") {
+  const eeDir = path.join(home, "state/ee_instances"), environments = [];
+  if (fs.existsSync(eeDir)) {
+    for (const file of fs.readdirSync(eeDir).filter((n) => n.endsWith(".json")).sort()) {
+      const rec = JSON.parse(fs.readFileSync(path.join(eeDir, file), "utf8"));
+      const allowed = Array.isArray(rec.policy?.allowed_interfaces) ? [...new Set(rec.policy.allowed_interfaces)].sort() : ["world_operator_chat", "world_provider_fixture"];
+      const env = { allowed_interfaces: allowed, allowed_tools: [], allowed_worker_environment_kinds: [], allowed_root_slots: null, allowed_artifact_verbs: ["change", "create", "delete", "read"], hard_blocked_tools: [] };
+      environments.push({ ee_id: rec.ee_id, effective_policy: env, policy_ceiling: { ...env, allowed_interfaces: ["world_operator_chat", "world_provider_fixture"] }, workers: [] });
+    }
+  }
+  console.log(JSON.stringify({ environments, issues: [] })); process.exit(0);
+}
+if (cmd === "bootstrap") {
+  fs.mkdirSync(home, { recursive: true });
+  fs.appendFileSync(path.join(home, "bootstrap-calls"), "bootstrap\\n");
+  fs.cpSync(srcReg, path.join(home, "registry"), { recursive: true });
+  for (const d of ["state/runs", "state/ee_instances", "state/interface-artifacts", "ledger/blobs"]) fs.mkdirSync(path.join(home, d), { recursive: true });
+  fs.writeFileSync(path.join(home, "host.json"), JSON.stringify({ host_manifest_version: 1, root_refs: {} }) + "\\n");
+  const ee = path.join(home, "state/ee_instances/ee_existence.json");
+  if (!fs.existsSync(ee)) fs.writeFileSync(ee, JSON.stringify({ ee_id: "ee_existence", template_name: "existence", parent_ee_id: null, goal: "Existence" }) + "\\n");
+  process.exit(0);
+}
+fs.mkdirSync(home, { recursive: true });
+fs.appendFileSync(path.join(home, "starts"), (cmd || "unknown") + "\\n");
+process.exit(99);
+`, { mode: 0o700 });
+
+  const prevKey = process.env.OCTOPUS_FIXTURE_API_KEY;
+  process.env.OCTOPUS_FIXTURE_API_KEY = "fixture-secret";
+  try {
+    await assert.rejects(fs.access(emptyHome), { code: "ENOENT" });
+    const baseArgs = [
+      "setup", "--home", emptyHome, "--bundle", installationRoot, "--non-interactive",
+      "--pack", "fixture", "--workspace-name", "Fresh Space", "--project-name", "Alpha",
+      "--provider", "world_provider_fixture", "--model", "fixture-model", "--effort", "low", "--no-start",
+    ];
+    const cold = captureIo();
+    const coldExit = await runCli([...baseArgs, "--json"], cold.io);
+    const coldOut = cold.read();
+    assert.equal(coldExit, 0, `cold setup failed: stdout=${coldOut.stdout} stderr=${coldOut.stderr}`);
+    const stdoutLines = coldOut.stdout.trimEnd().split("\n");
+    assert.equal(stdoutLines.length, 1);
+    const parsed = JSON.parse(stdoutLines[0]);
+    assert.equal(parsed.status, "configured");
+    assert.equal(parsed.changed, true);
+    assert.equal(parsed.runtime.started, false);
+    assert.equal(parsed.runtime.skipped, true);
+    assert.equal(parsed.runtime.runtimeReady, false);
+    assert.equal(parsed.workspace.receipt.project_ee_ids.length, 1);
+    const stderrLines = coldOut.stderr.trim().split("\n").filter(Boolean);
+    assert.ok(stderrLines.length >= 2 && stderrLines.every((line) => line.startsWith("[setup] ")));
+    assert.ok(stderrLines.includes("[setup] bootstrapping home"));
+    assert.ok(stderrLines.includes("[setup] setup plan ready"));
+    assert.equal(await fs.readFile(path.join(emptyHome, "bootstrap-calls"), "utf8"), "bootstrap\n");
+    await assert.rejects(fs.access(path.join(emptyHome, "starts")), { code: "ENOENT" });
+    await assert.rejects(fs.access(path.join(emptyHome, "state/runtime-instance")), { code: "ENOENT" });
+
+    const repeat = captureIo();
+    const repeatExit = await runCli([...baseArgs, "--json"], repeat.io);
+    assert.equal(repeatExit, 0, repeat.read().stderr);
+    const repeatParsed = JSON.parse(repeat.read().stdout.trim());
+    assert.equal(repeatParsed.status, "configured");
+    assert.equal(repeatParsed.changed, false);
+    assert.equal(repeatParsed.runtime.skipped, true);
+    assert.equal(await fs.readFile(path.join(emptyHome, "bootstrap-calls"), "utf8"), "bootstrap\n");
+
+    const human = captureIo();
+    const humanExit = await runCli(baseArgs, human.io);
+    assert.equal(humanExit, 0, human.read().stderr);
+    assert.match(human.read().stderr, /Runtime daemon not started \(--no-start\)/);
+    await assert.rejects(fs.access(path.join(emptyHome, "starts")), { code: "ENOENT" });
+  } finally {
+    if (prevKey === undefined) delete process.env.OCTOPUS_FIXTURE_API_KEY;
+    else process.env.OCTOPUS_FIXTURE_API_KEY = prevKey;
+  }
 }
 
 async function genuineSetup(environment) {

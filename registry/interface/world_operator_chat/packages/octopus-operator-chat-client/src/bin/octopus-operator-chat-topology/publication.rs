@@ -177,25 +177,42 @@ pub(super) fn publish_files(request: FilePublicationRequest) -> Result<FilePubli
                 || result.receipts.last().is_some_and(|receipt| receipt.outcome != PublicationOutcome::Applied) { return Ok(()); }
             Some(ConditionOwnership::acquire(runtime, condition, &request.writes)?)
         } else { None };
-        for write in &request.writes[result.receipts.len()..] {
-            if let Some(owner) = &ownership {
-                owner.verify()?;
-                let parent = write.path.parent().ok_or_else(|| invalid("conditioned publication target has no parent"))?;
-                if std::fs::canonicalize(parent)?.as_os_str() != parent.as_os_str() {
-                    return Err(invalid("conditioned publication target parent must be canonical"));
-                }
+        let remaining = &request.writes[result.receipts.len()..];
+        if ownership.is_none() && remaining.len() > 1 && remaining.iter().all(|write| write.content.is_string()) {
+            let batch: Vec<publication::BatchPublish<'_>> = remaining.iter().map(|write| publication::BatchPublish {
+                path: &write.path,
+                operation_id: &write.operation_id,
+                expected_before: write.expected_before_hash.as_str(),
+                bytes: write.content.as_str().unwrap().as_bytes(),
+                algorithm: DigestAlgorithm::Sha256,
+                retained_stage: None,
+            }).collect();
+            for receipt in publication::publish_batch(&batch)? {
+                let sha256 = receipt.digest_algorithm == DigestAlgorithm::Sha256;
+                result.receipts.push(receipt);
+                if !sha256 { return Err(invalid("client file publication received a non-SHA-256 receipt")); }
             }
-            let receipt = match write.content.as_str() {
-                Some(content) => publication::publish(&write.path, &write.operation_id, write.expected_before_hash.as_str(), content.as_bytes()),
-                None => publication::remove(&write.path, &write.operation_id, write.expected_before_hash.as_str().unwrap()),
-            }?;
-            let applied = receipt.outcome == PublicationOutcome::Applied;
-            if request.condition.is_some() && !same_request(&receipt, write) { return Err(invalid("file publication returned a receipt for another submitted operation")); }
-            let sha256 = receipt.digest_algorithm == DigestAlgorithm::Sha256;
-            result.receipts.push(receipt);
-            if !sha256 { return Err(invalid("client file publication received a non-SHA-256 receipt")); }
-            if let Some(owner) = &ownership { owner.verify()?; }
-            if !applied { break; }
+        } else {
+            for write in remaining {
+                if let Some(owner) = &ownership {
+                    owner.verify()?;
+                    let parent = write.path.parent().ok_or_else(|| invalid("conditioned publication target has no parent"))?;
+                    if std::fs::canonicalize(parent)?.as_os_str() != parent.as_os_str() {
+                        return Err(invalid("conditioned publication target parent must be canonical"));
+                    }
+                }
+                let receipt = match write.content.as_str() {
+                    Some(content) => publication::publish(&write.path, &write.operation_id, write.expected_before_hash.as_str(), content.as_bytes()),
+                    None => publication::remove(&write.path, &write.operation_id, write.expected_before_hash.as_str().unwrap()),
+                }?;
+                let applied = receipt.outcome == PublicationOutcome::Applied;
+                if request.condition.is_some() && !same_request(&receipt, write) { return Err(invalid("file publication returned a receipt for another submitted operation")); }
+                let sha256 = receipt.digest_algorithm == DigestAlgorithm::Sha256;
+                result.receipts.push(receipt);
+                if !sha256 { return Err(invalid("client file publication received a non-SHA-256 receipt")); }
+                if let Some(owner) = &ownership { owner.verify()?; }
+                if !applied { break; }
+            }
         }
         Ok(())
     })();

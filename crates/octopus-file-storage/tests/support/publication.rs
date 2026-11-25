@@ -589,3 +589,219 @@ fn directory_endpoints_reject_aliased_ancestors_without_rebasing_selected_effect
     assert_eq!(std::fs::read(outside.join("foreign/file")).unwrap(), b"outside");
     assert!(!outside.join("new").exists() && !root.join("destination").exists());
 }
+
+#[test]
+fn publish_batch_creates_updates_splits_duplicates_and_stops_on_predecessor_mismatch() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temporary.path()).unwrap();
+    let sibling_a = root.join("same/a.json");
+    let sibling_b = root.join("same/b.json");
+    let nested = root.join("nested/deep/c.json");
+    let bytes_a1 = b"{\"k\":\"a1\"}\n";
+    let bytes_b1 = b"{\"k\":\"b1\"}\n";
+    let bytes_c1 = b"{\"k\":\"c1\"}\n";
+    let bytes_a2 = b"{\"k\":\"a2\"}\n";
+    let hash_a1 = hash(bytes_a1);
+
+    let receipts = publish_batch(&[
+        BatchPublish { path: &sibling_a, operation_id: "batch-1-a", expected_before: None, bytes: bytes_a1, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &sibling_b, operation_id: "batch-1-b", expected_before: None, bytes: bytes_b1, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &nested, operation_id: "batch-1-c", expected_before: None, bytes: bytes_c1, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &sibling_a, operation_id: "batch-1-a2", expected_before: Some(&hash_a1), bytes: bytes_a2, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+    ]).unwrap();
+    assert_eq!(receipts.len(), 4);
+    assert!(receipts.iter().all(|r| r.outcome == PublicationOutcome::Applied));
+    assert_eq!(std::fs::read(&sibling_a).unwrap(), bytes_a2);
+    assert_eq!(std::fs::read(&sibling_b).unwrap(), bytes_b1);
+    assert_eq!(std::fs::read(&nested).unwrap(), bytes_c1);
+
+    let replay = publish_batch(&[
+        BatchPublish { path: &sibling_a, operation_id: "batch-1-a", expected_before: None, bytes: bytes_a1, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &sibling_b, operation_id: "batch-1-b", expected_before: None, bytes: bytes_b1, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &nested, operation_id: "batch-1-c", expected_before: None, bytes: bytes_c1, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &sibling_a, operation_id: "batch-1-a2", expected_before: Some(&hash_a1), bytes: bytes_a2, algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+    ]).unwrap();
+    assert_eq!(replay, receipts);
+
+    let hash_b1 = hash(bytes_b1);
+    let untouched = root.join("same/untouched.json");
+    let partial = publish_batch(&[
+        BatchPublish { path: &sibling_b, operation_id: "batch-2-b", expected_before: Some(&hash_b1), bytes: b"b2", algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &nested, operation_id: "batch-2-bad", expected_before: Some(&hash(b"wrong")), bytes: b"c2", algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+        BatchPublish { path: &untouched, operation_id: "batch-2-after", expected_before: None, bytes: b"nope", algorithm: DigestAlgorithm::Sha256, retained_stage: None },
+    ]).unwrap();
+    assert_eq!(partial.len(), 2);
+    assert_eq!(partial[0].outcome, PublicationOutcome::Applied);
+    assert_eq!(partial[1].outcome, PublicationOutcome::NotApplied);
+    assert_eq!(std::fs::read(&sibling_b).unwrap(), b"b2");
+    assert_eq!(std::fs::read(&nested).unwrap(), bytes_c1);
+    assert!(!untouched.exists());
+}
+
+#[test]
+fn batched_directory_moves_preserve_wave_order_prefix_failure_and_mid_wave_settlement() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temporary.path()).unwrap();
+    let staging = root.join("staging");
+    let live = root.join("live");
+    let backup = root.join("backup");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::create_dir_all(&backup).unwrap();
+
+    let mut large_moves = Vec::new();
+    for member in 0..4usize {
+        let src = staging.join(format!("large-{member}"));
+        std::fs::create_dir_all(src.join("nested")).unwrap();
+        for f in 0..70usize {
+            std::fs::write(src.join(format!("nested/f-{f:03}.txt")), format!("m{member}-f{f}")).unwrap();
+        }
+        large_moves.push(directory_move(&src, &live.join(format!("large-{member}"))));
+    }
+    let large_result = publish_directory_moves("batch-large-install", &large_moves).unwrap();
+    assert_eq!(large_result.error, None);
+    assert_eq!(large_result.receipts.len(), 4);
+    assert!(large_result.receipts.iter().all(|r| r.outcome == PublicationOutcome::Applied));
+    assert_eq!(publish_directory_moves("batch-large-install", &large_moves).unwrap(), large_result);
+
+    let mut repair_moves = Vec::new();
+    for member in 0..2usize {
+        repair_moves.push(directory_move(&live.join(format!("large-{member}")), &backup.join(format!("large-{member}"))));
+    }
+    for member in 0..2usize {
+        let next = staging.join(format!("next-{member}"));
+        std::fs::create_dir_all(&next).unwrap();
+        std::fs::write(next.join("version.txt"), format!("v2-{member}")).unwrap();
+        repair_moves.push(directory_move(&next, &live.join(format!("large-{member}"))));
+    }
+    let repair_result = publish_directory_moves("batch-two-wave-repair", &repair_moves).unwrap();
+    assert_eq!(repair_result.error, None);
+    assert_eq!(repair_result.receipts.len(), 4);
+    assert!(repair_result.receipts.iter().all(|r| r.outcome == PublicationOutcome::Applied));
+
+    let good_src = staging.join("prefix-0");
+    let bad_src = staging.join("prefix-1");
+    let tail_src = staging.join("prefix-2");
+    for (dir, body) in [(&good_src, "ok0"), (&bad_src, "before1"), (&tail_src, "ok2")] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("data.txt"), body).unwrap();
+    }
+    let good_move = directory_move(&good_src, &live.join("prefix-0"));
+    let bad_move = directory_move(&bad_src, &live.join("prefix-1"));
+    let tail_move = directory_move(&tail_src, &live.join("prefix-2"));
+    std::fs::write(bad_src.join("data.txt"), "mutated1").unwrap();
+    let partial = publish_directory_moves("batch-prefix-fail", &[good_move, bad_move, tail_move]).unwrap();
+    assert!(partial.error.is_some());
+    assert_eq!(partial.receipts.len(), 3);
+    assert_eq!(partial.receipts[0].outcome, PublicationOutcome::Applied);
+    assert_eq!(partial.receipts[1].outcome, PublicationOutcome::NotApplied);
+    assert_eq!(partial.receipts[2].outcome, PublicationOutcome::NotApplied);
+
+    let mut wave_moves = Vec::new();
+    for i in 0..3usize {
+        let src = staging.join(format!("wave-int-{i}"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("item.txt"), format!("w-{i}")).unwrap();
+        wave_moves.push(directory_move(&src, &live.join(format!("wave-int-{i}"))));
+    }
+    INTERRUPTION.with(|selected| selected.set(Some(Interruption::DirectoryPrepared(0))));
+    assert!(std::panic::catch_unwind(|| publish_directory_moves("batch-wave-interrupt", &wave_moves)).is_err());
+    let settled_reader = ReadGuard::try_acquire(&[], &[staging.join("wave-int-0")]);
+    assert!(settled_reader.is_ok(), "mid-wave prepared interruption must settle cleanly without permanent fencing");
+    for i in 0..3usize {
+        assert!(staging.join(format!("wave-int-{i}")).is_dir());
+        assert!(!live.join(format!("wave-int-{i}")).exists());
+    }
+}
+
+#[test]
+fn parallel_large_file_capture_and_cross_move_hardlinks_publish_and_reject_tamper() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temporary.path()).unwrap();
+    let staging = root.join("staging");
+    let live = root.join("live");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::create_dir_all(&live).unwrap();
+
+    let pkg_a = staging.join("pkg-a");
+    let pkg_b = staging.join("pkg-b");
+    std::fs::create_dir_all(pkg_a.join("bin/sub")).unwrap();
+    std::fs::create_dir_all(pkg_b.join("bin/sub")).unwrap();
+    let blob_shared: Vec<u8> = (0..(192 * 1024)).map(|i| ((i * 31 + 7) % 251) as u8).collect();
+    let blob_a_only: Vec<u8> = (0..(128 * 1024)).map(|i| ((i * 17 + 3) % 241) as u8).collect();
+    let blob_b_only: Vec<u8> = (0..(96 * 1024)).map(|i| ((i * 13 + 11) % 239) as u8).collect();
+    std::fs::write(pkg_a.join("bin/shared.bin"), &blob_shared).unwrap();
+    std::fs::write(pkg_a.join("bin/sub/a-only.bin"), &blob_a_only).unwrap();
+    std::fs::write(pkg_a.join("small.txt"), b"pkg-a-small").unwrap();
+    std::fs::hard_link(pkg_a.join("bin/shared.bin"), pkg_b.join("bin/shared.bin")).unwrap();
+    std::fs::write(pkg_b.join("bin/sub/b-only.bin"), &blob_b_only).unwrap();
+    std::fs::write(pkg_b.join("small.txt"), b"pkg-b-small").unwrap();
+
+    let move_a = directory_move(&pkg_a, &live.join("pkg-a"));
+    let move_b = directory_move(&pkg_b, &live.join("pkg-b"));
+    let result = publish_directory_moves("parallel-hardlink-batch", &[move_a, move_b]).unwrap();
+    assert_eq!(result.error, None);
+    assert_eq!(result.receipts.len(), 2);
+    assert_eq!(
+        FileIdentity::of(&std::fs::symlink_metadata(live.join("pkg-a/bin/shared.bin")).unwrap()).unwrap(),
+        FileIdentity::of(&std::fs::symlink_metadata(live.join("pkg-b/bin/shared.bin")).unwrap()).unwrap(),
+    );
+
+    let tamper_src = staging.join("tamper-large");
+    std::fs::create_dir_all(tamper_src.join("deep")).unwrap();
+    std::fs::write(tamper_src.join("deep/blob1.bin"), &blob_shared).unwrap();
+    std::fs::write(tamper_src.join("deep/blob2.bin"), &blob_a_only).unwrap();
+    let tamper_move = directory_move(&tamper_src, &live.join("tamper-large"));
+    let mut mutated = blob_a_only.clone();
+    *mutated.last_mut().unwrap() ^= 0xFF;
+    std::fs::write(tamper_src.join("deep/blob2.bin"), &mutated).unwrap();
+    let tamper_result = publish_directory_moves("parallel-large-tamper", &[tamper_move]).unwrap();
+    assert!(tamper_result.error.is_some());
+    assert_eq!(tamper_result.receipts[0].outcome, PublicationOutcome::NotApplied);
+}
+
+#[test]
+fn batched_history_export_and_tombstone_reclaim_recover_mid_batch_and_reject_tamper() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temporary.path()).unwrap();
+    let tx = root.join("tx");
+    let live = root.join("live");
+    std::fs::create_dir_all(&tx).unwrap();
+    std::fs::create_dir_all(&live).unwrap();
+
+    let mut moves = Vec::new();
+    for index in 0..10 {
+        let staged = tx.join(format!("owner-{index:02}"));
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("payload.txt"), format!("payload-{index}")).unwrap();
+        moves.push(directory_move(&staged, &live.join(format!("owner-{index:02}"))));
+    }
+    let stage_result = publish_directory_moves("batch-stage", &moves).unwrap();
+    assert_eq!(stage_result.error, None);
+    let journal_path = tx.join("journal.json");
+    let journal_receipt = publish(&journal_path, "tx-journal", None, b"{\"phase\":\"committed\"}\n").unwrap();
+    assert_eq!(journal_receipt.outcome, PublicationOutcome::Applied);
+
+    let tombstone = root.join("tx-tombstone");
+    let cleanup_move = directory_move(&tx, &tombstone);
+    let cleanup_result = publish_directory_moves("tx-cleanup", std::slice::from_ref(&cleanup_move)).unwrap();
+    assert_eq!(cleanup_result.error, None);
+    let proof = &cleanup_result.receipts[0];
+
+    INTERRUPTION.with(|selected| selected.set(Some(Interruption::Reclaim(3))));
+    assert!(std::panic::catch_unwind(|| reclaim_directory(&tombstone, proof, &cleanup_move.expected)).is_err());
+    assert!(ReadGuard::try_acquire(&[], std::slice::from_ref(&tombstone)).is_err());
+
+    let foreign = tombstone.join("foreign.txt");
+    std::fs::write(&foreign, b"intruder").unwrap();
+    assert!(reclaim_directory(&tombstone, proof, &cleanup_move.expected).is_err());
+    std::fs::remove_file(&foreign).unwrap();
+
+    reclaim_directory(&tombstone, proof, &cleanup_move.expected).unwrap();
+    assert!(!tombstone.exists());
+    for (index, moved) in moves.iter().enumerate() {
+        assert_eq!(history::find_directory(&moved.source, "batch-stage", index).unwrap().as_ref(), Some(&stage_result.receipts[index]));
+    }
+    assert_eq!(history::find_file(&journal_path, "tx-journal").unwrap().as_ref(), Some(&journal_receipt));
+    assert!(history::find_reclaim(&tombstone, proof).unwrap().is_some());
+}

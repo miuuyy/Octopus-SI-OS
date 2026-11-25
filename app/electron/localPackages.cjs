@@ -1,8 +1,10 @@
 const crypto = require("node:crypto");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
+const os = require("node:os");
 const path = require("node:path");
 const Ajv = require("ajv/dist/2020");
+const { hashVerifiedRegularFile, recordVerifiedFileDigest } = require("./parallelFileHash.cjs");
 const packageManifestSchema = require("../schemas/local_package_manifest.schema.json");
 const applicationPackSchema = require("../schemas/local_application_pack.schema.json");
 const packageReceiptSchema = require("../schemas/local_package_receipt.schema.json");
@@ -25,6 +27,14 @@ const CLEANUP_PUBLICATION_FILE = /^\.cleanup\.([A-Za-z0-9_-]{8,96})\.json$/;
 const CLEANUP_TRANSACTION_ROOT = /^\.cleanup\.([A-Za-z0-9_-]{8,96})\.[a-f0-9]{12}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const PACKAGE_IO_CONCURRENCY = 8;
+const HASH_CONCURRENCY = Math.min(8, Math.max(2, (os.cpus?.().length) || 2));
+const COPY_BUFFER_BYTES = 1024 * 1024;
+const DEDUP_MIN_BYTES = 4096;
+const REFLINK_UNSUPPORTED_CODES = new Set(["EOPNOTSUPP", "ENOTSUP", "ENOSYS", "EXDEV", "EINVAL"]);
+const HARDLINK_SKIP_CODES = new Set(["EXDEV", "EPERM", "EACCES", "EMLINK", "ENOTSUP", "EOPNOTSUPP", "EROFS"]);
+const MAX_DIRECTORY_BATCH_MOVES = 128;
+const MAX_DIRECTORY_BATCH_DIRS = 300;
+const MAX_DIRECTORY_BATCH_ENTRIES = 8000;
 const MAX_CONFIGURATION_BYTES = 2 * 1024 * 1024;
 const INTERFACE_IMPORT_PREFIX = "interface://";
 const PACKAGE_KINDS = new Set(["application", "driver", "artifact"]);
@@ -39,24 +49,82 @@ const REGISTRY_KINDS = new Set([
 ]);
 const SOURCE_EXCLUDES = new Set([".DS_Store", ".git", "__pycache__", "node_modules", "target"]);
 const sourceSnapshotCache = new Map();
+const snapshotFileMetadata = new WeakMap();
 const validatedReceiptDocuments = new WeakMap();
 const validatedPackagePublications = new WeakMap();
 const configurationValidators = new Map();
 const packageMutationGuards = new Map();
 
+function selectCatalogPackages(library, options = {}) {
+  const hasPackageIds = Array.isArray(options?.packageIds);
+  const hasPackId = typeof options?.packId === "string" && options.packId.trim().length > 0;
+  const hasProviderId = typeof options?.providerId === "string" && options.providerId.trim().length > 0;
+  if (!hasPackageIds && !hasPackId && !hasProviderId) return library.packages;
+  const wanted = new Set();
+  if (hasPackageIds) {
+    for (const id of options.packageIds) {
+      if (typeof id === "string" && id.trim()) wanted.add(id.trim());
+    }
+  }
+  if (hasPackId) {
+    const packId = options.packId.trim();
+    const pack = library.packs.find((entry) => entry.pack.id === packId);
+    if (pack) {
+      for (const component of pack.pack.components) wanted.add(component.package_id);
+      const packProviders = new Set();
+      if (pack.pack.workspace_setup?.home?.provider_interface_id) {
+        packProviders.add(pack.pack.workspace_setup.home.provider_interface_id);
+      }
+      for (const preset of pack.pack.workspace_setup?.agent_presets ?? []) {
+        if (preset?.provider_interface_id) packProviders.add(preset.provider_interface_id);
+      }
+      for (const entry of library.packages) {
+        if (entry.manifest.members.some((member) => member.registry_kind === "interface" && packProviders.has(member.owner))) {
+          wanted.add(entry.manifest.id);
+        }
+      }
+    }
+  }
+  if (hasProviderId) {
+    const providerId = options.providerId.trim();
+    for (const entry of library.packages) {
+      if (entry.manifest.id === providerId
+        || entry.manifest.product_id === providerId
+        || entry.manifest.members.some((member) => member.registry_kind === "interface" && member.owner === providerId)) {
+        wanted.add(entry.manifest.id);
+      }
+    }
+  }
+  const byId = new Map(library.packages.map((entry) => [entry.manifest.id, entry]));
+  const queue = [...wanted];
+  while (queue.length > 0) {
+    const id = queue.pop();
+    const entry = byId.get(id);
+    if (!entry) continue;
+    for (const dependency of entry.manifest.required_packages ?? []) {
+      if (!wanted.has(dependency)) {
+        wanted.add(dependency);
+        queue.push(dependency);
+      }
+    }
+  }
+  return library.packages.filter((entry) => wanted.has(entry.manifest.id));
+}
+
 async function readLocalPackageCatalog(options) {
   const roots = normalizeRoots(options);
   return withPackageStateRead(roots, async () => {
     const library = await loadLocalPackageLibrary(roots);
-    const sourceRead = { library, snapshots: new Map() };
-    const packages = [];
-    for (const entry of library.packages) {
+    const sourceRead = { library, snapshots: new Map(), inodeDigestCache: new Map() };
+    const targetEntries = selectCatalogPackages(library, options);
+    const packages = new Array(targetEntries.length);
+    await boundedEach(targetEntries, async (entry, index) => {
       try {
         const source = await snapshotPackageSource(roots, entry.manifest, sourceRead);
         const state = await readPackageState(roots, entry.manifest, source, { cacheActive: true });
-        packages.push(packageCatalogRecord(entry, source, state));
+        packages[index] = packageCatalogRecord(entry, source, state);
       } catch (error) {
-        packages.push({
+        packages[index] = {
           ...entry.manifest,
           manifest_digest: entry.manifestDigest,
           available: false,
@@ -68,9 +136,9 @@ async function readLocalPackageCatalog(options) {
           installed_digest: "",
           source_file_count: 0,
           error: errorMessage(error),
-        });
+        };
       }
-    }
+    }, HASH_CONCURRENCY);
     const packageById = new Map(packages.map((entry) => [entry.id, entry]));
     for (const entry of packages) {
       try {
@@ -303,8 +371,9 @@ async function withLocalPackageInstallation(options, operation) {
     const library = await loadLocalPackageLibrary(roots);
     const packageId = requiredId(options?.packageId, "packageId");
     const entry = requireLibraryPackage(library, packageId);
-    const source = await snapshotPackageSource(roots, entry.manifest, { fresh: true });
-    const state = await readPackageState(roots, entry.manifest, source);
+    const reuseCache = options?.reuseVerifiedCache === true;
+    const source = await snapshotPackageSource(roots, entry.manifest, { fresh: !reuseCache, library });
+    const state = await readPackageState(roots, entry.manifest, source, { cacheActive: reuseCache });
     return operation(packageCatalogRecord(entry, source, state), packageMemberFileSnapshot(source, state));
   });
 }
@@ -336,6 +405,9 @@ async function installLocalPackages(options) {
       assertMutable: options?.assertMutable,
       packId: optionalId(options?.packId, "packId"),
       onProgress: options?.onProgress,
+      deduplicate: options?.deduplicate,
+      reuseVerifiedSourceCache: options?.reuseVerifiedSourceCache === true,
+      library,
     });
     await syncApplicationHosts(roots, library, operationId, selected);
     return result;
@@ -487,9 +559,15 @@ async function applyLocalApplicationPack(options) {
         ? [component.package_id]
         : []
     ));
+    const extraPackageIds = requiredUniqueIds(options?.extraPackageIds ?? [], "extraPackageIds", true);
+    const repeatedExtra = extraPackageIds.filter((packageId) => packageIds.includes(packageId));
+    if (repeatedExtra.length) {
+      throw new Error(`Application Pack '${packId}' extraPackageIds already included in pack: ${repeatedExtra.join(", ")}`);
+    }
+    const allPackageIds = [...packageIds, ...extraPackageIds];
     if (packageIds.length === 0) throw new Error(`Application Pack '${packId}' selects no installable packages`);
-    const expected = normalizeDigestMap(options?.expectedSourceDigests, packageIds, "expectedSourceDigests");
-    const selected = requireReviewedPackageClosure(library, packageIds);
+    const expected = normalizeDigestMap(options?.expectedSourceDigests, allPackageIds, "expectedSourceDigests");
+    const selected = requireReviewedPackageClosure(library, allPackageIds);
     await installedApplicationHosts(roots, library);
     const result = await installResolvedPackages(roots, selected, {
       operationId,
@@ -497,6 +575,9 @@ async function applyLocalApplicationPack(options) {
       assertMutable: options?.assertMutable,
       packId,
       onProgress: options?.onProgress,
+      deduplicate: options?.deduplicate,
+      reuseVerifiedSourceCache: options?.reuseVerifiedSourceCache === true,
+      library,
     });
     await syncApplicationHosts(roots, library, operationId, selected);
     return { ...result, action: "apply_application_pack", packId };
@@ -964,14 +1045,15 @@ async function withInstalledAgentPreset(options, choice, operation) {
       }
       packageIds.add(owners[0].manifest.id);
     }
+    const reuseCache = options?.reuseVerifiedCache === true;
     const verify = async () => {
       const currentPack = await readJsonDocument(pack.file, "Agent preset pack");
       if (currentPack.digest !== pack.packDigest) throw new Error("Agent preset pack changed during authoring");
       for (const entry of packageDependencyOrder(library, [...packageIds])) {
         const id = entry.manifest.id;
         if (entry.source === "explicit" && (await readJsonDocument(entry.file, `Agent preset dependency '${id}'`)).digest !== entry.manifestDigest) throw new Error(`Agent preset dependency manifest '${id}' changed during authoring`);
-        const source = await snapshotPackageSource(roots, entry.manifest, { fresh: true });
-        const state = await readPackageState(roots, entry.manifest, source);
+        const source = await snapshotPackageSource(roots, entry.manifest, { fresh: !reuseCache, library });
+        const state = await readPackageState(roots, entry.manifest, source, { cacheActive: reuseCache });
         const record = packageCatalogRecord(entry, source, state);
         if (!record.installed || record.receipt_state !== "valid") throw new Error(`Agent preset requires verified installed package '${id}'`);
       }
@@ -1461,6 +1543,7 @@ function snapshotSourceMember(roots, member, sourceDirectory, options) {
   if (passed) return passed;
   const snapshot = snapshotDirectory(sourceDirectory, {
     cacheKey: options.fresh ? "" : `${roots.sourceRegistryRoot}\0${memberKey(member)}`,
+    inodeDigestCache: options.inodeDigestCache,
   });
   options.snapshots?.set(sourceDirectory, snapshot);
   return snapshot;
@@ -1804,9 +1887,9 @@ async function snapshotDirectory(rootValue, options = {}) {
       const absolute = path.join(directory, entry.name);
       const relative = path.join(relativeDirectory, entry.name);
       if (SOURCE_EXCLUDES.has(entry.name)) { excludedEntries.push(absolute); continue; }
-      const stat = await fs.lstat(absolute);
+      const stat = await lstatExact(absolute);
       if (entry.name === ".octopus-publication") {
-        if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) throw new Error(`Invalid private publication directory: ${absolute}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || (Number(stat.mode) & 0o077) !== 0) throw new Error(`Invalid private publication directory: ${absolute}`);
         continue;
       }
       if (stat.isSymbolicLink()) throw new Error(`local package contains a symbolic link: ${absolute}`);
@@ -1821,7 +1904,13 @@ async function snapshotDirectory(rootValue, options = {}) {
   };
   await visit(root, "");
   const fingerprint = hashJson({ directories, excludedEntries, files: inventory.map((file) => ({
-    path: file.relative_path, dev: file.stat.dev, size: file.stat.size, mode: file.stat.mode, mtime: file.stat.mtimeMs, ctime: file.stat.ctimeMs, inode: file.stat.ino,
+    path: file.relative_path,
+    dev: String(file.stat.dev),
+    size: Number(file.stat.size),
+    mode: Number(file.stat.mode),
+    mtimeNs: String(file.stat.mtimeNs),
+    ctimeNs: String(file.stat.ctimeNs),
+    inode: String(file.stat.ino),
   })) });
   const cached = options.cacheKey ? sourceSnapshotCache.get(options.cacheKey) : null;
   if (cached?.fingerprint === fingerprint) {
@@ -1829,20 +1918,44 @@ async function snapshotDirectory(rootValue, options = {}) {
     sourceSnapshotCache.set(options.cacheKey, cached);
     return cached.snapshot;
   }
-  for (const { path: absolute, relative_path: relative, stat } of inventory) {
-    const handle = await fs.open(absolute, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
-    let content;
-    try { content = await hashFileHandle(handle); }
-    finally { await handle.close(); }
-    const current = await fs.lstat(absolute);
-    if (content.size !== stat.size || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs
-      || current.ctimeMs !== stat.ctimeMs || current.mode !== stat.mode || current.ino !== stat.ino || !current.isFile()) {
+  const inodeDigestCache = options.inodeDigestCache instanceof Map ? options.inodeDigestCache : new Map();
+  const hashedFiles = new Array(inventory.length);
+  const metadata = new Array(inventory.length);
+  await boundedEach(inventory, async ({ path: absolute, relative_path: relative, stat }, index) => {
+    const inodeKey = inodeCacheKey(stat);
+    let contentPromise = inodeDigestCache.get(inodeKey);
+    if (!contentPromise) {
+      contentPromise = hashVerifiedRegularFile(absolute, stat, {
+        useVerifiedCache: Boolean(options.cacheKey),
+      });
+      inodeDigestCache.set(inodeKey, contentPromise);
+      contentPromise.catch(() => {
+        if (inodeDigestCache.get(inodeKey) === contentPromise) inodeDigestCache.delete(inodeKey);
+      });
+    }
+    const content = await contentPromise;
+    const current = await lstatExact(absolute);
+    if (content.size !== Number(stat.size) || current.size !== stat.size || current.mtimeNs !== stat.mtimeNs
+      || current.ctimeNs !== stat.ctimeNs || current.mode !== stat.mode || current.ino !== stat.ino
+      || current.dev !== stat.dev || !current.isFile()) {
       throw new Error(`local package file changed while reading: ${absolute}`);
     }
-    files.push({ path: absolute, relative_path: relative, size: stat.size, mode: stat.mode & 0o777, sha256: content.sha256 });
-  }
+    hashedFiles[index] = { path: absolute, relative_path: relative, size: Number(stat.size), mode: Number(stat.mode) & 0o777, sha256: content.sha256 };
+    metadata[index] = {
+      path: absolute,
+      relative_path: relative,
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mode: stat.mode,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+  }, HASH_CONCURRENCY);
+  files.push(...hashedFiles);
   const digest = snapshotDigest(files);
   const snapshot = { root, directories, files, digest, excludedEntries };
+  snapshotFileMetadata.set(files, metadata);
   if (options.cacheKey) {
     if (sourceSnapshotCache.size >= 1024) sourceSnapshotCache.delete(sourceSnapshotCache.keys().next().value);
     sourceSnapshotCache.set(options.cacheKey, { fingerprint, snapshot });
@@ -1858,6 +1971,8 @@ function assertNoExcludedActiveEntries(snapshot) {
 
 async function installResolvedPackages(roots, entries, operation) {
   const prepared = [];
+  const installInodeDigestCache = new Map();
+  const reuseVerifiedSourceCache = operation.reuseVerifiedSourceCache === true;
   for (const entry of entries) {
     reportProgress(operation.onProgress, {
       operationId: operation.operationId,
@@ -1869,12 +1984,16 @@ async function installResolvedPackages(roots, entries, operation) {
     if (entry.manifest.release_status === "system") {
       throw new Error(`System package '${entry.manifest.id}' cannot be installed independently`);
     }
-    const source = await snapshotPackageSource(roots, entry.manifest, { fresh: true });
+    const source = await snapshotPackageSource(roots, entry.manifest, {
+      fresh: !reuseVerifiedSourceCache,
+      inodeDigestCache: installInodeDigestCache,
+      library: operation.library,
+    });
     await verifyPackageDefinition(entry);
     if (operation.expected[entry.manifest.id] !== source.sourceDigest) {
       throw new Error(`local package '${entry.manifest.id}' changed before installation`);
     }
-    const state = await readPackageState(roots, entry.manifest, source);
+    const state = await readPackageState(roots, entry.manifest, source, { cacheActive: reuseVerifiedSourceCache });
     if (state.materialized && state.receiptState === "valid") {
       prepared.push({ entry, source, state, alreadyInstalled: true });
       continue;
@@ -1895,6 +2014,9 @@ async function installResolvedPackages(roots, entries, operation) {
   }
   await assertPackageMutationAllowed(roots, operation.assertMutable, pending.map((candidate) => candidate.entry.manifest.id));
   assertNoRepeatedTransactionOwners(pending);
+  const existingReceipts = await readOptionalDirectory(roots.receiptsRoot);
+  const hadPreExistingPackages = existingReceipts.some((entry) => entry.isFile() && entry.name.endsWith(".json"));
+  const shouldDeduplicate = operation.deduplicate ?? (process.platform === "linux");
   const receipts = pending.map(({ entry, source }) => packageReceipt(
     entry.manifest,
     source,
@@ -1928,6 +2050,17 @@ async function installResolvedPackages(roots, entries, operation) {
   try {
     const totalFiles = pending.reduce((total, candidate) => total + candidate.source.fileCount, 0);
     let copiedFiles = 0;
+    const copyState = { reflinkUnsupported: false };
+    const txDedup = shouldDeduplicate ? {
+      minBytes: DEDUP_MIN_BYTES,
+      keepers: new Map(),
+      pending: new Map(),
+      verifiedSourceInodes: new Map(),
+      hardlinkDisabled: false,
+    } : null;
+    const stagedPreimages = new Array(journal.moves.length);
+    const fileStatsByMove = new Map();
+    const moveMetrics = new Array(journal.moves.length);
     for (const [index, move] of journal.moves.entries()) {
       const sourceMember = pending
         .find((candidate) => candidate.entry.manifest.id === move.package_id)
@@ -1941,7 +2074,7 @@ async function installResolvedPackages(roots, entries, operation) {
       }
       await fs.mkdir(path.dirname(stage), { recursive: true, mode: 0o755 });
       await requirePlainDirectory(path.dirname(stage), path.dirname(stage));
-      await stagePackageSnapshot(sourceMember, stage, transactionRoot, index, () => {
+      const prepared = await preparePackageSnapshot(sourceMember, stage, transactionRoot, index, () => {
         copiedFiles += 1;
         reportProgress(operation.onProgress, {
           operationId: operation.operationId,
@@ -1950,36 +2083,70 @@ async function installResolvedPackages(roots, entries, operation) {
           phase: "copying",
           percent: totalFiles ? Math.round(copiedFiles / totalFiles * 70) : 70,
         });
-      }, roots, journalPath, journal, async () => {
-        const staged = await snapshotDirectory(stage);
-        if (staged.digest !== move.digest) throw new Error(`staged owner '${move.target}' does not match its source`);
-        journal.moves[index].state = "staged";
+      }, copyState, { txDedup });
+      if (packageDirectoryDigest(prepared.preimage) !== move.digest) {
+        throw new Error(`staged owner '${move.target}' does not match its source`);
+      }
+      stagedPreimages[index] = prepared.preimage;
+      fileStatsByMove.set(index, prepared.fileStats);
+      moveMetrics[index] = preimageMetrics(prepared.preimage);
+    }
+    const stageBatches = chunkMoveIndices(
+      journal.moves.map((_, index) => index),
+      (index) => moveMetrics[index],
+    );
+    for (const batch of stageBatches) {
+      const key = publicationRangeKey("stage", batch.start, batch.end);
+      const retained = batch.indices.map((index) => stagedPreimages[index]);
+      await publishPackageMoves(roots, journalPath, journal, key, retained, async () => {
+        const publication = journal.publications[key];
+        for (const [offset, moveIndex] of batch.indices.entries()) {
+          const move = journal.moves[moveIndex];
+          const receipt = publication?.receipts?.[offset];
+          if (!receipt || receipt.outcome !== "applied" || packageDirectoryDigest(receipt.movement.expected) !== move.digest) {
+            throw new Error(`staged owner '${move.target}' does not match its source`);
+          }
+          journal.moves[moveIndex].state = "staged";
+        }
+        await writeJournal(journalPath, journal);
       });
     }
     for (const candidate of pending) {
       await verifyPackageDefinition(candidate.entry);
-      const refreshed = await snapshotPackageSource(roots, candidate.entry.manifest, { fresh: true });
-      if (refreshed.sourceDigest !== candidate.source.sourceDigest) {
-        throw new Error(`local package '${candidate.entry.manifest.id}' changed while staging`);
+      const unchanged = await sourceSnapshotMetadataUnchanged(candidate.source);
+      if (!unchanged) {
+        const refreshed = await snapshotPackageSource(roots, candidate.entry.manifest, { fresh: true });
+        if (refreshed.sourceDigest !== candidate.source.sourceDigest) {
+          throw new Error(`local package '${candidate.entry.manifest.id}' changed while staging`);
+        }
       }
     }
     journal.phase = "committing";
     await writeJournal(journalPath, journal);
-    for (const [index, move] of journal.moves.entries()) {
-      const stage = resolveTransactionPath(roots, move.stage);
-      const target = resolveTransactionPath(roots, move.target);
-      await publishPackageMoves(roots, journalPath, journal, `commit:${index}`, [journal.publications[`stage:${index}`].moves[0].expected], () => {
-        journal.moves[index].state = "materialized";
+    const commitBatches = chunkMoveIndices(
+      journal.moves.map((_, index) => index),
+      (index) => moveMetrics[index],
+    );
+    for (const batch of commitBatches) {
+      const key = publicationRangeKey("commit", batch.start, batch.end);
+      const retained = batch.indices.map((index) => stagedPreimages[index]);
+      await publishPackageMoves(roots, journalPath, journal, key, retained, async () => {
+        for (const moveIndex of batch.indices) journal.moves[moveIndex].state = "materialized";
+        await writeJournal(journalPath, journal);
       });
-      reportProgress(operation.onProgress, {
-        operationId: operation.operationId,
-        packageId: move.package_id,
-        operation: "install",
-        phase: "installing",
-        percent: Math.round(72 + (index + 1) / journal.moves.length * 22),
-      });
+      for (const moveIndex of batch.indices) {
+        const move = journal.moves[moveIndex];
+        reportProgress(operation.onProgress, {
+          operationId: operation.operationId,
+          packageId: move.package_id,
+          operation: "install",
+          phase: "installing",
+          percent: Math.round(72 + (moveIndex + 1) / journal.moves.length * 22),
+        });
+      }
     }
-    await verifyMaterializedMoves(roots, journal.moves);
+    await verifyMaterializedMoves(roots, journal.moves, { journal, fileStatsByMove });
+    await preparePackageReceiptPublications(roots, journal);
     journal.phase = "owners_materialized";
     await writeJournal(journalPath, journal);
     for (const entry of pending) {
@@ -1991,13 +2158,21 @@ async function installResolvedPackages(roots, entries, operation) {
         percent: 96,
       });
     }
-    await verifyMaterializedMoves(roots, journal.moves);
     await publishPackageReceipts(roots, journalPath, journal);
-    journal.phase = "receipts_written";
-    await writeJournal(journalPath, journal);
     journal.phase = "committed";
-    await writeJournal(journalPath, journal);
-    await removeTransactionRoot(transactionRoot, roots);
+    const committedJournalWrite = await writeJournal(journalPath, journal);
+    await removeTransactionRoot(transactionRoot, roots, { journal, journalWrite: committedJournalWrite });
+    let postCommitDedupLinked = 0;
+    if (shouldDeduplicate && hadPreExistingPackages) {
+      const dedupResult = await deduplicateInstalledRegistryFiles(roots, {
+        members: pending.flatMap((candidate) => candidate.entry.manifest.members),
+        knownDigests: buildKnownDigestMap(fileStatsByMove),
+      });
+      postCommitDedupLinked = dedupResult.linked;
+    }
+    if (postCommitDedupLinked === 0) {
+      await seedActiveMemberSnapshotCache(roots, pending, journal, fileStatsByMove);
+    }
   } catch (error) {
     let recovery;
     try {
@@ -2150,6 +2325,10 @@ async function repairResolvedPackages(roots, entries, operation) {
   try {
     const totalFiles = replacements.reduce((total, candidate) => total + candidate.materialization.fileCount, 0);
     let copiedFiles = 0;
+    const copyState = { reflinkUnsupported: false };
+    const stagedPreimages = new Array(journal.moves.length);
+    const fileStatsByMove = new Map();
+    const moveMetrics = new Array(journal.moves.length);
     for (const [index, move] of journal.moves.entries()) {
       const sourceMember = replacements
         .find((candidate) => candidate.entry.manifest.id === move.package_id)
@@ -2163,7 +2342,7 @@ async function repairResolvedPackages(roots, entries, operation) {
       }
       await fs.mkdir(path.dirname(stage), { recursive: true, mode: 0o755 });
       await requirePlainDirectory(path.dirname(stage), path.dirname(stage));
-      await stagePackageSnapshot(sourceMember, stage, transactionRoot, index, () => {
+      const preparedMove = await preparePackageSnapshot(sourceMember, stage, transactionRoot, index, () => {
         copiedFiles += 1;
         reportProgress(operation.onProgress, {
           operationId: operation.operationId,
@@ -2172,10 +2351,32 @@ async function repairResolvedPackages(roots, entries, operation) {
           phase: "copying",
           percent: totalFiles ? Math.round(copiedFiles / totalFiles * 55) : 55,
         });
-      }, roots, journalPath, journal, async () => {
-        const staged = await snapshotDirectory(stage);
-        if (staged.digest !== move.digest) throw new Error(`staged repair owner '${move.target}' does not match its authored content`);
-        journal.moves[index].state = "staged";
+      }, copyState);
+      if (packageDirectoryDigest(preparedMove.preimage) !== move.digest) {
+        throw new Error(`staged repair owner '${move.target}' does not match its authored content`);
+      }
+      stagedPreimages[index] = preparedMove.preimage;
+      fileStatsByMove.set(index, preparedMove.fileStats);
+      moveMetrics[index] = preimageMetrics(preparedMove.preimage);
+    }
+    const stageBatches = chunkMoveIndices(
+      journal.moves.map((_, index) => index),
+      (index) => moveMetrics[index],
+    );
+    for (const batch of stageBatches) {
+      const key = publicationRangeKey("stage", batch.start, batch.end);
+      const retained = batch.indices.map((index) => stagedPreimages[index]);
+      await publishPackageMoves(roots, journalPath, journal, key, retained, async () => {
+        const publication = journal.publications[key];
+        for (const [offset, moveIndex] of batch.indices.entries()) {
+          const move = journal.moves[moveIndex];
+          const receipt = publication?.receipts?.[offset];
+          if (!receipt || receipt.outcome !== "applied" || packageDirectoryDigest(receipt.movement.expected) !== move.digest) {
+            throw new Error(`staged repair owner '${move.target}' does not match its authored content`);
+          }
+          journal.moves[moveIndex].state = "staged";
+        }
+        await writeJournal(journalPath, journal);
       });
     }
     for (const candidate of pending) {
@@ -2188,33 +2389,47 @@ async function repairResolvedPackages(roots, entries, operation) {
     await assertPackageMutationAllowed(roots, operation.assertMutable, pending.map(candidate => candidate.entry.manifest.id));
     journal.phase = "committing";
     await writeJournal(journalPath, journal);
-    for (const [index, move] of journal.moves.entries()) {
-      const stage = resolveTransactionPath(roots, move.stage);
-      const target = resolveTransactionPath(roots, move.target);
-      const backup = resolveTransactionPath(roots, move.backup);
-      const staged = journal.publications[`stage:${index}`].moves[0].expected;
-      await publishPackageMoves(roots, journalPath, journal, `commit:${index}`, move.previous_digest === null ? [staged] : [undefined, staged], () => {
-        journal.moves[index].state = "materialized";
+    const commitBatches = chunkMoveIndices(
+      journal.moves.map((_, index) => index),
+      (index) => {
+        const base = moveMetrics[index];
+        const multiplier = journal.moves[index].previous_digest === null ? 1 : 2;
+        return { dirs: base.dirs * multiplier, entries: base.entries * multiplier };
+      },
+      (index) => (journal.moves[index].previous_digest === null ? 1 : 2),
+    );
+    for (const batch of commitBatches) {
+      const key = publicationRangeKey("commit", batch.start, batch.end);
+      const retained = [
+        ...batch.indices.filter((index) => journal.moves[index].previous_digest !== null).map(() => undefined),
+        ...batch.indices.map((index) => stagedPreimages[index]),
+      ];
+      await publishPackageMoves(roots, journalPath, journal, key, retained, async () => {
+        for (const moveIndex of batch.indices) journal.moves[moveIndex].state = "materialized";
+        await writeJournal(journalPath, journal);
       });
-      reportProgress(operation.onProgress, {
-        operationId: operation.operationId,
-        packageId: move.package_id,
-        operation: "repair",
-        phase: "materializing",
-        percent: Math.round(57 + index / journal.moves.length * 34),
-      });
-      reportProgress(operation.onProgress, {
-        operationId: operation.operationId,
-        packageId: move.package_id,
-        operation: "repair",
-        phase: "installing",
-        percent: Math.round(58 + (index + 1) / journal.moves.length * 34),
-      });
+      for (const moveIndex of batch.indices) {
+        const move = journal.moves[moveIndex];
+        reportProgress(operation.onProgress, {
+          operationId: operation.operationId,
+          packageId: move.package_id,
+          operation: "repair",
+          phase: "materializing",
+          percent: Math.round(57 + moveIndex / journal.moves.length * 34),
+        });
+        reportProgress(operation.onProgress, {
+          operationId: operation.operationId,
+          packageId: move.package_id,
+          operation: "repair",
+          phase: "installing",
+          percent: Math.round(58 + (moveIndex + 1) / journal.moves.length * 34),
+        });
+      }
     }
     await retireOwners(roots, journalPath, journal);
-    await verifyMaterializedMoves(roots, journal.moves);
+    const verifiedTargets = await verifyMaterializedMoves(roots, journal.moves, { journal, fileStatsByMove });
     await verifyRetiredOwners(roots, journal);
-    await verifyRepairReceiptOwners(roots, journal.receipts);
+    await verifyRepairReceiptOwners(roots, journal.receipts, { verifiedTargets });
     journal.phase = "owners_materialized";
     await writeJournal(journalPath, journal);
     for (const candidate of pending) {
@@ -2240,8 +2455,8 @@ async function repairResolvedPackages(roots, entries, operation) {
     await writeJournal(journalPath, journal);
     await removeRepairBackups(roots, journal);
     journal.phase = "committed";
-    await writeJournal(journalPath, journal);
-    await removeTransactionRoot(transactionRoot, roots);
+    const committedJournalWrite = await writeJournal(journalPath, journal);
+    await removeTransactionRoot(transactionRoot, roots, { journal, journalWrite: committedJournalWrite });
   } catch (error) {
     let recovery;
     try {
@@ -2439,19 +2654,35 @@ async function removeResolvedPackages(roots, entries, operation) {
   try {
     journal.phase = "committing";
     await writeJournal(journalPath, journal);
-    for (const [index, move] of journal.moves.entries()) {
-      const target = resolveTransactionPath(roots, move.target);
-      const backup = resolveTransactionPath(roots, move.backup);
-      await publishPackageMoves(roots, journalPath, journal, `commit:${index}`, undefined, () => {
-        journal.moves[index].state = "backed_up";
+    const removeBatches = chunkMoveIndices(
+      journal.moves.map((_, index) => index),
+      (index) => {
+        const move = journal.moves[index];
+        const active = prepared
+          .find((candidate) => candidate.entry.manifest.id === move.package_id)
+          ?.state.activeMembers.find((member) => memberKey(member) === `${move.registry_kind}/${move.owner}`);
+        return {
+          dirs: active ? active.directories.length : 1,
+          entries: active ? active.directories.length + active.files.length : 1,
+        };
+      },
+    );
+    for (const batch of removeBatches) {
+      const key = publicationRangeKey("commit", batch.start, batch.end);
+      await publishPackageMoves(roots, journalPath, journal, key, undefined, async () => {
+        for (const moveIndex of batch.indices) journal.moves[moveIndex].state = "backed_up";
+        await writeJournal(journalPath, journal);
       });
-      reportProgress(operation.onProgress, {
-        operationId: operation.operationId,
-        packageId: move.package_id,
-        operation: "remove",
-        phase: "removing",
-        percent: Math.round(5 + (index + 1) / journal.moves.length * 85),
-      });
+      for (const moveIndex of batch.indices) {
+        const move = journal.moves[moveIndex];
+        reportProgress(operation.onProgress, {
+          operationId: operation.operationId,
+          packageId: move.package_id,
+          operation: "remove",
+          phase: "removing",
+          percent: Math.round(5 + (moveIndex + 1) / journal.moves.length * 85),
+        });
+      }
     }
     journal.phase = "owners_removed";
     await writeJournal(journalPath, journal);
@@ -2473,10 +2704,14 @@ async function removeResolvedPackages(roots, entries, operation) {
     await publishPackageReceipts(roots, journalPath, journal);
     journal.phase = "receipts_written";
     await writeJournal(journalPath, journal);
-    for (const index of journal.moves.keys()) await reclaimPackagePublication(roots, journal.publications[`commit:${index}`], 0);
+    for (const index of journal.moves.keys()) {
+      const entry = findPublicationForIndex(journal, "commit", index);
+      const slots = entry ? commitSlotsForMove(journal, entry.key, index) : null;
+      await reclaimPackagePublication(roots, entry?.publication, slots?.backupSlot ?? 0);
+    }
     journal.phase = "committed";
-    await writeJournal(journalPath, journal);
-    await removeTransactionRoot(transactionRoot, roots);
+    const committedJournalWrite = await writeJournal(journalPath, journal);
+    await removeTransactionRoot(transactionRoot, roots, { journal, journalWrite: committedJournalWrite });
   } catch (error) {
     let recovery;
     try {
@@ -2568,9 +2803,14 @@ async function recoverTransaction(roots, transactionRoot, journalPath) {
   validatePackagePublications(roots, journal);
   const complete = ["owners_materialized", "owners_removed", "receipts_written", "committed"].includes(journal.phase);
   if (complete) {
+    const seenCommitKeys = new Set();
     for (const index of journal.moves.keys()) {
-      if (!journal.publications[`commit:${index}`]) throw new Error("Committed package owner has no saved publication");
-      await publishPackageMoves(roots, journalPath, journal, `commit:${index}`);
+      const entry = findPublicationForIndex(journal, "commit", index);
+      if (!entry) throw new Error("Committed package owner has no saved publication");
+      if (!seenCommitKeys.has(entry.key)) {
+        seenCommitKeys.add(entry.key);
+        await publishPackageMoves(roots, journalPath, journal, entry.key);
+      }
     }
     if (journal.operation === "remove") {
       for (const move of journal.moves) {
@@ -2592,44 +2832,64 @@ async function recoverTransaction(roots, transactionRoot, journalPath) {
     journal.phase = "receipts_written";
     await writeJournal(journalPath, journal);
     if (journal.operation === "remove") {
-      for (const index of journal.moves.keys()) await reclaimPackagePublication(roots, journal.publications[`commit:${index}`], 0);
+      for (const index of journal.moves.keys()) {
+        const entry = findPublicationForIndex(journal, "commit", index);
+        const slots = entry ? commitSlotsForMove(journal, entry.key, index) : null;
+        await reclaimPackagePublication(roots, entry?.publication, slots?.backupSlot ?? 0);
+      }
     } else if (journal.operation === "repair") await removeRepairBackups(roots, journal);
     journal.phase = "committed";
-    await writeJournal(journalPath, journal);
-    await removeTransactionRoot(transactionRoot, roots);
+    const committedJournalWrite = await writeJournal(journalPath, journal);
+    await removeTransactionRoot(transactionRoot, roots, { journal, journalWrite: committedJournalWrite });
     return "committed";
   }
   journal.phase = "rolling_back";
   await writeJournal(journalPath, journal);
   await restoreRetiredOwners(roots, journalPath, journal);
-  for (const index of [...journal.moves.keys()].reverse()) {
-    const move = journal.moves[index], key = `commit:${index}`;
-    if (journal.publications[key]) {
-      try { await publishPackageMoves(roots, journalPath, journal, key); }
-      catch (error) {
-        if (journal.publications[key].receipts.length !== journal.publications[key].moves.length
-          || journal.publications[key].receipts.some(receipt => receipt.outcome === "uncertain")) throw error;
-      }
+  const settledCommits = new Set();
+  const settledStages = new Set();
+  const settlePublicationOnce = async (entry, settledSet) => {
+    if (!entry || settledSet.has(entry.key)) return;
+    settledSet.add(entry.key);
+    const pub = journal.publications[entry.key];
+    if (pub.receipts.length === pub.moves.length && pub.receipts.every(receipt => receipt.outcome === "applied")) {
+      return;
     }
-    const commit = journal.publications[key], receipts = commit?.receipts ?? [];
-    const installed = journal.operation !== "remove" && receipts.length === commit?.moves.length
-      && receipts.at(-1)?.outcome === "applied";
+    try { await publishPackageMoves(roots, journalPath, journal, entry.key); }
+    catch (error) {
+      if (pub.receipts.length !== pub.moves.length
+        || pub.receipts.some(receipt => receipt.outcome === "uncertain")) throw error;
+    }
+  };
+  for (const index of [...journal.moves.keys()].reverse()) {
+    const move = journal.moves[index];
+    const commitEntry = findPublicationForIndex(journal, "commit", index);
+    await settlePublicationOnce(commitEntry, settledCommits);
+    const slots = commitEntry ? commitSlotsForMove(journal, commitEntry.key, index) : { backupSlot: null, installSlot: null };
+    const receipts = commitEntry?.publication.receipts ?? [];
+    const installReceipt = slots.installSlot !== null ? receipts[slots.installSlot] : null;
+    const backupReceipt = slots.backupSlot !== null ? receipts[slots.backupSlot] : null;
+    const installed = journal.operation !== "remove" && installReceipt?.outcome === "applied";
     const backedUp = journal.operation !== "install" && (journal.operation !== "repair" || move.previous_digest !== null)
-      && receipts[0]?.outcome === "applied";
-    if (installed) await discardPackageDirectory(roots, journalPath, journal, `discard_target:${index}`, receipts.at(-1).movement.expected);
-    if (backedUp) await publishPackageMoves(roots, journalPath, journal, `undo:${index}`, [receipts[0].movement.expected]);
+      && backupReceipt?.outcome === "applied";
+    if (installed) await discardPackageDirectory(roots, journalPath, journal, `discard_target:${index}`, installReceipt.movement.expected);
+    if (backedUp) await publishPackageMoves(roots, journalPath, journal, `undo:${index}`, [backupReceipt.movement.expected]);
     if (!installed && journal.publications[`discard_stage:${index}`]) {
       await publishPackageMoves(roots, journalPath, journal, `discard_stage:${index}`);
       await reclaimPackagePublication(roots, journal.publications[`discard_stage:${index}`], 0);
-    } else if (!installed && journal.publications[`stage:${index}`]) {
-      try { await publishPackageMoves(roots, journalPath, journal, `stage:${index}`); }
-      catch (error) { if (journal.publications[`stage:${index}`].receipts[0]?.outcome !== "not_applied") throw error; }
-      if (journal.publications[`stage:${index}`].receipts[0]?.outcome === "applied") {
-        await discardPackageDirectory(roots, journalPath, journal, `discard_stage:${index}`, journal.publications[`stage:${index}`].moves[0].expected);
+    } else if (!installed) {
+      const stageEntry = findPublicationForIndex(journal, "stage", index);
+      if (stageEntry) {
+        await settlePublicationOnce(stageEntry, settledStages);
+        const stageOffset = index - stageEntry.start;
+        const stageReceipt = stageEntry.publication.receipts[stageOffset];
+        if (stageReceipt?.outcome === "applied") {
+          await discardPackageDirectory(roots, journalPath, journal, `discard_stage:${index}`, stageEntry.publication.moves[stageOffset].expected);
+        }
       }
     }
   }
-  await removeTransactionRoot(transactionRoot, roots);
+  await removeTransactionRoot(transactionRoot, roots, { journal });
   return "rolled_back";
 }
 
@@ -2930,33 +3190,62 @@ async function readReceipt(roots, packageId) {
   return receipt;
 }
 
-async function publishPackageReceipts(roots, journalPath, journal) {
-  const publisher = packagePublisher(roots), previous = new Map((journal.previous_receipts ?? []).map(receipt => [receipt.package_id, receipt]));
-  for (const receipt of journal.receipts) {
+async function preparePackageReceiptPublications(roots, journal) {
+  const previous = new Map((journal.previous_receipts ?? []).map((receipt) => [receipt.package_id, receipt]));
+  const missing = journal.receipts.filter((receipt) => !journal.file_publications[receipt.package_id]);
+  if (missing.length === 0) return false;
+  const prepared = await Promise.all(missing.map(async (receipt) => {
     const file = receiptPath(roots, receipt.package_id);
-    let publication = journal.file_publications[receipt.package_id];
-    if (!publication) {
-      const document = await pathExists(file) ? await readJsonDocument(file, "package receipt predecessor") : null;
-      const current = document ? parseReceipt(document.value, file) : null;
-      const prior = journal.operation === "remove" ? receipt : journal.operation === "repair" ? previous.get(receipt.package_id) ?? null : null;
-      if (stableJson(current) !== stableJson(prior)) throw new Error(`Package receipt changed before publication: ${receipt.package_id}`);
-      publication = {
-        filePath: file, operationId: `${packagePublicationId(journal, "receipt")}:${receipt.package_id}`,
-        expectedBeforeHash: document?.digest ?? null,
-        content: journal.operation === "remove" ? null : `${JSON.stringify(receipt, null, 2)}\n`,
-      };
-      journal.file_publications[receipt.package_id] = publication;
-      await writeJournal(journalPath, journal);
-    }
-    await publisher.publishFiles([publication]);
-    const current = await readReceipt(roots, receipt.package_id);
-    if (stableJson(current) !== stableJson(journal.operation === "remove" ? null : receipt)) throw new Error("Package receipt changed after native publication");
+    const document = await pathExists(file) ? await readJsonDocument(file, "package receipt predecessor") : null;
+    const current = document ? parseReceipt(document.value, file) : null;
+    const prior = journal.operation === "remove" ? receipt : journal.operation === "repair" ? previous.get(receipt.package_id) ?? null : null;
+    if (stableJson(current) !== stableJson(prior)) throw new Error(`Package receipt changed before publication: ${receipt.package_id}`);
+    return [receipt.package_id, {
+      filePath: file,
+      operationId: `${packagePublicationId(journal, "receipt")}:${receipt.package_id}`,
+      expectedBeforeHash: document?.digest ?? null,
+      content: journal.operation === "remove" ? null : `${JSON.stringify(receipt, null, 2)}\n`,
+    }];
+  }));
+  for (const [packageId, publication] of prepared) {
+    journal.file_publications[packageId] = publication;
   }
+  return true;
 }
 
-async function verifyRepairReceiptOwners(roots, receipts) {
+async function publishPackageReceipts(roots, journalPath, journal) {
+  const publisher = packagePublisher(roots);
+  const journalUpdated = await preparePackageReceiptPublications(roots, journal);
+  const publications = journal.receipts.map((receipt) => journal.file_publications[receipt.package_id]);
+  if (journalUpdated) await writeJournal(journalPath, journal);
+  if (publications.length > 0) {
+    const MAX_RECEIPT_BATCH_WRITES = 128;
+    const MAX_RECEIPT_BATCH_BYTES = 4 * 1024 * 1024;
+    let batch = [];
+    let batchBytes = 0;
+    for (const publication of publications) {
+      const estimatedBytes = Buffer.byteLength(publication.content ?? "", "utf8") + 512;
+      if (batch.length > 0 && (batch.length >= MAX_RECEIPT_BATCH_WRITES || batchBytes + estimatedBytes > MAX_RECEIPT_BATCH_BYTES)) {
+        await publisher.publishFiles(batch);
+        batch = [];
+        batchBytes = 0;
+      }
+      batch.push(publication);
+      batchBytes += estimatedBytes;
+    }
+    if (batch.length > 0) await publisher.publishFiles(batch);
+  }
+  await Promise.all(journal.receipts.map(async (receipt) => {
+    const current = await readReceipt(roots, receipt.package_id);
+    if (stableJson(current) !== stableJson(journal.operation === "remove" ? null : receipt)) throw new Error("Package receipt changed after native publication");
+  }));
+}
+
+async function verifyRepairReceiptOwners(roots, receipts, options = {}) {
+  const verifiedTargets = options.verifiedTargets instanceof Map ? options.verifiedTargets : null;
   for (const receipt of receipts) {
     for (const member of receipt.members) {
+      if (verifiedTargets && verifiedTargets.get(member.target) === member.digest) continue;
       const target = resolveTransactionPath(roots, member.target);
       const snapshot = await snapshotDirectory(target);
       if (snapshot.digest !== member.digest) {
@@ -2966,33 +3255,123 @@ async function verifyRepairReceiptOwners(roots, receipts) {
   }
 }
 
-async function copySnapshot(snapshot, targetRoot, onFile) {
+async function copySnapshot(snapshot, targetRoot, onFile = () => {}, options = {}) {
+  const copyState = options.copyState ?? { reflinkUnsupported: false };
+  const platform = options.platform ?? process.platform;
+  const syncFiles = options.syncFiles === true;
+  const collectPreimage = options.collectPreimage === true;
+  const collectedFileStats = collectPreimage ? new Map() : null;
+  const protectedRelative = new Set((snapshot.configuration ?? []).map((entry) => entry.path));
+  const isProtectedForDedup = (relative) => (
+    protectedRelative.has(relative) || isMemberDataPath(snapshot, relative)
+  );
+  const fileOptions = { ...options, copyState, platform, syncFiles, collectedFileStats, isProtectedForDedup };
   await fs.mkdir(targetRoot, { recursive: false, mode: 0o755 });
   for (const relativeDirectory of snapshot.directories.filter(Boolean)) {
     await fs.mkdir(path.join(targetRoot, relativeDirectory), { mode: 0o755 });
   }
-  await boundedEach(snapshot.files, async (file) => {
-    await copySnapshotFile(file, targetRoot);
+  let filesToCopy = snapshot.files;
+  if (platform === "linux" && !copyState.reflinkUnsupported && snapshot.files.length > 1) {
+    const probeIndex = snapshot.files.findIndex((file) => file.body === undefined);
+    if (probeIndex >= 0) {
+      await copySnapshotFile(snapshot.files[probeIndex], targetRoot, fileOptions);
+      onFile();
+      filesToCopy = snapshot.files.filter((_, index) => index !== probeIndex);
+    }
+  }
+  await boundedEach(filesToCopy, async (file) => {
+    await copySnapshotFile(file, targetRoot, fileOptions);
     onFile();
   });
-  for (const relativeDirectory of [...snapshot.directories].sort((left, right) => right.length - left.length)) {
-    await syncDirectory(path.join(targetRoot, relativeDirectory));
+  if (syncFiles) {
+    for (const relativeDirectory of [...snapshot.directories].sort((left, right) => right.length - left.length)) {
+      await syncDirectory(path.join(targetRoot, relativeDirectory));
+    }
+    await syncDirectory(path.dirname(targetRoot));
   }
-  await syncDirectory(path.dirname(targetRoot));
+  if (!collectPreimage) return undefined;
+  const rootStat = await fs.lstat(targetRoot);
+  const entries = [];
+  for (const relativeDirectory of snapshot.directories.filter(Boolean)) {
+    const dirStat = await fs.lstat(path.join(targetRoot, relativeDirectory));
+    entries.push({
+      relative_path: snapshotRelativePath(relativeDirectory),
+      kind: "directory",
+      identity: { device: dirStat.dev, inode: dirStat.ino },
+      mode: dirStat.mode & 0o7777,
+      bytes: 0,
+      digest: null,
+    });
+  }
+  for (const fileStat of collectedFileStats.values()) {
+    entries.push({
+      relative_path: fileStat.relative_path,
+      kind: "file",
+      identity: { device: fileStat.dev, inode: fileStat.ino },
+      mode: fileStat.mode & 0o7777,
+      bytes: fileStat.size,
+      digest: fileStat.sha256,
+    });
+  }
+  entries.sort((left, right) => compareDirectoryPaths(left.relative_path, right.relative_path));
+  return {
+    preimage: {
+      identity: { device: rootStat.dev, inode: rootStat.ino },
+      mode: rootStat.mode & 0o7777,
+      digest_algorithm: "sha256",
+      entries,
+    },
+    fileStats: collectedFileStats,
+  };
 }
 
-async function copySnapshotFile(file, targetRoot) {
+async function copySnapshotFile(file, targetRoot, options = {}) {
+  const copyState = options.copyState ?? { reflinkUnsupported: false };
+  const copyFileFn = typeof options.copyFile === "function" ? options.copyFile : fs.copyFile;
+  const platform = options.platform ?? process.platform;
+  const syncFiles = options.syncFiles === true;
+  const collectedFileStats = options.collectedFileStats instanceof Map ? options.collectedFileStats : null;
+  const txDedup = options.txDedup && typeof options.txDedup === "object" ? options.txDedup : null;
+  const isProtectedForDedup = typeof options.isProtectedForDedup === "function" ? options.isProtectedForDedup : () => false;
+  const recordFileStat = async (handle) => {
+    if (!collectedFileStats && !txDedup) return null;
+    const finalStat = await fstatExact(handle);
+    const rel = snapshotRelativePath(file.relative_path);
+    const record = {
+      relative_path: rel,
+      dev: Number(finalStat.dev),
+      ino: Number(finalStat.ino),
+      mode: Number(finalStat.mode),
+      size: Number(finalStat.size),
+      devBig: finalStat.dev,
+      inoBig: finalStat.ino,
+      modeBig: finalStat.mode,
+      sizeBig: finalStat.size,
+      mtimeNs: finalStat.mtimeNs,
+      ctimeNs: finalStat.ctimeNs,
+      sha256: file.sha256,
+    };
+    if (collectedFileStats) collectedFileStats.set(rel, record);
+    return record;
+  };
   const source = await fs.open(file.path, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
   try {
-    const before = await source.stat();
+    const before = await fstatExact(source);
     if (!before.isFile()) throw new Error(`local package source is not a regular file: ${file.path}`);
-    const content = await hashFileHandle(source);
-    const stat = await source.stat();
-    if (!stat.isFile() || stat.size !== (file.input_size ?? file.size) || content.size !== stat.size
-      || (stat.mode & 0o777) !== (file.input_mode ?? file.mode) || content.sha256 !== (file.input_sha256 ?? file.sha256)
-      || before.mtimeMs !== stat.mtimeMs || before.ctimeMs !== stat.ctimeMs) {
-      throw new Error(`local package source changed while copying '${file.path}'`);
-    }
+    const expectedSize = file.input_size ?? file.size;
+    const expectedMode = file.input_mode ?? file.mode;
+    const expectedSha256 = file.input_sha256 ?? file.sha256;
+    const rel = snapshotRelativePath(file.relative_path);
+    const eligibleForTxDedup = Boolean(
+      txDedup
+      && !txDedup.hardlinkDisabled
+      && file.body === undefined
+      && expectedSize >= txDedup.minBytes
+      && path.extname(rel).toLowerCase() !== ".json"
+      && !isProtectedForDedup(rel),
+    );
+    const dedupKey = eligibleForTxDedup ? `${file.mode}:${expectedSize}:${expectedSha256}` : "";
+    let releasePendingKeeper = null;
     if (file.configuration_input) {
       const input = file.configuration_input;
       const current = await fs.lstat(input.path);
@@ -3000,42 +3379,225 @@ async function copySnapshotFile(file, targetRoot) {
         || sha256Bytes(await fs.readFile(input.path)) !== input.sha256) throw new Error(`package configuration changed while copying '${input.path}'`);
     }
     const target = path.join(targetRoot, file.relative_path);
-    const clone = file.body === undefined && process.platform !== "linux";
-    if (clone) {
-      const parent = await fs.open(path.dirname(target), fsSync.constants.O_RDONLY | fsSync.constants.O_DIRECTORY | fsSync.constants.O_NOFOLLOW);
-      try { require("./nativeFiles.cjs").cloneFile(source.fd, parent.fd, path.basename(target)); }
-      finally { await parent.close(); }
+    if (eligibleForTxDedup) {
+      while (!txDedup.keepers.has(dedupKey) && txDedup.pending.has(dedupKey) && !txDedup.hardlinkDisabled) {
+        await txDedup.pending.get(dedupKey).catch(() => {});
+      }
+      const keeper = !txDedup.hardlinkDisabled ? txDedup.keepers.get(dedupKey) : null;
+      if (keeper) {
+        if (Number(before.size) !== expectedSize || (Number(before.mode) & 0o777) !== expectedMode) {
+          throw new Error(`local package source changed while copying '${file.path}'`);
+        }
+        const sourceInodeKey = inodeCacheKey(before);
+        const verifiedSource = txDedup.verifiedSourceInodes.get(sourceInodeKey);
+        if (!verifiedSource || verifiedSource.size !== expectedSize || verifiedSource.sha256 !== expectedSha256) {
+          const content = await hashFileHandle(source);
+          if (content.size !== expectedSize || content.sha256 !== expectedSha256) {
+            throw new Error(`local package source changed while copying '${file.path}'`);
+          }
+          txDedup.verifiedSourceInodes.set(sourceInodeKey, content);
+        }
+        const afterVerify = await fstatExact(source);
+        if (!afterVerify.isFile() || afterVerify.size !== before.size || afterVerify.mode !== before.mode
+          || afterVerify.mtimeNs !== before.mtimeNs || afterVerify.ctimeNs !== before.ctimeNs
+          || afterVerify.ino !== before.ino || afterVerify.dev !== before.dev) {
+          throw new Error(`local package source changed while copying '${file.path}'`);
+        }
+        let linked = false;
+        try {
+          await fs.link(keeper.path, target);
+          linked = true;
+        } catch (error) {
+          await fs.unlink(target).catch(() => {});
+          if (!HARDLINK_SKIP_CODES.has(error?.code)) throw error;
+          if (error.code !== "EMLINK") txDedup.hardlinkDisabled = true;
+        }
+        if (linked) {
+          const handle = await fs.open(target, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
+          try {
+            const installed = await fstatExact(handle);
+            if (!installed.isFile()
+              || installed.dev !== keeper.devBig || installed.ino !== keeper.inoBig
+              || (installed.dev === before.dev && installed.ino === before.ino)
+              || Number(installed.size) !== expectedSize
+              || (Number(installed.mode) & 0o777) !== file.mode) {
+              throw new Error(`local package copy is not isolated: ${target}`);
+            }
+            if (syncFiles) await handle.sync();
+            const record = await recordFileStat(handle);
+            if (keeper.latestCtimeNs === undefined || installed.ctimeNs >= keeper.latestCtimeNs) {
+              keeper.latestCtimeNs = installed.ctimeNs;
+              keeper.latestMtimeNs = installed.mtimeNs;
+            }
+            if (record) keeper.allFileStats.push(record);
+            for (const sharedStat of keeper.allFileStats) {
+              sharedStat.mtimeNs = keeper.latestMtimeNs;
+              sharedStat.ctimeNs = keeper.latestCtimeNs;
+            }
+          } catch (error) {
+            await fs.unlink(target).catch(() => {});
+            throw error;
+          } finally { await handle.close(); }
+          return;
+        }
+      } else if (!txDedup.hardlinkDisabled && !txDedup.pending.has(dedupKey)) {
+        let resolvePending;
+        const pendingPromise = new Promise((resolve) => { resolvePending = resolve; });
+        txDedup.pending.set(dedupKey, pendingPromise);
+        releasePendingKeeper = () => {
+          txDedup.pending.delete(dedupKey);
+          resolvePending();
+        };
+      }
     }
-    const handle = await fs.open(target, clone ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW : "wx", file.mode);
+    let recordedStat = null;
     try {
-      if (file.body !== undefined) await handle.writeFile(file.body);
-      else if (!clone) {
-        const buffer = Buffer.allocUnsafe(64 * 1024);
-        for (let offset = 0; offset < stat.size;) {
-          const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
-          if (!bytesRead) throw new Error(`local package source was truncated while copying '${file.path}'`);
-          await handle.writeFile(buffer.subarray(0, bytesRead));
-          offset += bytesRead;
+      if (file.body === undefined && platform === "linux") {
+        const beforeSize = Number(before.size);
+        if (beforeSize !== expectedSize || (Number(before.mode) & 0o777) !== expectedMode) {
+          throw new Error(`local package source changed while copying '${file.path}'`);
+        }
+        let reflinked = false;
+        if (!copyState.reflinkUnsupported) {
+          try {
+            await copyFileFn(
+              file.path,
+              target,
+              fsSync.constants.COPYFILE_EXCL | fsSync.constants.COPYFILE_FICLONE_FORCE,
+            );
+            reflinked = true;
+          } catch (error) {
+            if (!REFLINK_UNSUPPORTED_CODES.has(error?.code)) throw error;
+            copyState.reflinkUnsupported = true;
+          }
+        }
+        if (reflinked) {
+          try {
+            const handle = await fs.open(target, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
+            try {
+              const installed = await fstatExact(handle);
+              if (!installed.isFile() || Number(installed.nlink) !== 1 || (installed.dev === before.dev && installed.ino === before.ino)) {
+                throw new Error(`local package copy is not isolated: ${target}`);
+              }
+              const content = await hashFileHandle(handle);
+              if (content.size !== expectedSize || content.sha256 !== expectedSha256) {
+                throw new Error(`local package source changed while copying '${file.path}'`);
+              }
+              await handle.chmod(file.mode);
+              if (syncFiles) await handle.sync();
+              recordedStat = await recordFileStat(handle);
+            } finally { await handle.close(); }
+          } catch (error) {
+            await fs.unlink(target).catch(() => {});
+            throw error;
+          }
+        } else {
+          const handle = await fs.open(target, "wx", file.mode);
+          try {
+            const hash = crypto.createHash("sha256");
+            const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(beforeSize, COPY_BUFFER_BYTES)));
+            let offset = 0;
+            while (offset < beforeSize) {
+              const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, beforeSize - offset), offset);
+              if (!bytesRead) throw new Error(`local package source was truncated while copying '${file.path}'`);
+              hash.update(buffer.subarray(0, bytesRead));
+              let written = 0;
+              while (written < bytesRead) {
+                const result = await handle.write(buffer, written, bytesRead - written);
+                if (!result.bytesWritten) throw new Error(`local package short write while copying '${target}'`);
+                written += result.bytesWritten;
+              }
+              offset += bytesRead;
+            }
+            const probe = Buffer.allocUnsafe(1);
+            const trailing = await source.read(probe, 0, 1, offset);
+            if (trailing.bytesRead !== 0 || offset !== expectedSize || hash.digest("hex") !== expectedSha256) {
+              throw new Error(`local package source changed while copying '${file.path}'`);
+            }
+            const installed = await fstatExact(handle);
+            if (!installed.isFile() || Number(installed.nlink) !== 1 || (installed.dev === before.dev && installed.ino === before.ino) || Number(installed.size) !== expectedSize) {
+              throw new Error(`local package copy is not isolated: ${target}`);
+            }
+            await handle.chmod(file.mode);
+            if (syncFiles) await handle.sync();
+            recordedStat = await recordFileStat(handle);
+          } catch (error) {
+            await handle.close().catch(() => {});
+            await fs.unlink(target).catch(() => {});
+            throw error;
+          }
+          await handle.close();
+        }
+        const after = await fstatExact(source);
+        if (!after.isFile() || after.size !== before.size || after.mode !== before.mode || after.mtimeNs !== before.mtimeNs
+          || after.ctimeNs !== before.ctimeNs || after.ino !== before.ino || after.dev !== before.dev) {
+          await fs.unlink(target).catch(() => {});
+          throw new Error(`local package source changed while copying '${file.path}'`);
+        }
+      } else {
+        const content = await hashFileHandle(source);
+        const stat = await fstatExact(source);
+        const statSize = Number(stat.size);
+        if (!stat.isFile() || statSize !== expectedSize || content.size !== statSize
+          || (Number(stat.mode) & 0o777) !== expectedMode || content.sha256 !== expectedSha256
+          || before.mtimeNs !== stat.mtimeNs || before.ctimeNs !== stat.ctimeNs) {
+          throw new Error(`local package source changed while copying '${file.path}'`);
+        }
+        const clone = file.body === undefined && platform !== "linux";
+        if (clone) {
+          const parent = await fs.open(path.dirname(target), fsSync.constants.O_RDONLY | fsSync.constants.O_DIRECTORY | fsSync.constants.O_NOFOLLOW);
+          try { require("./nativeFiles.cjs").cloneFile(source.fd, parent.fd, path.basename(target)); }
+          finally { await parent.close(); }
+        }
+        const handle = await fs.open(target, clone ? fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW : "wx", file.mode);
+        try {
+          if (file.body !== undefined) await handle.writeFile(file.body);
+          else if (!clone) {
+            const buffer = Buffer.allocUnsafe(Math.max(1, Math.min(statSize, COPY_BUFFER_BYTES)));
+            for (let offset = 0; offset < statSize;) {
+              const { bytesRead } = await source.read(buffer, 0, Math.min(buffer.length, statSize - offset), offset);
+              if (!bytesRead) throw new Error(`local package source was truncated while copying '${file.path}'`);
+              await handle.writeFile(buffer.subarray(0, bytesRead));
+              offset += bytesRead;
+            }
+          }
+          const installed = await fstatExact(handle);
+          if (!installed.isFile() || Number(installed.nlink) !== 1 || installed.dev === stat.dev && installed.ino === stat.ino) {
+            throw new Error(`local package copy is not isolated: ${target}`);
+          }
+          await handle.chmod(file.mode);
+          if (syncFiles) await handle.sync();
+          recordedStat = await recordFileStat(handle);
+        } finally { await handle.close(); }
+        const after = await fstatExact(source);
+        if (after.size !== stat.size || after.mode !== stat.mode || after.mtimeNs !== stat.mtimeNs || after.ctimeNs !== stat.ctimeNs) {
+          throw new Error(`local package source changed while copying '${file.path}'`);
         }
       }
-      const installed = await handle.stat();
-      if (!installed.isFile() || installed.nlink !== 1 || installed.dev === stat.dev && installed.ino === stat.ino) {
-        throw new Error(`local package copy is not isolated: ${target}`);
+      if (eligibleForTxDedup && recordedStat && !txDedup.keepers.has(dedupKey)) {
+        txDedup.verifiedSourceInodes.set(inodeCacheKey(before), { size: expectedSize, sha256: expectedSha256 });
+        txDedup.keepers.set(dedupKey, {
+          path: target,
+          devBig: recordedStat.devBig,
+          inoBig: recordedStat.inoBig,
+          size: recordedStat.size,
+          mode: recordedStat.mode,
+          sha256: recordedStat.sha256,
+          latestCtimeNs: recordedStat.ctimeNs,
+          latestMtimeNs: recordedStat.mtimeNs,
+          allFileStats: [recordedStat],
+        });
       }
-      await handle.chmod(file.mode);
-      await handle.sync();
-    } finally { await handle.close(); }
-    const after = await source.stat();
-    if (after.size !== stat.size || after.mode !== stat.mode || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
-      throw new Error(`local package source changed while copying '${file.path}'`);
+    } finally {
+      if (releasePendingKeeper) releasePendingKeeper();
     }
   } finally { await source.close(); }
 }
 
-async function boundedEach(items, operation) {
+async function boundedEach(items, operation, concurrency = PACKAGE_IO_CONCURRENCY) {
   const failures = [];
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(PACKAGE_IO_CONCURRENCY, items.length) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (!failures.length && next < items.length) {
       const index = next;
       next += 1;
@@ -3044,6 +3606,237 @@ async function boundedEach(items, operation) {
     }
   }));
   if (failures.length) throw failures.reduce((first, failure) => failure.index < first.index ? failure : first).error;
+}
+
+async function sourceSnapshotMetadataUnchanged(source) {
+  for (const member of source.members) {
+    const entries = snapshotFileMetadata.get(member.files);
+    if (!entries) return false;
+    try {
+      const visitedFiles = [];
+      const visitedDirectories = [""];
+      const visit = async (directory, relativeDirectory) => {
+        const dirEntries = (await fs.readdir(directory, { withFileTypes: true }))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        for (const entry of dirEntries) {
+          if (SOURCE_EXCLUDES.has(entry.name) || entry.name === ".octopus-publication") continue;
+          const absolute = path.join(directory, entry.name);
+          const relative = path.join(relativeDirectory, entry.name);
+          const stat = await lstatExact(absolute);
+          if (stat.isSymbolicLink()) return false;
+          if (stat.isDirectory()) {
+            visitedDirectories.push(relative);
+            if (!await visit(absolute, relative)) return false;
+            continue;
+          }
+          if (!stat.isFile()) return false;
+          visitedFiles.push({ path: absolute, relative_path: relative, stat });
+        }
+        return true;
+      };
+      if (!await visit(member.root, "")) return false;
+      if (visitedDirectories.length !== member.directories.length || visitedFiles.length !== entries.length) return false;
+      for (let i = 0; i < visitedDirectories.length; i += 1) {
+        if (visitedDirectories[i] !== member.directories[i]) return false;
+      }
+      for (let i = 0; i < entries.length; i += 1) {
+        const expected = entries[i];
+        const actual = visitedFiles[i];
+        if (actual.path !== expected.path || actual.relative_path !== expected.relative_path
+          || actual.stat.dev !== expected.dev || actual.stat.ino !== expected.ino
+          || actual.stat.size !== expected.size || actual.stat.mode !== expected.mode
+          || actual.stat.mtimeNs !== expected.mtimeNs || actual.stat.ctimeNs !== expected.ctimeNs) {
+          return false;
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function deduplicateInstalledRegistryFiles(roots, options = {}) {
+  const normalized = roots?.activeRegistryRoot ? roots : normalizeRoots(roots);
+  const minBytes = Number.isInteger(options.minBytes) && options.minBytes >= 1 ? options.minBytes : DEDUP_MIN_BYTES;
+  const linkFile = typeof options.linkFile === "function" ? options.linkFile : (existing, target) => fs.link(existing, target);
+  let activeRoot;
+  try { activeRoot = await realPlainDirectory(normalized.activeRegistryRoot, normalized.activeRegistryRoot); }
+  catch { return { linked: 0, savedBytes: 0, skipped: 0, groups: 0 }; }
+
+  const protectedExact = new Set();
+  const protectedPrefixes = [];
+  const addProtectedMember = (member) => {
+    if (!member || !REGISTRY_KINDS.has(member.registry_kind) || !SAFE_ID.test(member.owner ?? "")) return;
+    const ownerRoot = path.join(activeRoot, member.registry_kind, member.owner);
+    for (const config of member.configuration ?? []) {
+      if (typeof config?.path === "string" && config.path) {
+        protectedExact.add(path.resolve(ownerRoot, config.path));
+      }
+    }
+    for (const dataDir of member.data_directories ?? []) {
+      if (typeof dataDir === "string" && dataDir) {
+        const resolved = path.resolve(ownerRoot, dataDir);
+        protectedExact.add(resolved);
+        protectedPrefixes.push(resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`);
+      }
+    }
+  };
+  for (const member of options.members ?? []) addProtectedMember(member);
+  if (normalized.receiptsRoot && await pathExists(normalized.receiptsRoot)) {
+    const receiptEntries = await readOptionalDirectory(normalized.receiptsRoot);
+    for (const entry of receiptEntries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      try {
+        const doc = await readJsonDocument(path.join(normalized.receiptsRoot, entry.name), "dedup receipt");
+        for (const member of doc.value?.members ?? []) addProtectedMember(member);
+      } catch {}
+    }
+  }
+  const packagesDir = normalized.libraryRoot ? path.join(normalized.libraryRoot, "packages") : "";
+  if (packagesDir && await pathExists(packagesDir)) {
+    const manifestEntries = await readOptionalDirectory(packagesDir);
+    for (const entry of manifestEntries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      try {
+        const doc = await readJsonDocument(path.join(packagesDir, entry.name), "dedup package manifest");
+        for (const member of doc.value?.members ?? []) addProtectedMember(member);
+      } catch {}
+    }
+  }
+  const isProtected = (absolute) => {
+    if (protectedExact.has(absolute)) return true;
+    return protectedPrefixes.some((prefix) => absolute.startsWith(prefix));
+  };
+
+  const buckets = new Map();
+  const visit = async (directory) => {
+    const entries = (await fs.readdir(directory, { withFileTypes: true }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (SOURCE_EXCLUDES.has(entry.name) || entry.name === ".octopus-publication") continue;
+      if (entry.name.startsWith(".dedup.") && entry.name.endsWith(".tmp")) continue;
+      const absolute = path.join(directory, entry.name);
+      if (isProtected(absolute)) continue;
+      let stat;
+      try { stat = await lstatExact(absolute); } catch { continue; }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        await visit(absolute);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      if (Number(stat.size) < minBytes) continue;
+      if (path.extname(entry.name).toLowerCase() === ".json") continue;
+      const key = `${stat.dev}:${Number(stat.mode) & 0o777}:${stat.size}`;
+      let list = buckets.get(key);
+      if (!list) {
+        list = [];
+        buckets.set(key, list);
+      }
+      list.push({ path: absolute, stat });
+    }
+  };
+  await visit(activeRoot);
+
+  const candidatesToHash = [];
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue;
+    const distinctInodes = new Set(list.map((item) => item.stat.ino));
+    if (distinctInodes.size < 2) continue;
+    candidatesToHash.push(...list);
+  }
+  if (candidatesToHash.length === 0) return { linked: 0, savedBytes: 0, skipped: 0, groups: 0 };
+
+  const digestGroups = new Map();
+  const knownDigests = options.knownDigests instanceof Map ? options.knownDigests : null;
+  await boundedEach(candidatesToHash, async (item) => {
+    try {
+      const inodeKey = inodeCacheKey(item.stat);
+      let sha256 = knownDigests?.get(inodeKey);
+      if (!sha256) {
+        const handle = await fs.open(item.path, fsSync.constants.O_RDONLY | fsSync.constants.O_NOFOLLOW);
+        let content;
+        try { content = await hashFileHandle(handle); }
+        finally { await handle.close(); }
+        if (content.size !== Number(item.stat.size)) return;
+        sha256 = content.sha256;
+      }
+      const current = await lstatExact(item.path);
+      if (!current.isFile() || current.isSymbolicLink()
+        || current.size !== item.stat.size || current.mode !== item.stat.mode
+        || current.mtimeNs !== item.stat.mtimeNs || current.ctimeNs !== item.stat.ctimeNs
+        || current.ino !== item.stat.ino || current.dev !== item.stat.dev) {
+        return;
+      }
+      const key = `${item.stat.dev}:${Number(item.stat.mode) & 0o777}:${item.stat.size}:${sha256}`;
+      let group = digestGroups.get(key);
+      if (!group) {
+        group = [];
+        digestGroups.set(key, group);
+      }
+      group.push(item);
+    } catch {}
+  }, HASH_CONCURRENCY);
+
+  let linked = 0;
+  let savedBytes = 0;
+  let skipped = 0;
+  let groups = 0;
+  for (const group of digestGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((left, right) => left.path.localeCompare(right.path));
+    const keeper = group[0];
+    let groupLinked = false;
+    for (let i = 1; i < group.length; i += 1) {
+      const candidate = group[i];
+      if (candidate.stat.dev === keeper.stat.dev && candidate.stat.ino === keeper.stat.ino) continue;
+      let keeperNow;
+      let candidateNow;
+      try {
+        keeperNow = await lstatExact(keeper.path);
+        candidateNow = await lstatExact(candidate.path);
+      } catch {
+        skipped += 1;
+        continue;
+      }
+      if (!keeperNow.isFile() || keeperNow.isSymbolicLink() || !candidateNow.isFile() || candidateNow.isSymbolicLink()
+        || keeperNow.dev !== keeper.stat.dev || keeperNow.ino !== keeper.stat.ino
+        || keeperNow.size !== keeper.stat.size || keeperNow.mode !== keeper.stat.mode
+        || keeperNow.mtimeNs !== keeper.stat.mtimeNs || keeperNow.ctimeNs !== keeper.stat.ctimeNs
+        || candidateNow.dev !== candidate.stat.dev || candidateNow.ino !== candidate.stat.ino
+        || candidateNow.size !== candidate.stat.size || candidateNow.mode !== candidate.stat.mode
+        || candidateNow.mtimeNs !== candidate.stat.mtimeNs || candidateNow.ctimeNs !== candidate.stat.ctimeNs) {
+        skipped += 1;
+        continue;
+      }
+      const tempPath = path.join(
+        path.dirname(candidate.path),
+        `.dedup.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
+      );
+      try {
+        await linkFile(keeper.path, tempPath);
+        await fs.rename(tempPath, candidate.path);
+        const verified = await lstatExact(candidate.path);
+        if (verified.isFile() && !verified.isSymbolicLink()
+          && verified.dev === keeper.stat.dev && verified.ino === keeper.stat.ino) {
+          linked += 1;
+          savedBytes += Number(candidate.stat.size);
+          keeper.stat = await lstatExact(keeper.path);
+          groupLinked = true;
+        }
+      } catch (error) {
+        await fs.unlink(tempPath).catch(() => {});
+        if (HARDLINK_SKIP_CODES.has(error?.code)) {
+          skipped += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (groupLinked) groups += 1;
+  }
+  return { linked, savedBytes, skipped, groups };
 }
 
 async function hashFileHandle(handle) {
@@ -3084,26 +3877,248 @@ function packageDirectoryDigest(preimage) {
 
 function packagePublicationId(journal, key) { return `package:${journal.operation_id}:${journal.publication_id}:${key}`; }
 
+function compareDirectoryPaths(left, right) {
+  const a = left.split("/"), b = right.split("/");
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const compared = Buffer.compare(Buffer.from(a[index]), Buffer.from(b[index]));
+    if (compared) return compared;
+  }
+  return a.length - b.length;
+}
+
+function parsePublicationKey(key) {
+  const match = /^(stage|commit|undo|discard_stage|discard_target|retire|unretire):([0-9]+)(?:-([0-9]+))?$/.exec(key);
+  if (!match) throw new Error("Package publication has an invalid owner step");
+  const kind = match[1];
+  const start = Number(match[2]);
+  const end = match[3] !== undefined ? Number(match[3]) : start;
+  if (String(start) !== match[2] || (match[3] !== undefined && String(end) !== match[3]) || end < start) {
+    throw new Error("Package publication has an invalid owner index range");
+  }
+  if (end > start && kind !== "stage" && kind !== "commit") {
+    throw new Error("Package publication range is only supported for stage and commit steps");
+  }
+  return { kind, start, end };
+}
+
+function publicationRangeKey(kind, start, end) {
+  return start === end ? `${kind}:${start}` : `${kind}:${start}-${end}`;
+}
+
+function findPublicationForIndex(journal, kind, index) {
+  for (const [key, publication] of Object.entries(journal.publications ?? {})) {
+    const parsed = parsePublicationKey(key);
+    if (parsed.kind === kind && index >= parsed.start && index <= parsed.end) {
+      return { key, start: parsed.start, end: parsed.end, publication };
+    }
+  }
+  return null;
+}
+
+function commitSlotsForMove(journal, key, index) {
+  const { kind, start, end } = parsePublicationKey(key);
+  if (kind !== "commit" || index < start || index > end) {
+    throw new Error("Package commit publication does not cover owner index");
+  }
+  if (journal.operation === "install") {
+    return { backupSlot: null, installSlot: index - start };
+  }
+  if (journal.operation === "remove") {
+    return { backupSlot: index - start, installSlot: null };
+  }
+  let backupCount = 0;
+  let backupSlot = null;
+  for (let i = start; i <= end; i += 1) {
+    if (journal.moves[i].previous_digest !== null) {
+      if (i === index) backupSlot = backupCount;
+      backupCount += 1;
+    }
+  }
+  return { backupSlot, installSlot: backupCount + (index - start) };
+}
+
+function preimageMetrics(preimage) {
+  let dirs = 1;
+  for (const entry of preimage.entries) {
+    if (entry.kind === "directory") dirs += 1;
+  }
+  return { dirs, entries: preimage.entries.length };
+}
+
+function chunkMoveIndices(indices, getMetrics, moveWeight = () => 1) {
+  if (indices.length === 0) return [];
+  const batches = [];
+  let current = [];
+  let currentMoves = 0;
+  let currentDirs = 0;
+  let currentEntries = 0;
+  const flush = () => {
+    if (!current.length) return;
+    batches.push({ start: current[0], end: current[current.length - 1], indices: current });
+    current = [];
+    currentMoves = 0;
+    currentDirs = 0;
+    currentEntries = 0;
+  };
+  for (const index of indices) {
+    const weight = moveWeight(index);
+    const metrics = getMetrics(index);
+    if (current.length > 0 && (
+      currentMoves + weight > MAX_DIRECTORY_BATCH_MOVES
+      || currentDirs + metrics.dirs > MAX_DIRECTORY_BATCH_DIRS
+      || currentEntries + metrics.entries > MAX_DIRECTORY_BATCH_ENTRIES
+    )) {
+      flush();
+    }
+    current.push(index);
+    currentMoves += weight;
+    currentDirs += metrics.dirs;
+    currentEntries += metrics.entries;
+  }
+  flush();
+  return batches;
+}
+
+function buildKnownDigestMap(fileStatsByMove) {
+  const map = new Map();
+  for (const fileStats of fileStatsByMove.values()) {
+    for (const stat of fileStats.values()) {
+      const key = `${stat.devBig ?? stat.dev}:${stat.inoBig ?? stat.ino}:${stat.sizeBig ?? stat.size}:${stat.modeBig ?? stat.mode}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      map.set(key, stat.sha256);
+    }
+  }
+  return map;
+}
+
+async function seedActiveMemberSnapshotCache(roots, pending, journal, fileStatsByMove) {
+  for (const [index, move] of journal.moves.entries()) {
+    const fileStats = fileStatsByMove.get(index);
+    if (!fileStats) continue;
+    const candidate = pending.find((item) => item.entry.manifest.id === move.package_id);
+    const sourceMember = candidate?.source.members.find(
+      (member) => memberKey(member) === `${move.registry_kind}/${move.owner}`,
+    );
+    if (!sourceMember) continue;
+    let activeRoot;
+    try {
+      activeRoot = await realPlainDirectory(resolveTransactionPath(roots, move.target), move.target);
+    } catch {
+      continue;
+    }
+    const files = [];
+    const metadata = [];
+    const fingerprintFiles = [];
+    let complete = true;
+    for (const file of sourceMember.files) {
+      const saved = fileStats.get(snapshotRelativePath(file.relative_path));
+      if (!saved || saved.sha256 !== file.sha256) {
+        complete = false;
+        break;
+      }
+      const activePath = path.join(activeRoot, file.relative_path);
+      files.push({
+        path: activePath,
+        relative_path: file.relative_path,
+        size: file.size,
+        mode: file.mode,
+        sha256: file.sha256,
+      });
+      metadata.push({
+        path: activePath,
+        relative_path: file.relative_path,
+        dev: saved.devBig,
+        ino: saved.inoBig,
+        size: saved.sizeBig,
+        mode: saved.modeBig,
+        mtimeNs: saved.mtimeNs,
+        ctimeNs: saved.ctimeNs,
+      });
+      recordVerifiedFileDigest({
+        dev: saved.devBig,
+        ino: saved.inoBig,
+        size: saved.sizeBig,
+        mode: saved.modeBig,
+        mtimeNs: saved.mtimeNs,
+        ctimeNs: saved.ctimeNs,
+      }, saved.sha256);
+      fingerprintFiles.push({
+        path: file.relative_path,
+        dev: String(saved.devBig),
+        size: Number(saved.sizeBig),
+        mode: Number(saved.modeBig),
+        mtimeNs: String(saved.mtimeNs),
+        ctimeNs: String(saved.ctimeNs),
+        inode: String(saved.inoBig),
+      });
+    }
+    if (!complete) continue;
+    const directories = [...sourceMember.directories];
+    const excludedEntries = [];
+    const fingerprint = hashJson({ directories, excludedEntries, files: fingerprintFiles });
+    const snapshot = { root: activeRoot, directories, files, digest: move.digest, excludedEntries };
+    snapshotFileMetadata.set(files, metadata);
+    const cacheKey = `active\0${roots.activeRegistryRoot}\0${move.registry_kind}/${move.owner}`;
+    if (sourceSnapshotCache.size >= 1024) sourceSnapshotCache.delete(sourceSnapshotCache.keys().next().value);
+    sourceSnapshotCache.set(cacheKey, { fingerprint, snapshot });
+  }
+}
+
 function packageMoveCoordinates(roots, journal, key) {
-  const [kind, number] = key.split(":"), index = Number(number);
+  const { kind, start, end } = parsePublicationKey(key);
   if (kind === "retire" || kind === "unretire") {
-    const retirement = journal.operation === "repair" ? journal.retirements?.[index] : undefined;
-    if (!retirement || String(index) !== number || retirement.previous_digest === null) throw new Error("Package publication has no exact retired owner index");
+    const retirement = journal.operation === "repair" ? journal.retirements?.[start] : undefined;
+    if (!retirement || start !== end || retirement.previous_digest === null) throw new Error("Package publication has no exact retired owner index");
     const target = resolveTransactionPath(roots, retirement.target), backup = resolveTransactionPath(roots, retirement.backup);
     return kind === "retire" ? [[target, backup, retirement.previous_digest]] : [[backup, target, retirement.previous_digest]];
   }
-  const move = journal.moves[index];
-  if (!move || String(index) !== number) throw new Error("Package publication has no exact owner index");
-  const target = resolveTransactionPath(roots, move.target), stage = resolveTransactionPath(roots, move.stage), backup = resolveTransactionPath(roots, move.backup);
   const tx = path.join(roots.transactionsRoot, journal.operation_id);
+  for (let index = start; index <= end; index += 1) {
+    if (!journal.moves[index]) throw new Error("Package publication has no exact owner index");
+  }
+  if (kind === "stage" && journal.operation !== "remove") {
+    const coordinates = [];
+    for (let index = start; index <= end; index += 1) {
+      const move = journal.moves[index];
+      coordinates.push([path.join(tx, `owner-${index}`), resolveTransactionPath(roots, move.stage), move.digest]);
+    }
+    return coordinates;
+  }
+  if (kind === "commit") {
+    if (journal.operation === "install") {
+      const coordinates = [];
+      for (let index = start; index <= end; index += 1) {
+        const move = journal.moves[index];
+        coordinates.push([resolveTransactionPath(roots, move.stage), resolveTransactionPath(roots, move.target), move.digest]);
+      }
+      return coordinates;
+    }
+    if (journal.operation === "remove") {
+      const coordinates = [];
+      for (let index = start; index <= end; index += 1) {
+        const move = journal.moves[index];
+        coordinates.push([resolveTransactionPath(roots, move.target), resolveTransactionPath(roots, move.backup), move.digest]);
+      }
+      return coordinates;
+    }
+    // Repair commit: emit all backups first (wave 0), then all installs (wave 1).
+    const backups = [];
+    const installs = [];
+    for (let index = start; index <= end; index += 1) {
+      const move = journal.moves[index];
+      const target = resolveTransactionPath(roots, move.target);
+      const stage = resolveTransactionPath(roots, move.stage);
+      const backup = resolveTransactionPath(roots, move.backup);
+      if (move.previous_digest !== null) backups.push([target, backup, move.previous_digest]);
+      installs.push([stage, target, move.digest]);
+    }
+    return [...backups, ...installs];
+  }
+  const move = journal.moves[start];
+  const target = resolveTransactionPath(roots, move.target), stage = resolveTransactionPath(roots, move.stage), backup = resolveTransactionPath(roots, move.backup);
   const next = move.digest, previous = journal.operation === "repair" ? move.previous_digest : move.digest;
-  if (kind === "stage" && journal.operation !== "remove") return [[path.join(tx, `owner-${index}`), stage, next]];
-  if (kind === "commit") return journal.operation === "install" ? [[stage, target, next]]
-    : journal.operation === "remove" ? [[target, backup, previous]]
-    : [...(previous === null ? [] : [[target, backup, previous]]), [stage, target, next]];
   if (kind === "undo" && journal.operation !== "install" && previous !== null) return [[backup, target, previous]];
-  if (kind === "discard_stage" && journal.operation !== "remove") return [[stage, path.join(tx, `discard-stage-${index}`), next]];
-  if (kind === "discard_target" && journal.operation !== "remove") return [[target, path.join(tx, `discard-target-${index}`), next]];
+  if (kind === "discard_stage" && journal.operation !== "remove") return [[stage, path.join(tx, `discard-stage-${start}`), next]];
+  if (kind === "discard_target" && journal.operation !== "remove") return [[target, path.join(tx, `discard-target-${start}`), next]];
   throw new Error("Package publication has an invalid owner step");
 }
 
@@ -3118,7 +4133,18 @@ function validatePackagePublications(roots, journal) {
       throw new Error("Package receipt publication differs from its saved transaction");
     }
   }
+  const coveredByKind = new Map();
   for (const [key, publication] of Object.entries(journal.publications)) {
+    const parsed = parsePublicationKey(key);
+    let covered = coveredByKind.get(parsed.kind);
+    if (!covered) {
+      covered = new Set();
+      coveredByKind.set(parsed.kind, covered);
+    }
+    for (let i = parsed.start; i <= parsed.end; i += 1) {
+      if (covered.has(i)) throw new Error("Package publication overlaps an existing owner index");
+      covered.add(i);
+    }
     const coordinates = packageMoveCoordinates(roots, journal, key);
     const content = JSON.stringify([packagePublicationId(journal, key), coordinates, publication]);
     if (validatedPackagePublications.get(publication) === content) continue;
@@ -3187,25 +4213,120 @@ async function discardPackageDirectory(roots, journalPath, journal, key, expecte
   await reclaimPackagePublication(roots, journal.publications[key], 0);
 }
 
-async function stagePackageSnapshot(snapshot, stage, transactionRoot, index, onFile, roots, journalPath, journal, applied) {
+async function preparePackageSnapshot(snapshot, stage, transactionRoot, index, onFile, copyState = { reflinkUnsupported: false }, extraOptions = {}) {
   const preparation = path.join(transactionRoot, `owner-${index}`);
-  await copySnapshot(snapshot, preparation, onFile);
-  if ((await snapshotDirectory(preparation)).digest !== snapshot.digest) throw new Error(`package preparation changed before staging '${stage}'`);
+  const prepared = await copySnapshot(snapshot, preparation, onFile, {
+    copyState,
+    syncFiles: false,
+    collectPreimage: true,
+    ...extraOptions,
+  });
   if (await pathExists(stage)) throw new Error(`package stage appeared during preparation '${stage}'`);
-  await publishPackageMoves(roots, journalPath, journal, `stage:${index}`, undefined, applied);
+  return prepared;
 }
 
-async function verifyMaterializedMoves(roots, moves) {
-  for (const move of moves) {
+async function verifyMaterializedMoveMetadata(target, expectedPreimage, fileStats) {
+  try {
+    const rootStat = await lstatExact(target);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()
+      || Number(rootStat.dev) !== expectedPreimage.identity.device
+      || Number(rootStat.ino) !== expectedPreimage.identity.inode
+      || (Number(rootStat.mode) & 0o7777) !== expectedPreimage.mode) {
+      return false;
+    }
+    const observed = [];
+    const visit = async (directory, relativeDirectory) => {
+      const entries = await fs.readdir(directory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (SOURCE_EXCLUDES.has(entry.name)) return false;
+        const absolute = path.join(directory, entry.name);
+        const stat = await lstatExact(absolute);
+        if (entry.name === ".octopus-publication") {
+          if (!stat.isDirectory() || stat.isSymbolicLink() || (Number(stat.mode) & 0o077) !== 0) return false;
+          continue;
+        }
+        if (stat.isSymbolicLink()) return false;
+        const relative = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+        if (stat.isDirectory()) {
+          observed.push({ relative_path: relative, kind: "directory", stat });
+          if (!await visit(absolute, relative)) return false;
+        } else if (stat.isFile()) {
+          observed.push({ relative_path: relative, kind: "file", stat });
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+    if (!await visit(target, "")) return false;
+    if (observed.length !== expectedPreimage.entries.length) return false;
+    observed.sort((left, right) => compareDirectoryPaths(left.relative_path, right.relative_path));
+    for (let i = 0; i < observed.length; i += 1) {
+      const actual = observed[i];
+      const expected = expectedPreimage.entries[i];
+      if (actual.relative_path !== expected.relative_path
+        || actual.kind !== expected.kind
+        || Number(actual.stat.dev) !== expected.identity.device
+        || Number(actual.stat.ino) !== expected.identity.inode
+        || (Number(actual.stat.mode) & 0o7777) !== expected.mode) {
+        return false;
+      }
+      if (expected.kind === "file") {
+        const saved = fileStats.get(expected.relative_path);
+        if (!saved
+          || Number(actual.stat.dev) !== saved.dev
+          || Number(actual.stat.ino) !== saved.ino
+          || Number(actual.stat.mode) !== saved.mode
+          || Number(actual.stat.size) !== saved.size
+          || Number(actual.stat.size) !== expected.bytes
+          || actual.stat.mtimeNs !== saved.mtimeNs
+          || actual.stat.ctimeNs !== saved.ctimeNs
+          || saved.sha256 !== expected.digest) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyMaterializedMoves(roots, moves, options = {}) {
+  const journal = options.journal ?? null;
+  const fileStatsByMove = options.fileStatsByMove instanceof Map ? options.fileStatsByMove : null;
+  const verifiedTargets = new Map();
+  for (const [index, move] of moves.entries()) {
     const target = resolveTransactionPath(roots, move.target);
+    if (journal && fileStatsByMove) {
+      const commitEntry = findPublicationForIndex(journal, "commit", index);
+      const slots = commitEntry ? commitSlotsForMove(journal, commitEntry.key, index) : null;
+      const installReceipt = slots?.installSlot !== null && slots?.installSlot !== undefined
+        ? commitEntry.publication.receipts[slots.installSlot]
+        : null;
+      const fileStats = fileStatsByMove.get(index);
+      if (installReceipt?.outcome === "applied"
+        && fileStats
+        && packageDirectoryDigest(installReceipt.movement.expected) === move.digest
+        && await verifyMaterializedMoveMetadata(target, installReceipt.movement.expected, fileStats)) {
+        verifiedTargets.set(move.target, move.digest);
+        continue;
+      }
+    }
     const snapshot = await snapshotDirectory(target);
     if (snapshot.digest !== move.digest) throw new Error(`materialized owner '${move.target}' failed digest verification`);
+    verifiedTargets.set(move.target, move.digest);
   }
+  return verifiedTargets;
 }
 
 async function removeRepairBackups(roots, journal) {
   for (const [index, move] of journal.moves.entries()) {
-    if (move.previous_digest !== null) await reclaimPackagePublication(roots, journal.publications[`commit:${index}`], 0);
+    if (move.previous_digest !== null) {
+      const entry = findPublicationForIndex(journal, "commit", index);
+      const slots = entry ? commitSlotsForMove(journal, entry.key, index) : null;
+      await reclaimPackagePublication(roots, entry?.publication, slots?.backupSlot ?? 0);
+    }
   }
   for (const [index, retirement] of (journal.retirements ?? []).entries()) {
     if (retirement.previous_digest !== null) await reclaimPackagePublication(roots, journal.publications[`retire:${index}`], 0);
@@ -3248,31 +4369,75 @@ async function createTransactionRoot(roots, operationId, journal) {
   if (await pathExists(transactionRoot)) throw new Error(`package transaction '${operationId}' already exists`);
   const preparationRoot = path.join(roots.transactionsRoot, `.prepare.${operationId}.${crypto.randomBytes(6).toString("hex")}`);
   await fs.mkdir(preparationRoot, { recursive: false, mode: 0o700 });
-  await writeJournal(path.join(preparationRoot, "journal.json"), journal);
-  return publishPreparedTransaction(roots, preparationRoot);
+  const journalWrite = await writeJournal(path.join(preparationRoot, "journal.json"), journal);
+  return publishPreparedTransaction(roots, preparationRoot, { journal, journalWrite });
 }
 
-async function publishPreparedTransaction(roots, preparationRoot) {
+async function buildSingleJournalPreimage(directory, journalWrite) {
+  if (!journalWrite || typeof journalWrite.sha256 !== "string" || !Number.isSafeInteger(journalWrite.bytes)) return null;
+  try {
+    const rootStat = await fs.lstat(directory);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return null;
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    const visible = [];
+    for (const entry of entries) {
+      if (entry.name === ".octopus-publication") {
+        const metaStat = await fs.lstat(path.join(directory, entry.name));
+        if (!metaStat.isDirectory() || metaStat.isSymbolicLink() || (metaStat.mode & 0o077) !== 0) return null;
+        continue;
+      }
+      visible.push(entry);
+    }
+    if (visible.length !== 1 || visible[0].name !== "journal.json") return null;
+    const journalStat = await fs.lstat(path.join(directory, "journal.json"));
+    if (!journalStat.isFile() || journalStat.isSymbolicLink() || journalStat.size !== journalWrite.bytes) return null;
+    return {
+      identity: { device: rootStat.dev, inode: rootStat.ino },
+      mode: rootStat.mode & 0o7777,
+      digest_algorithm: "sha256",
+      entries: [{
+        relative_path: "journal.json",
+        kind: "file",
+        identity: { device: journalStat.dev, inode: journalStat.ino },
+        mode: journalStat.mode & 0o7777,
+        bytes: journalStat.size,
+        digest: journalWrite.sha256,
+      }],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function publishPreparedTransaction(roots, preparationRoot, options = {}) {
   const match = PREPARED_TRANSACTION_ROOT.exec(path.basename(preparationRoot));
   if (!match || path.dirname(preparationRoot) !== roots.transactionsRoot) throw new Error("Invalid prepared package root");
-  const journal = parseTransaction((await readJsonDocument(path.join(preparationRoot, "journal.json"), "prepared package transaction", 64 * 1024 * 1024)).value, preparationRoot);
+  const journal = options.journal ?? parseTransaction((await readJsonDocument(path.join(preparationRoot, "journal.json"), "prepared package transaction", 64 * 1024 * 1024)).value, preparationRoot);
   if (journal.schema_version !== 3 || journal.operation_id !== match[1] || journal.phase !== "prepared"
     || journal.moves.some(move => move.state !== "planned") || Object.keys(journal.publications).length || Object.keys(journal.file_publications).length) {
     throw new Error("Prepared package root has an uncertain or already-started publication");
   }
   const destination = path.join(roots.transactionsRoot, journal.operation_id);
   const file = path.join(roots.transactionsRoot, `.prepare.${journal.operation_id}.${journal.publication_id}.json`);
+  let knownRecord = null;
   if (!await pathExists(file)) {
-    const expected = await packagePublisher(roots).snapshotDirectory(preparationRoot);
-    await writeJsonAtomic(file, { schema_version: 1, operation_id: journal.operation_id, publication_id: journal.publication_id,
-      attempt: 0, movement: { source: preparationRoot, destination, expected } }, 0o600);
+    const expected = await buildSingleJournalPreimage(preparationRoot, options.journalWrite)
+      ?? await packagePublisher(roots).snapshotDirectory(preparationRoot);
+    knownRecord = {
+      schema_version: 1,
+      operation_id: journal.operation_id,
+      publication_id: journal.publication_id,
+      attempt: 0,
+      movement: { source: preparationRoot, destination, expected },
+    };
+    await writeJsonAtomic(file, knownRecord, 0o600, true);
   }
-  return finishPackagePreparation(roots, file);
+  return finishPackagePreparation(roots, file, knownRecord);
 }
 
-async function finishPackagePreparation(roots, file) {
+async function finishPackagePreparation(roots, file, knownRecord = null) {
   const match = PREPARATION_PUBLICATION_FILE.exec(path.basename(file));
-  const record = (await readJsonDocument(file, "package preparation publication", 64 * 1024 * 1024)).value;
+  const record = knownRecord ?? (await readJsonDocument(file, "package preparation publication", 64 * 1024 * 1024)).value;
   if (!match || path.dirname(file) !== roots.transactionsRoot || record.schema_version !== 1
     || record.operation_id !== match[1] || record.publication_id !== match[2] || Object.keys(record).length !== 5
     || !Number.isSafeInteger(record.attempt) || record.attempt < 0
@@ -3289,7 +4454,7 @@ async function finishPackagePreparation(roots, file) {
       || await pathExists(record.movement.destination)
       || stableJson(await publisher.snapshotDirectory(record.movement.source)) !== stableJson(record.movement.expected)) throw error;
     record.attempt += 1;
-    await writeJsonAtomic(file, record, 0o600);
+    await writeJsonAtomic(file, record, 0o600, true);
     await publisher.publishDirectoryMoves(operation(), [record.movement]);
   }
   await fs.unlink(file);
@@ -3298,17 +4463,25 @@ async function finishPackagePreparation(roots, file) {
   return destination;
 }
 
-async function removeTransactionRoot(transactionRoot, roots) {
+async function removeTransactionRoot(transactionRoot, roots, options = {}) {
   const operationId = path.basename(transactionRoot);
   if (!SAFE_OPERATION_ID.test(operationId) || path.dirname(transactionRoot) !== roots.transactionsRoot) throw new Error("Invalid package transaction cleanup root");
   const file = path.join(roots.transactionsRoot, `.cleanup.${operationId}.json`);
+  let knownRecord = null;
   if (!await pathExists(file)) {
-    const expected = await packagePublisher(roots).snapshotDirectory(transactionRoot);
+    const expected = await buildSingleJournalPreimage(transactionRoot, options.journalWrite)
+      ?? await packagePublisher(roots).snapshotDirectory(transactionRoot);
     const destination = path.join(roots.transactionsRoot, `.cleanup.${operationId}.${sha256Bytes(Buffer.from(operationId)).slice(0, 12)}`);
-    const journal = parseTransaction((await readJsonDocument(path.join(transactionRoot, "journal.json"), "package cleanup transaction", 64 * 1024 * 1024)).value, transactionRoot);
-    await writeJsonAtomic(file, { schema_version: 1, operation_id: operationId, publication_id: journal.publication_id, movement: { source: transactionRoot, destination, expected } }, 0o600);
+    const journal = options.journal ?? parseTransaction((await readJsonDocument(path.join(transactionRoot, "journal.json"), "package cleanup transaction", 64 * 1024 * 1024)).value, transactionRoot);
+    knownRecord = {
+      schema_version: 1,
+      operation_id: operationId,
+      publication_id: journal.publication_id,
+      movement: { source: transactionRoot, destination, expected },
+    };
+    await writeJsonAtomic(file, knownRecord, 0o600, true);
   }
-  await finishPackageCleanup(roots, file);
+  await finishPackageCleanup(roots, file, knownRecord);
 }
 
 async function discardUnpublishedPreparation(roots, source) {
@@ -3328,10 +4501,10 @@ async function discardUnpublishedPreparation(roots, source) {
   await finishPackageCleanup(roots, file);
 }
 
-async function finishPackageCleanup(roots, file) {
+async function finishPackageCleanup(roots, file, knownRecord = null) {
   const match = CLEANUP_PUBLICATION_FILE.exec(path.basename(file));
   if (!match || path.dirname(file) !== roots.transactionsRoot) throw new Error("Invalid package cleanup proof path");
-  const record = (await readJsonDocument(file, "package cleanup publication", 64 * 1024 * 1024)).value;
+  const record = knownRecord ?? (await readJsonDocument(file, "package cleanup publication", 64 * 1024 * 1024)).value;
   const operationId = match[1], source = record.movement?.source;
   const preparation = typeof source === "string" ? PREPARED_TRANSACTION_ROOT.exec(path.basename(source)) : null;
   const destination = path.join(roots.transactionsRoot, `.cleanup.${operationId}.${sha256Bytes(Buffer.from(operationId)).slice(0, 12)}`);
@@ -3348,18 +4521,19 @@ async function finishPackageCleanup(roots, file) {
 
 async function writeJournal(file, journal) {
   validateTransactionDocument(journal, file);
-  await writeJsonAtomic(file, journal, 0o600);
+  return writeJsonAtomic(file, journal, 0o600, true);
 }
 
-async function writeJsonAtomic(file, value, mode) {
+async function writeJsonAtomic(file, value, mode, compact = false) {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const body = Buffer.from(`${compact ? JSON.stringify(value) : JSON.stringify(value, null, 2)}\n`, "utf8");
   const temporary = path.join(
     path.dirname(file),
     `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
   );
   const handle = await fs.open(temporary, "wx", mode);
   try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await handle.writeFile(body);
     await handle.chmod(mode);
     await handle.sync();
   } finally {
@@ -3367,6 +4541,7 @@ async function writeJsonAtomic(file, value, mode) {
   }
   await fs.rename(temporary, file);
   await syncDirectory(path.dirname(file));
+  return { bytes: body.byteLength, sha256: sha256Bytes(body) };
 }
 
 async function syncDirectory(directory) {
@@ -3599,6 +4774,18 @@ async function realPlainDirectory(directory, label) {
   return resolved;
 }
 
+async function lstatExact(filePath) {
+  return fs.lstat(filePath, { bigint: true });
+}
+
+async function fstatExact(handle) {
+  return handle.stat({ bigint: true });
+}
+
+function inodeCacheKey(stat) {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mode}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
+
 async function pathExists(candidate) {
   try {
     await fs.lstat(candidate);
@@ -3687,6 +4874,8 @@ function withPackageStateLock(stateRoot, operation, shared = false) {
 module.exports = {
   withInstalledAgentPreset,
   applyLocalApplicationPack,
+  copySnapshot,
+  deduplicateInstalledRegistryFiles,
   inspectLocalPackageCatalog,
   inspectLocalPackageDiagnostics,
   inspectLocalPackageInstallation,

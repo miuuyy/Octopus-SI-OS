@@ -20,7 +20,7 @@ const privateEnvironments = new WeakMap();
 const starts = new Map();
 const PACKAGE_COMMAND = "npm --prefix app run build:cli (or node app/scripts/package-cli.cjs to package existing release binaries)";
 const execute = promisify(execFile);
-const RUNTIME_COMMANDS = new Set(["down", "restart", "doctor"]);
+const RUNTIME_COMMANDS = new Set(["bootstrap", "down", "restart", "doctor"]);
 const RUNTIME_COMMAND_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 
 function taskRetirementBarrier(environment) {
@@ -109,6 +109,14 @@ function createEnvironment(options = {}) {
     async status(request = {}) { return status(environment, request, () => statusProjection ??= projectionStore(environment)); },
     async start(request = {}) { return start(environment, request); },
     async startForeground(request = {}) { return startForeground(environment, request); },
+    async bootstrap(request = {}) { return bootstrap(environment, request); },
+    async recoverStoppedTransactions(request = {}) {
+      const host = runtimeHost(environment);
+      const current = await host.probe();
+      if (current.phase === "unmanaged" && !current.ready && current.ownership === "none" && current.pid === null && !current.error) {
+        await recoverStoppedTransactions(environment, host, request.signal);
+      }
+    },
     async down(request = {}) { return runRuntimeCommand(environment, "down", request); },
     async restart(request = {}) { return runRuntimeCommand(environment, "restart", request); },
     async doctor(request = {}) { return runRuntimeCommand(environment, "doctor", request); },
@@ -318,6 +326,36 @@ async function runRuntimeCommand(environment, command, options = {}) {
       });
     });
   });
+}
+
+async function bootstrap(environment, options = {}) {
+  assertNotAborted(options.signal);
+  const host = runtimeHost(environment);
+  const current = await host.probe();
+  if (current.error) throw runtimeError(current.error, environment);
+  if (current.ready) {
+    return {
+      command: "bootstrap",
+      ok: true,
+      skipped: true,
+      reason: "runtime_already_running",
+      home: environment.home,
+    };
+  }
+  if (current.pid != null || current.phase !== "unmanaged" || current.ownership !== "none") {
+    const detail = current.pid != null ? ` (pid ${current.pid})` : "";
+    throw runtimeError(`Octopus runtime is active for '${environment.home}'${detail}. Wait for it to finish starting or stop it before offline Home bootstrap.`, environment);
+  }
+  requireExecutable(environment.runtimeBinary, "release runtime", environment);
+  requireDistribution(environment);
+  await recoverStoppedTransactions(environment, host, options.signal);
+  assertNotAborted(options.signal);
+  const result = await runRuntimeCommand(environment, "bootstrap", options);
+  if (!result.ok) {
+    const detail = (result.stderr || result.stdout || "").trim();
+    throw new Error(`Offline Home bootstrap failed (exit ${result.exitCode})${detail ? `: ${detail}` : "."}`);
+  }
+  return result;
 }
 
 async function startForeground(environment, options = {}) {
@@ -560,4 +598,4 @@ function positiveTimeout(value) {
 function assertNotAborted(signal) { if (signal?.aborted) { const error = new Error("Terminal operation cancelled; any shared runtime already started remains running."); error.code = "ABORT_ERR"; throw error; } }
 function runtimeError(message, environment) { const error = new Error(`${message} Runtime log: ${environment.logPath}`); error.logPath = environment.logPath; return error; }
 
-module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, startForeground, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };
+module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, startForeground, bootstrap, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };

@@ -189,6 +189,10 @@ impl Target {
     }
 
     fn open(path: &Path, initialize: bool) -> io::Result<Self> {
+        Self::open_with_sync(path, initialize, true)
+    }
+
+    fn open_with_sync(path: &Path, initialize: bool, sync_dir: bool) -> io::Result<Self> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(invalid("publication target must be an absolute file path"));
         }
@@ -201,7 +205,7 @@ impl Target {
         if std::fs::symlink_metadata(&path).is_ok_and(|metadata| !metadata.is_file()) {
             return Err(invalid("publication target must be a regular file or absent"));
         }
-        if initialize { coordination_root(&parent)?; }
+        if initialize { coordination_root_with_sync(&parent, sync_dir)?; }
         Ok(Self::coordinates(path))
     }
 
@@ -226,6 +230,10 @@ impl Target {
     }
 
     fn retain_predecessor(&self, operation_id: &str, file: &File) -> io::Result<()> {
+        self.retain_predecessor_with_sync(operation_id, file, true)
+    }
+
+    fn retain_predecessor_with_sync(&self, operation_id: &str, file: &File, sync: bool) -> io::Result<()> {
         let path = self.predecessor(operation_id);
         match std::fs::hard_link(&self.path, &path) {
             Ok(()) => (),
@@ -235,8 +243,11 @@ impl Target {
         if FileIdentity::of(&open_regular(&path)?.metadata()?)? != FileIdentity::of(&file.metadata()?)? {
             return Err(invalid("publication predecessor has foreign retained identity"));
         }
-        crate::sync_ordered(file)?;
-        sync_directory(&self.root)
+        if sync {
+            crate::sync_ordered(file)?;
+            sync_directory(&self.root)?;
+        }
+        Ok(())
     }
 
     fn install(&self) -> PathBuf {
@@ -403,6 +414,507 @@ pub fn publish(
 
 pub fn remove(path: &Path, operation_id: &str, expected_before: &str) -> io::Result<PublicationReceipt> {
     WriteGuard::acquire_operation(path, true, operation_id)?.remove(operation_id, expected_before, DigestAlgorithm::Sha256)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BatchPublish<'a> {
+    pub path: &'a Path,
+    pub operation_id: &'a str,
+    pub expected_before: Option<&'a str>,
+    pub bytes: &'a [u8],
+    pub algorithm: DigestAlgorithm,
+    pub retained_stage: Option<&'a Path>,
+}
+
+const BATCH_CHUNK_SIZE: usize = 192;
+
+pub fn publish_batch(requests: &[BatchPublish<'_>]) -> io::Result<Vec<PublicationReceipt>> {
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+    for req in requests {
+        validate_operation(req.operation_id)?;
+        validate_hash(req.expected_before)?;
+        namespace::validate_absolute(req.path)?;
+        if req.path.file_name().is_none()
+            || req.path.components().any(|part| part.as_os_str() == COORDINATION_DIRECTORY)
+        {
+            return Err(invalid("publication requires an ordinary absolute file path"));
+        }
+    }
+    let mut all_receipts = Vec::with_capacity(requests.len());
+    let mut cursor = 0usize;
+    while cursor < requests.len() {
+        let mut seen = BTreeSet::new();
+        let mut end = cursor;
+        while end < requests.len() && end - cursor < BATCH_CHUNK_SIZE {
+            let normalized = namespace::normalize_entry(requests[end].path)?;
+            if normalized.file_name().is_none()
+                || normalized.components().any(|part| part.as_os_str() == COORDINATION_DIRECTORY)
+            {
+                return Err(invalid("publication requires an ordinary absolute file path"));
+            }
+            if !seen.insert(normalized) {
+                break;
+            }
+            end += 1;
+        }
+        let chunk = &requests[cursor..end];
+        if chunk.len() == 1 {
+            let req = &chunk[0];
+            let guard = if req.expected_before.is_none() {
+                WriteGuard::acquire_creating_operation(req.path, req.operation_id)?
+            } else {
+                WriteGuard::acquire_operation(req.path, false, req.operation_id)?
+            };
+            let receipt = guard.publish_with_stage(
+                req.operation_id,
+                req.expected_before,
+                req.bytes,
+                req.algorithm,
+                req.retained_stage,
+            )?;
+            let applied = receipt.outcome == PublicationOutcome::Applied;
+            all_receipts.push(receipt);
+            if !applied {
+                return Ok(all_receipts);
+            }
+            cursor = end;
+            continue;
+        }
+        let (chunk_receipts, stopped) = publish_batch_chunk(chunk)?;
+        all_receipts.extend(chunk_receipts);
+        if stopped {
+            return Ok(all_receipts);
+        }
+        cursor = end;
+    }
+    Ok(all_receipts)
+}
+
+struct BatchItem<'a> {
+    chunk_index: usize,
+    req: &'a BatchPublish<'a>,
+    expected: PublicationReceipt,
+    target: Target,
+    lock: HeldFile,
+    held_current: Option<HeldFile>,
+    pending: PendingPublication,
+    prepared: File,
+    stage_path: PathBuf,
+    needs_pending_commit: bool,
+}
+
+fn publish_batch_chunk(chunk: &[BatchPublish<'_>]) -> io::Result<(Vec<PublicationReceipt>, bool)> {
+    let mut results: Vec<Option<PublicationReceipt>> = vec![None; chunk.len()];
+    let mut pending_indices = Vec::new();
+    for (index, req) in chunk.iter().enumerate() {
+        if pending_indices.is_empty() {
+            let expected = expected_receipt(req.path, req);
+            if let Some(receipt) = history::find_file(req.path, req.operation_id)? {
+                ensure_same_request(&receipt, &expected)?;
+                let applied = receipt.outcome == PublicationOutcome::Applied;
+                results[index] = Some(receipt);
+                if !applied {
+                    return Ok((collect_prefix_receipts(results, Some(index)), true));
+                }
+                continue;
+            }
+        }
+        pending_indices.push(index);
+    }
+    if pending_indices.is_empty() {
+        return Ok((collect_prefix_receipts(results, None), false));
+    }
+
+    let mut missing_parents = BTreeSet::new();
+    for &index in &pending_indices {
+        let req = &chunk[index];
+        let normalized = namespace::normalize_entry(req.path)?;
+        let parent = normalized.parent().ok_or_else(|| invalid("publication target has no parent"))?;
+        if !parent.try_exists()? {
+            if req.expected_before.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "publication parent is absent; operation-aware creation is required",
+                ));
+            }
+            missing_parents.insert(parent.to_path_buf());
+        }
+    }
+    if !missing_parents.is_empty() {
+        create_missing_parents_batch(&missing_parents)?;
+    }
+
+    let mut normalized_paths = Vec::with_capacity(pending_indices.len());
+    let mut parent_requests = Vec::with_capacity(pending_indices.len() * 2);
+    let mut fence_paths = Vec::with_capacity(pending_indices.len() * 2);
+    for &index in &pending_indices {
+        let req = &chunk[index];
+        let normalized = namespace::normalize_entry(req.path)?;
+        let parent = normalized.parent().ok_or_else(|| invalid("publication target has no parent"))?;
+        let original_parent = req.path.parent().ok_or_else(|| invalid("publication target has no parent"))?;
+        let may_create = req.expected_before.is_none();
+        parent_requests.push((parent.to_path_buf(), may_create));
+        parent_requests.push((original_parent.to_path_buf(), false));
+        fence_paths.push(req.path.to_path_buf());
+        fence_paths.push(normalized.clone());
+        normalized_paths.push((index, normalized));
+    }
+    let membership = NamespaceGuard::acquire(&parent_requests, true)?;
+    directory::check_fences(&fence_paths, None, true)?;
+
+    let mut acquire_order: Vec<(usize, PathBuf)> = normalized_paths.clone();
+    acquire_order.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut acquired: BTreeMap<usize, (Target, HeldFile, Option<HeldFile>)> = BTreeMap::new();
+    let mut touched_parents = BTreeSet::new();
+    let mut touched_coord_dirs = BTreeSet::new();
+    for (index, normalized) in acquire_order {
+        let target = Target::open_with_sync(&normalized, true, false)?;
+        touched_parents.insert(target.path.parent().unwrap().to_path_buf());
+        touched_coord_dirs.insert(target.root.clone());
+        let lock = target.lock(true, true)?;
+        let held_current = match HeldFile::existing(target.path.clone(), true, false, true) {
+            Ok(held) => Some(held),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        acquired.insert(index, (target, lock, held_current));
+    }
+
+    let mut active: Vec<BatchItem<'_>> = Vec::new();
+    let mut predecessor_files: Vec<File> = Vec::new();
+    let mut stop_after: Option<usize> = None;
+    for (index, _normalized) in normalized_paths {
+        let req = &chunk[index];
+        let (target, lock, held_current) = acquired.remove(&index).unwrap();
+        let expected = expected_receipt(&target.path, req);
+        if let Some(receipt) = target.prior_receipt(&expected)? {
+            let applied = receipt.outcome == PublicationOutcome::Applied;
+            results[index] = Some(receipt);
+            if !applied {
+                stop_after = Some(index);
+                break;
+            }
+            continue;
+        }
+        let current = current_file(&target.path)?;
+        let observed = current.as_ref().map(|file| digest_file(file, req.algorithm)).transpose()?;
+        let retained = req.retained_stage.map(|path| {
+            let file = open_regular(path)?;
+            if file.metadata()?.len() != req.bytes.len() as u64
+                || digest_file(&file, req.algorithm)? != req.algorithm.digest(req.bytes)
+            {
+                return Err(invalid("retained publication stage differs from the exact requested bytes"));
+            }
+            Ok(file)
+        }).transpose()?;
+        if observed.as_deref() != req.expected_before && retained.is_none() {
+            let mut receipt = expected;
+            receipt.error = Some(format!("publication predecessor changed at '{}'", target.path.display()));
+            write_record_once(&target.receipt(req.operation_id), &receipt)?;
+            results[index] = Some(receipt);
+            stop_after = Some(index);
+            break;
+        }
+        let stage_path = target.stage(req.operation_id);
+        let pending_path = target.pending();
+        let (prepared, pending, needs_pending_commit) = if let Some(pending) = read_record::<PendingPublication>(&pending_path)? {
+            ensure_same_request(&pending.receipt, &expected)?;
+            (open_regular(&stage_path)?, pending, false)
+        } else {
+            remove_if_present(&stage_path)?;
+            let file = if let Some(retained_path) = req.retained_stage {
+                std::fs::hard_link(retained_path, &stage_path)?;
+                let file = open_regular(&stage_path)?;
+                if FileIdentity::of(&file.metadata()?)? != FileIdentity::of(&retained.as_ref().unwrap().metadata()?)? {
+                    return Err(invalid("retained publication stage changed while being imported"));
+                }
+                file
+            } else {
+                let file = write_new_regular(&stage_path, req.bytes)?;
+                if let Some(current) = &current {
+                    file.set_permissions(current.metadata()?.permissions())?;
+                }
+                file
+            };
+            let before_identity = if observed.as_deref() == req.expected_before {
+                if let Some(current) = current {
+                    target.retain_predecessor_with_sync(req.operation_id, &current, false)?;
+                    let identity = FileIdentity::of(&current.metadata()?)?;
+                    predecessor_files.push(current);
+                    Some(identity)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let pending = PendingPublication {
+                schema_version: 3,
+                receipt: expected.clone(),
+                before_identity,
+                stage_identity: FileIdentity::of(&file.metadata()?)?,
+            };
+            (file, pending, true)
+        };
+        active.push(BatchItem {
+            chunk_index: index,
+            req,
+            expected,
+            target,
+            lock,
+            held_current,
+            pending,
+            prepared,
+            stage_path,
+            needs_pending_commit,
+        });
+    }
+
+    if active.is_empty() {
+        return Ok((collect_prefix_receipts(results, stop_after), stop_after.is_some()));
+    }
+
+    // Barrier 1a: stage bytes, predecessor hardlinks, and coordination directories durable before publishing pending intents.
+    {
+        let mut barrier_files: Vec<&File> = active.iter().map(|item| &item.prepared).collect();
+        barrier_files.extend(predecessor_files.iter());
+        let mut barrier_dirs = touched_coord_dirs.clone();
+        barrier_dirs.extend(touched_parents.iter().cloned());
+        sync_batch_barrier(&barrier_files, &barrier_dirs)?;
+    }
+    drop(predecessor_files);
+
+    // Phase 1b: stage pending records and replacement install links, sync staged bytes, then commit pending records.
+    let mut staged_pendings: Vec<StagedRecord> = Vec::new();
+    let mut has_replacements = false;
+    for item in &active {
+        if item.needs_pending_commit {
+            if let Some(staged) = stage_record_once_bounded(&item.target.pending(), &item.pending, RECORD_LIMIT)? {
+                staged_pendings.push(staged);
+            }
+        }
+        if item.req.expected_before.is_some() {
+            has_replacements = true;
+            let link = item.target.install();
+            match std::fs::hard_link(&item.stage_path, &link) {
+                Ok(()) => (),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if FileIdentity::of(&open_regular(&link)?.metadata()?)?
+                        != FileIdentity::of(&item.prepared.metadata()?)?
+                    {
+                        return Err(invalid("publication install link has foreign file identity"));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    if !staged_pendings.is_empty() {
+        let barrier_files: Vec<&File> = staged_pendings.iter().map(|staged| &staged.file).collect();
+        sync_batch_barrier(&barrier_files, &BTreeSet::new())?;
+        drop(barrier_files);
+        for staged in staged_pendings {
+            commit_staged_record(staged)?;
+        }
+        sync_batch_barrier(&[], &touched_coord_dirs)?;
+    } else if has_replacements {
+        sync_batch_barrier(&[], &touched_coord_dirs)?;
+    }
+
+    let mut ready_to_install: Vec<BatchItem<'_>> = Vec::with_capacity(active.len());
+    for item in active {
+        if item.req.retained_stage.is_some() {
+            if let Some(receipt) = item.target.settle_pending(Some(item.req.operation_id))? {
+                let applied = receipt.outcome == PublicationOutcome::Applied;
+                results[item.chunk_index] = Some(receipt);
+                if !applied {
+                    stop_after = Some(item.chunk_index);
+                    break;
+                }
+                continue;
+            }
+        }
+        ready_to_install.push(item);
+    }
+    if ready_to_install.is_empty() {
+        return Ok((collect_prefix_receipts(results, stop_after), stop_after.is_some()));
+    }
+
+    // Phase 2: verify ownership and install every target.
+    for item in &ready_to_install {
+        item.prepared.try_lock_exclusive()?;
+        item.lock.verify()?;
+        membership.verify()?;
+        if let Some(current) = &item.held_current {
+            current.verify()?;
+        }
+        if item.req.expected_before.is_none() {
+            std::fs::hard_link(&item.stage_path, &item.target.path)?;
+        } else {
+            std::fs::rename(item.target.install(), &item.target.path)?;
+        }
+    }
+    {
+        let barrier_files: Vec<&File> = ready_to_install.iter().map(|item| &item.prepared).collect();
+        sync_batch_barrier(&barrier_files, &touched_parents)?;
+    }
+
+    // Phase 3: verify installed identities, stage and commit Applied receipts.
+    let mut staged_receipts: Vec<StagedRecord> = Vec::with_capacity(ready_to_install.len());
+    let mut applied_receipts: Vec<PublicationReceipt> = Vec::with_capacity(ready_to_install.len());
+    for item in &ready_to_install {
+        let current = current_file(&item.target.path)?
+            .ok_or_else(|| invalid("installed batch publication target disappeared"))?;
+        if FileIdentity::of(&current.metadata()?)? != item.pending.stage_identity {
+            return Err(invalid("installed batch publication target identity mismatch"));
+        }
+        let mut receipt = item.expected.clone();
+        receipt.outcome = PublicationOutcome::Applied;
+        if let Some(staged) = stage_record_once_bounded(&item.target.receipt(item.req.operation_id), &receipt, RECORD_LIMIT)? {
+            staged_receipts.push(staged);
+        }
+        applied_receipts.push(receipt);
+    }
+    if !staged_receipts.is_empty() {
+        let barrier_files: Vec<&File> = staged_receipts.iter().map(|staged| &staged.file).collect();
+        sync_batch_barrier(&barrier_files, &BTreeSet::new())?;
+        drop(barrier_files);
+        for staged in staged_receipts {
+            commit_staged_record(staged)?;
+        }
+    }
+    sync_batch_barrier(&[], &touched_coord_dirs)?;
+
+    // Phase 4: retire stage, install, predecessor, and pending files.
+    for item in &ready_to_install {
+        for path in [item.target.install(), item.stage_path.clone()] {
+            if let Some(file) = current_file(&path)? {
+                if FileIdentity::of(&file.metadata()?)? != item.pending.stage_identity {
+                    return Err(invalid("publication cleanup found foreign file identity"));
+                }
+                std::fs::remove_file(path)?;
+            }
+        }
+        if item.pending.schema_version >= 3 {
+            let predecessor_path = item.target.predecessor(item.req.operation_id);
+            if let Some(file) = current_file(&predecessor_path)? {
+                if Some(FileIdentity::of(&file.metadata()?)?) != item.pending.before_identity {
+                    return Err(invalid("publication cleanup found foreign predecessor identity"));
+                }
+                std::fs::remove_file(predecessor_path)?;
+            }
+        }
+        remove_if_present(&item.target.pending())?;
+    }
+    sync_batch_barrier(&[], &touched_coord_dirs)?;
+
+    for (item, receipt) in ready_to_install.into_iter().zip(applied_receipts.into_iter()) {
+        item.lock.verify()?;
+        results[item.chunk_index] = Some(receipt);
+    }
+    membership.verify()?;
+
+    Ok((collect_prefix_receipts(results, stop_after), stop_after.is_some()))
+}
+
+fn expected_receipt(path: &Path, req: &BatchPublish<'_>) -> PublicationReceipt {
+    PublicationReceipt {
+        digest_algorithm: req.algorithm,
+        operation_id: req.operation_id.into(),
+        path: path.to_path_buf(),
+        before_hash: req.expected_before.map(str::to_string),
+        after_hash: Some(req.algorithm.digest(req.bytes)),
+        bytes: req.bytes.len() as u64,
+        outcome: PublicationOutcome::NotApplied,
+        error: None,
+    }
+}
+
+fn collect_prefix_receipts(
+    results: Vec<Option<PublicationReceipt>>,
+    stop_after: Option<usize>,
+) -> Vec<PublicationReceipt> {
+    let limit = stop_after.map_or(results.len(), |idx| idx + 1);
+    results.into_iter().take(limit).flatten().collect()
+}
+
+fn create_missing_parents_batch(parents: &BTreeSet<PathBuf>) -> io::Result<()> {
+    let mut normalized_parents = BTreeSet::new();
+    for parent in parents {
+        normalized_parents.insert(namespace::normalize(parent)?);
+    }
+    let requests: Vec<(PathBuf, bool)> = normalized_parents.iter().map(|p| (p.clone(), true)).collect();
+    let guard = NamespaceGuard::acquire(&requests, true)?;
+    let fence_paths: Vec<PathBuf> = normalized_parents.iter().cloned().collect();
+    directory::check_fences(&fence_paths, None, true)?;
+    let mut created_parents = BTreeSet::new();
+    for path in &normalized_parents {
+        let mut absent = Vec::new();
+        let mut cursor = path.as_path();
+        while !cursor.try_exists()? {
+            absent.push(cursor.to_path_buf());
+            cursor = cursor.parent().ok_or_else(|| invalid("directory creation has no existing ancestor"))?;
+        }
+        if !std::fs::symlink_metadata(cursor)?.is_dir() {
+            return Err(invalid("directory creation ancestor is not a directory"));
+        }
+        for dir in absent.into_iter().rev() {
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    if let Some(parent) = dir.parent() {
+                        created_parents.insert(parent.to_path_buf());
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if !std::fs::symlink_metadata(&dir)?.is_dir() {
+                        return Err(invalid("directory creation encountered a non-directory"));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    if !created_parents.is_empty() {
+        sync_batch_barrier(&[], &created_parents)?;
+    }
+    guard.verify()
+}
+
+fn sync_batch_barrier(files: &[&File], dirs: &BTreeSet<PathBuf>) -> io::Result<bool> {
+    #[cfg(target_os = "linux")]
+    if files.len() + dirs.len() > 2 {
+        let mut synced_devices = BTreeSet::new();
+        let mut all_synced = true;
+        for file in files {
+            let dev = FileIdentity::of(&file.metadata()?)?.device;
+            if synced_devices.insert(dev) && !crate::sync_filesystem_ordered(file)? {
+                all_synced = false;
+                break;
+            }
+        }
+        if all_synced {
+            for dir in dirs {
+                let handle = File::open(dir)?;
+                let dev = FileIdentity::of(&handle.metadata()?)?.device;
+                if synced_devices.insert(dev) && !crate::sync_filesystem_ordered(&handle)? {
+                    all_synced = false;
+                    break;
+                }
+            }
+        }
+        if all_synced && !synced_devices.is_empty() {
+            return Ok(true);
+        }
+    }
+    for file in files {
+        crate::sync_ordered(file)?;
+    }
+    for dir in dirs {
+        sync_directory(dir)?;
+    }
+    Ok(false)
 }
 
 pub struct WriteGuard {
@@ -818,6 +1330,10 @@ fn directory_lock(directory: &Path, exclusive: bool, wait: bool) -> io::Result<H
 }
 
 fn coordination_root(parent: &Path) -> io::Result<PathBuf> {
+    coordination_root_with_sync(parent, true)
+}
+
+fn coordination_root_with_sync(parent: &Path, sync_dir: bool) -> io::Result<PathBuf> {
     let root = parent.join(COORDINATION_DIRECTORY);
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -827,7 +1343,9 @@ fn coordination_root(parent: &Path) -> io::Result<PathBuf> {
     }
     match builder.create(&root) {
         Ok(()) => {
-            sync_directory(parent)?;
+            if sync_dir {
+                sync_directory(parent)?;
+            }
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
         Err(error) => return Err(error),
@@ -905,6 +1423,38 @@ fn write_record_once<T: Serialize>(path: &Path, record: &T) -> io::Result<()> {
     write_record_once_bounded(path, record, RECORD_LIMIT)
 }
 
+struct StagedRecord {
+    temporary: PathBuf,
+    path: PathBuf,
+    file: File,
+}
+
+fn stage_record_once_bounded<T: Serialize>(path: &Path, record: &T, limit: u64) -> io::Result<Option<StagedRecord>> {
+    let bytes = serde_json::to_vec(record).map_err(|error| invalid(error.to_string()))?;
+    if bytes.len() as u64 > limit {
+        return Err(invalid("publication metadata exceeds its declared bound"));
+    }
+    if let Some(file) = current_file(path)? {
+        if digest_file(&file, DigestAlgorithm::Sha256)? != hash(&bytes) {
+            return Err(invalid("publication evidence already contains a different record"));
+        }
+        return Ok(None);
+    }
+    let mut temporary_name = record_temporary_prefix(path);
+    temporary_name.push(format!("{}.{}.tmp", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed)));
+    let temporary = path.with_file_name(temporary_name);
+    let file = write_new_regular(&temporary, &bytes)?;
+    Ok(Some(StagedRecord { temporary, path: path.to_path_buf(), file }))
+}
+
+fn commit_staged_record(staged: StagedRecord) -> io::Result<()> {
+    let installed = std::fs::hard_link(&staged.temporary, &staged.path);
+    let cleanup = std::fs::remove_file(&staged.temporary);
+    installed?;
+    cleanup?;
+    Ok(())
+}
+
 fn write_record_once_bounded<T: Serialize>(path: &Path, record: &T, limit: u64) -> io::Result<()> {
     let bytes = serde_json::to_vec(record).map_err(|error| invalid(error.to_string()))?;
     if bytes.len() as u64 > limit {
@@ -929,14 +1479,22 @@ fn write_record_once_bounded<T: Serialize>(path: &Path, record: &T, limit: u64) 
     sync_directory(path.parent().unwrap())
 }
 
-fn digest_file(mut file: &File, algorithm: DigestAlgorithm) -> io::Result<String> {
+fn digest_file(file: &File, algorithm: DigestAlgorithm) -> io::Result<String> {
+    let mut buffer = vec![0u8; 256 * 1024];
+    digest_file_with_buffer(file, algorithm, &mut buffer)
+}
+
+pub(super) fn digest_file_with_buffer(
+    mut file: &File,
+    algorithm: DigestAlgorithm,
+    buffer: &mut [u8],
+) -> io::Result<String> {
     use std::io::Seek;
     file.rewind()?;
     let mut digest = Sha256::new();
     let mut blake = blake3::Hasher::new();
-    let mut buffer = [0u8; 65536];
     loop {
-        let count = file.read(&mut buffer)?;
+        let count = file.read(buffer)?;
         if count == 0 { break; }
         match algorithm {
             DigestAlgorithm::Sha256 => { digest.update(&buffer[..count]); },

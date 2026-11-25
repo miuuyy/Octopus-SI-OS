@@ -16,6 +16,23 @@ const PACKAGE_INVENTORY_METHODS = new Set([
   "projection.operator.chat.contexts",
 ]);
 
+function scopedPackageInventoryFilter(method, params) {
+  if (method !== "projection.operator.os.applications" && method !== "projection.operator.os.drivers") {
+    return null;
+  }
+  const packageIds = arrayValue(params?.package_ids).map(stringValue).filter(Boolean);
+  if (!packageIds.length) return null;
+  if (method === "projection.operator.os.drivers") {
+    return { packageIds, includeApplications: false, applicationIds: null };
+  }
+  const applicationIds = arrayValue(params?.application_ids).map(stringValue).filter(Boolean);
+  return {
+    packageIds,
+    includeApplications: true,
+    applicationIds: applicationIds.length ? applicationIds : null,
+  };
+}
+
 function queryRouterProjection(store) {
   async function readProjection(request) {
     await store.beforeRead();
@@ -73,7 +90,8 @@ function queryRouterProjection(store) {
       includeLedger,
     );
     if (PACKAGE_INVENTORY_METHODS.has(method)) {
-      projection = await store.withFileProjectionPackages(projection, includeLedger);
+      const scopedFilter = scopedPackageInventoryFilter(method, params);
+      projection = await store.withFileProjectionPackages(projection, includeLedger, scopedFilter);
     }
     switch (method) {
       case "projection.runtime.snapshot":

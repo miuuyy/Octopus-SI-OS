@@ -1,5 +1,7 @@
 use super::*;
 
+const RECLAIM_BATCH_SIZE: usize = 256;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Intent {
@@ -16,6 +18,8 @@ struct Progress {
     schema_version: u32,
     intent_hash: String,
     next: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    batch_end: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,7 +175,12 @@ fn order(manifest: &DirectoryPreimage) -> Vec<&DirectoryEntry> {
 }
 
 fn validate_progress(intent: &Intent, progress: &Progress) -> io::Result<()> {
-    if progress.schema_version != 1 || progress.intent_hash != encoded_hash(intent)? || progress.next > intent.manifest.entries.len() {
+    let len = intent.manifest.entries.len();
+    if progress.schema_version != 1
+        || progress.intent_hash != encoded_hash(intent)?
+        || progress.next > len
+        || progress.batch_end.is_some_and(|end| end <= progress.next || end > len)
+    {
         return Err(invalid("reclamation progress differs from its durable intent"));
     }
     Ok(())
@@ -200,10 +209,11 @@ fn validate_frontier(intent: &Intent, progress: &Progress) -> io::Result<bool> {
         return Err(invalid("reclamation found a foreign tombstone inode"));
     }
     let mut entries = current.entries.into_iter().map(|entry| (entry.relative_path.clone(), entry)).collect::<BTreeMap<_, _>>();
+    let frontier_end = progress.batch_end.unwrap_or((progress.next + 1).min(intent.manifest.entries.len()));
     for (index, expected) in order(&intent.manifest).into_iter().enumerate() {
         let observed = entries.remove(&expected.relative_path);
         if if index < progress.next { observed.is_some() }
-            else if index == progress.next { observed.as_ref().is_some_and(|observed| observed != expected) }
+            else if index < frontier_end { observed.as_ref().is_some_and(|observed| observed != expected) }
             else { observed.as_ref() != Some(expected) }
         { return Err(invalid("reclamation tree differs from its exact durable frontier")); }
     }
@@ -211,7 +221,7 @@ fn validate_frontier(intent: &Intent, progress: &Progress) -> io::Result<bool> {
     Ok(true)
 }
 
-fn unlink(path: &Path, directory: bool, parent_identity: &FileIdentity, identity: &FileIdentity) -> io::Result<()> {
+fn unlink_unsynced(path: &Path, directory: bool, parent_identity: &FileIdentity, identity: &FileIdentity) -> io::Result<File> {
     #[cfg(unix)] {
         use std::ffi::CString;
         use std::os::fd::AsRawFd;
@@ -223,9 +233,14 @@ fn unlink(path: &Path, directory: bool, parent_identity: &FileIdentity, identity
         }
         let result = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), if directory { libc::AT_REMOVEDIR } else { 0 }) };
         if result != 0 { return Err(io::Error::last_os_error()); }
-        crate::sync_ordered(&parent)
+        Ok(parent)
     }
     #[cfg(not(unix))] { let _ = (path, directory, parent_identity, identity); Err(io::Error::new(io::ErrorKind::Unsupported, "exact tombstone reclamation requires native unlink")) }
+}
+
+fn unlink(path: &Path, directory: bool, parent_identity: &FileIdentity, identity: &FileIdentity) -> io::Result<()> {
+    let parent = unlink_unsynced(path, directory, parent_identity, identity)?;
+    crate::sync_ordered(&parent)
 }
 
 fn entry_parent_identity<'a>(intent: &'a Intent, relative: &Path) -> io::Result<&'a FileIdentity> {
@@ -289,7 +304,7 @@ pub fn reclaim_directory(tombstone: &Path, proof: &DirectoryMoveReceipt, expecte
             if existing && directory::capture(&tombstone, expected.digest_algorithm, true, &expected.identity)? != intent.manifest {
                 return Err(invalid("reclamation intent lost its initial exact frontier"));
             }
-            let progress = Progress { schema_version: 1, intent_hash: encoded_hash(&intent)?, next: 0 };
+            let progress = Progress { schema_version: 1, intent_hash: encoded_hash(&intent)?, next: 0, batch_end: None };
             write_record_once(&progress_path, &progress)?;
             progress
         }
@@ -298,18 +313,54 @@ pub fn reclaim_directory(tombstone: &Path, proof: &DirectoryMoveReceipt, expecte
     let fence = Fence { schema_version: 1, intent_path: path.clone(), intent_hash: encoded_hash(&intent)? };
     write_record_once(&marker(&tombstone), &fence)?;
     if !validate_frontier(&intent, &progress)? { return finish(&intent, &path); }
-    for (index, expected) in order(&intent.manifest).into_iter().enumerate().skip(progress.next) {
-        let entry = tombstone.join(&expected.relative_path);
-        if !directory::absent(&entry)? {
-            if directory::capture_entry(&entry, expected.relative_path.clone(), intent.manifest.digest_algorithm)? != *expected {
-                return Err(invalid("reclamation entry changed after frontier validation"));
+    let ordered = order(&intent.manifest);
+    while progress.next < ordered.len() {
+        let start = progress.next;
+        let end = if let Some(existing_end) = progress.batch_end {
+            existing_end
+        } else {
+            let depth = ordered[start].relative_path.components().count();
+            let limit = (start + RECLAIM_BATCH_SIZE).min(ordered.len());
+            let mut cursor = start + 1;
+            while cursor < limit && ordered[cursor].relative_path.components().count() == depth {
+                cursor += 1;
             }
-            namespace.verify()?;
-            unlink(&entry, expected.kind == DirectoryEntryKind::Directory, entry_parent_identity(&intent, &expected.relative_path)?, &expected.identity)?;
-            if expected.kind == DirectoryEntryKind::Directory { namespace.removed(&entry); }
+            cursor
+        };
+        if end - start > 1 && progress.batch_end != Some(end) {
+            progress.batch_end = Some(end);
+            write_progress(&progress_path, &progress)?;
         }
-        #[cfg(test)] interrupt_at(Interruption::Reclaim(index));
-        progress.next = index + 1;
+        let mut touched_parents: BTreeSet<PathBuf> = BTreeSet::new();
+        for index in start..end {
+            let expected = ordered[index];
+            let entry = tombstone.join(&expected.relative_path);
+            if !directory::absent(&entry)? {
+                if directory::capture_entry(&entry, expected.relative_path.clone(), intent.manifest.digest_algorithm)? != *expected {
+                    return Err(invalid("reclamation entry changed after frontier validation"));
+                }
+                namespace.verify()?;
+                let _parent = unlink_unsynced(
+                    &entry,
+                    expected.kind == DirectoryEntryKind::Directory,
+                    entry_parent_identity(&intent, &expected.relative_path)?,
+                    &expected.identity,
+                )?;
+                if let Some(parent_path) = entry.parent() {
+                    touched_parents.insert(parent_path.to_path_buf());
+                }
+                if expected.kind == DirectoryEntryKind::Directory {
+                    namespace.removed(&entry);
+                    touched_parents.remove(&entry);
+                }
+            }
+            #[cfg(test)] interrupt_at(Interruption::Reclaim(index));
+        }
+        if !touched_parents.is_empty() {
+            sync_batch_barrier(&[], &touched_parents)?;
+        }
+        progress.next = end;
+        progress.batch_end = None;
         write_progress(&progress_path, &progress)?;
     }
     namespace.verify()?;

@@ -66,45 +66,55 @@ async function initializeWorkspace(options) {
       if (existingRoot) await verifyExistingRootObservation({ ...roots, eeInstancesRoot: overlay }, {
         ...existingRoot, path: path.join(overlay, `${existingRoot.ee_id}.json`),
       }, true);
-      plan = parseHomePlan(await options.planOperatorSurface({
-        eeInstancesRoot: overlay,
-        request: {
-          chatId: materialized.chatId,
-          cycle: materialized.cycle,
-          providerInterfaceId: request.home.providerInterfaceId,
-          providerModel: request.home.providerModel,
-          workerInterfaceId: request.home.workerInterfaceId,
-          ...(request.home.reasoningEffort ? { reasoningEffort: request.home.reasoningEffort } : {}),
-          ...(request.home.serviceTier ? { serviceTier: request.home.serviceTier } : {}),
-          ...(request.home.voiceModel ? { voiceModel: request.home.voiceModel } : {}),
-          ...(Object.keys(request.home.doorHostSlots).length ? { doorHostSlots: request.home.doorHostSlots } : {}),
-          ...(request.home.contextArtifactBindings.length
-            ? { contextArtifactBindings: request.home.contextArtifactBindings }
-            : {}),
-          ...(request.home.selectedWorkerEnvironmentKinds.length
-            ? { selectedWorkerEnvironmentKinds: request.home.selectedWorkerEnvironmentKinds }
-            : {}),
-          eeId: materialized.rootEeId,
-          clientSurfaceRole: "home",
-        },
-      }), request, materialized);
-      projectProfiles = await preflightInitialWorkspaceProjects({
-        eeInstancesRoot: overlay,
-        materialized,
-        operationId: request.operationId,
-        planOperatorSurface: options.planOperatorSurface,
-        projects: request.projects,
-        providerInterfaceId: request.home.providerInterfaceId,
-        providerModel: request.home.providerModel,
-        task: request.task,
-      });
+      const agentPresetSpecs = [];
       for (const choice of request.agentPresets ?? []) {
         if (typeof options.planAgentPreset !== "function") throw new Error("Workspace Agent preset planner is unavailable");
         for (const projectKey of choice.projectKeys) {
           const operationId = `agent_${sha256(Buffer.from(`${request.operationId}\0${choice.packId}\0${choice.presetId}`)).slice(0, 32)}`;
-          agentPlans.push(await options.planAgentPreset({ choice, projectEeId: requiredMapValue(materialized.projectEeIds, projectKey), operationId, eeInstancesRoot: overlay }));
+          agentPresetSpecs.push({ choice, projectEeId: requiredMapValue(materialized.projectEeIds, projectKey), operationId, eeInstancesRoot: overlay });
         }
       }
+      const [homePlanOutcome, projectProfilesOutcome, agentPlansOutcome] = await Promise.allSettled([
+        Promise.resolve().then(() => options.planOperatorSurface({
+          eeInstancesRoot: overlay,
+          request: {
+            chatId: materialized.chatId,
+            cycle: materialized.cycle,
+            providerInterfaceId: request.home.providerInterfaceId,
+            providerModel: request.home.providerModel,
+            workerInterfaceId: request.home.workerInterfaceId,
+            ...(request.home.reasoningEffort ? { reasoningEffort: request.home.reasoningEffort } : {}),
+            ...(request.home.serviceTier ? { serviceTier: request.home.serviceTier } : {}),
+            ...(request.home.voiceModel ? { voiceModel: request.home.voiceModel } : {}),
+            ...(Object.keys(request.home.doorHostSlots).length ? { doorHostSlots: request.home.doorHostSlots } : {}),
+            ...(request.home.contextArtifactBindings.length
+              ? { contextArtifactBindings: request.home.contextArtifactBindings }
+              : {}),
+            ...(request.home.selectedWorkerEnvironmentKinds.length
+              ? { selectedWorkerEnvironmentKinds: request.home.selectedWorkerEnvironmentKinds }
+              : {}),
+            eeId: materialized.rootEeId,
+            clientSurfaceRole: "home",
+          },
+        })),
+        Promise.resolve().then(() => preflightInitialWorkspaceProjects({
+          eeInstancesRoot: overlay,
+          materialized,
+          operationId: request.operationId,
+          planOperatorSurface: options.planOperatorSurface,
+          projects: request.projects,
+          providerInterfaceId: request.home.providerInterfaceId,
+          providerModel: request.home.providerModel,
+          task: request.task,
+        })),
+        Promise.all(agentPresetSpecs.map((spec) => options.planAgentPreset(spec))),
+      ]);
+      if (homePlanOutcome.status === "rejected") throw homePlanOutcome.reason;
+      plan = parseHomePlan(homePlanOutcome.value, request, materialized);
+      if (projectProfilesOutcome.status === "rejected") throw projectProfilesOutcome.reason;
+      if (agentPlansOutcome.status === "rejected") throw agentPlansOutcome.reason;
+      projectProfiles = projectProfilesOutcome.value;
+      agentPlans.push(...agentPlansOutcome.value);
     } finally {
       await fs.rm(overlay, { recursive: true, force: true });
     }
@@ -1507,7 +1517,7 @@ async function createEeOverlay(roots, eeWrites) {
       const source = path.join(roots.eeInstancesRoot, entry.name);
       const target = path.join(overlay, entry.name);
       const bytes = await readFileNoFollow(source);
-      await writeSyncedFile(target, bytes, 0o600, "wx");
+      await writeStagedFile(target, bytes, 0o600, "wx");
     }
     for (const write of eeWrites) {
       if (write.expectedBeforeDigest) {
@@ -1516,14 +1526,13 @@ async function createEeOverlay(roots, eeWrites) {
         if (!before || sha256(before) !== write.expectedBeforeDigest) throw new Error(`Workspace root EE '${write.eeId}' changed before planning`);
         await fs.unlink(target);
       }
-      await writeSyncedFile(
+      await writeStagedFile(
         path.join(overlay, `${write.eeId}.json`),
         Buffer.from(eeDocument(write)),
         0o600,
         "wx",
       );
     }
-    await syncDirectory(overlay);
     return overlay;
   } catch (error) {
     await fs.rm(overlay, { recursive: true, force: true });
@@ -1548,11 +1557,17 @@ async function preflightInitialWorkspaceProjects({
     ...(task.contextArtifactBindings.length ? { context_artifact_bindings: structuredClone(task.contextArtifactBindings) } : {}),
     ...(task.selectedWorkerEnvironmentKinds.length ? { selected_worker_environment_kinds: [...task.selectedWorkerEnvironmentKinds] } : {}),
   };
-  await preflightProjectTaskSurface({
-    authoringProfile: rootProfile, eeId: materialized.rootEeId, eeInstancesRoot, operationId,
-    planOperatorSurface, projectKey: "root", providerInterfaceId, providerModel,
-  });
   const profiles = new Map([["root", rootProfile]]);
+  const preflightSpecs = [{
+    authoringProfile: rootProfile,
+    eeId: materialized.rootEeId,
+    eeInstancesRoot,
+    operationId,
+    planOperatorSurface,
+    projectKey: "root",
+    providerInterfaceId,
+    providerModel,
+  }];
   const remaining = new Map(projects.map((project) => [project.key, project]));
   while (remaining.size) {
     const ready = projects.filter((project) => remaining.has(project.key) && profiles.has(project.parentKey));
@@ -1560,7 +1575,7 @@ async function preflightInitialWorkspaceProjects({
     for (const project of ready) {
       const eeId = requiredMapValue(materialized.projectEeIds, project.key);
       const profile = projectAuthoringProfile(profiles.get(project.parentKey), eeId);
-      await preflightProjectTaskSurface({
+      preflightSpecs.push({
         authoringProfile: profile,
         eeId,
         eeInstancesRoot,
@@ -1574,6 +1589,7 @@ async function preflightInitialWorkspaceProjects({
       remaining.delete(project.key);
     }
   }
+  await Promise.all(preflightSpecs.map((spec) => preflightProjectTaskSurface(spec)));
   return profiles;
 }
 
@@ -2364,10 +2380,10 @@ async function stageWorkspaceTransaction(roots, request, writes, receipt, schema
   await fs.mkdir(path.join(stagingRoot, "after"), { mode: 0o700 });
   await fs.mkdir(path.join(stagingRoot, "before"), { mode: 0o700 });
   await syncDirectory(roots.transactionsRoot);
-  const journalWrites = [];
+  const journalWrites = new Array(writes.length);
   const publicationAttempt = crypto.randomUUID();
   try {
-    for (const [index, write] of writes.entries()) {
+    await runBounded(writes.map((write, index) => ({ write, index })), async ({ write, index }) => {
       const destinationRoot = allowedDestinationRoot(roots, write.destination);
       await validateExistingPath(destinationRoot, write.destination);
       const before = await readFileIfPresent(write.destination);
@@ -2377,7 +2393,7 @@ async function stageWorkspaceTransaction(roots, request, writes, receipt, schema
         if (beforeDigest !== write.expectedBeforeDigest) {
           throw new Error(`Workspace write '${write.tag}' changed before staging`);
         }
-        journalWrites.push({
+        journalWrites[index] = {
           destination: write.destination,
           expected_before_digest: write.expectedBeforeDigest,
           before_digest: beforeDigest,
@@ -2387,8 +2403,8 @@ async function stageWorkspaceTransaction(roots, request, writes, receipt, schema
           tag: write.tag,
           publish_barrier: write.publishBarrier,
           state: "unchanged",
-        });
-        continue;
+        };
+        return;
       }
       if (beforeDigest !== write.expectedBeforeDigest) {
         throw new Error(`Workspace write '${write.tag}' expected ${write.expectedBeforeDigest ?? "an absent file"}, found ${beforeDigest ?? "an absent file"}`);
@@ -2406,7 +2422,7 @@ async function stageWorkspaceTransaction(roots, request, writes, receipt, schema
         beforeFile = path.join("before", `${String(index).padStart(4, "0")}.bin`);
         await writeSyncedFile(path.join(stagingRoot, beforeFile), before, 0o600, "wx");
       }
-      journalWrites.push({
+      journalWrites[index] = {
         destination: write.destination,
         expected_before_digest: write.expectedBeforeDigest,
         before_digest: beforeDigest,
@@ -2416,10 +2432,14 @@ async function stageWorkspaceTransaction(roots, request, writes, receipt, schema
         tag: write.tag,
         publish_barrier: write.publishBarrier,
         state: "staged",
-      });
+      };
+    });
+    if (journalWrites.some((write) => write.after_file)) {
+      await syncDirectory(path.join(stagingRoot, "after"));
     }
-    await syncDirectory(path.join(stagingRoot, "after"));
-    await syncDirectory(path.join(stagingRoot, "before"));
+    if (journalWrites.some((write) => write.before_file)) {
+      await syncDirectory(path.join(stagingRoot, "before"));
+    }
     await syncDirectory(stagingRoot);
     const journal = {
       schema,
@@ -2537,9 +2557,15 @@ async function stageClientAuthoringTransaction(roots, plan) {
           removal.destination, path.join(transactionRoot, "removed", String(index).padStart(4, "0")), expected),
       });
     }
-    await syncDirectory(path.join(stagingRoot, "after"));
-    await syncDirectory(path.join(stagingRoot, "before"));
-    await syncDirectory(path.join(stagingRoot, "removed"));
+    if (journalWrites.some((write) => write.after_file)) {
+      await syncDirectory(path.join(stagingRoot, "after"));
+    }
+    if (journalWrites.some((write) => write.before_file)) {
+      await syncDirectory(path.join(stagingRoot, "before"));
+    }
+    if (journalRemovals.length > 0) {
+      await syncDirectory(path.join(stagingRoot, "removed"));
+    }
     await syncDirectory(stagingRoot);
     const directoryInventory = plan.retirement ? await captureRetirementDirectoryInventory(roots, plan) : null;
     await writeJournal(stagingRoot, parseClientAuthoringJournal({
@@ -2584,24 +2610,68 @@ async function commitTransaction(roots, transactionRoot, onProgress) {
     Number(journal.writes[left].publish_barrier) - Number(journal.writes[right].publish_barrier)
     || left - right
   ));
-  for (const [position, index] of ordered.entries()) {
+  const nonBarrier = ordered.filter((index) => !journal.writes[index].publish_barrier);
+  const barrier = ordered.filter((index) => journal.writes[index].publish_barrier);
+  let completedCount = 0;
+  const pendingNonBarrier = [];
+  for (const index of nonBarrier) {
     const write = journal.writes[index];
-    if (write.publish_barrier && journal.schema === "octopus.workspace_setup_transaction") {
+    if (write.state === "unchanged" || write.state === "applied") {
+      await verifyAppliedWrite(write);
+      completedCount += 1;
+    } else {
+      pendingNonBarrier.push(index);
+    }
+  }
+  if (pendingNonBarrier.length > 0) {
+    const MAX_BATCH_WRITES = 256;
+    const MAX_BATCH_BYTES = 8 * 1024 * 1024;
+    let chunk = [];
+    let chunkBytes = 0;
+    const flushChunk = async () => {
+      if (chunk.length === 0) return;
+      await applyJournalBatch(roots, transactionRoot, journal, chunk);
+      completedCount += chunk.length;
+      reportProgress(
+        onProgress,
+        journal.operation_id,
+        "applying",
+        Math.round(28 + completedCount / ordered.length * 62),
+        "Creating your space",
+      );
+      chunk = [];
+      chunkBytes = 0;
+    };
+    for (const index of pendingNonBarrier) {
+      const estimatedBytes = (journal.writes[index].publication?.bytes ?? 0) + 512;
+      if (chunk.length > 0 && (chunk.length >= MAX_BATCH_WRITES || chunkBytes + estimatedBytes > MAX_BATCH_BYTES)) {
+        await flushChunk();
+      }
+      chunk.push(index);
+      chunkBytes += estimatedBytes;
+    }
+    await flushChunk();
+  }
+  for (const index of barrier) {
+    const write = journal.writes[index];
+    if (journal.schema === "octopus.workspace_setup_transaction") {
       await verifySetupRootObservation(roots, journal.receipt);
     }
     if (write.state === "unchanged" || write.state === "applied") {
       await verifyAppliedWrite(write);
+      completedCount += 1;
       continue;
     }
     await applyJournalWrite(roots, transactionRoot, journal, index);
     journal.writes[index].state = "applied";
     await writeJournal(transactionRoot, journal);
+    completedCount += 1;
     reportProgress(
       onProgress,
       journal.operation_id,
-      write.publish_barrier ? "publishing" : "applying",
-      Math.round(28 + (position + 1) / ordered.length * 62),
-      write.publish_barrier ? "Publishing Home" : "Creating your space",
+      "publishing",
+      Math.round(28 + completedCount / ordered.length * 62),
+      "Publishing Home",
     );
   }
   await verifyJournalWrites(journal.writes);
@@ -3209,6 +3279,108 @@ async function applyJournalWrite(roots, transactionRoot, journal, index) {
   const content = await journalContent(transactionRoot, write);
   await publishJournalOperation(roots, transactionRoot, journal, index, content, false);
   await verifyAppliedWrite(write);
+}
+
+async function applyJournalBatch(roots, transactionRoot, journal, indices) {
+  if (indices.length === 1) {
+    await applyJournalWrite(roots, transactionRoot, journal, indices[0]);
+    journal.writes[indices[0]].state = "applied";
+    await writeJournal(transactionRoot, journal);
+    return;
+  }
+  if (typeof roots.publishFiles !== "function") {
+    throw new Error("Workspace destination effects require the native file publisher");
+  }
+  const toPublish = [];
+  const payloads = [];
+  for (const index of indices) {
+    const write = journal.writes[index];
+    const destinationRoot = allowedDestinationRoot(roots, write.destination);
+    await validateExistingPath(destinationRoot, write.destination);
+    if (write.publication.receipt?.outcome === "applied") {
+      write.state = "applied";
+      await verifyAppliedWrite(write);
+      continue;
+    }
+    const content = await journalContent(transactionRoot, write);
+    if ((content === null ? 0 : Buffer.byteLength(content)) !== write.publication.bytes) {
+      throw new Error("Workspace publication byte count changed");
+    }
+    toPublish.push(index);
+    payloads.push({
+      filePath: write.destination,
+      tag: write.tag,
+      operationId: write.publication.operation_id,
+      expectedBeforeHash: write.before_digest,
+      content,
+    });
+  }
+  if (toPublish.length === 0) {
+    await writeJournal(transactionRoot, journal);
+    return;
+  }
+  for (const index of toPublish) journal.writes[index].publication.started = true;
+  await writeJournal(transactionRoot, journal);
+  const accept = (receipts) => {
+    if (!Array.isArray(receipts) || receipts.length > toPublish.length) {
+      throw new Error("Workspace batch publication returned a malformed receipt prefix");
+    }
+    for (const [position, receipt] of receipts.entries()) {
+      const write = journal.writes[toPublish[position]];
+      const publication = write.publication;
+      if (position && receipts[position - 1].outcome !== "applied") {
+        throw new Error("Workspace batch publication continued after refusal");
+      }
+      const exact = parsePublicationReceipt(
+        receipt,
+        publication.operation_id,
+        write.destination,
+        write.before_digest,
+        write.after_digest,
+        publication.bytes,
+      );
+      if (publication.receipt && stableJson(publication.receipt) !== stableJson(exact)) {
+        throw new Error("Workspace batch publication changed its retained original receipt");
+      }
+      publication.receipt = exact;
+      if (exact.outcome === "applied") {
+        write.state = "applied";
+      } else {
+        for (const tail of toPublish.slice(position + 1)) {
+          if (journal.writes[tail].publication.receipt) {
+            throw new Error("Workspace batch publication has evidence after refusal");
+          }
+          journal.writes[tail].publication.started = false;
+        }
+      }
+    }
+  };
+  const condition = journal.condition
+    ? { octopus_home: journal.condition.octopus_home, preimages: journal.condition.preimages }
+    : undefined;
+  try {
+    const receipts = await roots.publishFiles(payloads, condition);
+    accept(receipts);
+    if (receipts.length !== toPublish.length) {
+      throw new Error("Workspace publication omitted its exact receipt");
+    }
+    const failedIndex = toPublish.find((index) => journal.writes[index].publication.receipt?.outcome !== "applied");
+    if (failedIndex !== undefined) {
+      await writeJournal(transactionRoot, journal);
+      const failedWrite = journal.writes[failedIndex];
+      const error = new Error(`Workspace publication ${failedWrite.publication.receipt.outcome}: ${failedWrite.publication.receipt.error ?? failedWrite.tag}`);
+      error.code = "client_publication_failed";
+      throw error;
+    }
+  } catch (error) {
+    if (Array.isArray(error?.publicationReceipts)) accept(error.publicationReceipts);
+    await writeJournal(transactionRoot, journal);
+    throw error;
+  }
+  await writeJournal(transactionRoot, journal);
+  await runBounded(toPublish, async (index) => {
+    await verifyAppliedWrite(journal.writes[index]);
+  });
 }
 
 async function publishJournalOperation(roots, transactionRoot, journal, index, content, reverse) {
@@ -5188,6 +5360,35 @@ async function writeSyncedFile(file, body, mode, flag) {
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+async function writeStagedFile(file, body, mode, flag) {
+  const handle = await fs.open(file, flag, mode);
+  try {
+    await handle.writeFile(body);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function runBounded(items, operation, concurrency = 16) {
+  if (items.length === 0) return;
+  const failures = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (failures.length === 0 && next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        await operation(items[index], index);
+      } catch (error) {
+        failures.push({ index, error });
+      }
+    }
+  }));
+  if (failures.length > 0) {
+    throw failures.reduce((first, failure) => (failure.index < first.index ? failure : first)).error;
   }
 }
 

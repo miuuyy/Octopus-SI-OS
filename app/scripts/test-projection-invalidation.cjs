@@ -9,6 +9,7 @@ test("run progress refreshes exact records without invalidating configuration or
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "oct-projection-cycle-"));
   let catalogReads = 0, catalogFailure = false;
   const localPackages = require("../electron/localPackages.cjs");
+  const originalReadLocalPackageCatalog = localPackages.readLocalPackageCatalog;
   localPackages.readLocalPackageCatalog = async () => {
     catalogReads++;
     if (catalogFailure) throw new Error("Package configuration unavailable");
@@ -162,7 +163,13 @@ test("run progress refreshes exact records without invalidating configuration or
     home = path.join(root, "second");
     assert.equal((await read("projection.operator.providers.list")).providers[0].model, "first");
     assert.deepEqual((await read("projection.runs.list", { include_ledger: false })).runs, []);
-  } finally { store.close(); await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    store.close();
+    localPackages.readLocalPackageCatalog = originalReadLocalPackageCatalog;
+    delete require.cache[require.resolve("../electron/projection/configuration.cjs")];
+    delete require.cache[require.resolve("../electron/projection.cjs")];
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("EE policy projection rebuilds when policy changes while its build is in flight", async () => {
@@ -372,6 +379,112 @@ test("settled run records reuse cached parses while rewritten records reread imm
     assert.equal(reads, 4);
   } finally {
     fs.readFile = originalReadFile;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("scoped applications and drivers projections cache independently and refresh on owner edits", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "oct-scoped-proj-")));
+  const home = path.join(root, "home"), sourceRegistry = path.join(root, "source/registry"), localLibrary = path.join(root, "source/packages");
+  for (const dir of ["registry/interface", "registry/tool", "state/ee_instances", "state/runs", "client/package-state/receipts", "client/package-state/transactions", "ledger"]) {
+    await fs.mkdir(path.join(home, dir), { recursive: true });
+  }
+  await fs.mkdir(path.join(sourceRegistry, "interface"), { recursive: true });
+  await fs.mkdir(path.join(localLibrary, "packages"), { recursive: true });
+  await fs.mkdir(path.join(localLibrary, "packs"), { recursive: true });
+  await fs.writeFile(path.join(home, "ledger/movements.jsonl"), "");
+
+  const writeApp = async (registryDir, id, version) => {
+    const dir = path.join(registryDir, "interface", id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "interface.json"), JSON.stringify({ id }));
+    await fs.writeFile(path.join(dir, "application.json"), JSON.stringify({
+      schema_version: 3, id, name: id, description: id, category: "plugin",
+      developer: "Test", version, logo: "logo.svg", interfaces: [id], artifact_bindings: [], task_capabilities: { tools: [] },
+    }));
+    await fs.writeFile(path.join(dir, "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  };
+  const writePkg = async (id, kind, owner) => {
+    await fs.writeFile(path.join(localLibrary, "packages", `${id}.json`), JSON.stringify({
+      schema: "octopus.local_package", schema_version: 1, id, version: "1.0.0",
+      product_kind: kind, product_id: owner, release_status: "optional",
+      display: { name: id, description: id, developer: "Test", category: kind },
+      members: [{ registry_kind: "interface", owner, primary: true }],
+    }));
+  };
+
+  await writeApp(sourceRegistry, "app_a", "1");
+  await writeApp(path.join(home, "registry"), "app_a", "1");
+  await writePkg("app_a", "application", "app_a");
+  await writeApp(sourceRegistry, "app_b", "1");
+  await fs.writeFile(path.join(sourceRegistry, "interface/app_b/payload.bin"), Buffer.alloc(16 * 1024, 0x41));
+  await writePkg("app_b", "application", "app_b");
+  await fs.mkdir(path.join(sourceRegistry, "interface/drv_a"), { recursive: true });
+  await fs.writeFile(path.join(sourceRegistry, "interface/drv_a/interface.json"), JSON.stringify({ id: "drv_a" }));
+  await writePkg("drv_a", "driver", "drv_a");
+
+  const originalReaddir = fs.readdir;
+  const originalOpen = fs.open;
+  let packageDirScans = 0;
+  let unselectedOpens = 0;
+  fs.readdir = (target, ...rest) => {
+    if (typeof target === "string" && path.resolve(target) === path.join(localLibrary, "packages")) packageDirScans += 1;
+    return originalReaddir(target, ...rest);
+  };
+  fs.open = (target, ...rest) => {
+    if (typeof target === "string" && path.resolve(target).startsWith(path.join(sourceRegistry, "interface/app_b") + path.sep)) unselectedOpens += 1;
+    return originalOpen(target, ...rest);
+  };
+  const store = require("../electron/projection.cjs").createProjectionContext({
+    resolveRepoRoot: () => root, octopusHome: () => home, sourceRegistry: () => path.join(home, "registry"),
+    localPackageRegistry: () => sourceRegistry, localPackageLibrary: () => localLibrary,
+  });
+  try {
+    const scopedA = await store.readProjection({
+      contract_version: 1, method: "projection.operator.os.applications",
+      params: { package_ids: ["app_a"], application_ids: ["app_a"] },
+    });
+    assert.deepEqual(scopedA.applications.map((app) => app.id), ["app_a"]);
+    assert.equal(unselectedOpens, 0, "scoped read must not open unselected package files");
+
+    const scansAfterFirst = packageDirScans;
+    store.invalidateProjection(true, "structure", "state/ee_instances/workspace.json");
+    store.invalidateProjection(true, "runs", "state/runs/run_1.json");
+    const cachedA = await store.readProjection({
+      contract_version: 1, method: "projection.operator.os.applications",
+      params: { package_ids: ["app_a"], application_ids: ["app_a"] },
+    });
+    assert.equal(cachedA.applications[0].version, "1");
+    assert.equal(packageDirScans, scansAfterFirst, "EE/run invalidations must preserve scoped application cache");
+
+    await writeApp(path.join(home, "registry"), "app_a", "2");
+    store.invalidateProjection(true, "structure", "registry/interface/app_a/application.json");
+    const updatedA = await store.readProjection({
+      contract_version: 1, method: "projection.operator.os.applications",
+      params: { package_ids: ["app_a"], application_ids: ["app_a"] },
+    });
+    assert.equal(updatedA.applications[0].version, "2");
+    assert.ok(packageDirScans > scansAfterFirst, "owner edit must invalidate scoped application cache");
+
+    const drvFirst = await store.readProjection({
+      contract_version: 1, method: "projection.operator.os.drivers", params: { package_ids: ["drv_a"] },
+    });
+    assert.deepEqual(drvFirst.drivers.map((row) => row.package_id), ["drv_a"]);
+    const scansAfterDriver = packageDirScans;
+    store.invalidateProjection(true, "files", "registry/interface/drv_a/interface.json");
+    await store.readProjection({
+      contract_version: 1, method: "projection.operator.os.drivers", params: { package_ids: ["drv_a"] },
+    });
+    assert.ok(packageDirScans > scansAfterDriver, "files invalidation must refresh scoped driver inventory");
+
+    const scansBeforeFull = packageDirScans;
+    const allApps = await store.readProjection({ contract_version: 1, method: "projection.operator.os.applications", params: {} });
+    assert.deepEqual(allApps.applications.map((app) => app.id).sort(), ["app_a", "app_b"]);
+    assert.ok(packageDirScans > scansBeforeFull, "unfiltered catalog cache stays isolated from scoped reads");
+  } finally {
+    store.close();
+    fs.readdir = originalReaddir;
+    fs.open = originalOpen;
     await fs.rm(root, { recursive: true, force: true });
   }
 });

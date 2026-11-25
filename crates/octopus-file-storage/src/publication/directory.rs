@@ -1,8 +1,13 @@
 use super::*;
 use std::path::Component;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const MAX_MOVES: usize = 128;
 const MAX_ENTRIES: usize = 16384;
+const INLINE_TREE_FILES_LIMIT: usize = 256;
+const PARALLEL_DIGEST_MIN_BYTES: u64 = 64 * 1024;
+const MAX_PARALLEL_DIGEST_WORKERS: usize = 8;
+const LARGE_DIGEST_BUFFER_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -216,7 +221,21 @@ pub(super) fn validate_receipt(receipt: &DirectoryMoveReceipt) -> io::Result<()>
     Ok(())
 }
 
-fn collect(root: &File, relative: &Path, algorithm: DigestAlgorithm, metadata: bool, entries: &mut Vec<DirectoryEntry>) -> io::Result<()> {
+struct CapturedTreeStates {
+    entries: Vec<(PathBuf, native::NodeState)>,
+    #[cfg(target_os = "linux")]
+    devices: BTreeSet<u64>,
+}
+
+fn collect_with_states(
+    root: &File,
+    relative: &Path,
+    algorithm: DigestAlgorithm,
+    metadata: bool,
+    defer_large_files: bool,
+    small_buffer: &mut [u8],
+    entries: &mut Vec<(DirectoryEntry, native::NodeState)>,
+) -> io::Result<()> {
     let before = root.metadata()?;
     for name in native::names(root, MAX_ENTRIES)? {
         let relative_path = relative.join(&name);
@@ -228,15 +247,24 @@ fn collect(root: &File, relative: &Path, algorithm: DigestAlgorithm, metadata: b
             { return Err(invalid("reserved publication metadata is not an exact private directory")); }
             continue;
         }
-        let item = capture_entry_at(root, &name, relative_path.clone(), algorithm)?;
+        let (item, node_state) = capture_entry_at_with_state(
+            root,
+            &name,
+            relative_path.clone(),
+            algorithm,
+            defer_large_files,
+            small_buffer,
+        )?;
         let child = if item.kind == DirectoryEntryKind::Directory {
             let child = native::child(root, &name, true)?;
             if FileIdentity::of(&child.metadata()?)? != item.identity { return Err(invalid("manifest directory changed identity")); }
             Some(child)
         } else { None };
-        entries.push(item);
+        entries.push((item, node_state));
         if entries.len() > MAX_ENTRIES { return Err(invalid("directory manifest exceeds its entry limit")); }
-        if let Some(child) = child { collect(&child, &relative_path, algorithm, metadata, entries)?; }
+        if let Some(child) = child {
+            collect_with_states(&child, &relative_path, algorithm, metadata, defer_large_files, small_buffer, entries)?;
+        }
     }
     let after = root.metadata()?;
     if FileVersion::of(&before)? != FileVersion::of(&after)? || mode(&before) != mode(&after) {
@@ -245,14 +273,25 @@ fn collect(root: &File, relative: &Path, algorithm: DigestAlgorithm, metadata: b
     Ok(())
 }
 
-fn capture_entry_at(parent: &File, name: &std::ffi::OsStr, relative_path: PathBuf, algorithm: DigestAlgorithm) -> io::Result<DirectoryEntry> {
+fn capture_entry_at_with_state(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    relative_path: PathBuf,
+    algorithm: DigestAlgorithm,
+    defer_large_files: bool,
+    buffer: &mut [u8],
+) -> io::Result<(DirectoryEntry, native::NodeState)> {
     let before = native::state(parent, name)?;
     let (bytes, digest) = match &before.kind {
         DirectoryEntryKind::Directory => (0, None),
         DirectoryEntryKind::File => {
-            let file = native::child(parent, name, false)?;
-            if FileIdentity::of(&file.metadata()?)? != before.identity { return Err(invalid("manifest file changed identity")); }
-            (before.bytes, Some(digest_file(&file, algorithm)?))
+            if defer_large_files && before.bytes >= PARALLEL_DIGEST_MIN_BYTES {
+                (before.bytes, None)
+            } else {
+                let file = native::child(parent, name, false)?;
+                if FileIdentity::of(&file.metadata()?)? != before.identity { return Err(invalid("manifest file changed identity")); }
+                (before.bytes, Some(digest_file_with_buffer(&file, algorithm, buffer)?))
+            }
         },
         DirectoryEntryKind::Symlink => {
             let bytes = native::link_target(parent, name)?;
@@ -260,7 +299,150 @@ fn capture_entry_at(parent: &File, name: &std::ffi::OsStr, relative_path: PathBu
         },
     };
     if native::state(parent, name)? != before { return Err(invalid("manifest entry changed during capture")); }
-    Ok(DirectoryEntry { relative_path, kind: before.kind, identity: before.identity, mode: before.mode, bytes, digest })
+    let entry = DirectoryEntry {
+        relative_path,
+        kind: before.kind.clone(),
+        identity: before.identity.clone(),
+        mode: before.mode,
+        bytes,
+        digest,
+    };
+    Ok((entry, before))
+}
+
+fn capture_entry_at(parent: &File, name: &std::ffi::OsStr, relative_path: PathBuf, algorithm: DigestAlgorithm) -> io::Result<DirectoryEntry> {
+    let mut buffer = [0u8; 65536];
+    capture_entry_at_with_state(parent, name, relative_path, algorithm, false, &mut buffer).map(|(entry, _)| entry)
+}
+
+fn digest_deferred_file(
+    root: &File,
+    relative_path: &Path,
+    expected_state: &native::NodeState,
+    algorithm: DigestAlgorithm,
+    buffer: &mut [u8],
+) -> io::Result<String> {
+    let file_name = relative_path.file_name().ok_or_else(|| invalid("manifest entry has no name"))?;
+    let mut owned_parent: Option<File> = None;
+    if let Some(parent_rel) = relative_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        for component in parent_rel.components() {
+            let Component::Normal(segment) = component else {
+                return Err(invalid("manifest entry has an invalid relative path"));
+            };
+            let current = owned_parent.as_ref().unwrap_or(root);
+            owned_parent = Some(native::child(current, segment, true)?);
+        }
+    }
+    let parent = owned_parent.as_ref().unwrap_or(root);
+    let file = native::child(parent, file_name, false)?;
+    if FileIdentity::of(&file.metadata()?)? != expected_state.identity {
+        return Err(invalid("manifest file changed identity"));
+    }
+    let digest = digest_file_with_buffer(&file, algorithm, buffer)?;
+    if native::state(parent, file_name)? != *expected_state {
+        return Err(invalid("manifest entry changed during capture"));
+    }
+    Ok(digest)
+}
+
+fn populate_deferred_digests(
+    root: &File,
+    algorithm: DigestAlgorithm,
+    captured: &mut [(DirectoryEntry, native::NodeState)],
+) -> io::Result<()> {
+    let mut pending = captured
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (entry, _))| {
+            (entry.kind == DirectoryEntryKind::File && entry.digest.is_none()).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    pending.sort_by(|left, right| {
+        captured[*right]
+            .0
+            .bytes
+            .cmp(&captured[*left].0.bytes)
+            .then_with(|| captured[*left].0.relative_path.cmp(&captured[*right].0.relative_path))
+    });
+    let workers = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(MAX_PARALLEL_DIGEST_WORKERS)
+        .min(pending.len());
+    if workers <= 1 {
+        let mut buffer = vec![0u8; LARGE_DIGEST_BUFFER_BYTES];
+        for index in pending {
+            let digest = digest_deferred_file(
+                root,
+                &captured[index].0.relative_path,
+                &captured[index].1,
+                algorithm,
+                &mut buffer,
+            )?;
+            captured[index].0.digest = Some(digest);
+        }
+        return Ok(());
+    }
+    let cursor = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let captured_ref: &[(DirectoryEntry, native::NodeState)] = captured;
+    let pending_ref: &[usize] = &pending;
+    let batches = std::thread::scope(|scope| -> io::Result<Vec<(usize, String)>> {
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            handles.push(scope.spawn(|| -> io::Result<Vec<(usize, String)>> {
+                let mut buffer = vec![0u8; LARGE_DIGEST_BUFFER_BYTES];
+                let mut local = Vec::new();
+                loop {
+                    if failed.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let slot = cursor.fetch_add(1, Ordering::Relaxed);
+                    if slot >= pending_ref.len() {
+                        break;
+                    }
+                    let index = pending_ref[slot];
+                    let (entry, state) = &captured_ref[index];
+                    match digest_deferred_file(root, &entry.relative_path, state, algorithm, &mut buffer) {
+                        Ok(digest) => local.push((index, digest)),
+                        Err(error) => {
+                            failed.store(true, Ordering::Relaxed);
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(local)
+            }));
+        }
+        let mut results = Vec::with_capacity(pending_ref.len());
+        let mut first_error = None;
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(local)) => results.extend(local),
+                Ok(Err(error)) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+                Err(_) => {
+                    if first_error.is_none() {
+                        first_error = Some(invalid("parallel directory digest worker panicked"));
+                    }
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(results)
+    })?;
+    for (index, digest) in batches {
+        captured[index].0.digest = Some(digest);
+    }
+    Ok(())
 }
 
 pub(super) fn capture_entry(path: &Path, relative_path: PathBuf, algorithm: DigestAlgorithm) -> io::Result<DirectoryEntry> {
@@ -268,20 +450,195 @@ pub(super) fn capture_entry(path: &Path, relative_path: PathBuf, algorithm: Dige
     capture_entry_at(&parent, path.file_name().ok_or_else(|| invalid("manifest entry has no name"))?, relative_path, algorithm)
 }
 
-pub(super) fn capture(path: &Path, algorithm: DigestAlgorithm, metadata: bool, identity: &FileIdentity) -> io::Result<DirectoryPreimage> {
+fn capture_with_states(
+    path: &Path,
+    algorithm: DigestAlgorithm,
+    metadata: bool,
+    identity: &FileIdentity,
+) -> io::Result<(DirectoryPreimage, CapturedTreeStates)> {
     let root = native::directory(path)?;
     let before = root.metadata()?;
     if FileIdentity::of(&before)? != *identity { return Err(invalid("directory publication source changed its held identity")); }
-    let mut entries = Vec::new();
-    collect(&root, Path::new(""), algorithm, metadata, &mut entries)?;
-    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let mut captured = Vec::new();
+    let mut small_buffer = [0u8; 65536];
+    collect_with_states(&root, Path::new(""), algorithm, metadata, true, &mut small_buffer, &mut captured)?;
+    populate_deferred_digests(&root, algorithm, &mut captured)?;
+    captured.sort_by(|left, right| left.0.relative_path.cmp(&right.0.relative_path));
     let after = root.metadata()?;
     if FileVersion::of(&before)? != FileVersion::of(&after)? || mode(&before) != mode(&after) {
         return Err(invalid("directory root changed during manifest capture"));
     }
+    #[cfg(target_os = "linux")]
+    let mut devices = BTreeSet::new();
+    #[cfg(target_os = "linux")]
+    devices.insert(identity.device);
+    let mut entries = Vec::with_capacity(captured.len());
+    let mut states = Vec::with_capacity(captured.len());
+    for (entry, state) in captured {
+        #[cfg(target_os = "linux")]
+        devices.insert(state.identity.device);
+        states.push((entry.relative_path.clone(), state));
+        entries.push(entry);
+    }
     let preimage = DirectoryPreimage { identity: identity.clone(), mode: mode(&before), digest_algorithm: algorithm, entries };
     validate_preimage(&preimage)?;
-    Ok(preimage)
+    Ok((preimage, CapturedTreeStates {
+        entries: states,
+        #[cfg(target_os = "linux")]
+        devices,
+    }))
+}
+
+pub(super) fn capture(path: &Path, algorithm: DigestAlgorithm, metadata: bool, identity: &FileIdentity) -> io::Result<DirectoryPreimage> {
+    capture_with_states(path, algorithm, metadata, identity).map(|(preimage, _)| preimage)
+}
+
+fn collect_moved_states(
+    root: &File,
+    relative: &Path,
+    algorithm: DigestAlgorithm,
+    observed: &mut Vec<(PathBuf, native::NodeState, Option<String>)>,
+) -> io::Result<()> {
+    let before = root.metadata()?;
+    for name in native::names(root, MAX_ENTRIES)? {
+        let relative_path = relative.join(&name);
+        if name == COORDINATION_DIRECTORY {
+            let state = native::state(root, &name)?;
+            let child = native::child(root, &name, true)?;
+            if state.kind != DirectoryEntryKind::Directory || state.mode & 0o077 != 0
+                || FileIdentity::of(&child.metadata()?)? != state.identity
+            { return Err(invalid("reserved publication metadata is not an exact private directory")); }
+            continue;
+        }
+        let state = native::state(root, &name)?;
+        let (child, link_digest) = match state.kind {
+            DirectoryEntryKind::Directory => {
+                let child = native::child(root, &name, true)?;
+                if FileIdentity::of(&child.metadata()?)? != state.identity { return Err(invalid("manifest directory changed identity")); }
+                (Some(child), None)
+            }
+            DirectoryEntryKind::File => (None, None),
+            DirectoryEntryKind::Symlink => {
+                let bytes = native::link_target(root, &name)?;
+                (None, Some(algorithm.digest(&bytes)))
+            }
+        };
+        if native::state(root, &name)? != state { return Err(invalid("manifest entry changed during post-move verification")); }
+        observed.push((relative_path.clone(), state, link_digest));
+        if observed.len() > MAX_ENTRIES { return Err(invalid("directory manifest exceeds its entry limit")); }
+        if let Some(child) = child { collect_moved_states(&child, &relative_path, algorithm, observed)?; }
+    }
+    let after = root.metadata()?;
+    if FileVersion::of(&before)? != FileVersion::of(&after)? || mode(&before) != mode(&after) {
+        return Err(invalid("directory membership changed during post-move verification"));
+    }
+    Ok(())
+}
+
+fn matches_with_states(path: &Path, expected: &DirectoryPreimage) -> io::Result<Option<CapturedTreeStates>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() || FileIdentity::of(&metadata)? != expected.identity { return Ok(None); }
+    let (captured, states) = capture_with_states(path, expected.digest_algorithm, false, &expected.identity)?;
+    if captured == *expected {
+        Ok(Some(states))
+    } else {
+        Ok(None)
+    }
+}
+
+fn verify_moved_tree(path: &Path, expected: &DirectoryPreimage, states: &CapturedTreeStates) -> io::Result<bool> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() || FileIdentity::of(&metadata)? != expected.identity || mode(&metadata) != expected.mode {
+        return Ok(false);
+    }
+    let root = native::directory(path)?;
+    let before = root.metadata()?;
+    if FileIdentity::of(&before)? != expected.identity || mode(&before) != expected.mode {
+        return Ok(false);
+    }
+    let mut observed = Vec::with_capacity(states.entries.len());
+    collect_moved_states(&root, Path::new(""), expected.digest_algorithm, &mut observed)?;
+    observed.sort_by(|left, right| left.0.cmp(&right.0));
+    let after = root.metadata()?;
+    if FileVersion::of(&before)? != FileVersion::of(&after)? || mode(&before) != mode(&after) {
+        return matches(path, expected);
+    }
+    if observed.len() != states.entries.len() || observed.len() != expected.entries.len() {
+        return Ok(false);
+    }
+    for (((obs_path, obs_state, obs_link_digest), (exp_path, exp_state)), exp_entry) in observed
+        .iter()
+        .zip(states.entries.iter())
+        .zip(expected.entries.iter())
+    {
+        if obs_path != exp_path || obs_state != exp_state {
+            return matches(path, expected);
+        }
+        if exp_entry.kind == DirectoryEntryKind::Symlink && obs_link_digest != &exp_entry.digest {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn collect_identities(
+    root: &File,
+    relative: &Path,
+    directories: &mut Vec<PathBuf>,
+    files: &mut Vec<(PathBuf, FileIdentity)>,
+    total_entries: &mut usize,
+) -> io::Result<()> {
+    let before = root.metadata()?;
+    for name in native::names(root, MAX_ENTRIES)? {
+        let relative_path = relative.join(&name);
+        if name == COORDINATION_DIRECTORY {
+            let state = native::state(root, &name)?;
+            let child = native::child(root, &name, true)?;
+            if state.kind != DirectoryEntryKind::Directory
+                || state.mode & 0o077 != 0
+                || FileIdentity::of(&child.metadata()?)? != state.identity
+            {
+                return Err(invalid(
+                    "reserved publication metadata is not an exact private directory",
+                ));
+            }
+            continue;
+        }
+        let state = native::state(root, &name)?;
+        *total_entries += 1;
+        if *total_entries > MAX_ENTRIES {
+            return Err(invalid("directory manifest exceeds its entry limit"));
+        }
+        match state.kind {
+            DirectoryEntryKind::Directory => {
+                let child = native::child(root, &name, true)?;
+                if FileIdentity::of(&child.metadata()?)? != state.identity {
+                    return Err(invalid("manifest directory changed identity"));
+                }
+                directories.push(relative_path.clone());
+                collect_identities(&child, &relative_path, directories, files, total_entries)?;
+            }
+            DirectoryEntryKind::File => {
+                files.push((relative_path, state.identity));
+            }
+            DirectoryEntryKind::Symlink => {}
+        }
+    }
+    let after = root.metadata()?;
+    if FileVersion::of(&before)? != FileVersion::of(&after)? || mode(&before) != mode(&after) {
+        return Err(invalid(
+            "directory membership changed while its manifest was captured",
+        ));
+    }
+    Ok(())
 }
 
 pub fn snapshot_directory(path: &Path, algorithm: DigestAlgorithm) -> io::Result<DirectoryPreimage> {
@@ -290,20 +647,67 @@ pub fn snapshot_directory(path: &Path, algorithm: DigestAlgorithm) -> io::Result
     let guard = NamespaceGuard::acquire(&[(path.clone(), true)], true)?;
     exact_path(&path)?;
     check_fences(std::slice::from_ref(&path), None, true)?;
-    let preimage = capture(&path, algorithm, false, guard.identity(&path)?)?;
+    let root_identity = guard.identity(&path)?.clone();
+    let root_dir = native::directory(&path)?;
+    let root_before = root_dir.metadata()?;
+    if FileIdentity::of(&root_before)? != root_identity {
+        return Err(invalid("directory publication source changed its held identity"));
+    }
+    let mut discovered_dirs = Vec::new();
+    let mut discovered_files = Vec::new();
+    let mut total_entries = 0usize;
+    collect_identities(
+        &root_dir,
+        Path::new(""),
+        &mut discovered_dirs,
+        &mut discovered_files,
+        &mut total_entries,
+    )?;
+    let root_after = root_dir.metadata()?;
+    if FileVersion::of(&root_before)? != FileVersion::of(&root_after)?
+        || mode(&root_before) != mode(&root_after)
+    {
+        return Err(invalid("directory root changed during manifest capture"));
+    }
+    discovered_dirs.sort();
+    discovered_files.sort_by(|left, right| left.0.cmp(&right.0));
     guard.verify()?;
     drop(guard);
     let mut requests = vec![(path.clone(), true)];
-    for entry in &preimage.entries {
-        if entry.kind == DirectoryEntryKind::Directory { namespace::member_directory(&mut requests, path.join(&entry.relative_path))?; }
+    for relative_dir in &discovered_dirs {
+        namespace::member_directory(&mut requests, path.join(relative_dir))?;
     }
     let guard = NamespaceGuard::acquire(&requests, true)?;
     exact_path(&path)?;
     check_fences(std::slice::from_ref(&path), None, true)?;
-    let members = preimage.entries.iter().filter(|entry| entry.kind == DirectoryEntryKind::File)
-        .map(|entry| (path.join(&entry.relative_path), entry.identity.clone())).collect::<Vec<_>>();
+    let members = discovered_files
+        .iter()
+        .map(|(relative_path, identity)| (path.join(relative_path), identity.clone()))
+        .collect::<Vec<_>>();
     let files = namespace::TreeFiles::acquire(&members, true)?;
-    if capture(&path, algorithm, false, &preimage.identity)? != preimage { return Err(invalid("directory changed before its complete manifest guard was acquired")); }
+    if guard.identity(&path)? != &root_identity {
+        return Err(invalid(
+            "directory changed before its complete manifest guard was acquired",
+        ));
+    }
+    let preimage = capture(&path, algorithm, false, &root_identity)?;
+    let captured_dirs = preimage
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == DirectoryEntryKind::Directory)
+        .map(|entry| entry.relative_path.clone())
+        .collect::<Vec<_>>();
+    let captured_files = preimage
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == DirectoryEntryKind::File)
+        .map(|entry| (entry.relative_path.clone(), entry.identity.clone()))
+        .collect::<Vec<_>>();
+    if captured_dirs != discovered_dirs || captured_files != discovered_files {
+        return Err(invalid(
+            "directory changed before its complete manifest guard was acquired",
+        ));
+    }
     guard.verify()?;
     files.verify()?;
     Ok(preimage)
@@ -370,12 +774,13 @@ fn verify_prepared(plan: &Plan, index: usize, prepared: &PreparedMove) -> io::Re
 
 fn retire(plan: &Plan, plan_path: &Path) -> io::Result<()> {
     let expected = reference(plan, plan_path);
+    let mut sync_dirs = BTreeSet::new();
     for endpoint in plan.moves.iter().flat_map(|movement| [&movement.source, &movement.destination]).collect::<BTreeSet<_>>() {
         let path = marker(endpoint);
         if let Some(found) = read_record::<Reference>(&path)? {
             if found != expected { return Err(invalid("directory fence was replaced by a different operation")); }
             std::fs::remove_file(&path)?;
-            sync_directory(path.parent().unwrap())?;
+            sync_dirs.insert(path.parent().unwrap().to_path_buf());
         }
     }
     for index in 0..plan.moves.len() {
@@ -383,9 +788,12 @@ fn retire(plan: &Plan, plan_path: &Path) -> io::Result<()> {
         if let Some(prepared) = read_record::<PreparedMove>(&path)? {
             verify_prepared(plan, index, &prepared)?;
             std::fs::remove_file(path)?;
+            sync_dirs.insert(plan_path.parent().unwrap().to_path_buf());
         }
     }
-    sync_directory(plan_path.parent().unwrap())?;
+    if !sync_dirs.is_empty() {
+        sync_batch_barrier(&[], &sync_dirs)?;
+    }
     std::fs::remove_file(plan_path)?;
     sync_directory(plan_path.parent().unwrap())
 }
@@ -405,8 +813,16 @@ pub(super) fn settle_path(path: &Path, resume: Option<&str>, wait: bool) -> io::
             receipts.push(receipt);
             continue;
         }
-        if stopped && prepared.is_some() { return Err(invalid("directory batch prepared a step after a stopped predecessor")); }
         let movement = &plan.moves[index];
+        if stopped && prepared.is_some() {
+            if parents_match(&plan)? && absent(&movement.destination)? && matches(&movement.source, &movement.expected)? {
+                let receipt = receipt_for(&plan, index, PublicationOutcome::NotApplied, Some("directory batch stopped before moving the prepared step".into()));
+                save_receipt(&receipt)?;
+                receipts.push(receipt);
+                continue;
+            }
+            return Err(invalid("directory batch prepared a step after a stopped predecessor"));
+        }
         let receipt = if prepared.is_some() {
             let observed = (|| -> io::Result<Option<bool>> {
                 if !parents_match(&plan)? { return Ok(None); }
@@ -478,7 +894,7 @@ pub(super) fn check_fences_reclaim(paths: &[PathBuf], resume: Option<&str>, wait
     Ok(())
 }
 
-fn rename_no_replace(movement: &DirectoryMove, parents: &BTreeMap<PathBuf, FileIdentity>) -> io::Result<()> {
+fn rename_no_replace_inner(movement: &DirectoryMove, parents: &BTreeMap<PathBuf, FileIdentity>, sync: bool) -> io::Result<()> {
     let source = &movement.source;
     let destination = &movement.destination;
     #[cfg(unix)] {
@@ -500,12 +916,50 @@ fn rename_no_replace(movement: &DirectoryMove, parents: &BTreeMap<PathBuf, FileI
         #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
         return Err(io::Error::new(io::ErrorKind::Unsupported, "atomic no-replace directory publication is unavailable"));
         #[cfg(any(target_vendor = "apple", target_os = "linux"))]
-        return if result == 0 { crate::sync_ordered(&source_parent)?; crate::sync_ordered(&destination_parent) } else { Err(io::Error::last_os_error()) };
+        return if result == 0 {
+            if sync {
+                crate::sync_ordered(&source_parent)?;
+                crate::sync_ordered(&destination_parent)?;
+            }
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        };
     }
-    #[cfg(not(unix))] { let _ = (source, destination, parents); Err(io::Error::new(io::ErrorKind::Unsupported, "directory publication requires native no-replace moves")) }
+    #[cfg(not(unix))] { let _ = (source, destination, parents, sync); Err(io::Error::new(io::ErrorKind::Unsupported, "directory publication requires native no-replace moves")) }
 }
 
 fn sync_preimage(path: &Path, expected: &DirectoryPreimage) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut all_same_device = true;
+        for entry in &expected.entries {
+            if entry.kind == DirectoryEntryKind::File {
+                let entry_path = path.join(&entry.relative_path);
+                let parent = native::directory(entry_path.parent().unwrap())?;
+                let file = native::child(&parent, entry_path.file_name().unwrap(), false)?;
+                let identity = FileIdentity::of(&file.metadata()?)?;
+                if identity != entry.identity {
+                    return Err(invalid("directory member changed before durable preparation"));
+                }
+                if identity.device != expected.identity.device {
+                    all_same_device = false;
+                }
+            }
+        }
+        for entry in expected.entries.iter().rev() {
+            if entry.kind == DirectoryEntryKind::Directory {
+                let dir = native::pinned_directory(&path.join(&entry.relative_path), &entry.identity)?;
+                if FileIdentity::of(&dir.metadata()?)?.device != expected.identity.device {
+                    all_same_device = false;
+                }
+            }
+        }
+        let root = native::pinned_directory(path, &expected.identity)?;
+        if all_same_device && crate::sync_filesystem_ordered(&root)? {
+            return Ok(());
+        }
+    }
     for entry in &expected.entries {
         if entry.kind == DirectoryEntryKind::File {
             let entry_path = path.join(&entry.relative_path);
@@ -533,39 +987,205 @@ fn original_result(plan: &Plan) -> io::Result<Option<DirectoryPublicationResult>
     Ok((result.receipts.len() == plan.moves.len()).then_some(result))
 }
 
-fn execute(plan: &Plan, plan_path: &Path, index: usize, namespace: &mut NamespaceGuard, files: &mut namespace::TreeFiles) -> io::Result<()> {
+fn move_file_members(movement: &DirectoryMove) -> Vec<(PathBuf, FileIdentity)> {
+    movement
+        .expected
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == DirectoryEntryKind::File)
+        .flat_map(|entry| {
+            [&movement.source, &movement.destination]
+                .map(|endpoint| (endpoint.join(&entry.relative_path), entry.identity.clone()))
+        })
+        .collect()
+}
+
+fn prepare_wave_step(
+    plan: &Plan,
+    index: usize,
+    batch_files: &Option<namespace::TreeFiles>,
+) -> io::Result<CapturedTreeStates> {
     let movement = &plan.moves[index];
+    let _move_files = if batch_files.is_none() {
+        Some(namespace::TreeFiles::acquire(&move_file_members(movement), true)?)
+    } else {
+        None
+    };
     exact_path(&movement.source)?;
     exact_path(&movement.destination)?;
-    if !parents_match(plan)? || !absent(&movement.destination)? || !matches(&movement.source, &movement.expected)? {
+    if !parents_match(plan)? || !absent(&movement.destination)? {
         return Err(invalid("directory move predecessor or destination differs from the exact requested manifest"));
     }
-    let outside = coordination_root(movement.source.parent().unwrap())?;
-    history::export_tree(&movement.source, &movement.expected.identity, &outside)?;
-    if !absent(&movement.destination)? || !matches(&movement.source, &movement.expected)? {
-        return Err(invalid("directory move changed during history export"));
-    }
-    sync_preimage(&movement.source, &movement.expected)?;
-    let prepared = PreparedMove { schema_version: 1, plan_hash: plan.plan_hash.clone(), index };
-    write_record_once(&prepared_path(plan_path, index), &prepared)?;
-    #[cfg(test)] interrupt_at(Interruption::DirectoryPrepared(index));
-    namespace.verify()?;
-    files.verify()?;
-    exact_path(&movement.source)?;
-    exact_path(&movement.destination)?;
-    rename_no_replace(movement, &plan.parents)?;
-    namespace.moved(&movement.source, &movement.destination);
-    files.moved(&movement.source, &movement.destination);
-    namespace.verify()?;
-    files.verify()?;
-    #[cfg(test)] interrupt_at(Interruption::DirectoryInstalled(index));
-    let receipt = if absent(&movement.source)? && matches(&movement.destination, &movement.expected)? {
-        receipt_for(plan, index, PublicationOutcome::Applied, None)
-    } else {
-        receipt_for(plan, index, PublicationOutcome::Uncertain, Some("installed directory lost its exact original inode or manifest".into()))
+    let Some(mut states) = matches_with_states(&movement.source, &movement.expected)? else {
+        return Err(invalid("directory move predecessor or destination differs from the exact requested manifest"));
     };
-    save_receipt(&receipt)?;
-    if receipt.outcome == PublicationOutcome::Uncertain { return Err(invalid("directory movement remains uncertain")); }
+    let outside = coordination_root(movement.source.parent().unwrap())?;
+    let exported = history::export_tree(&movement.source, &movement.expected.identity, &outside)?;
+    if exported {
+        if !absent(&movement.destination)? {
+            return Err(invalid("directory move changed during history export"));
+        }
+        let Some(refreshed) = matches_with_states(&movement.source, &movement.expected)? else {
+            return Err(invalid("directory move changed during history export"));
+        };
+        states = refreshed;
+    }
+    if let Some(files) = _move_files.as_ref() {
+        files.verify()?;
+    }
+    Ok(states)
+}
+
+fn execute_wave(
+    plan: &Plan,
+    plan_path: &Path,
+    wave: &[usize],
+    namespace: &mut NamespaceGuard,
+    batch_files: &mut Option<namespace::TreeFiles>,
+) -> io::Result<()> {
+    let mut prepared_steps: Vec<(usize, CapturedTreeStates)> = Vec::with_capacity(wave.len());
+    let mut staged_prepared: Vec<StagedRecord> = Vec::with_capacity(wave.len());
+    #[cfg(target_os = "linux")]
+    let mut linux_deferred_sync: Vec<usize> = Vec::new();
+    #[cfg(target_os = "linux")]
+    let mut linux_sync_handles: Vec<File> = Vec::new();
+    #[cfg(target_os = "linux")]
+    let mut linux_devices: BTreeSet<u64> = BTreeSet::new();
+    let mut phase1_err: Option<io::Error> = None;
+
+    for &index in wave {
+        let states = match prepare_wave_step(plan, index, batch_files) {
+            Ok(states) => states,
+            Err(error) => {
+                phase1_err = Some(error);
+                break;
+            }
+        };
+        let movement = &plan.moves[index];
+        #[cfg(target_os = "linux")]
+        {
+            if states.devices.len() == 1 {
+                let device = *states.devices.iter().next().unwrap();
+                if linux_devices.insert(device) {
+                    linux_sync_handles.push(native::pinned_directory(&movement.source, &movement.expected.identity)?);
+                }
+                linux_deferred_sync.push(index);
+            } else {
+                sync_preimage(&movement.source, &movement.expected)?;
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            sync_preimage(&movement.source, &movement.expected)?;
+        }
+        let prepared = PreparedMove { schema_version: 1, plan_hash: plan.plan_hash.clone(), index };
+        if let Some(staged) = stage_record_once_bounded(&prepared_path(plan_path, index), &prepared, RECORD_LIMIT)? {
+            staged_prepared.push(staged);
+        }
+        prepared_steps.push((index, states));
+    }
+
+    if !prepared_steps.is_empty() {
+        // Barrier 1a: source subtrees and staged prepared bytes durable before linking prepared records.
+        {
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+            let mut barrier_files: Vec<&File> = staged_prepared.iter().map(|s| &s.file).collect();
+            #[cfg(target_os = "linux")]
+            barrier_files.extend(linux_sync_handles.iter());
+            let fs_synced = sync_batch_barrier(&barrier_files, &BTreeSet::new())?;
+            drop(barrier_files);
+            #[cfg(target_os = "linux")]
+            if !fs_synced {
+                for &index in &linux_deferred_sync {
+                    let movement = &plan.moves[index];
+                    sync_preimage(&movement.source, &movement.expected)?;
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = fs_synced;
+        }
+        #[cfg(target_os = "linux")]
+        drop(linux_sync_handles);
+
+        for staged in staged_prepared {
+            commit_staged_record(staged)?;
+        }
+        sync_directory(plan_path.parent().unwrap())?;
+
+        #[cfg(test)]
+        for &(index, _) in &prepared_steps {
+            interrupt_at(Interruption::DirectoryPrepared(index));
+        }
+
+        // Phase 2: atomic no-replace directory renames for all prepared steps in this wave.
+        let mut barrier2_dirs = BTreeSet::new();
+        for &(index, ref states) in &prepared_steps {
+            let movement = &plan.moves[index];
+            let mut move_files = if batch_files.is_none() {
+                let held = namespace::TreeFiles::acquire(&move_file_members(movement), true)?;
+                if !verify_moved_tree(&movement.source, &movement.expected, states)? {
+                    return Err(invalid("directory move source changed before rename"));
+                }
+                Some(held)
+            } else {
+                None
+            };
+            let active_files = batch_files.as_mut().or(move_files.as_mut()).unwrap();
+            namespace.verify()?;
+            active_files.verify()?;
+            exact_path(&movement.source)?;
+            exact_path(&movement.destination)?;
+            rename_no_replace_inner(movement, &plan.parents, false)?;
+            namespace.moved(&movement.source, &movement.destination);
+            active_files.moved(&movement.source, &movement.destination);
+            namespace.verify()?;
+            active_files.verify()?;
+            barrier2_dirs.insert(movement.source.parent().unwrap().to_path_buf());
+            barrier2_dirs.insert(movement.destination.parent().unwrap().to_path_buf());
+        }
+        sync_batch_barrier(&[], &barrier2_dirs)?;
+
+        #[cfg(test)]
+        for &(index, _) in &prepared_steps {
+            interrupt_at(Interruption::DirectoryInstalled(index));
+        }
+
+        // Phase 3: verify moved subtrees, stage and commit receipts.
+        let mut staged_receipts: Vec<StagedRecord> = Vec::with_capacity(prepared_steps.len());
+        let mut history_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut any_uncertain = false;
+        for (index, states) in prepared_steps {
+            let movement = &plan.moves[index];
+            let receipt = if absent(&movement.source)? && verify_moved_tree(&movement.destination, &movement.expected, &states)? {
+                receipt_for(plan, index, PublicationOutcome::Applied, None)
+            } else {
+                any_uncertain = true;
+                receipt_for(plan, index, PublicationOutcome::Uncertain, Some("installed directory lost its exact original inode or manifest".into()))
+            };
+            let root = coordination_root(receipt.movement.source.parent().unwrap())?;
+            let (staged, dir) = history::stage_directory(&root, &receipt)?;
+            if let Some(staged) = staged {
+                staged_receipts.push(staged);
+            }
+            history_dirs.insert(dir);
+        }
+        if !staged_receipts.is_empty() {
+            let barrier_files: Vec<&File> = staged_receipts.iter().map(|s| &s.file).collect();
+            sync_batch_barrier(&barrier_files, &BTreeSet::new())?;
+            drop(barrier_files);
+            for staged in staged_receipts {
+                commit_staged_record(staged)?;
+            }
+        }
+        sync_batch_barrier(&[], &history_dirs)?;
+        if any_uncertain {
+            return Err(invalid("directory movement remains uncertain"));
+        }
+    }
+
+    if let Some(error) = phase1_err {
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -632,22 +1252,69 @@ pub fn publish_directory_moves(operation_id: &str, moves: &[DirectoryMove]) -> i
         }
     }
     validate_plan(&plan, &plan_path)?;
-    let members = plan.moves.iter().flat_map(|movement| movement.expected.entries.iter()
-        .filter(|entry| entry.kind == DirectoryEntryKind::File)
-        .flat_map(|entry| [&movement.source, &movement.destination].map(|endpoint| (endpoint.join(&entry.relative_path), entry.identity.clone())))).collect::<Vec<_>>();
-    let mut files = namespace::TreeFiles::acquire(&members, true)?;
+    let total_files: usize = plan.moves.iter()
+        .map(|movement| movement.expected.entries.iter().filter(|entry| entry.kind == DirectoryEntryKind::File).count())
+        .sum();
+    let mut batch_files = if total_files <= INLINE_TREE_FILES_LIMIT {
+        let members = plan.moves.iter().flat_map(move_file_members).collect::<Vec<_>>();
+        Some(namespace::TreeFiles::acquire(&members, true)?)
+    } else {
+        None
+    };
     let lock = HeldFile::acquire(plan_path.with_extension("lock"), true, true)?;
     write_record_once_bounded(&plan_path, &plan, history::DIRECTORY_LIMIT)?;
     let attempt = (|| -> io::Result<()> {
         let reference = reference(&plan, &plan_path);
-        for endpoint in &endpoints { write_record_once(&marker(endpoint), &reference)?; }
+        let mut staged_markers = Vec::with_capacity(endpoints.len());
+        let mut marker_dirs = BTreeSet::new();
+        for endpoint in &endpoints {
+            let path = marker(endpoint);
+            marker_dirs.insert(path.parent().unwrap().to_path_buf());
+            if let Some(staged) = stage_record_once_bounded(&path, &reference, RECORD_LIMIT)? {
+                staged_markers.push(staged);
+            }
+        }
+        if !staged_markers.is_empty() {
+            let barrier_files: Vec<&File> = staged_markers.iter().map(|s| &s.file).collect();
+            sync_batch_barrier(&barrier_files, &BTreeSet::new())?;
+            drop(barrier_files);
+            for staged in staged_markers {
+                commit_staged_record(staged)?;
+            }
+            sync_batch_barrier(&[], &marker_dirs)?;
+        }
         namespace.verify()?;
+        let mut pending_indices = Vec::new();
         for index in 0..plan.moves.len() {
             if let Some(receipt) = existing_receipt(&plan, index)? {
                 if receipt.outcome != PublicationOutcome::Applied { return Err(invalid("directory batch already stopped at this step")); }
                 continue;
             }
-            execute(&plan, &plan_path, index, &mut namespace, &mut files)?;
+            pending_indices.push(index);
+        }
+        let mut waves: Vec<Vec<usize>> = Vec::new();
+        let mut current_wave: Vec<usize> = Vec::new();
+        let mut wave_sources: BTreeSet<&Path> = BTreeSet::new();
+        for index in pending_indices {
+            let movement = &plan.moves[index];
+            if wave_sources.contains(movement.destination.as_path()) {
+                waves.push(std::mem::take(&mut current_wave));
+                wave_sources.clear();
+            }
+            wave_sources.insert(movement.source.as_path());
+            current_wave.push(index);
+        }
+        if !current_wave.is_empty() {
+            waves.push(current_wave);
+        }
+        for wave in waves {
+            execute_wave(
+                &plan,
+                &plan_path,
+                &wave,
+                &mut namespace,
+                &mut batch_files,
+            )?;
         }
         retire(&plan, &plan_path)
     })();

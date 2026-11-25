@@ -566,7 +566,7 @@ async function main() {
     let injectConflict = true;
     const conflictPlanner = async (input) => {
       const plan = await fixturePlan(conflictHomeRoot, conflictRegistryRoot, input);
-      if (!injectConflict) return plan;
+      if (!injectConflict || input.request.clientSurfaceRole !== "home") return plan;
       injectConflict = false;
       const conflictPath = path.join(conflictRegistryRoot, "interface", plan.chatInterfaceId, "conflict.json");
       await fs.mkdir(path.dirname(conflictPath), { recursive: true });
@@ -919,18 +919,40 @@ async function verifyPublicationRecovery(temporary) {
   await assert.rejects(initializeWorkspace({ octopusHomeRoot: rollbackHome, registryRoot: rollbackRegistry,
     request: setupRequest("publication_rollback_12345678"), planOperatorSurface: input => fixturePlan(rollbackHome, rollbackRegistry, input),
     publishFiles: async writes => {
-      calls.push(writes[0]);
-      if (calls.length !== 2) return rollbackPublisher(writes);
-      return publishFiles(writes, async ({ writes: requests }) => ({ receipts: requests.map(write => ({ digest_algorithm: "sha256",
-        operation_id: write.operation_id, path: write.path, before_hash: write.expected_before_hash, after_hash: hash(write.content),
-        bytes: Buffer.byteLength(write.content), outcome: "not_applied", error: "fixture publication refusal" })), error: null }));
+      calls.push(writes);
+      if (calls.length === 1 && writes.length > 1) {
+        const [applied] = await rollbackPublisher([writes[0]]);
+        return publishFiles(writes.slice(0, 2), async ({ writes: requests }) => ({
+          receipts: [
+            applied,
+            {
+              digest_algorithm: "sha256",
+              operation_id: requests[1].operation_id,
+              path: requests[1].path,
+              before_hash: requests[1].expected_before_hash,
+              after_hash: hash(requests[1].content),
+              bytes: Buffer.byteLength(requests[1].content),
+              outcome: "not_applied",
+              error: "fixture publication refusal",
+            },
+          ],
+          error: null,
+        }));
+      }
+      return rollbackPublisher(writes);
     } }), /fixture publication refusal/);
-  assert.equal(calls.length, 3); assert.notEqual(calls[2].operationId, calls[0].operationId);
-  assert.equal(calls[2].expectedBeforeHash, hash(calls[0].content)); assert.equal(hash(calls[2].content), calls[0].expectedBeforeHash);
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].length > 1, "non-barrier setup writes must publish in a batch");
+  assert.equal(calls[1].length, 1, "rollback must only undo the single applied prefix write");
+  const firstWrite = calls[0][0], rollbackWrite = calls[1][0];
+  assert.notEqual(rollbackWrite.operationId, firstWrite.operationId);
+  assert.equal(rollbackWrite.expectedBeforeHash, hash(firstWrite.content));
+  assert.equal(hash(rollbackWrite.content), firstWrite.expectedBeforeHash);
   const rollbackFile = (await fs.readdir(path.join(rollbackHome, "client-state/workspace"))).find(file => file.startsWith("rollback-publication_rollback_"));
   const rollback = JSON.parse(await fs.readFile(path.join(rollbackHome, "client-state/workspace", rollbackFile)));
-  assert.equal(rollback.writes[0].publication.rollback_receipt.operation_id, calls[2].operationId);
+  assert.equal(rollback.writes[0].publication.rollback_receipt.operation_id, rollbackWrite.operationId);
   assert.equal(rollback.writes[0].publication.rollback_receipt.outcome, "applied");
+  assert.equal(rollback.writes[2].publication.started, false, "unattempted tail writes after mid-batch refusal must reset started");
   console.log("workspace publication: retained recovery preserves later changes, obsolete journals refuse, checked rollback passed");
 }
 
