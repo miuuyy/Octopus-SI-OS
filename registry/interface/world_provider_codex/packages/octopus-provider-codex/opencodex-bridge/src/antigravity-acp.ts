@@ -1,9 +1,12 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { arch, platform, tmpdir } from "node:os";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { arch, platform } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { crc32, inflateRawSync } from "node:zlib";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { crc32, createInflateRaw } from "node:zlib";
 import release from "../antigravity-acp.json" with { type: "json" };
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
@@ -53,11 +56,29 @@ const failure = (message: string, code: string, status = 500, retryable = false)
   type: "error", message, status, errorType: status === 401 ? "authentication_error" : status === 400 ? "invalid_request_error" : "upstream_error", code, retryable,
 });
 
-function asset(): Asset {
-  const key = `${platform()}-${arch()}`;
+const RECONNECT_HINT = "Connect Antigravity in Applications or run 'octopus connect world_provider_antigravity'.";
+const MAX_ZIP_CENTRAL_DIR_BYTES = 4 * 1024 * 1024;
+const MAX_ZIP_EOCD_WINDOW = 65_557;
+
+export type InstallationInspection =
+  | { ok: true; key: string; asset: Asset; paths: ReturnType<typeof layout> }
+  | { ok: false; key: string; code: string; status: number; message: string };
+
+export function antigravityPlatformKey(hostPlatform = platform(), hostArch = arch()): string {
+  return `${hostPlatform}-${hostArch}`;
+}
+
+export function antigravityReleaseAsset(key = antigravityPlatformKey()): Asset {
   const entry = (release.assets as Record<string, Asset>)[key];
   if (!entry) throw new AntigravityAccountError("unsupported_platform", `Google publishes no Antigravity ACP server for ${key}.`);
   return entry;
+}
+
+function assetPlatformForDigest(sha256: string): string | undefined {
+  for (const [key, entry] of Object.entries(release.assets as Record<string, Asset>)) {
+    if (entry.sha256 === sha256) return key;
+  }
+  return undefined;
 }
 
 function layout(directory: string) {
@@ -93,83 +114,301 @@ function accountDirectory(config: AntigravityAccountConfig): string {
   return resolve(config.directory);
 }
 
-async function installed(directory: string): Promise<ReturnType<typeof layout> | undefined> {
+export async function inspectAntigravityInstallation(
+  directory: string,
+  hostKey = antigravityPlatformKey(),
+): Promise<InstallationInspection> {
+  const source = antigravityReleaseAsset(hostKey);
   const paths = layout(directory);
-  const text = await readFile(paths.receipt, "utf8").catch(() => undefined);
-  if (text === undefined) return undefined;
-  const receipt = record(JSON.parse(text));
-  if (receipt?.version !== release.version || receipt.sha256 !== asset().sha256) return undefined;
-  for (const file of [paths.executable, paths.harness]) {
-    const stat = await lstat(file).catch(() => undefined);
-    if (!stat?.isFile() || (stat.mode & 0o100) === 0) return undefined;
-  }
-  return paths;
-}
-
-function zipEntries(archive: Buffer): Map<string, Buffer> {
-  const end = archive.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  if (end < 0) throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive has no zip directory.");
-  const count = archive.readUInt16LE(end + 10);
-  let offset = archive.readUInt32LE(end + 16);
-  const entries = new Map<string, Buffer>();
-  for (let index = 0; index < count; index++) {
-    if (archive.readUInt32LE(offset) !== 0x02014b50) throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive directory is malformed.");
-    const method = archive.readUInt16LE(offset + 10);
-    const crc = archive.readUInt32LE(offset + 16);
-    const compressed = archive.readUInt32LE(offset + 20);
-    const size = archive.readUInt32LE(offset + 24);
-    const nameLength = archive.readUInt16LE(offset + 28);
-    const extraLength = archive.readUInt16LE(offset + 30);
-    const commentLength = archive.readUInt16LE(offset + 32);
-    const local = archive.readUInt32LE(offset + 42);
-    const name = archive.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
-    offset += 46 + nameLength + extraLength + commentLength;
-    if (name !== release.executable && name !== release.harness) continue;
-    if (archive.readUInt32LE(local) !== 0x04034b50) throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} is malformed.`);
-    const start = local + 30 + archive.readUInt16LE(local + 26) + archive.readUInt16LE(local + 28);
-    const raw = archive.subarray(start, start + compressed);
-    const data = method === 0 ? Buffer.from(raw) : method === 8 ? inflateRawSync(raw) : undefined;
-    if (!data || data.length !== size || (crc32(data) >>> 0) !== crc) {
-      throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} failed its integrity check.`);
+  let text: string;
+  try {
+    text = await readFile(paths.receipt, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return {
+        ok: false, key: hostKey, code: "antigravity_not_connected", status: 401,
+        message: `Antigravity ACP server ${release.version} for ${hostKey} is not installed. ${RECONNECT_HINT}`,
+      };
     }
-    entries.set(name, data);
+    return {
+      ok: false, key: hostKey, code: "antigravity_invalid_installation", status: 401,
+      message: `Installed Antigravity ACP receipt for ${release.version} cannot be read. ${RECONNECT_HINT}`,
+    };
   }
-  return entries;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {
+      ok: false, key: hostKey, code: "antigravity_invalid_installation", status: 401,
+      message: `Installed Antigravity ACP receipt for ${release.version} is malformed. ${RECONNECT_HINT}`,
+    };
+  }
+  const receipt = record(parsed);
+  if (!receipt || receipt.version !== release.version) {
+    return {
+      ok: false, key: hostKey, code: "antigravity_invalid_installation", status: 401,
+      message: `Installed Antigravity ACP server version does not match ${release.version}. ${RECONNECT_HINT}`,
+    };
+  }
+  const recordedPlatform = typeof receipt.platform === "string" && receipt.platform ? receipt.platform : undefined;
+  if (receipt.sha256 !== source.sha256 || (recordedPlatform !== undefined && recordedPlatform !== hostKey)) {
+    const installedPlatform = recordedPlatform
+      ?? (typeof receipt.sha256 === "string" ? assetPlatformForDigest(receipt.sha256) : undefined);
+    if (installedPlatform && installedPlatform !== hostKey) {
+      return {
+        ok: false, key: hostKey, code: "antigravity_incompatible_platform", status: 400,
+        message: `Installed Antigravity ACP server ${release.version} is for ${installedPlatform}, not ${hostKey}. ${RECONNECT_HINT}`,
+      };
+    }
+    return {
+      ok: false, key: hostKey, code: "antigravity_invalid_installation", status: 401,
+      message: `Installed Antigravity ACP server ${release.version} does not match the pinned ${hostKey} digest. ${RECONNECT_HINT}`,
+    };
+  }
+  for (const [name, file] of [[release.executable, paths.executable], [release.harness, paths.harness]] as const) {
+    const stat = await lstat(file).catch(() => undefined);
+    if (!stat?.isFile() || stat.isSymbolicLink() || (stat.mode & 0o100) === 0) {
+      return {
+        ok: false, key: hostKey, code: "antigravity_invalid_installation", status: 401,
+        message: `Installed Antigravity ACP executable '${name}' is missing or not executable. ${RECONNECT_HINT}`,
+      };
+    }
+  }
+  return { ok: true, key: hostKey, asset: source, paths };
 }
 
-async function install(directory: string, signal: AbortSignal | undefined, progress: (message: string) => void): Promise<ReturnType<typeof layout>> {
-  const present = await installed(directory);
-  if (present) return present;
-  const source = asset();
-  progress(`Downloading Google's Antigravity ACP server ${release.version}`);
+async function readExact(handle: Awaited<ReturnType<typeof open>>, length: number, position: number): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  let total = 0;
+  while (total < length) {
+    const { bytesRead } = await handle.read(buffer, total, length - total, position + total);
+    if (bytesRead <= 0) throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive is truncated.");
+    total += bytesRead;
+  }
+  return buffer;
+}
+
+export async function downloadVerifiedArchive(
+  url: string,
+  expectedBytes: number,
+  expectedSha256: string,
+  destination: string,
+  options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+): Promise<void> {
   const timeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
-  const response = await fetch(source.url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, redirect: "error" });
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const response = await (options.fetchImpl ?? fetch)(url, { signal, redirect: "error" });
   if (!response.ok) throw new AntigravityAccountError("download_failed", `Google's Antigravity ACP server download answered HTTP ${response.status}.`);
-  const archive = Buffer.from(await response.arrayBuffer());
-  if (archive.length !== source.archive_bytes || createHash("sha256").update(archive).digest("hex") !== source.sha256) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/.test(contentLength.trim()) && Number(contentLength.trim()) !== expectedBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new AntigravityAccountError("invalid_release", "Google's Antigravity ACP server archive does not match its pinned size.");
+  }
+  if (!response.body) throw new AntigravityAccountError("download_failed", "Google's Antigravity ACP server download returned an empty body.");
+  const hash = createHash("sha256");
+  const handle = await open(destination, "wx", 0o600);
+  const reader = response.body.getReader();
+  let received = 0;
+  try {
+    for (;;) {
+      if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Antigravity ACP server download was cancelled.");
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      received += chunk.byteLength;
+      if (received > expectedBytes) {
+        throw new AntigravityAccountError("invalid_release", "Google's Antigravity ACP server archive exceeded its pinned size.");
+      }
+      hash.update(chunk);
+      let written = 0;
+      while (written < chunk.byteLength) {
+        const { bytesWritten } = await handle.write(chunk, written, chunk.byteLength - written);
+        if (bytesWritten <= 0) throw new Error("Short write while staging Antigravity ACP archive.");
+        written += bytesWritten;
+      }
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+    await handle.close();
+  }
+  if (received !== expectedBytes || hash.digest("hex") !== expectedSha256) {
     throw new AntigravityAccountError("invalid_release", "Google's Antigravity ACP server archive does not match its pinned digest.");
   }
-  progress("Verifying the Antigravity ACP server");
-  const entries = zipEntries(archive);
-  const executable = entries.get(release.executable);
-  const harness = entries.get(release.harness);
-  if (executable?.length !== source.executable_bytes || harness?.length !== source.harness_bytes) {
-    throw new AntigravityAccountError("invalid_release", "Google's Antigravity ACP server archive lacks its declared executables.");
+}
+
+export async function extractZipEntriesToFiles(
+  archivePath: string,
+  targets: Record<string, { destination: string; expectedBytes: number; mode: number }>,
+): Promise<void> {
+  const handle = await open(archivePath, "r");
+  try {
+    const fileSize = (await handle.stat()).size;
+    if (fileSize < 22) throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive has no zip directory.");
+    const tailSize = Math.min(fileSize, MAX_ZIP_EOCD_WINDOW);
+    const tailStart = fileSize - tailSize;
+    const tail = await readExact(handle, tailSize, tailStart);
+    let eocdPos = -1;
+    for (let pos = tailSize - 22; pos >= 0; pos--) {
+      if (tail.readUInt32LE(pos) === 0x06054b50 && tailStart + pos + 22 + tail.readUInt16LE(pos + 20) === fileSize) {
+        eocdPos = pos;
+        break;
+      }
+    }
+    if (eocdPos < 0) throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive has no zip directory.");
+    const eocdOffset = tailStart + eocdPos;
+    const diskNumber = tail.readUInt16LE(eocdPos + 4);
+    const cdDisk = tail.readUInt16LE(eocdPos + 6);
+    const diskEntries = tail.readUInt16LE(eocdPos + 8);
+    const count = tail.readUInt16LE(eocdPos + 10);
+    const cdSize = tail.readUInt32LE(eocdPos + 12);
+    const cdOffset = tail.readUInt32LE(eocdPos + 16);
+    if (diskNumber !== 0 || cdDisk !== 0 || diskEntries !== count || count === 0xffff || cdSize === 0xffffffff
+      || cdOffset === 0xffffffff || cdSize > MAX_ZIP_CENTRAL_DIR_BYTES || cdOffset + cdSize > eocdOffset) {
+      throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive directory is malformed.");
+    }
+    const cd = await readExact(handle, cdSize, cdOffset);
+    const seen = new Set<string>();
+    let offset = 0;
+    for (let index = 0; index < count; index++) {
+      if (offset + 46 > cd.length || cd.readUInt32LE(offset) !== 0x02014b50) {
+        throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive directory is malformed.");
+      }
+      const method = cd.readUInt16LE(offset + 10);
+      const crc = cd.readUInt32LE(offset + 16);
+      const compressed = cd.readUInt32LE(offset + 20);
+      const size = cd.readUInt32LE(offset + 24);
+      const nameLength = cd.readUInt16LE(offset + 28);
+      const extraLength = cd.readUInt16LE(offset + 30);
+      const commentLength = cd.readUInt16LE(offset + 32);
+      const local = cd.readUInt32LE(offset + 42);
+      if (offset + 46 + nameLength + extraLength + commentLength > cd.length) {
+        throw new AntigravityAccountError("invalid_release", "The Antigravity ACP archive directory is malformed.");
+      }
+      const name = cd.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+      offset += 46 + nameLength + extraLength + commentLength;
+      const target = targets[name];
+      if (!target) continue;
+      if (seen.has(name)) throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive repeats entry ${name}.`);
+      seen.add(name);
+      if (size !== target.expectedBytes) {
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} does not match its declared size.`);
+      }
+      if (method !== 0 && method !== 8) {
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} uses an unsupported compression method.`);
+      }
+      if (local + 30 > cdOffset) {
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} is malformed.`);
+      }
+      const localHeader = await readExact(handle, 30, local);
+      if (localHeader.readUInt32LE(0) !== 0x04034b50) {
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} is malformed.`);
+      }
+      const dataStart = local + 30 + localHeader.readUInt16LE(26) + localHeader.readUInt16LE(28);
+      if (dataStart + compressed > cdOffset) {
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} is malformed.`);
+      }
+      if (compressed === 0) {
+        if (method !== 0 || target.expectedBytes !== 0 || crc !== 0) {
+          throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} failed its integrity check.`);
+        }
+        await writeFile(target.destination, Buffer.alloc(0), { mode: target.mode, flag: "wx" });
+        await chmod(target.destination, target.mode);
+        continue;
+      }
+      let written = 0;
+      let runningCrc = 0;
+      const source = createReadStream(archivePath, { start: dataStart, end: dataStart + compressed - 1 });
+      const verifier = new Transform({
+        transform(chunk, _encoding, callback) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          written += buf.length;
+          if (written > target.expectedBytes) {
+            callback(new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} exceeded its declared size.`));
+            return;
+          }
+          runningCrc = crc32(buf, runningCrc);
+          callback(null, buf);
+        },
+      });
+      const destination = createWriteStream(target.destination, { flags: "wx", mode: target.mode });
+      try {
+        if (method === 8) await pipeline(source, createInflateRaw(), verifier, destination);
+        else await pipeline(source, verifier, destination);
+      } catch (error) {
+        if (error instanceof AntigravityAccountError) throw error;
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} failed its integrity check.`);
+      }
+      if (written !== target.expectedBytes || (runningCrc >>> 0) !== crc) {
+        throw new AntigravityAccountError("invalid_release", `The Antigravity ACP archive entry ${name} failed its integrity check.`);
+      }
+      await chmod(target.destination, target.mode);
+    }
+    if (seen.size !== Object.keys(targets).length) {
+      throw new AntigravityAccountError("invalid_release", "Google's Antigravity ACP server archive lacks its declared executables.");
+    }
+  } finally {
+    await handle.close();
   }
+}
+
+export async function installAntigravityAcp(
+  directory: string,
+  options: { signal?: AbortSignal; onProgress?: (message: string) => void; hostKey?: string; fetchImpl?: typeof fetch; assetOverride?: Asset } = {},
+): Promise<ReturnType<typeof layout>> {
+  const hostKey = options.hostKey ?? antigravityPlatformKey();
+  const source = options.assetOverride ?? antigravityReleaseAsset(hostKey);
+  if (!options.assetOverride) {
+    const present = await inspectAntigravityInstallation(directory, hostKey);
+    if (present.ok) return present.paths;
+  }
+  const progress = options.onProgress ?? (() => undefined);
   const paths = layout(directory);
+  await ownedDirectory(directory, true);
   await ownedDirectory(join(directory, "acp"), true);
   const staging = await mkdtemp(join(directory, "acp", ".install-"));
+  await chmod(staging, 0o700);
+  const archivePath = join(staging, ".archive.zip");
+  let replaced: string | undefined;
   try {
-    await writeFile(join(staging, release.executable), executable, { mode: 0o700, flag: "wx" });
-    await writeFile(join(staging, release.harness), harness, { mode: 0o700, flag: "wx" });
-    await writeFile(join(staging, "receipt.json"), `${JSON.stringify({ version: release.version, sha256: source.sha256 })}\n`, { mode: 0o600, flag: "wx" });
-    await rm(paths.install, { recursive: true, force: true });
-    await rename(staging, paths.install);
+    progress(`Downloading Google's Antigravity ACP server ${release.version}`);
+    await downloadVerifiedArchive(source.url, source.archive_bytes, source.sha256, archivePath, {
+      signal: options.signal, fetchImpl: options.fetchImpl,
+    });
+    progress("Verifying the Antigravity ACP server");
+    await extractZipEntriesToFiles(archivePath, {
+      [release.executable]: { destination: join(staging, release.executable), expectedBytes: source.executable_bytes, mode: 0o700 },
+      [release.harness]: { destination: join(staging, release.harness), expectedBytes: source.harness_bytes, mode: 0o700 },
+    });
+    await rm(archivePath, { force: true });
+    const receiptPath = join(staging, "receipt.json");
+    await writeFile(receiptPath, `${JSON.stringify({ version: release.version, platform: hostKey, sha256: source.sha256 })}\n`, { mode: 0o600, flag: "wx" });
+    await chmod(receiptPath, 0o600);
+    const existing = await lstat(paths.install).catch(() => undefined);
+    if (existing) {
+      replaced = `${paths.install}.replace-${process.pid}-${Date.now()}`;
+      await rename(paths.install, replaced);
+    }
+    try {
+      await rename(staging, paths.install);
+    } catch (error) {
+      if (replaced) await rename(replaced, paths.install).catch(() => undefined);
+      throw error;
+    }
+    if (replaced) await rm(replaced, { recursive: true, force: true }).catch(() => undefined);
   } catch (error) {
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
   return paths;
+}
+
+function browserNoop(): string {
+  return existsSync("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
 }
 
 function environment(paths: ReturnType<typeof layout>, turn: string): Record<string, string> {
@@ -179,10 +418,10 @@ function environment(paths: ReturnType<typeof layout>, turn: string): Record<str
     TMPDIR: join(turn, "tmp"),
     ANTIGRAVITY_HARNESS_PATH: paths.harness,
     AGY_ACP_FORCE_FILE_STORAGE: "1",
-    BROWSER: "/usr/bin/true",
+    BROWSER: browserNoop(),
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
     LANG: process.env.LANG ?? "en_US.UTF-8",
-    ...Object.fromEntries(["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE"].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : [])),
+    ...Object.fromEntries(["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : [])),
   };
 }
 
@@ -234,7 +473,7 @@ class AcpProcess {
   onAuthorizationUrl: (url: string) => void = () => undefined;
 
   constructor(paths: ReturnType<typeof layout>, turn: string, spawn: typeof nodeSpawn, private readonly maxFrameBytes = 8 * 1024 * 1024) {
-    this.child = spawn(paths.executable, asset().args, {
+    this.child = spawn(paths.executable, antigravityReleaseAsset().args, {
       cwd: join(turn, "workspace"), env: environment(paths, turn), stdio: ["pipe", "pipe", "pipe"], detached: true,
     });
     this.closed = new Promise(resolve => {
@@ -263,7 +502,7 @@ class AcpProcess {
   authenticate(): Promise<JsonRecord> {
     const signedOut = Promise.withResolvers<never>();
     const auth = connect(this, () => {
-      signedOut.reject(new AcpFailure("Antigravity is signed out. Connect it again in Applications.", "antigravity_not_signed_in", 401));
+      signedOut.reject(new AcpFailure(`Antigravity is signed out. ${RECONNECT_HINT}`, "antigravity_not_signed_in", 401));
       this.kill();
     });
     return withTimeout(Promise.race([auth, signedOut.promise]), STARTUP_TIMEOUT_MS, "Antigravity sign-in");
@@ -337,9 +576,15 @@ class AcpProcess {
   }
 }
 
-async function turnDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "octopus-antigravity-"));
-  for (const name of ["home", "tmp", "workspace"]) await mkdir(join(directory, name), { mode: 0o700 });
+async function turnDirectory(baseDirectory: string): Promise<string> {
+  await ownedDirectory(baseDirectory, true);
+  const directory = await mkdtemp(join(baseDirectory, ".login-"));
+  await chmod(directory, 0o700);
+  for (const name of ["home", "tmp", "workspace"]) {
+    const sub = join(directory, name);
+    await mkdir(sub, { mode: 0o700 });
+    await chmod(sub, 0o700);
+  }
   return directory;
 }
 
@@ -358,14 +603,27 @@ function tierLabel(response: JsonRecord): string {
   return typeof tier?.name === "string" && tier.name.trim() ? `Google · ${tier.name.trim()}` : "Google account";
 }
 
-export async function antigravityAccountStatus(config: AntigravityAccountConfig): Promise<AntigravityAccountStatus> {
+export async function antigravityAccountStatus(config: AntigravityAccountConfig, hostKey = antigravityPlatformKey()): Promise<AntigravityAccountStatus> {
   const directory = accountDirectory(config);
-  const paths = await installed(directory);
-  if (!paths || !(await ownedDirectory(paths.home, false))) return { signedIn: false, accountLabel: null };
-  const token = await lstat(join(paths.home, release.agent, "acp_token.json")).catch(() => undefined);
+  const inspection = await inspectAntigravityInstallation(directory, hostKey);
+  if (!inspection.ok || !(await ownedDirectory(inspection.paths.home, false))) return { signedIn: false, accountLabel: null };
+  const token = await lstat(join(inspection.paths.home, release.agent, "acp_token.json")).catch(() => undefined);
   if (!token?.isFile() || token.size === 0) return { signedIn: false, accountLabel: null };
-  const saved = record(JSON.parse(await readFile(join(directory, "account.json"), "utf8").catch(() => "{}")));
+  let saved: JsonRecord | undefined;
+  try {
+    saved = record(JSON.parse(await readFile(join(directory, "account.json"), "utf8")));
+  } catch {
+    saved = undefined;
+  }
   return { signedIn: true, accountLabel: typeof saved?.label === "string" && saved.label ? saved.label : "Google account" };
+}
+
+export async function antigravityInstall(config: AntigravityAccountConfig, options: {
+  onProgress?: (message: string) => void; signal?: AbortSignal; hostKey?: string; fetchImpl?: typeof fetch; assetOverride?: Asset;
+} = {}): Promise<AntigravityAccountStatus> {
+  const directory = accountDirectory(config);
+  await installAntigravityAcp(directory, options);
+  return antigravityAccountStatus(config, options.hostKey);
 }
 
 export async function antigravityLogin(config: AntigravityAccountConfig, options: {
@@ -373,9 +631,9 @@ export async function antigravityLogin(config: AntigravityAccountConfig, options
 }): Promise<AntigravityAccountStatus> {
   const directory = accountDirectory(config);
   await ownedDirectory(directory, true);
-  const paths = await install(directory, options.signal, options.onProgress ?? (() => undefined));
+  const paths = await installAntigravityAcp(directory, { signal: options.signal, onProgress: options.onProgress });
   await ownedDirectory(paths.home, true);
-  const turn = await turnDirectory();
+  const turn = await turnDirectory(directory);
   const acp = new AcpProcess(paths, turn, nodeSpawn);
   const abort = () => acp.kill();
   options.signal?.addEventListener("abort", abort, { once: true });
@@ -428,11 +686,12 @@ export function createAntigravityAcpAdapter(_provider: OcxProviderConfig, accoun
           return;
         }
         const directory = accountDirectory(account);
-        const paths = await installed(directory);
-        if (!paths) {
-          emit(failure(`Connect Antigravity in Applications to install Google's ACP server ${release.version} and use the connected account.`, "antigravity_not_connected", 401));
+        const inspection = await inspectAntigravityInstallation(directory);
+        if (!inspection.ok) {
+          emit(failure(inspection.message, inspection.code, inspection.status));
           return;
         }
+        const paths = inspection.paths;
         for (const message of parsed.context.messages) {
           if (message.role === "developer" && Array.isArray(message.content) && message.content.some(part => part.type !== "text")) {
             emit(failure("Antigravity requires text in developer instructions.", "antigravity_developer_content", 400));
@@ -449,6 +708,10 @@ export function createAntigravityAcpAdapter(_provider: OcxProviderConfig, accoun
           parsed, systemPrompt, tools: bridge.tools, wireByName, requireToolCall: bridge.requireToolCall, incoming, emit,
         });
       } catch (error) {
+        if (error instanceof AntigravityAccountError) {
+          emit(failure(error.message, error.code, error.code === "unsupported_platform" ? 400 : 401));
+          return;
+        }
         emit(failure(error instanceof Error ? error.message : String(error), "antigravity_turn_failed", 502));
       }
     },

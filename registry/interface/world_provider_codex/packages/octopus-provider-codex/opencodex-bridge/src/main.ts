@@ -1,7 +1,7 @@
 import { createProviderAdapter, supportsAdapter } from "./adapters.ts";
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { ANTIGRAVITY_ACCOUNT_PROVIDER, closeAntigravityConversations, AntigravityAccountError, antigravityAccountStatus, antigravityLogin, antigravityLogout, type AntigravityAccountConfig } from "./antigravity-acp.ts";
+import { ANTIGRAVITY_ACCOUNT_PROVIDER, closeAntigravityConversations, AntigravityAccountError, antigravityAccountStatus, antigravityInstall, antigravityLogin, antigravityLogout, type AntigravityAccountConfig } from "./antigravity-acp.ts";
 import type { ProviderAdapter } from "../node_modules/@bitkyc08/opencodex/src/adapters/base.ts";
 import { runGrokCaptureMcpServer } from "./grok-cli.ts";
 import { runCodeBuddyMcpServer } from "../node_modules/@bitkyc08/opencodex/src/adapters/codebuddy/mcp-server.ts";
@@ -1054,6 +1054,10 @@ try {
     let result: unknown;
     switch (raw.operation) {
       case "status": result = await antigravityAccountStatus(account); break;
+      case "install": result = await antigravityInstall(account, {
+        signal: abort.signal,
+        onProgress: (message) => { publish({ event: "progress", message }); },
+      }); break;
       case "login": result = await antigravityLogin(account, {
         signal: abort.signal,
         onAuth: (url) => { publish({ event: "auth", url }); },

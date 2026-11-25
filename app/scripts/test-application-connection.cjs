@@ -299,3 +299,59 @@ test("distributed applications install every interface their connection modules 
     }
   }
 });
+
+test("Antigravity account client forwards declared proxy env and surfaces bridge errors and stderr diagnostics", async () => {
+  const agId = "world_provider_antigravity";
+  const bridgeRel = "packages/octopus-provider-codex/opencodex-bridge/bin/octopus-opencodex-bridge";
+  write(`${agId}/application.json`, manifest(agId, { category: "provider", setup: { fields: [] } }));
+  write(`${agId}/interface.json`, {
+    id: agId, interface_type: "world", role: "provider",
+    interface_driver_config: {
+      private_config: {
+        opencodex: { schema_version: 1, oauth_provider: "antigravity-acp", credential_owner_interface: agId },
+        client_connection: { schema_version: 1, module: `interface://${agId}/packages/account-client.cjs` },
+        account_bridge: `interface://world_provider_codex/${bridgeRel}`,
+      },
+    },
+  });
+  write(`${agId}/life.json`, { processes: [{ inherit_env: ["HOME", "PATH", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] }] });
+  const accountClientDest = path.join(registry, "interface", agId, "packages/account-client.cjs");
+  fs.mkdirSync(path.dirname(accountClientDest), { recursive: true });
+  fs.copyFileSync(
+    path.resolve(__dirname, "../../registry/interface/world_provider_antigravity/packages/account-client.cjs"),
+    accountClientDest,
+  );
+  const envCapture = path.join(root, "bridge-env.json");
+  const modeFile = path.join(root, "bridge-mode.txt");
+  const fakeBridgeScript = path.join(root, "fake-bridge.cjs");
+  fs.writeFileSync(fakeBridgeScript, [
+    `const fs = require("node:fs");`,
+    `fs.writeFileSync(${JSON.stringify(envCapture)}, JSON.stringify(process.env));`,
+    `const mode = fs.readFileSync(${JSON.stringify(modeFile)}, "utf8").trim();`,
+    `if (mode === "error") { process.stdout.write(JSON.stringify({ event: "error", code: "unsupported_platform", message: "Google publishes no Antigravity ACP server for linux-riscv64." }) + "\\n"); process.stderr.write("opencodex bridge failed closed\\n"); process.exit(1); }`,
+    `if (mode === "crash") { process.stderr.write("libstdc++.so.6: cannot open shared object file\\n"); process.exit(127); }`,
+    `process.stdout.write(JSON.stringify({ event: "result", result: { signedIn: true, accountLabel: "Google · Pro" } }) + "\\n");`,
+  ].join("\n") + "\n");
+  const fakeBridge = path.join(registry, "interface/world_provider_codex", bridgeRel);
+  fs.mkdirSync(path.dirname(fakeBridge), { recursive: true });
+  const runnerPrefix = process.env.ELECTRON_RUN_AS_NODE ? "ELECTRON_RUN_AS_NODE=1 " : "";
+  fs.writeFileSync(fakeBridge, `#!/bin/sh\n${runnerPrefix}exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeBridgeScript)}\n`, { mode: 0o700 });
+  const agHost = createApplicationConnectionHost({
+    resolveTargets: createRegistryConnectionTargets({
+      registryRoot: () => registry,
+      octopusHome: () => home,
+      launchEnvironment: () => ({ HTTPS_PROXY: "http://proxy.internal:8080", SECRET_UNDECLARED: "never" }),
+      openExternal: async () => {},
+    }),
+    scope: () => home,
+  });
+  fs.writeFileSync(modeFile, "ok");
+  assert.deepEqual((await agHost.probe({ applicationId: agId })).interfaces[0].state, { state: "connected", account: { label: "Google · Pro" } });
+  const observedEnv = JSON.parse(fs.readFileSync(envCapture, "utf8"));
+  assert.equal(observedEnv.HTTPS_PROXY, "http://proxy.internal:8080");
+  assert.equal(observedEnv.SECRET_UNDECLARED, undefined);
+  fs.writeFileSync(modeFile, "error");
+  assert.match((await agHost.probe({ applicationId: agId })).interfaces[0].state.message, /linux-riscv64/);
+  fs.writeFileSync(modeFile, "crash");
+  assert.match((await agHost.probe({ applicationId: agId })).interfaces[0].state.message, /exit 127.*libstdc\+\+\.so\.6/);
+});

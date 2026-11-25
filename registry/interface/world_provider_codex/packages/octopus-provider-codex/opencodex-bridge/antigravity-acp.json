@@ -26,6 +26,16 @@
       "harness_bytes": 134730544,
       "args": []
     },
+    "linux-arm64": {
+      "url": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-arm64.zip",
+      "sha256": "1e184f439477b54138e94440056b26a78c0a8075a8fd2ffda637ec31267c6459",
+      "archive_bytes": 264366319,
+      "executable_bytes": 721489411,
+      "harness_bytes": 132951888,
+      "args": [
+        "--uid="
+      ]
+    },
     "linux-x64": {
       "url": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-x86_64.zip",
       "sha256": "36f373e8948edf1727b39c7d62b5722d6a4474bdfd72b04ad3d6def571808c9f",

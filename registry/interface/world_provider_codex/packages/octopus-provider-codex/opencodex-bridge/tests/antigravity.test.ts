@@ -1,11 +1,20 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, lstat, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { crc32, deflateRawSync } from "node:zlib";
+import release from "../antigravity-acp.json" with { type: "json" };
 import { parseRequest } from "../node_modules/@bitkyc08/opencodex/src/responses/parser.ts";
 import type { AdapterEvent } from "../node_modules/@bitkyc08/opencodex/src/types.ts";
 import { acpPrompt } from "../src/antigravity-content.ts";
-import { createAcpStderrScanner } from "../src/antigravity-acp.ts";
+import {
+  AntigravityAccountError,
+  antigravityReleaseAsset,
+  createAcpStderrScanner,
+  inspectAntigravityInstallation,
+  installAntigravityAcp,
+} from "../src/antigravity-acp.ts";
 import { runAntigravityConversation, closeAntigravityConversations, type AcpConnection } from "../src/antigravity-conversation.ts";
 
 test("Antigravity replays typed assistant history without prose tool-call syntax", async () => {
@@ -142,4 +151,135 @@ test("Antigravity flushes trailing text while a turn stays open and still suppre
   };
   try { for (const scenario of ["timer", "tool-call", "sdk-error"] as const) await runCase(scenario); }
   finally { await closeAntigravityConversations(directory); await rm(directory, { recursive: true, force: true }); }
+});
+
+function buildZip(files: Array<{ name: string; content: Buffer; method?: 0 | 8 }>): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const file of files) {
+    const method = file.method ?? 8;
+    const name = Buffer.from(file.name, "utf8");
+    const body = method === 8 ? deflateRawSync(file.content) : file.content;
+    const checksum = crc32(file.content) >>> 0;
+    const local = Buffer.alloc(30 + name.length);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(checksum, 14); local.writeUInt32LE(body.length, 18); local.writeUInt32LE(file.content.length, 22);
+    local.writeUInt16LE(name.length, 26); name.copy(local, 30);
+    locals.push(local, body);
+    const central = Buffer.alloc(46 + name.length);
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(method, 10);
+    central.writeUInt32LE(checksum, 16); central.writeUInt32LE(body.length, 20); central.writeUInt32LE(file.content.length, 24);
+    central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42); name.copy(central, 46);
+    centrals.push(central);
+    offset += local.length + body.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(files.length, 8); eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, eocd]);
+}
+
+test("Antigravity release manifest pins Linux x64/arm64 and macOS targets and fails closed on unsupported arch", () => {
+  for (const key of ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"] as const) {
+    const entry = antigravityReleaseAsset(key);
+    expect(entry.url.startsWith("https://dl.google.com/agy-extensions/releases/")).toBe(true);
+    expect(entry.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(entry.archive_bytes).toBeGreaterThan(0);
+    expect(entry.executable_bytes).toBeGreaterThan(0);
+    expect(entry.harness_bytes).toBeGreaterThan(0);
+    expect(entry.args).toEqual(key.startsWith("linux-") ? ["--uid="] : []);
+  }
+  expect(() => antigravityReleaseAsset("linux-riscv64")).toThrow(AntigravityAccountError);
+  try { antigravityReleaseAsset("linux-riscv64"); } catch (error) {
+    expect((error as AntigravityAccountError).code).toBe("unsupported_platform");
+  }
+});
+
+test("Antigravity streams verified zip installation and diagnoses missing, corrupt, and cross-platform receipts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "octopus-acp-install-"));
+  try {
+    const exeBytes = Buffer.from("#!/bin/sh\necho acp\n" + "x".repeat(4096));
+    const harnessBytes = Buffer.from("#!/bin/sh\necho harness\n" + "y".repeat(2048));
+    const archive = buildZip([
+      { name: release.executable, content: exeBytes, method: 8 },
+      { name: release.harness, content: harnessBytes, method: 0 },
+    ]);
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const syntheticAsset = {
+      url: "https://dl.google.com/agy-extensions/releases/linux/synthetic.zip",
+      sha256: digest,
+      archive_bytes: archive.length,
+      executable_bytes: exeBytes.length,
+      harness_bytes: harnessBytes.length,
+      args: ["--uid="],
+    };
+    const streamedResponse = (bytes: Buffer, contentLength = bytes.length) => new Response(new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 257) controller.enqueue(bytes.subarray(i, i + 257));
+        controller.close();
+      },
+    }), { status: 200, headers: { "content-length": String(contentLength) } });
+
+    const missing = await inspectAntigravityInstallation(directory, "linux-x64");
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.code).toBe("antigravity_not_connected");
+      expect(missing.message).toContain("linux-x64");
+      expect(missing.message).toContain("octopus connect world_provider_antigravity");
+    }
+
+    const progress: string[] = [];
+    const paths = await installAntigravityAcp(directory, {
+      hostKey: "linux-x64",
+      assetOverride: syntheticAsset,
+      onProgress: (message) => progress.push(message),
+      fetchImpl: (async () => streamedResponse(archive)) as typeof fetch,
+    });
+    expect(progress).toEqual([`Downloading Google's Antigravity ACP server ${release.version}`, "Verifying the Antigravity ACP server"]);
+    expect(await readFile(paths.executable)).toEqual(exeBytes);
+    expect(await readFile(paths.harness)).toEqual(harnessBytes);
+    expect((await lstat(paths.executable)).mode & 0o777).toBe(0o700);
+    expect((await lstat(paths.harness)).mode & 0o777).toBe(0o700);
+    expect((await lstat(paths.receipt)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(paths.receipt, "utf8"))).toEqual({ version: release.version, platform: "linux-x64", sha256: digest });
+    expect((await readdir(paths.install)).sort()).toEqual([release.executable, release.harness, "receipt.json"]);
+
+    await expect(installAntigravityAcp(directory, {
+      hostKey: "linux-x64",
+      assetOverride: { ...syntheticAsset, sha256: "0".repeat(64) },
+      fetchImpl: (async () => streamedResponse(archive)) as typeof fetch,
+    })).rejects.toMatchObject({ code: "invalid_release" });
+
+    await expect(installAntigravityAcp(directory, {
+      hostKey: "linux-x64",
+      assetOverride: syntheticAsset,
+      fetchImpl: (async () => streamedResponse(Buffer.concat([archive, Buffer.from("extra")]), archive.length)) as typeof fetch,
+    })).rejects.toMatchObject({ code: "invalid_release" });
+
+    await writeFile(paths.receipt, `${JSON.stringify({ version: release.version, sha256: release.assets["darwin-arm64"].sha256 })}\n`);
+    const cross = await inspectAntigravityInstallation(directory, "linux-x64");
+    expect(cross.ok).toBe(false);
+    if (!cross.ok) {
+      expect(cross.code).toBe("antigravity_incompatible_platform");
+      expect(cross.message).toContain("darwin-arm64");
+      expect(cross.message).toContain("linux-x64");
+    }
+
+    await writeFile(paths.receipt, "{not-json");
+    const malformed = await inspectAntigravityInstallation(directory, "linux-x64");
+    expect(malformed.ok).toBe(false);
+    if (!malformed.ok) expect(malformed.code).toBe("antigravity_invalid_installation");
+
+    await writeFile(paths.receipt, `${JSON.stringify({ version: release.version, platform: "linux-x64", sha256: release.assets["linux-x64"].sha256 })}\n`);
+    await chmod(paths.executable, 0o600);
+    const nonExec = await inspectAntigravityInstallation(directory, "linux-x64");
+    expect(nonExec.ok).toBe(false);
+    if (!nonExec.ok) expect(nonExec.message).toContain(release.executable);
+    await chmod(paths.executable, 0o700);
+    expect((await inspectAntigravityInstallation(directory, "linux-x64")).ok).toBe(true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

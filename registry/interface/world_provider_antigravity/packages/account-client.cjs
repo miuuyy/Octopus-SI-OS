@@ -3,7 +3,9 @@ const { constants } = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const TIMEOUTS = { status: 20_000, login: 1_800_000, logout: 20_000 };
+const TIMEOUTS = { status: 20_000, install: 1_800_000, login: 1_800_000, logout: 20_000 };
+const LAUNCH_ENV_NAMES = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+const STDERR_TAIL_LIMIT = 2048;
 const ID = /^[A-Za-z0-9_-]+$/;
 
 function record(value) {
@@ -76,16 +78,34 @@ function authorizationUrl(value) {
   return url.href;
 }
 
+function bridgeEnvironment(ctx) {
+  if (typeof ctx.launchEnvironment !== "function") return {};
+  const env = {};
+  for (const name of LAUNCH_ENV_NAMES) {
+    const value = ctx.launchEnvironment(name);
+    if (typeof value === "string" && value.length > 0 && !value.includes("\0")) env[name] = value;
+  }
+  return env;
+}
+
+function bridgeExitError(operation, code, signal, stderrTail) {
+  const status = signal ? `signal ${signal}` : code !== null ? `exit ${code}` : "unexpected close";
+  const detail = stderrTail.replace(/[\u0000-\u001f\u007f]+/gu, " ").trim().slice(-200);
+  return new Error(`Antigravity account ${operation} failed in its bridge (${status})${detail ? `: ${detail}` : "."}`);
+}
+
 function invoke(target, operation, ctx, authorize) {
   checkCancelled(ctx.signal);
+  const env = bridgeEnvironment(ctx);
   return new Promise((resolve, reject) => {
     const child = spawn(target.binary, ["__account"], {
-      cwd: path.dirname(target.binary), env: {}, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      cwd: path.dirname(target.binary), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
     });
     const decoder = new TextDecoder("utf-8", { fatal: true });
-    let buffer = "", bytes = 0, stderrBytes = 0, result, received = false, authReceived = false;
-    let exited = false, closed = false, settled = false, failure = null, pending = 0, callbacks = Promise.resolve();
-    let killTimer, cleanupTimer;
+    const stderrDecoder = new TextDecoder("utf-8");
+    let buffer = "", bytes = 0, stderrBytes = 0, stderrTail = "", result, received = false, authReceived = false;
+    let exited = false, exitCode = null, exitSignal = null, closed = false, settled = false, failure = null, pending = 0, callbacks = Promise.resolve();
+    let killTimer, cleanupTimer, drainTimer;
     const timer = setTimeout(() => fail(new Error(`Antigravity account ${operation} timed out.`)), TIMEOUTS[operation]);
     const abort = () => fail(new Error("Antigravity account operation was cancelled."));
 
@@ -95,6 +115,7 @@ function invoke(target, operation, ctx, authorize) {
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(cleanupTimer);
+      clearTimeout(drainTimer);
       ctx.signal?.removeEventListener("abort", abort);
       if (error) reject(error); else resolve(result);
     }
@@ -103,13 +124,17 @@ function invoke(target, operation, ctx, authorize) {
       if (!closed || settled) return;
       if (failure) return settle(failure);
       if (pending) return;
-      settle(exited && received ? null : new Error("Antigravity account bridge closed without a result and successful exit."));
+      if (!exited || exitCode !== 0 || exitSignal) {
+        return settle(bridgeExitError(operation, exitCode, exitSignal, stderrTail));
+      }
+      settle(received ? null : new Error("Antigravity account bridge closed without a result and successful exit."));
     }
 
     function fail(error) {
       if (failure || settled) return;
       failure = error;
       clearTimeout(timer);
+      clearTimeout(drainTimer);
       if (!closed) {
         if (!exited) child.kill("SIGTERM");
         child.stdin.destroy();
@@ -142,7 +167,7 @@ function invoke(target, operation, ctx, authorize) {
         const url = authorizationUrl(value.url);
         authReceived = true;
         notify(() => authorize(url), "Antigravity sign-in could not open the authorization page.");
-      } else if (exact(value, ["event", "message"]) && value.event === "progress" && operation === "login" && text(value.message, 300)) {
+      } else if (exact(value, ["event", "message"]) && value.event === "progress" && (operation === "login" || operation === "install") && text(value.message, 300)) {
         notify(() => ctx.progress({ message: value.message }), "Antigravity sign-in could not report progress.");
       } else if (exact(value, ["event", "code", "message"]) && value.event === "error"
         && typeof value.code === "string" && /^[a-z_]+$/.test(value.code) && text(value.message, 600)) {
@@ -177,15 +202,25 @@ function invoke(target, operation, ctx, authorize) {
     });
     child.stderr.on("data", chunk => {
       stderrBytes += chunk.length;
+      stderrTail = (stderrTail + stderrDecoder.decode(chunk, { stream: true })).slice(-STDERR_TAIL_LIMIT);
       if (stderrBytes > 64 * 1024) fail(new Error("Antigravity account bridge exceeded its diagnostic limit."));
     });
-    child.once("error", () => fail(new Error("Antigravity account bridge could not run.")));
-    child.stdin.on("error", () => fail(new Error("Antigravity account bridge could not receive its request.")));
+    child.stderr.on("end", () => {
+      stderrTail = (stderrTail + stderrDecoder.decode()).slice(-STDERR_TAIL_LIMIT);
+    });
+    child.once("error", error => fail(new Error(`Antigravity account bridge could not run${error?.code ? ` (${error.code})` : ""}.`)));
+    child.stdin.on("error", error => {
+      if (error?.code !== "EPIPE") fail(new Error("Antigravity account bridge could not receive its request."));
+    });
     child.stdout.on("error", () => fail(new Error("Antigravity account bridge response could not be read.")));
     child.stderr.on("error", () => fail(new Error("Antigravity account bridge diagnostics could not be read.")));
     child.once("exit", (code, signal) => {
       exited = true;
-      if (code !== 0 || signal) fail(new Error(`Antigravity account ${operation} failed in its bridge.`));
+      exitCode = code;
+      exitSignal = signal;
+      if ((code !== 0 || signal) && !closed && !failure && !settled) {
+        drainTimer = setTimeout(() => fail(bridgeExitError(operation, exitCode, exitSignal, stderrTail)), 500);
+      }
     });
     child.once("close", () => { closed = true; finish(); });
     ctx.signal?.addEventListener("abort", abort, { once: true });
