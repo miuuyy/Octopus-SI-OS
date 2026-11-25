@@ -129,14 +129,19 @@ jobs:
           node scripts/test-markdown-presentation.mjs
 
       - name: Interface package source contracts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           node registry/interface/world_operator_chat/test_client_outbound.cjs
           node registry/interface/world_operator_chat/test_planned_artifact_write.cjs
           node registry/interface/world_operator_chat/test_publication.cjs
           node registry/interface/world_operator_chat/test_home_state.cjs
           node registry/interface/world_operator_chat/test_maintenance_client.cjs
-          python3 registry/verifier/operation_call_allowed/tests/test_verify.py
-          python3 registry/verifier/tool_result_correspondence/tests/test_verify.py
+          python3 -B registry/verifier/operation_call_allowed/tests/test_verify.py
+          python3 -B registry/verifier/tool_result_correspondence/tests/test_verify.py
+          python3 -B registry/verifier/json_schema/tests/test_verify.py
+          python3 -B registry/verifier/diff_scope/tests/test_verify.py
+          python3 -B registry/verifier/artifact_digest/tests/test_verify.py
           python3 registry/interface/world_slack/tests/test_slack_contract.py
           node registry/interface/world_slack/tests/test_connection.cjs
           node registry/interface/world_mcp_example/packages/octopus-mcp-client/test_connection.cjs
@@ -242,11 +247,14 @@ jobs:
         run: cargo check --workspace --all-targets --keep-going
 
       - name: Linux AppArmor profiles and delegation labels
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           test -x /usr/sbin/apparmor_parser
           test -f /etc/apparmor.d/abi/4.0
-          cargo test --locked -p octopus-linux-process-authority --bin octopus-linux-process-authority enforced_
-          cargo test --locked -p octopus-verifiers --lib process_authority::linux::tests::the_installed_parser_accepts_every_profile_shape -- --exact
+          cargo test --locked -p octopus-linux-process-authority
+          cargo test --locked -p octopus-verifiers --lib
+          cargo test --locked -p octopus-verifiers --test process_sandbox_mode
 
   rust:
     runs-on: ubuntu-latest
@@ -299,7 +307,11 @@ jobs:
         run: cargo test --locked -p octopus-web-search-env --lib
 
       - name: Runtime and product dependency boundaries
-        run: cargo test --locked -p octopus-app --test architecture_dependency_guard -- --exact production_roots_keep_registry_implementation_boundaries worker_environment_kind_packages_link_neither_runtime_nor_app_server
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          cargo test --locked -p octopus-app --test architecture_dependency_guard -- --exact production_roots_keep_registry_implementation_boundaries worker_environment_kind_packages_link_neither_runtime_nor_app_server the_verifier_box_stays_blind_to_verifier_identity_and_language
+          cargo test --locked -p octopus-verifiers --test registry_conformance
 
       - name: Coder and workspace command ownership and continuity
         run: |
