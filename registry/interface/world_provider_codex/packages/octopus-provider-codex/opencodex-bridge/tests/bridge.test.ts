@@ -218,7 +218,7 @@ test("a spent quota window returns an immediate typed 429 with only observed ret
 });
 
 test("transient 429 is returned immediately for Codex-owned retries", async () => {
-  for (const advice of [undefined, "15"]) {
+  for (const advice of [undefined, "15", "120", "300"]) {
     const result = await exchange({}, Response.json({
       error: { code: "rate_limit_exceeded", message: "per-minute quota exceeded; opaque private upstream detail" },
     }, { status: 429, headers: advice ? { "Retry-After": advice } : undefined }));
@@ -226,6 +226,26 @@ test("transient 429 is returned immediately for Codex-owned retries", async () =
     expect(result.requests).toBe(1);
     expect(result.headers.get("retry-after")).toBe(advice ?? null);
     expect(JSON.parse(result.text).error).toMatchObject({ type: "rate_limit_error", code: "rate_limit_exceeded" });
+    expect(result.text).not.toContain("opaque private upstream detail");
+  }
+});
+
+test("429 with excessive Retry-After becomes non-retryable usage_limit_reached", async () => {
+  for (const delay of [301, 691200]) {
+    const before = Math.floor(Date.now() / 1000);
+    const result = await exchange({}, Response.json({
+      error: { code: "rate_limit_exceeded", message: "weekly cooldown; opaque private upstream detail" },
+    }, { status: 429, headers: { "Retry-After": String(delay) } }));
+    expect(result.status).toBe(429);
+    expect(result.requests).toBe(1);
+    expect(result.headers.get("retry-after")).toBe(String(delay));
+    const { error } = JSON.parse(result.text);
+    expect(error).toMatchObject({
+      type: "usage_limit_reached",
+      code: "usage_limit_reached",
+      message: "Provider quota exhausted",
+    });
+    expect(error.resets_at).toBeGreaterThanOrEqual(before + delay);
     expect(result.text).not.toContain("opaque private upstream detail");
   }
 });

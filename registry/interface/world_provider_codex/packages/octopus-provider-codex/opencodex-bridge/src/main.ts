@@ -821,6 +821,7 @@ const QUOTA_CODES = new Set([
   "credit_balance_exhausted", "organization_spend_limit_exceeded",
   "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
 ]);
+const MAX_TRANSIENT_RETRY_AFTER_SECONDS = 300;
 
 function retryAdvice(headers: Headers, now: number) {
   const delay = Number(formatClientRetryAfter(headers.get("retry-after"), now));
@@ -858,8 +859,9 @@ async function providerHttpError(upstream: Response, maxBytes: number, adapter: 
     const parsed: unknown = JSON.parse(body);
     if (isObject(parsed)) error = isObject(parsed.error) ? parsed.error : parsed;
   } catch { /* a non-JSON error may still carry a quota phrase */ }
+  const excessiveRetryAfter = delay !== null && delay > MAX_TRANSIENT_RETRY_AFTER_SECONDS;
   if (status === 402 || (status === 429 && (
-    QUOTA_CODES.has(String(error.code)) || QUOTA_CODES.has(String(error.type)) || isQuotaExhaustedBody(body)
+    QUOTA_CODES.has(String(error.code)) || QUOTA_CODES.has(String(error.type)) || isQuotaExhaustedBody(body) || excessiveRetryAfter
   ))) {
     const reset = error.resets_at;
     const resetMs = typeof reset === "number" && Number.isSafeInteger(reset) && reset * 1000 > now
