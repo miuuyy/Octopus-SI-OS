@@ -286,6 +286,19 @@ test("client_connection providers verify and connect through the application con
     const proof = await service.setupOwner.probe(plan);
     assert.equal(proof[0].data.source, "interface.client_connection");
     assert.equal(proof[0].data.state, "connected");
+    const failingService = createClientProviderMetadata({
+      registryRoot: () => reg, sourceRegistryRoot: () => reg,
+      accountClient: () => assert.fail("must not touch Codex account"),
+      connectionHost: () => ({
+        probe: async ({ applicationId }) => ({
+          applicationId,
+          interfaces: [{ interfaceId: applicationId, state: { state: "error", message: "Google publishes no Antigravity ACP server for linux-riscv64." } }],
+        }),
+        connect: async () => assert.fail("unused"),
+      }),
+      reference: (kind, id, data) => ({ kind, id, data }),
+    });
+    await assert.rejects(failingService.setupOwner.probe(plan), /linux-riscv64/);
     const setup = await service.setupCatalog({
       packs: [{
         id: "pack",

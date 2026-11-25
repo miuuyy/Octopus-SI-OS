@@ -107,7 +107,7 @@ function createClientProviderMetadata({ registryRoot, sourceRegistryRoot, octopu
         })];
       }
       if (match.state?.state === "not_connected" || match.state?.state === "expired") return null;
-      throw new Error(match.state?.error?.message || `Provider '${descriptor.id}' connection check failed.`);
+      throw new Error(match.state?.message || match.state?.error?.message || `Provider '${descriptor.id}' connection check failed.`);
     }
     if (operation === "signIn") {
       const connected = await host.connect(

@@ -56,7 +56,13 @@ async function setupEnvironment(environment, options = {}) {
       if (current && (current.operationId !== workspace.receipt.operation_id || current.plan.workspace.request_digest !== workspace.receipt.request_digest)) throw new Error("Completed client setup does not match Home's workspace receipt.");
       if (current) assertSavedChoices(options, current.plan);
       else if (hasNewChoices(options)) throw new Error("This Home is already configured. Existing setup choices cannot be replaced by setup.");
-      if (options.signIn && (!current || current.plan.provider.required_state === "account_readable")) await ensureSignIn(environment, options);
+      if (options.signIn && (!current || current.plan.provider.required_state === "account_readable")) {
+        if (current) {
+          if (!await owners.provider.probe(current.plan)) await owners.provider.apply(current.plan);
+        } else {
+          await ensureSignIn(environment, options);
+        }
+      }
       await environment.start({ onProgress: progress, timeoutMs: options.timeoutMs, signal: options.signal });
       return {
         status: "configured", changed: false, home: environment.home,

@@ -115,6 +115,8 @@ They use the same user-facing operations as interactive chat.
 ./octopus up
 ./octopus up --foreground
 ./octopus status --json
+./octopus connect world_provider_antigravity
+./octopus connect status world_provider_antigravity --json
 ./octopus doctor
 ./octopus restart
 ./octopus down

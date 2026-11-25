@@ -535,3 +535,80 @@ test("CLI up --foreground validates flags, fails closed if running, forwards sig
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("CLI connect checks, connects with stderr progress/auth links, and disconnects installed client_connection apps", async () => {
+  const Module = require("node:module");
+  const indexFile = path.resolve(__dirname, "../cli/index.cjs");
+  const indexSource = await fs.readFile(indexFile, "utf8");
+  const root = await fs.realpath(await fs.mkdtemp("/tmp/oct-cli-connect-"));
+  try {
+    const home = path.join(root, "home");
+    const appDir = path.join(home, "registry/interface/world_demo_app");
+    await fs.mkdir(path.join(appDir, "packages"), { recursive: true });
+    await fs.writeFile(path.join(appDir, "application.json"), JSON.stringify({
+      schema_version: 3, id: "world_demo_app", name: "Demo App", description: "Connectable app",
+      category: "provider", developer: "Test", version: "1.0.0", logo: "logo.svg",
+      interfaces: ["world_demo_app"], setup: { fields: [] },
+      connection: { disclosure: ["Connect downloads the provider runtime."] },
+    }));
+    await fs.writeFile(path.join(appDir, "interface.json"), JSON.stringify({
+      id: "world_demo_app", interface_type: "world", role: "provider",
+      interface_driver_config: { private_config: { client_connection: { schema_version: 1, module: "interface://world_demo_app/packages/conn.cjs" } } },
+    }));
+    await fs.writeFile(path.join(appDir, "packages/conn.cjs"), `
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const marker = ctx => path.join(ctx.privateDirectory, "connected.txt");
+      module.exports = {
+        schemaVersion: 1,
+        async probe(ctx) {
+          return fs.existsSync(marker(ctx)) ? { state: "connected", account: { label: "user@example.com" } } : { state: "not_connected" };
+        },
+        async connect(ctx) {
+          ctx.progress({ message: "Downloading server" });
+          await ctx.openExternal("https://accounts.google.com/o/oauth2/v2/auth?client_id=test");
+          fs.writeFileSync(marker(ctx), "ok");
+          return { state: "connected", account: { label: "user@example.com" } };
+        },
+        async disconnect(ctx) {
+          fs.rmSync(marker(ctx), { force: true });
+          return { state: "not_connected" };
+        },
+      };
+    `);
+    const unit = new Module(indexFile, module);
+    unit.filename = indexFile; unit.paths = Module._nodeModulePaths(path.dirname(indexFile));
+    const nativeRequire = Module.createRequire(indexFile);
+    unit.require = (id) => id === "./environment.cjs" ? {
+      createEnvironment: () => ({ home, packageRoots: { activeRegistryRoot: path.join(home, "registry") }, launchEnv: {}, close() {} }),
+    } : id === "node:fs/promises" ? { ...fs, async access() {} } : nativeRequire(id);
+    unit._compile(indexSource, indexFile);
+    const runCli = async (args) => {
+      let stdout = "", stderr = "";
+      const code = await unit.exports.main(args, {
+        stdin: { isTTY: false }, stdout: { isTTY: false, write: t => { stdout += t; } }, stderr: { write: t => { stderr += t; } },
+      });
+      return { code, stdout, stderr };
+    };
+    const initial = await runCli(["connect", "status", "world_demo_app", "--json"]);
+    assert.equal(initial.code, 0, initial.stderr);
+    assert.equal(JSON.parse(initial.stdout).interfaces[0].state.state, "not_connected");
+
+    const connected = await runCli(["connect", "world_demo_app", "--json"]);
+    assert.equal(connected.code, 0, connected.stderr);
+    assert.equal(JSON.parse(connected.stdout).interfaces[0].state.state, "connected");
+    assert.match(connected.stderr, /Connect downloads the provider runtime/);
+    assert.match(connected.stderr, /Downloading server/);
+    assert.match(connected.stderr, /https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/);
+
+    const disconnected = await runCli(["connect", "disconnect", "world_demo_app", "--json"]);
+    assert.equal(disconnected.code, 0, disconnected.stderr);
+    assert.equal(JSON.parse(disconnected.stdout).interfaces[0].state.state, "not_connected");
+
+    const missing = await runCli(["connect", "world_missing_app"]);
+    assert.equal(missing.code, 1);
+    assert.match(missing.stderr, /not installed/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
