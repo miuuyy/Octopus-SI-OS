@@ -90,9 +90,10 @@ This offline command does not start or contact the daemon, bind a socket, create
 a Home, repair files or delete evidence. Long Home/`TMPDIR` paths are supported.
 OS aliases in ancestor paths are accepted; a symlink selected as the Home itself
 is refused, and symlink entries within the selected Home are not followed. It
-reports ledger/index/WAL/SHM/blob/metadata totals, interface directory breakdowns,
-and the largest run files with their inline amendment sizes without reading
-conversation databases or blob payloads.
+reports ledger/index/WAL/SHM/blob/metadata totals, provider-blind interface
+directory totals (`interfaces.entries`: `{ id, total, top_directories }`), and
+the five largest run files with their inline `capability_amendment` sizes
+without reading blob payloads or probing provider-private paths.
 
 JSON schema version 1 encodes byte quantities as exact decimal strings. Logical
 bytes come from `lstat.size`; POSIX allocated bytes are `st_blocks * 512`. Counts
@@ -109,7 +110,9 @@ of a domain-separated SHA-256 digest of the version tag, source sequence, and
 context name. IDs are 47 ASCII characters regardless of input name length. The
 context cache fingerprint includes the ID scheme version, so an old cached
 fingerprint cannot bypass recovery validation after an upgrade. Recovery still
-requires exact, complete, unique context messages for the exact thread. Legacy
-`octopus-context-` IDs and altered context message IDs are refused with a
-fresh-thread diagnostic rather than silently reinjected or accepted; this does
-not mutate or repair any existing thread.
+requires exact, complete, unique context messages for the exact thread.
+Prior-turn v1 `msg_` context messages on the same thread are tolerated before
+the current turn's items appear, while legacy `octopus-context-` IDs anywhere
+in the rollout and malformed or in-turn altered context message IDs are refused
+with a fresh-thread diagnostic rather than silently reinjected or accepted;
+this does not mutate or repair any existing thread.

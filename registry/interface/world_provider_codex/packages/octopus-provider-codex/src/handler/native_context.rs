@@ -12,6 +12,15 @@ fn native_context_id(source: u64, name: &str) -> String {
     format!("msg_{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest))
 }
 
+fn is_v1_native_context_id(id: &str) -> bool {
+    id.strip_prefix("msg_").is_some_and(|encoded| {
+        encoded.len() == 43
+            && base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(encoded)
+                .is_ok_and(|bytes| bytes.len() == 32)
+    })
+}
+
 fn native_context_fingerprint(
     thread: &str,
     context: &BTreeMap<String, AdditionalContextEntry>,
@@ -71,18 +80,24 @@ fn recorded_native_context(path: &Path, thread: &str, items: &[serde_json::Value
         if actual["id"].as_str().is_some_and(|id| id.starts_with("octopus-context-")) {
             return Err(refuse("legacy native context IDs require a fresh native thread".into()));
         }
-        if !items.iter().any(|item| item["id"] == actual["id"])
-            && items.iter().any(|item| {
-                item["content"] == actual["content"] && item["role"] == actual["role"]
-            })
-        {
-            return Err(refuse("context message identity was changed".into()));
-        }
         if let Some(expected) = items.iter().find(|item| item["id"] == actual["id"]) {
             let id = expected["id"].as_str().expect("context message id");
             if !found.insert(id.to_string()) || actual["type"] != expected["type"]
                 || actual["role"] != expected["role"] || actual["content"] != expected["content"] {
                 return Err(refuse(format!("context message '{id}' is duplicated or changed")));
+            }
+            continue;
+        }
+        if items.iter().any(|item| {
+            item["content"] == actual["content"] && item["role"] == actual["role"]
+        }) {
+            // Prior turns on the same thread may have injected identical policy/bindings
+            // under an earlier source sequence's valid v1 msg_ ID before this turn's items.
+            let valid_prior_v1 = found.is_empty()
+                && actual["type"] == "message"
+                && actual["id"].as_str().is_some_and(is_v1_native_context_id);
+            if !valid_prior_v1 {
+                return Err(refuse("context message identity was changed".into()));
             }
         }
     }
@@ -208,5 +223,36 @@ mod tests {
         duplicated.push(items[0].clone());
         write(&duplicated);
         assert!(recorded_native_context(&path, "thread", &items).is_err());
+    }
+
+    #[test]
+    fn multi_turn_recovery_allows_prior_v1_context_and_rejects_tampered_or_legacy_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rollout.jsonl");
+        let write = |messages: &[serde_json::Value]| {
+            let mut rows = vec![serde_json::json!({"type":"session_meta","payload":{"id":"thread"}}).to_string()];
+            rows.extend(messages.iter().map(|item| serde_json::json!({"type":"response_item","payload":item}).to_string()));
+            std::fs::write(&path, rows.join("\n") + "\n").unwrap();
+        };
+        let turn1 = native_context_items(10, native_turn_context(Some("history".into()), Some("policy".into()), Some("bindings".into())));
+        let turn2 = native_context_items(20, native_turn_context(None, Some("policy".into()), Some("bindings".into())));
+        write(&turn1);
+        assert!(!recorded_native_context(&path, "thread", &turn2).unwrap());
+        let both: Vec<_> = turn1.iter().chain(turn2.iter()).cloned().collect();
+        write(&both);
+        assert!(recorded_native_context(&path, "thread", &turn2).unwrap());
+        write(&both[..both.len() - 1]);
+        assert!(recorded_native_context(&path, "thread", &turn2).is_err());
+        let mut altered_in_turn = both.clone();
+        altered_in_turn.last_mut().unwrap()["id"] = serde_json::json!(native_context_id(99, "octopus_formed_policy"));
+        write(&altered_in_turn);
+        assert!(recorded_native_context(&path, "thread", &turn2).is_err());
+        let mut legacy_prior = both;
+        legacy_prior[1]["id"] = serde_json::json!("octopus-context-10-octopus_formed_policy");
+        write(&legacy_prior);
+        assert!(recorded_native_context(&path, "thread", &turn2).is_err());
+        legacy_prior[1]["id"] = serde_json::Value::Null;
+        write(&legacy_prior);
+        assert!(recorded_native_context(&path, "thread", &turn2).is_err());
     }
 }
