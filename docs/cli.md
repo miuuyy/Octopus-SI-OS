@@ -193,3 +193,54 @@ app run build:cli`, or an explicit `--bundle <path>` such as
 The first terminal version omits voice, gesture controls, scheduled-task
 editing, graphical widgets, and extension downloads. Those configured
 capabilities remain part of the same Octopus installation.
+
+Use `octopus packages check [--json]` for a read-only installed-receipt,
+managed-file drift and ownership-transfer preview (exit 0 clean, 1 issues).
+Use `octopus storage [--json]` for a read-only offline Home storage inventory
+(ledger, interface directory totals, and top five run records with inline
+amendment byte counts; exit 0 measured or absent, 1 inspection errors).
+Neither command starts the runtime, binds a daemon socket, or mutates Home state.
+For check output details, listing and transactionally installing optional bundled
+packages after setup, see [Install optional bundled packages](linux.md#install-optional-bundled-packages).
+
+### Idle resources and archiving
+
+`octopus tasks` lists tasks; `octopus archive <task-id>` archives a settled
+task, and `octopus restore <task-id>` restores its saved checkpoint frontier.
+These are client authoring operations, not runtime control-socket requests.
+The control socket supports status, stop and restart, not run archiving.
+
+Archiving currently clears only the task's own active checkpoints. Detached
+writers and memory-maintenance companions retain their routes, so archive is
+**not** a whole-task process-reaping operation. Do not bulk-archive standing
+sensor tasks or reusable workers just because their latest turn is idle.
+No automatic age-based archival or history deletion runs in the background.
+
+Filesystem workspace doors instead sleep after two idle minutes with no call
+or unresolved result in flight, releasing their cached tool processes. A new
+call wakes the door; persistent commands and unread output remain in durable
+process keepers. Closed keepers exit once their output is drained and their exact
+call outcome is durable; replay reads that receipt without retaining a process.
+Unread output has no age-based expiry. A disconnected terminal delivery is also
+reclaimed by a periodic check, independent of incoming status requests.
+Browser and desktop sessions remain resident while their room owners are held.
+Desktop transport readiness no longer starts its native helper; the first actual
+desktop request starts it, and permission/helper failures remain explicit. The
+desktop host itself remains resident to preserve viewer/control state and leases.
+
+In a headless pack, the runtime, provider/client/service-input lives, memory
+observers/writers and selected code-mode/system-room doors can still remain
+resident. System-room doors already sleep when no call/result is pending.
+Process-session, git-worktree, browser-session and desktop-session doors sleep
+after two idle minutes,
+but only after explicit room release removes every cached tool owner. An open
+room conservatively pins its door, even after a command finishes; active calls
+and unresolved results also prevent sleep. Failed release keeps a sleep lease
+until a later successful explicit release. The next arrival wakes a fresh door
+at its durable frontier without replaying completed work. These are
+declaration-level expectations, not measured RSS or a promise that every installed
+interface has a running life. Code-mode doors also sleep only with zero cached
+room owners, empty handoff state and a caught-up owner observer. A completed cell
+is not proof that its V8 context has closed; retained contexts still pin the door.
+`octopus doctor` reports registry **life declarations**, not a count of
+currently running OS processes; use OS process tools to measure resident work.

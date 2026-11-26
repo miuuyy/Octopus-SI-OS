@@ -35,7 +35,7 @@
     "build:cli": "node scripts/build-cli.cjs --runtime",
     "build:cli-client": "node scripts/build-cli.cjs",
     "test:install-linux": "node --test scripts/test-install-linux.cjs",
-    "test:cli": "node scripts/build-cli.cjs && node --test scripts/test-cli-client.cjs scripts/test-cli-transcript.cjs scripts/test-cli-terminal.cjs scripts/test-cli-package.cjs scripts/test-cli-target.cjs scripts/test-cli-inspection.cjs scripts/test-release-linux.cjs scripts/test-install-linux.cjs && node scripts/test-cli-setup.cjs",
+    "test:cli": "node scripts/build-cli.cjs && node --test scripts/test-cli-client.cjs scripts/test-cli-transcript.cjs scripts/test-cli-terminal.cjs scripts/test-cli-package.cjs scripts/test-cli-target.cjs scripts/test-cli-inspection.cjs scripts/test-cli-storage.cjs scripts/test-package-drift.cjs scripts/test-client-doctor-ledger.cjs scripts/test-release-linux.cjs scripts/test-install-linux.cjs && node scripts/test-cli-setup.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "package:mac": "node scripts/package-macos.cjs",
     "release:linux": "node scripts/release-linux.cjs",
@@ -44,7 +44,8 @@
     "desktop": "npm run package:mac && open -n ./build/Octopus.app",
     "gen:types": "node scripts/generate-schema-types.mjs",
     "gen:licenses": "node scripts/generate-client-licenses.mjs",
-    "gen:code-theme-seeds": "node scripts/generate-code-theme-seeds.mjs"
+    "gen:code-theme-seeds": "node scripts/generate-code-theme-seeds.mjs",
+    "test:headless-setup": "node --test scripts/test-cli-headless.cjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

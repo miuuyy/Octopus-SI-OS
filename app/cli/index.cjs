@@ -35,6 +35,8 @@ const HELP = `Octopus — your agentic operating system, in the terminal
   octopus down                     Stop the running shared runtime cleanly
   octopus restart                  Restart the running shared runtime in place
   octopus status                   Inspect runtime and Home readiness
+  octopus storage [--json]         Report Home storage without writes or a daemon
+  octopus packages check [--json]  Inspect installed package drift without writes
   octopus doctor                   Verify the active registry, client packages, and probes
 
 Options:
@@ -107,10 +109,14 @@ async function main(argv = process.argv.slice(2), io = process) {
     if (flags.help) { io.stdout.write(commandHelp(parsed.positionals)); return 0; }
     if (flags.version) { io.stdout.write(`Octopus ${require("../package.json").version}\n`); return 0; }
     if (Number(process.versions.node.split(".")[0]) < 24) throw new Error("Octopus CLI needs Node.js 24 or newer. Set OCTOPUS_NODE to that Node executable.");
+    if (parsed.positionals[0] === "storage") {
+      if (parsed.positionals.length !== 1) throw new Error("Use octopus storage [--home <path>] [--json]");
+      if (flags.foreground || flags["no-start"]) throw new Error("storage does not support --foreground or --no-start.");
+      return require("./storage.cjs").storageCommand(flags.home, json, io.stdout);
+    }
     try { await fs.access(path.join(__dirname, "../build/cli/shared.cjs")); }
     catch (error) { if (error.code === "ENOENT") throw new Error("Build the terminal client first: npm --prefix app run build:cli"); throw error; }
-    const { createEnvironment } = require("./environment.cjs");
-    environment = createEnvironment({ home: flags.home, bundle: flags.bundle });
+    const { createEnvironment, resolvePackageRoots } = require("./environment.cjs");
     const selection = {
       projectId: flags.project, agentId: flags.agent,
       providerId: flags.provider, model: flags.model, effort: flags.effort, serviceTier: flags["service-tier"],
@@ -118,7 +124,7 @@ async function main(argv = process.argv.slice(2), io = process) {
       ...(flags.access === undefined ? {} : { access: taskAccess(flags.access) }),
     };
     const words = [...parsed.positionals];
-    const known = new Set(["chat", "resume", "exec", "send", "watch", "tasks", "history", "inspect", "projects", "models", "answer", "stop", "rename", "archive", "restore", "delete", "export", "setup", "connect", "up", "down", "restart", "status", "doctor", "agent", "project", "download"]);
+    const known = new Set(["chat", "resume", "exec", "send", "watch", "tasks", "history", "inspect", "projects", "models", "answer", "stop", "rename", "archive", "restore", "delete", "export", "setup", "connect", "up", "down", "restart", "status", "doctor", "agent", "project", "download", "packages"]);
     const command = known.has(words[0]) ? words.shift() : "chat";
     if (flags.foreground && command !== "up") throw new Error("--foreground is only supported with 'up'.");
     if (flags["no-start"] && command !== "setup") throw new Error("--no-start is only supported with 'setup'.");
@@ -126,6 +132,11 @@ async function main(argv = process.argv.slice(2), io = process) {
       if (json) io.stdout.write(`${JSON.stringify(value)}\n`);
       else io.stdout.write(`${safeText(presentResult(value))}\n`);
     };
+    if (command === "packages") {
+      if (words.length !== 1 || words[0] !== "check") throw new Error("Use octopus packages check [--json]");
+      return require("./packages.cjs").checkPackages(resolvePackageRoots({ home: flags.home, bundle: flags.bundle }), json, io.stdout);
+    }
+    environment = createEnvironment({ home: flags.home, bundle: flags.bundle });
     if (command === "status") { report(await environment.status()); return 0; }
     if (command === "up") {
       if (words.length) throw new Error("up does not accept positional arguments. See --help.");
@@ -467,7 +478,9 @@ function commandHelp(words) {
   if (words[0] === "project") return `Octopus Projects\n\n  octopus project create "Project name" [--project <parent-id>] [--policy <id>]\n  octopus project policies [--project <parent-id>] [--json]\n  octopus project folders <project-id> <folder>... [--json]\n\nNew Projects use their parent's policy unless an allowed policy is selected.\nThe first folder is the Project's Primary folder; editing folders affects future tasks.\nUse 'octopus projects' to find existing Project IDs.\n`;
   if (words[0] === "agent") return `Octopus Agents\n\n  octopus agent create "Agent name" --project <id> --provider <id> --model <id> --effort <level> [--application <id>]...\n\nUse 'octopus projects --json' for Project IDs and 'octopus models --project <id> --json'\nfor the exact permitted provider, model, and reasoning choices.\nThe Agent uses that Project's configured Drivers and its default Applications;\n--application selects the Applications explicitly instead.\n`;
   if (words[0] === "connect") return `Octopus connect\n\n  octopus connect <application-id> [interface-id] [--home <path>] [--json]\n  octopus connect status <application-id> [interface-id] [--home <path>] [--json]\n  octopus connect disconnect <application-id> [interface-id] [--home <path>] [--json]\n\nConnects, checks, or disconnects an installed client_connection Application (for example world_provider_antigravity).\nProgress and sign-in addresses are written to stderr.\n`;
-  if (words[0] === "setup") return `Octopus setup\n\n  octopus setup [--home <path>]\n  octopus setup --home <path> --non-interactive --pack <id> --workspace-name <name>\n    --project-name <name> [--provider <id>] --model <id> --effort <level> [--no-start]\n\nInteractive setup lists installed choices and guides provider sign-in or credentials.\nNoninteractive setup requires existing provider sign-in or credentials (for API-key providers, via the provider's auth_env_key or saved private environment.json). Configured Homes are preserved.\nUse --no-start to provision packages, provider credentials, and Home without starting the runtime daemon (for systemd/service managers).\n`;
+  if (words[0] === "storage") return "Octopus storage\n\n  octopus storage [--home <path>] [--json]\n\nRead-only offline Home inventory; no daemon, SQLite opens, recovery or writes. Byte sizes are decimal strings in JSON; allocation is POSIX st_blocks * 512. Counts and sizes are per path including directories and symlinks; symlink targets are not followed. A live scan is not atomic. Inline amendment sizes are compact JSON UTF-8, not source spans. Exit 0: measured (or absent); 1: inspection errors.\n";
+  if (words[0] === "packages") return "Octopus packages\n\n  octopus packages check [--home <path>] [--bundle <path>] [--json]\n\nRead-only installed receipt/file drift and target ownership-transfer preview. Exit 0: clean (updates may be available); 1: drift/issues or invalid invocation. Does not repair, recover transactions or start the runtime.\n";
+  if (words[0] === "setup") return `Octopus setup\n\n  octopus setup [--home <path>]\n  octopus setup --home <path> --non-interactive --pack <id> --workspace-name <name>\n    --project-name <name> [--provider <id>] --model <id> --effort <level> [--no-start]\n\nApplication packs: codex (desktop-capable defaults), headless (API-key server setup without browser/desktop/audio drivers).\nInteractive setup lists installed choices and guides provider sign-in or credentials.\nNoninteractive setup requires existing provider sign-in or credentials (for API-key providers, via the provider's auth_env_key or saved private environment.json). Configured Homes are preserved.\nUse --no-start to provision packages, provider credentials, and Home without starting the runtime daemon (for systemd/service managers).\nA provider with a declared model alias (for example OpenRouter) also accepts an explicit upstream --model ID; its private model environment is saved without widening the model policy to '*'.\n`;
   return HELP;
 }
 

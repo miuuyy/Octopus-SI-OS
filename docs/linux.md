@@ -63,6 +63,97 @@ octopus setup --no-start
 octopus doctor
 ```
 
+## Headless Linux Quickstart (Bring Any API Key)
+
+After installing the Linux `x86_64` bundle above (or
+[building the CLI](cli.md#build-and-open)), setup can run without a desktop,
+macOS, or ChatGPT OAuth. Choose one supported API-key provider below, set its
+key privately in your shell environment, and use a model available to that
+account. These examples use IDs in the bundled catalogue; provider access and
+billing are separate, and catalogue entries can change.
+
+Node.js **24+** is required. [Ubuntu 26.04's apt](https://packages.ubuntu.com/resolute/nodejs) package ships Node 22: install
+a supported Node separately and, if it is not first on `PATH`, point directly
+at it. Keep this environment when running setup, doctor, and the runtime:
+
+```sh
+export OCTOPUS_NODE=/usr/local/bin/node # replace with your Node 24+ executable
+"$OCTOPUS_NODE" --version
+```
+
+`codex` remains the desktop-capable default pack. The dedicated `headless` pack
+supplies Home, task authoring, context, memory, code mode, filesystem and
+isolated process/git rooms, with OpenRouter as its default API provider. It
+does not install browser, desktop, audio or realtime voice drivers. Gemini and
+OpenCode Go are available explicitly via `--provider`; their package closure is
+installed transactionally and selected in Home and Project
+`application_defaults`. Headless-compatible sensors are optional; installing one
+does not arm a trigger. The shared Codex adapter package is still required by
+API providers, but no ChatGPT sign-in is needed.
+
+Run **one** of these alternatives against a fresh Home. Do not paste real keys
+into command-line flags or commit them to a setup file.
+
+```sh
+# Gemini: first set OCTOPUS_PROVIDER_GEMINI_API_KEY privately.
+octopus setup --non-interactive --no-start --pack headless \
+  --workspace-name "My space" --provider world_provider_gemini \
+  --model gemini-3.5-flash
+
+# OpenRouter: first set OCTOPUS_PROVIDER_OPENROUTER_API_KEY privately.
+octopus setup --non-interactive --no-start --pack headless \
+  --workspace-name "My space" --provider world_provider_openrouter \
+  --model anthropic/claude-sonnet-5
+
+# OpenCode Go: first set OCTOPUS_PROVIDER_OPENCODE_GO_API_KEY privately.
+octopus setup --non-interactive --no-start --pack headless \
+  --workspace-name "My space" --provider world_provider_opencode_go \
+  --model beam-free
+```
+
+### Explicit OpenRouter models and privacy
+
+`--provider world_provider_openrouter` reads
+`OCTOPUS_PROVIDER_OPENROUTER_API_KEY` and saves it only in the selected Home's
+`interfaces/world_provider_openrouter/environment.json` with mode `0600`.
+Credentials do not belong in flags, setup receipts or logs. Setup does not test a
+billable provider call.
+
+The shipped default model and named catalogue entries are unchanged; no `:free`
+model is selected automatically. For a model outside that catalogue, an explicit
+`--model vendor/model-id` opts into the provider's declared `openrouter-model`
+alias. Setup saves the upstream ID as `OCTOPUS_PROVIDER_OPENROUTER_MODEL` in the
+same private environment file. Alternatively, set that variable privately and
+pass `--model openrouter-model`. A missing alias target, malformed model ID or
+provider without an override contract is rejected. The exact alias remains the
+policy model; setup never adds a wildcard or silently substitutes another model.
+
+An explicitly selected `:free` model is allowed, but may not support ZDR. An ID
+alone is not a privacy guarantee: verify the chosen upstream route's retention,
+privacy settings, availability and tool support before sending sensitive data.
+Custom aliases use a conservative text/tool catalogue; setup does not discover
+or verify a custom model's capabilities. A configured Home keeps its saved
+provider/model choices; rerunning setup is not a provider switch.
+
+`--home <path>` selects a different Home; use it consistently on subsequent
+commands. Setup preserves an already configured Home rather than replacing its
+provider. API-key setup reads the provider's environment variable (or an
+existing private provider environment file) and saves credentials privately.
+`--no-start` provisions the Home without launching a detached daemon:
+
+```sh
+octopus doctor
+octopus up --foreground
+# From another terminal, a real provider reply checks more than diagnostics:
+octopus exec "Reply with a short hello."
+```
+
+Setup and doctor do not prove a successful provider call. This is a research
+preview, and Linux does not gain macOS-only integrations. For unattended use,
+configure the [systemd service](#run-as-a-systemd-service) instead of leaving
+an unmanaged background process. Enforced process isolation additionally needs
+the host authority service described below.
+
 ### Upgrading an existing Linux host
 
 AppArmor profiles are rendered inside the privileged host daemon
@@ -272,6 +363,69 @@ journalctl -u octopus.service -f
 
 Run `octopus doctor` after initial Home setup (once `<OCTOPUS_HOME>/registry`
 is populated).
+
+## Install optional bundled packages
+
+The bundled catalog includes packages outside the setup pack. Use the package
+manager from the checkout or standalone release (it always prints JSON):
+
+```sh
+node app/scripts/safe-self-update.cjs packages available --json
+node app/scripts/safe-self-update.cjs packages install world_watch world_provider_openrouter --dry-run --json
+node app/scripts/safe-self-update.cjs packages install world_watch world_provider_openrouter --json
+```
+
+For standalone releases add `--platform linux --install-dir /opt/octopus/current`;
+use `--home /home/operator/.octopus` to select the service user's Home.
+Use exact package ids from `packages available` (including for GitHub sensors).
+Installation reviews the dependency closure and pins its source digests, then
+uses the same transactional installer and receipts as setup. Installed packages,
+local configuration and credentials are preserved; ambiguous ownership requires
+explicit repair. A dry run lists new and preserved packages without writing.
+Installation does not bind sensors to tasks, configure provider credentials, or
+restart the runtime. `packages status` / `packages sync` audit / repair packages
+already installed; they do not install optional packages.
+
+Before an upgrade, inspect installed state without creating locks, caches,
+transactions, directories or starting the runtime:
+
+```sh
+octopus packages check --home /home/operator/.octopus
+octopus packages check --home /home/operator/.octopus --json
+# Same report in the standalone updater (always JSON):
+node app/scripts/safe-self-update.cjs packages check --platform linux --install-dir /opt/octopus/current --home /home/operator/.octopus --json
+```
+
+The check lists installed receipts, managed-file differences (package, registry
+owner, relative path and reason), available updates, and ready/blocked ownership
+transfers. Reasons include `modified`, `missing`, `added` and `mode_changed`;
+invalid receipts, unreceipted owners, duplicate ownership and unfinished
+transactions require review. The reserved `.octopus-publication` directory is
+publication bookkeeping, not a pending package transaction; malformed metadata
+and actual transaction entries still require review. Declared mutable data
+additions and allowed configuration values are not managed drift. File contents
+and configuration values are never printed.
+
+This offline check accepts Homes beyond the Unix socket path-length limit;
+commands that use the local daemon still require a socket-compatible Home.
+
+Exit **0** means no detected issues (updates/clean transfers may still be
+available); **1** means drift or issues. Terminal CLI invocation errors also use
+1; updater invocation errors use 2. JSON has the versioned shape
+`{schema_version:1, ok, packages, transfers, issues}`. Each package has
+`id, receipt_state, update_available, files, issues`; `files` lists differences,
+not every unchanged file. Each file has `registry_kind, owner, path, reason`;
+each transfer has `registry_kind, owner, from, to, state, reason`; issues have
+`code, member`. `update_available` is null when the target cannot be inspected.
+A check is an observation, not authorization to write: sync must still revalidate
+its own preimages and selection, and never recovers a pending transaction as
+part of this check.
+
+Sync repairs the selected installed packages in one checked transaction, including
+member ownership transfers between their manifests. Both the old and new owner
+packages must be selected (including with `--only`); sync refuses duplicate
+ownership, transferred-file drift, and removals without a receiving package.
+If one selected repair is refused, the batch does not proceed independently.
 
 ## Staged self-update for systemd installations
 
