@@ -79,7 +79,7 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
         Ok(issues) => errors.extend(issues),
         Err(error) => errors.push(format!("run worker policies: {error}")),
     }
-    let mut life_processes = 0usize;
+    let mut life_declarations = 0usize;
     let mut unprobed_processes = 0usize;
     let mut probe_jobs = Vec::new();
     let mut imported_executable_cache =
@@ -105,7 +105,7 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
                 )
             })?;
         for (process_index, process) in resolved.config.processes.iter().enumerate() {
-            life_processes += 1;
+            life_declarations += 1;
             let executable_result = if process.bin.starts_with("interface://") {
                 if let Some(cached) = imported_executable_cache.get(&process.bin) {
                     cached.clone()
@@ -193,9 +193,9 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
     println!("octopus doctor");
     println!("home       {}", octopus_home.display());
     println!(
-        "registry   {} interfaces · {} life processes",
+        "registry   {} interfaces · {} life declarations",
         interfaces.len(),
-        life_processes
+        life_declarations
     );
     match (&client_doctor, client_doctor_execution_failed) {
         (Some(report), _) => println!(
@@ -285,6 +285,13 @@ fn diagnose_executable_runtime(
     errors
 }
 
+fn client_doctor_node(override_value: Option<&str>) -> &str {
+    override_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("node")
+}
+
 async fn run_client_doctor(
     octopus_home: &Path,
     installation_root: &Path,
@@ -298,7 +305,10 @@ async fn run_client_doctor(
             command.env_clear().env("ELECTRON_RUN_AS_NODE", "1");
             command
         }
-        ClientDoctorRunner::Node => tokio::process::Command::new("node"),
+        ClientDoctorRunner::Node => {
+            let node = std::env::var("OCTOPUS_NODE").ok();
+            tokio::process::Command::new(client_doctor_node(node.as_deref()))
+        }
     };
     command
         .arg(&layout.script)
@@ -701,6 +711,21 @@ fn render_diagnostic(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_doctor_node_honors_nonempty_trimmed_override() {
+        assert_eq!(client_doctor_node(None), "node");
+        assert_eq!(client_doctor_node(Some("")), "node");
+        assert_eq!(client_doctor_node(Some("  \t\n")), "node");
+        assert_eq!(
+            client_doctor_node(Some(" /usr/local/bin/node ")),
+            "/usr/local/bin/node"
+        );
+        assert_eq!(
+            client_doctor_node(Some("/opt/node 24/bin/node")),
+            "/opt/node 24/bin/node"
+        );
+    }
 
     #[tokio::test]
     async fn doctor_reports_bound_worker_loader_refusals_and_isolates_unused_presets() {
