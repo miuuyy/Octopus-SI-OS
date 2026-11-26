@@ -241,6 +241,119 @@ async function inspectLocalPackageCatalog(options) {
   return { packages, errors: library.errors };
 }
 
+async function inspectLocalPackageDrift(options) {
+  const roots = normalizeRoots(options);
+  const report = { schema_version: 1, ok: true, packages: [], transfers: [], issues: [] };
+  const issue = (code, member = null) => ({ code, member });
+  let library;
+  try { library = await loadLocalPackageLibrary(roots); }
+  catch (error) {
+    const duplicate = /registry owner '([^']+)' belongs to both/.exec(String(error.message));
+    report.issues.push(issue(duplicate ? "duplicate_target_owner" : "catalog_invalid", duplicate?.[1] ?? null));
+    report.ok = false; return report;
+  }
+  if (library.errors.length) report.issues.push(issue("catalog_invalid"));
+  try {
+    if ((await packageTransactionEntries(roots, { allowMissing: true })).length) report.issues.push(issue("pending_transaction"));
+  } catch { report.issues.push(issue("invalid_transaction_state")); }
+  const targets = new Map(), owners = new Map(), rows = new Map();
+  for (const entry of library.packages) for (const member of entry.manifest.members) {
+    targets.set(memberKey(member), entry);
+  }
+  const files = await readOptionalDirectory(roots.receiptsRoot), observedReceipts = new Map();
+  for (const file of files.filter(file => file.name.endsWith(".json")).sort((a, b) => a.name.localeCompare(b.name))) {
+    const id = file.name.slice(0, -5);
+    const row = { id, receipt_state: "valid", update_available: null, files: [], issues: [] };
+    report.packages.push(row); rows.set(id, row);
+    let receipt;
+    try { receipt = await readReceipt(roots, id); if (!receipt) throw new Error("missing"); }
+    catch { row.receipt_state = "invalid"; row.issues.push(issue("invalid_receipt")); continue; }
+    observedReceipts.set(id, hashJson(receipt));
+    const entry = library.packages.find(entry => entry.manifest.id === id);
+    if (!entry) row.issues.push(issue("package_unavailable"));
+    else {
+      try {
+        const source = await snapshotPackageSource(roots, entry.manifest, { fresh: true });
+        await verifyPackageDefinition(entry);
+        row.update_available = source.sourceDigest !== receipt.source_digest || source.manifestDigest !== receipt.manifest_digest;
+      } catch { row.issues.push(issue("source_unavailable")); }
+    }
+    for (const baseline of receipt.members) {
+      const key = memberKey(baseline);
+      if (owners.has(key)) {
+        row.issues.push(issue("duplicate_installed_owner", key));
+        rows.get(owners.get(key).id).issues.push(issue("duplicate_installed_owner", key));
+      } else owners.set(key, { id, member: baseline });
+      const target = targets.get(key)?.manifest.members.find(member => memberKey(member) === key);
+      const member = { ...target, ...baseline };
+      const savedJson = new Map((baseline.json_files ?? []).map(file => [file.path, file]));
+      const saved = new Map((baseline.materialized_files ?? []).map(file => [file.path, { ...file, ...savedJson.get(file.path) }]));
+      if (!baseline.materialized_files) { row.issues.push(issue("unsupported_receipt_baseline", key)); continue; }
+      let current = new Map();
+      try {
+        const snapshot = await snapshotDirectory(memberPath(roots.activeRegistryRoot, member));
+        let projected;
+        try { projected = await projectMemberConfiguration(snapshot, baseline.configuration ?? []); }
+        catch {
+          row.issues.push(issue("invalid_configuration", key));
+          projected = { ...snapshot, projectedFiles: new Map() };
+        }
+        current = sourceFileMap(projected);
+      } catch (error) {
+        if (error.code !== "ENOENT" && !String(error.message).includes("ENOENT")) row.issues.push(issue("unreadable_owner", key));
+      }
+      for (const relative of [...new Set([...saved.keys(), ...current.keys()])].sort(compareSnapshotPaths)) {
+        const before = saved.get(relative), now = current.get(relative);
+        if (!before && now && isMemberDataPath(member, relative)) continue;
+        if (sameOwnedFile(before, now)) continue;
+        row.files.push({ registry_kind: baseline.registry_kind, owner: baseline.owner, path: relative,
+          reason: !before ? "added" : !now ? "missing" : before.mode !== now.mode ? "mode_changed" : "modified" });
+      }
+    }
+  }
+  for (const entry of library.packages) {
+    for (const member of entry.manifest.members) {
+      const key = memberKey(member);
+      if (!owners.has(key) && await pathExists(memberPath(roots.activeRegistryRoot, member))) {
+        let row = rows.get(entry.manifest.id);
+        if (!row) {
+          row = { id: entry.manifest.id, receipt_state: "missing", update_available: null, files: [], issues: [] };
+          rows.set(row.id, row); report.packages.push(row);
+        }
+        row.issues.push(issue("unreceipted_owner", key));
+      }
+    }
+  }
+  const finalFiles = await readOptionalDirectory(roots.receiptsRoot);
+  if (stableJson(files.map(file => file.name).sort()) !== stableJson(finalFiles.map(file => file.name).sort())) {
+    report.issues.push(issue("receipt_set_changed_during_read"));
+  }
+  for (const [id, digest] of observedReceipts) {
+    try {
+      if (hashJson(await readReceipt(roots, id)) !== digest) throw new Error("changed");
+    } catch { rows.get(id).issues.push(issue("receipt_changed_during_read")); }
+  }
+  for (const [key, prior] of owners) {
+    const target = targets.get(key)?.manifest.id;
+    if (target === prior.id) continue;
+    if (!target) { rows.get(prior.id).issues.push(issue("owner_removal_requires_review", key)); continue; }
+    const donor = rows.get(prior.id), recipient = rows.get(target);
+    const blocked = report.issues.length > 0 || !recipient || [donor, recipient].some(row => row.receipt_state !== "valid" || row.files.length || row.issues.length);
+    report.transfers.push({ registry_kind: prior.member.registry_kind, owner: prior.member.owner,
+      from: prior.id, to: target, state: blocked ? "blocked" : "ready",
+      reason: !recipient ? "recipient_not_installed" : blocked ? "drift_or_issue" : "ownership_transfer" });
+  }
+  report.packages.sort((a, b) => a.id.localeCompare(b.id));
+  for (const row of report.packages) {
+    row.files.sort((a, b) => `${a.registry_kind}/${a.owner}/${a.path}`.localeCompare(`${b.registry_kind}/${b.owner}/${b.path}`));
+    row.issues.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  report.transfers.sort((a, b) => `${a.registry_kind}/${a.owner}`.localeCompare(`${b.registry_kind}/${b.owner}`));
+  report.ok = !report.issues.length && report.packages.every(row => !row.files.length && !row.issues.length)
+    && report.transfers.every(transfer => transfer.state === "ready");
+  return report;
+}
+
 async function inspectLocalPackageDiagnostics(options) {
   const roots = normalizeRoots(options);
   for (const root of [roots.sourceRegistryRoot, roots.activeRegistryRoot, roots.libraryRoot]) {
@@ -460,15 +573,61 @@ async function repairLocalPackages(options) {
       if (state.receiptState !== "valid" || (!state.materialized && !canAddMissingOwners(state))) throw new Error(`Repair requires installed dependency '${dependency.manifest.id}'`);
     }
     await installedApplicationHosts(roots, library);
+    const transfers = await reviewPackageTransfers(roots, library, selected);
     const result = await repairResolvedPackages(roots, selected, {
       operationId,
       expectedRepairs,
       allowOwnerAdditions: true,
+      prepareMaterialization: async (manifest, source, state) => {
+        const incoming = transfers.get(manifest.id) ?? [];
+        return preparePackageRepair(manifest, source, incoming.length
+          ? { ...state, receipt: { ...state.receipt, members: [...state.receipt.members, ...incoming] } }
+          : state);
+      },
       onProgress: options?.onProgress,
     });
     await syncApplicationHosts(roots, library, operationId, selected);
     return result;
   });
+}
+
+async function reviewPackageTransfers(roots, library, selected) {
+  const targets = new Map();
+  for (const entry of library.packages) for (const member of entry.manifest.members) {
+    const key = memberKey(member);
+    if (targets.has(key)) throw new Error(`Duplicate target ownership for '${key}'`);
+    targets.set(key, entry.manifest.id);
+  }
+  const selectedIds = new Set(selected.map(entry => entry.manifest.id));
+  const owners = new Map(), incoming = new Map();
+  for (const file of await fs.readdir(roots.receiptsRoot)) {
+    if (!file.endsWith(".json")) continue;
+    const id = file.slice(0, -5);
+    const receipt = await readReceipt(roots, id);
+    if (!receipt) throw new Error(`Missing installed receipt '${id}'`);
+    for (const member of receipt.members) {
+      const key = memberKey(member);
+      if (owners.has(key)) throw new Error(`Duplicate installed ownership for '${key}'`);
+      owners.set(key, { receipt, member });
+    }
+  }
+  for (const [key, { receipt, member }] of owners) {
+    const next = targets.get(key);
+    if (next === receipt.package_id) continue;
+    if (!selectedIds.has(receipt.package_id) && !selectedIds.has(next)) continue;
+    if (!next || !selectedIds.has(next) || !selectedIds.has(receipt.package_id)) {
+      throw new Error(`Owner '${key}' requires both installed packages in the same repair; removal is not authorized`);
+    }
+    const snapshot = await snapshotDirectory(memberPath(roots.activeRegistryRoot, member));
+    const active = await projectMemberConfiguration(snapshot, member.configuration ?? []);
+    if (active.digest !== member.digest || receiptHasLocalChanges(member)) {
+      throw new Error(`Transferred owner '${key}' has drifted; repair cannot discard authored files`);
+    }
+    const members = incoming.get(next) ?? [];
+    members.push(member);
+    incoming.set(next, members);
+  }
+  return incoming;
 }
 
 function canAddMissingOwners(state) {
@@ -1688,7 +1847,9 @@ async function readPackageState(roots, manifest, source, options = {}) {
   const receiptResult = await readReceipt(roots, manifest.id);
   const activeMembers = [];
   let present = 0;
-  for (const member of orderedMembers(manifest.members)) {
+  const installedMembers = [...manifest.members, ...(receiptResult?.members ?? [])
+    .filter(member => !manifest.members.some(target => memberKey(target) === memberKey(member)))];
+  for (const member of orderedMembers(installedMembers)) {
     const target = memberPath(roots.activeRegistryRoot, member);
     if (!await pathExists(target)) {
       activeMembers.push({ ...member, target, present: false, digest: "" });
@@ -1722,7 +1883,7 @@ async function readPackageState(roots, manifest, source, options = {}) {
       ...(baselineProjectedFiles ? { baselineProjectedFiles } : {}),
     });
   }
-  const materialized = present === manifest.members.length;
+  const materialized = present === installedMembers.length;
   const partiallyMaterialized = present > 0 && !materialized;
   const installedDigest = present > 0 ? hashJson({
     manifest_digest: source.manifestDigest,
@@ -2260,7 +2421,9 @@ async function repairResolvedPackages(roots, entries, operation) {
 
   assertNoRepeatedTransactionOwners(pending);
   const replacements = pending.filter((candidate) => (
-    candidate.state.installedDigest !== hashJson({ manifest_digest: candidate.source.manifestDigest,
+    candidate.materialization.members.some(member => candidate.state.receipt
+      && !candidate.state.receipt.members.some(prior => memberKey(prior) === memberKey(member)))
+    || candidate.state.installedDigest !== hashJson({ manifest_digest: candidate.source.manifestDigest,
       members: candidate.materialization.members.map((member) => ({ registry_kind: member.registry_kind, owner: member.owner, digest: member.digest })) })
   ));
   for (const candidate of replacements) {
@@ -2738,8 +2901,9 @@ async function removeResolvedPackages(roots, entries, operation) {
   };
 }
 
-async function packageTransactionEntries(roots) {
-  const entries = await fs.readdir(roots.transactionsRoot, { withFileTypes: true });
+async function packageTransactionEntries(roots, { allowMissing = false } = {}) {
+  const entries = allowMissing ? await readOptionalDirectory(roots.transactionsRoot)
+    : await fs.readdir(roots.transactionsRoot, { withFileTypes: true });
   if (entries.some(entry => entry.name === ".octopus-publication")) {
     const stat = await fs.lstat(path.join(roots.transactionsRoot, ".octopus-publication"));
     if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) throw new Error("Invalid package publication metadata directory");
@@ -2990,7 +3154,11 @@ function validateRepairJournalContract(journal) {
     const next = receiptsByPackage.get(previous.package_id), retired = retiredByPackage.get(previous.package_id) ?? new Set();
     if (next.product_kind !== previous.product_kind || next.product_id !== previous.product_id
       || previous.members.some(member => !retired.has(memberKey(member))
-        && !next.members.some(candidate => memberKey(candidate) === memberKey(member) && candidate.target === member.target))) {
+        && !next.members.some(candidate => memberKey(candidate) === memberKey(member) && candidate.target === member.target)
+        && !journal.receipts.some(recipient => recipient.package_id !== previous.package_id
+          && recipient.members.some(candidate => memberKey(candidate) === memberKey(member) && candidate.target === member.target)
+          && journal.moves.some(move => move.package_id === recipient.package_id && move.target === member.target
+            && move.previous_digest === member.digest)))) {
       throw new Error(`repair receipt '${previous.package_id}' removes or renames a prior owner`);
     }
   }
@@ -3038,7 +3206,11 @@ function validateRepairJournalContract(journal) {
         throw new Error(`repair move '${move.package_id}:${key}' has no proven absent new-owner preimage`);
       }
     } else if (previous && !priorMember) {
-      throw new Error(`repair move '${move.package_id}:${key}' cannot claim an existing unowned owner`);
+      const donors = previousReceipts.filter(donor => donor.package_id !== move.package_id
+        && donor.members.some(member => memberKey(member) === key && member.target === move.target
+          && member.digest === move.previous_digest)
+        && !receiptsByPackage.get(donor.package_id).members.some(member => memberKey(member) === key));
+      if (donors.length !== 1) throw new Error(`repair move '${move.package_id}:${key}' cannot claim an existing unowned owner`);
     }
     const moved = movedMembersByPackage.get(move.package_id) ?? new Set();
     moved.add(key);
@@ -4878,6 +5050,7 @@ module.exports = {
   deduplicateInstalledRegistryFiles,
   inspectLocalPackageCatalog,
   inspectLocalPackageDiagnostics,
+  inspectLocalPackageDrift,
   inspectLocalPackageInstallation,
   installLocalPackages,
   readLocalPackageCatalog,

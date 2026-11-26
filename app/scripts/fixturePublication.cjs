@@ -101,14 +101,14 @@ function fixtureDirectoryPublisher(home) {
         receipts.push({ schema_version: 1, operation_id: operation, index, plan_hash: hash(JSON.stringify(request.moves)),
           movement, outcome: "applied", error: null });
       }
-      await fs.writeFile(file, JSON.stringify({ request, receipts, reclaimed: false }));
+      await fs.writeFile(file, JSON.stringify({ request, receipts, reclaimed: [] }));
       return { receipts, error: null };
     }
     assert.equal(mode, "--reclaim-directory");
     assert.deepEqual(prior.receipts[request.publication.index], request.publication);
-    if (!prior.reclaimed) {
+    if (!prior.reclaimed.includes(request.publication.index)) {
       assert.deepEqual(await snapshot(request.tombstone), request.expected, "fixture reclaim identity changed");
-      await fs.rm(request.tombstone, { recursive: true }); prior.reclaimed = true;
+      await fs.rm(request.tombstone, { recursive: true }); prior.reclaimed.push(request.publication.index);
       await fs.writeFile(file, JSON.stringify(prior));
     } else await assert.rejects(fs.lstat(request.tombstone), { code: "ENOENT" });
     return { tombstone: request.tombstone, publication: request.publication, reclaimed: true };

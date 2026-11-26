@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { bundles, buildInfo, buildStaging, verifyStaging, isValidRuntimeUsageOutput, checkCliLayoutParity, status,
   checkBuildDiskSpace, resolveMinFreeGb, pruneBuildArtifacts,
   swapBundles, rollbackBundles, control, readLedgerTurns, readTurnsInFlight, blockingTurns, newInterfaceFailures,
-  packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions, resolveRestartTimeoutMs,
+  packageAction, availablePackages, installPackages, main: updaterMain, restartRuntime, parseArgs, resolveQuietWaitOptions, resolveRestartTimeoutMs,
   readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService,
   parseSystemctlShow, parseSystemctlExecStart, parseSystemctlEnvironment, inspectSystemdService,
   isSystemdUnitFailedOrCrashLooping, terminateProcess, runtimeEnv } = require("./safe-self-update.cjs");
@@ -108,6 +108,77 @@ const idle = async () => [];
 const options = { timeoutMs: 1500 };
 
 async function main() {
+  await require("./support/package-transfer-tests.cjs")(fakeLayout, tempRoot);
+  {
+    const bundle = fakeLayout().live, home = tempRoot();
+    const app = path.join(bundle, "Contents", "Resources", "app");
+    const electron = path.join(app, "electron"), library = path.join(app, "local-packages");
+    fs.mkdirSync(electron, { recursive: true });
+    fs.mkdirSync(path.join(home, "registry"), { recursive: true });
+    fs.writeFileSync(path.join(electron, "localPackages.cjs"), `module.exports = require(${JSON.stringify(path.resolve(__dirname, "../electron/localPackages.cjs"))});`);
+    const publication = process.argv.includes("--native-publication")
+      ? `require(${JSON.stringify(path.resolve(__dirname, "support/native-publication.cjs"))}).nativePublication()`
+      : `require(${JSON.stringify(path.resolve(__dirname, "fixturePublication.cjs"))}).fixtureDirectoryPublisher(${JSON.stringify(home)})`;
+    fs.writeFileSync(path.join(electron, "packageStorage.cjs"), `exports.createPackageStoragePublisher = () => {
+      const publisher = ${publication};
+      return ${process.argv.includes("--native-publication") ? "publisher" : `{ ...publisher, publishFiles: require(${JSON.stringify(path.resolve(__dirname, "fixturePublication.cjs"))}).fixtureFilePublisher(${JSON.stringify(home)}) }`};
+    };`);
+    const json = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+    for (const id of ["optional_base", "optional_sensor"]) {
+      json(path.join(library, "registry", "interface", id, "interface.json"), {
+        id, interface_type: "world", role: "sensor", direction: "inbound", source_names: [id],
+      });
+      json(path.join(library, "packages", id + ".json"), {
+        schema: "octopus.local_package", schema_version: 1, id, version: "1.0.0",
+        product_kind: "application", product_id: id, release_status: "optional",
+        display: { name: id, description: "Optional fixture", developer: "Octopus", category: "sensor" },
+        members: [{ registry_kind: "interface", owner: id, primary: true }],
+        ...(id === "optional_sensor" ? { required_packages: ["optional_base"] } : {}),
+      });
+    }
+    const available = await availablePackages(bundle, home);
+    assert.equal(available.ok, true);
+    assert.deepEqual(available.packages.map(p => p.id).sort(), ["optional_base", "optional_sensor"]);
+    const plan = await installPackages(bundle, home, ["optional_sensor"], { dryRun: true });
+    assert.deepEqual(plan.install, ["optional_base", "optional_sensor"]);
+    assert.equal(plan.applied, false);
+    assert.deepEqual(fs.readdirSync(path.join(home, "registry")), []);
+    assert.equal(fs.existsSync(path.join(home, "client")), false);
+    await assert.rejects(installPackages(bundle, home, ["missing"], { dryRun: true }), /Unknown package.*packages available/);
+    await assert.rejects(installPackages(bundle, home, ["optional_sensor", "missing"]), /Unknown package/);
+    await assert.rejects(installPackages(bundle, home, ["../optional_sensor"]), /Invalid package id/);
+    await assert.rejects(installPackages(bundle, home, []), /at least one/);
+    assert.equal(fs.existsSync(path.join(home, "client")), false);
+    const result = await installPackages(bundle, home, ["optional_sensor"]);
+    assert.equal(result.result.installed, true);
+    assert.equal(result.result.changed, true);
+    const installed = await availablePackages(bundle, home);
+    assert.ok(installed.packages.every(p => p.installed && p.receipt_state === "valid"));
+    const config = path.join(home, "registry", "interface", "optional_sensor", "environment.json");
+    fs.writeFileSync(config, '{"TOKEN":"fixture-only"}');
+    const receipt = path.join(home, "client", "package-state", "receipts", "optional_sensor.json");
+    const beforeReceipt = fs.readFileSync(receipt, "utf8");
+    const again = await installPackages(bundle, home, ["optional_sensor"]);
+    assert.equal(again.result.changed, false);
+    assert.equal(fs.readFileSync(config, "utf8"), '{"TOKEN":"fixture-only"}');
+    assert.equal(fs.readFileSync(receipt, "utf8"), beforeReceipt);
+    const args = ["--target", "app", "--build-root", path.dirname(bundle), "--home", home];
+    await assert.rejects(updaterMain(["packages", "install", "optional_sensor", "--dry-rnu", ...args]), /Unknown packages option/);
+    await assert.rejects(updaterMain(["packages", "install", "optional_sensor", "--dry-run=false", ...args]), /boolean flag/);
+    const cliPlan = await updaterMain(["packages", "install", "optional_sensor", "--dry-run", "--json", ...args]);
+    assert.deepEqual(cliPlan.install, []);
+    const cliBundle = path.join(tempRoot(), "cli");
+    fs.mkdirSync(path.join(cliBundle, "runtime"), { recursive: true });
+    fs.cpSync(library, path.join(cliBundle, "runtime", "local-packages"), { recursive: true });
+    fs.cpSync(electron, path.join(cliBundle, "electron"), { recursive: true });
+    json(path.join(cliBundle, "runtime", "runtime-build-receipt.json"), { schema: "octopus.cli_runtime_distribution" });
+    const linuxPlan = await updaterMain(["packages", "install", "optional_sensor", "--dry-run", "--platform", "linux", "--install-dir", cliBundle, "--home", home]);
+    assert.deepEqual(linuxPlan.install, []);
+    assert.deepEqual(linuxPlan.preserved, ["optional_base", "optional_sensor"]);
+    const failed = spawnSync(process.execPath, [path.join(__dirname, "safe-self-update.cjs"), "packages", "install", "missing", "--json", ...args], { encoding: "utf8" });
+    assert.equal(failed.status, 2);
+    assert.match(JSON.parse(failed.stdout).error, /Unknown package/);
+  }
   let layout = fakeLayout();
   assert.equal(swapBundles(layout, { dryRun: true }).applied, false);
   assert.equal(buildInfo(layout.live).revision, "live");

@@ -1250,11 +1250,16 @@ function pruneBuildArtifacts(layout, home, {
   };
 }
 
+function packageInspectionRoots(bundle, home, layout = null) {
+  const root = installation(bundle, layout);
+  return { sourceRegistryRoot: path.join(root, "local-packages", "registry"), activeRegistryRoot: path.join(home, "registry"),
+    libraryRoot: path.join(root, "local-packages"), stateRoot: path.join(home, "client", "package-state") };
+}
+
 function packageRoots(bundle, home, layout = null) {
-  const root = installation(bundle, layout), sourceRegistryRoot = path.join(root, "local-packages", "registry");
+  const roots = packageInspectionRoots(bundle, home, layout), root = installation(bundle, layout);
   const { createPackageStoragePublisher } = require(path.join(electronRoot(bundle, layout), "packageStorage.cjs"));
-  return { sourceRegistryRoot, activeRegistryRoot: path.join(home, "registry"), libraryRoot: path.join(root, "local-packages"),
-    stateRoot: path.join(home, "client", "package-state"), publication: createPackageStoragePublisher(sourceRegistryRoot, root) };
+  return { ...roots, publication: createPackageStoragePublisher(roots.sourceRegistryRoot, root) };
 }
 const localPackages = (bundle, layout = null) => require(path.join(electronRoot(bundle, layout), "localPackages.cjs"));
 const CHAT_CLIENT_PACKAGE = "world_operator_chat";
@@ -1273,6 +1278,43 @@ async function packageStatus(bundle, home) {
     local_changes: (entry.local_changes ?? []).length, error: entry.error || "",
     expected: { sourceDigest: entry.source_digest, installedDigest: entry.installed_digest, receiptState: entry.receipt_state, receiptDigest: entry.receipt_digest || null },
   }));
+}
+
+async function availablePackages(bundle, home) {
+  const catalog = await localPackages(bundle).inspectLocalPackageCatalog(packageRoots(bundle, home));
+  return { ok: catalog.errors.length === 0, packages: catalog.packages, errors: catalog.errors };
+}
+
+async function installPackages(bundle, home, packageIds, { dryRun = false } = {}) {
+  if (!packageIds.length) throw new Error("packages install requires at least one package id; use packages available");
+  if (packageIds.some((id) => !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(id))) throw new Error("Invalid package id; use packages available");
+  const catalog = await availablePackages(bundle, home);
+  if (!catalog.ok) throw new Error(`Package catalog is invalid: ${catalog.errors.join("; ")}`);
+  const byId = new Map(catalog.packages.map((entry) => [entry.id, entry]));
+  const closure = [], visiting = new Set(), visited = new Set();
+  const visit = (id) => {
+    if (visiting.has(id)) throw new Error(`Package dependency cycle at '${id}'`);
+    if (visited.has(id)) return;
+    const entry = byId.get(id);
+    if (!entry) throw new Error(`Unknown package '${id}'; use packages available to list bundled package ids`);
+    if (entry.available === false || entry.error) throw new Error(`Package '${id}' is unavailable: ${entry.error || "invalid source"}`);
+    if (entry.release_status === "system") throw new Error(`System package '${id}' cannot be installed independently`);
+    visiting.add(id);
+    (entry.required_packages ?? []).forEach(visit);
+    visiting.delete(id);
+    visited.add(id);
+    closure.push(entry);
+  };
+  packageIds.forEach(visit);
+  const install = closure.filter((entry) => !entry.installed).map((entry) => entry.id);
+  const preserved = closure.filter((entry) => entry.installed).map((entry) => entry.id);
+  if (dryRun) return { ok: true, applied: false, install, preserved };
+  const result = await localPackages(bundle).installLocalPackages({
+    ...packageRoots(bundle, home), operationId: `packages-install-${crypto.randomUUID()}`,
+    packageIds: closure.map((entry) => entry.id),
+    expectedSourceDigests: Object.fromEntries(closure.map((entry) => [entry.id, entry.source_digest])),
+  });
+  return { ok: true, applied: true, install, preserved, result };
 }
 
 function baselineDrift(bundle, home) {
@@ -1298,13 +1340,14 @@ async function syncPackages(bundle, home, { dryRun = false, withChatClient = fal
     && (!only || only.includes(row.id)));
   const skipped = status.filter((row) => !selected.includes(row) && row.action !== "current").map(({ id, action, error }) => ({ id, action, error }));
   if (dryRun) return { applied: false, repair: selected.map((row) => row.id), skipped };
-  const results = [];
-  for (const [index, row] of selected.entries()) {
+  let results = [];
+  if (selected.length) {
     try {
       const outcome = await localPackages(bundle).repairLocalPackages({ ...packageRoots(bundle, home),
-        operationId: `self-update-${Date.now()}-${index}`, packageIds: [row.id], expectedRepairs: { [row.id]: row.expected } });
-      results.push({ id: row.id, repaired: true, changed: outcome.changed !== false });
-    } catch (error) { results.push({ id: row.id, repaired: false, error: error.message }); }
+        operationId: `self-update-${crypto.randomUUID()}`, packageIds: selected.map(row => row.id),
+        expectedRepairs: Object.fromEntries(selected.map(row => [row.id, row.expected])) });
+      results = selected.map(row => ({ id: row.id, repaired: true, changed: outcome.changed !== false }));
+    } catch (error) { results = selected.map(row => ({ id: row.id, repaired: false, error: error.message })); }
   }
   return { applied: true, results, skipped };
 }
@@ -1826,6 +1869,9 @@ const USAGE = `Usage: node app/scripts/safe-self-update.cjs <command> [options]
   prune [--dry-run] [--include-prev] [--include-cli] [--target-dir=<dir>]
                                   remove rebuildable staging/failed/Rust target artifacts without touching live install or ~/.octopus
   verify [--no-smoke] [--allow-modified-source]
+  packages check [--json]          read-only drift and transfer preview
+  packages available [--json]
+  packages install <package-id>... [--dry-run] [--json]
   packages status | packages sync [--dry-run] [--with-chat-client] [--only=a,b]
   swap [--dry-run]                live -> prev, staging -> live
   restart [--swap] [--timeout=<seconds>] [--caller-run=<run id>] [--allow-in-flight-run <run id>]... [--wait-quiet[=<seconds>]] [--quiet-for=<seconds>] [--dry-run] [--force] [--no-rollback] [--detach --log=<file>]
@@ -1932,6 +1978,15 @@ function parseArgs(argv) {
 
 async function main(argv) {
   const { positional, options } = parseArgs(argv);
+  if (positional[0] === "packages" && ["available", "install", "check"].includes(positional[1])) {
+    const allowed = new Set(["home", "stateDir", "buildRoot", "platform", "target", "layout", "installDir", "json", "dryRun"]);
+    for (const [key, value] of Object.entries(options)) {
+      if (!allowed.has(key)) throw new Error(`Unknown packages option '${key}'`);
+      if (["json", "dryRun"].includes(key) && value !== true) throw new Error(`--${key === "dryRun" ? "dry-run" : key} is a boolean flag, not a value`);
+    }
+    if (positional[1] === "check" && (positional.length !== 2 || options.dryRun)) throw new Error("packages check takes no package ids or --dry-run");
+    if (positional[1] === "available" && positional.length !== 2) throw new Error("packages available takes no package ids");
+  }
   const layout = bundles(
     options.buildRoot ? path.resolve(options.buildRoot) : undefined,
     {
@@ -1969,6 +2024,9 @@ async function main(argv) {
       userService,
     });
   }
+  if (command === "packages" && sub === "check") return localPackages(layout.live).inspectLocalPackageDrift(packageInspectionRoots(layout.live, home));
+  if (command === "packages" && sub === "available") return availablePackages(layout.live, home);
+  if (command === "packages" && sub === "install") return installPackages(layout.live, home, positional.slice(2), { dryRun });
   if (command === "packages" && sub === "status") return { packages: await packageStatus(layout.live, home), baseline: baselineDrift(layout.live, home) };
   if (command === "packages" && sub === "sync") {
     return syncPackages(layout.live, home, { dryRun, withChatClient: options.withChatClient === true, only: typeof options.only === "string" ? options.only.split(",") : null });
@@ -2002,7 +2060,7 @@ async function main(argv) {
 module.exports = { bundles, resolveLayoutOptions, isCliLayout, isStandaloneCliTarget, resolveCliBundlePaths, cliReceipt, electronRoot, runtimeBinary,
   buildInfo, buildStaging, verifyStaging, isValidRuntimeUsageOutput, checkCliLayoutParity, status, checkBuildDiskSpace, resolveMinFreeGb, pruneBuildArtifacts,
   swapBundles, rollbackBundles, control, isReady, readChatTurns, readLedgerTurns, readTurnsInFlight, blockingTurns,
-  newInterfaceFailures, packageAction, restartRuntime, parseArgs, resolveQuietWaitOptions, resolveRestartTimeoutMs,
+  newInterfaceFailures, packageAction, availablePackages, installPackages, restartRuntime, parseArgs, resolveQuietWaitOptions, resolveRestartTimeoutMs,
   readRuntimeInstanceState, parseLaunchdService, inspectLaunchdService,
   parseSystemctlShow, parseSystemctlExecStart, parseSystemctlEnvironment, inspectSystemdService, isSystemdUnitFailedOrCrashLooping, restartSystemdService,
   terminateProcess, runtimeEnv, main };
@@ -2011,5 +2069,7 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((result) => {
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result?.ok === false ? 1 : 0;
-  }, (error) => { console.error(error.usage ? error.message : `safe-self-update: ${error.message}`); process.exitCode = 2; });
+  }, (error) => {
+    if (process.argv.includes("--json")) { console.log(JSON.stringify({ ok: false, error: error.message }, null, 2)); process.exitCode = 2; return; }
+    console.error(error.usage ? error.message : `safe-self-update: ${error.message}`); process.exitCode = 2; });
 }

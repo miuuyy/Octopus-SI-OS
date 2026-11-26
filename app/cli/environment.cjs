@@ -39,6 +39,14 @@ function taskRetirementBarrier(environment) {
 }
 
 function resolveEnvironment(options = {}) {
+  return resolveEnvironmentPaths(options, false);
+}
+
+function resolvePackageRoots(options = {}) {
+  return resolveEnvironmentPaths(options, true);
+}
+
+function resolveEnvironmentPaths(options, packageInspection) {
   const ambient = { ...(options.env ?? process.env) };
   const userRoot = absolute(options.userHome ?? os.homedir(), "user home");
   const requestedHome = options.home === undefined ? null : argumentPath(options.home, options.cwd, userRoot, "--home");
@@ -72,6 +80,7 @@ function resolveEnvironment(options = {}) {
       ?? (repoInstallation ? path.join(repoRoot, "app", "distribution", "local-packages") : path.join(installationRoot, "local-packages")), "local package library"),
     stateRoot: path.join(home, "client", "package-state"),
   };
+  if (packageInspection) return packageRoots;
   packageRoots.publication = require("../electron/packageStorage.cjs").createPackageStoragePublisher(packageRoots.sourceRegistryRoot, installationRoot);
   const launchEnv = {
     OCTOPUS_HOME: home,
@@ -598,4 +607,4 @@ function positiveTimeout(value) {
 function assertNotAborted(signal) { if (signal?.aborted) { const error = new Error("Terminal operation cancelled; any shared runtime already started remains running."); error.code = "ABORT_ERR"; throw error; } }
 function runtimeError(message, environment) { const error = new Error(`${message} Runtime log: ${environment.logPath}`); error.logPath = environment.logPath; return error; }
 
-module.exports = { taskRetirementBarrier, resolveEnvironment, createEnvironment, status, start, startForeground, bootstrap, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };
+module.exports = { taskRetirementBarrier, resolveEnvironment, resolvePackageRoots, createEnvironment, status, start, startForeground, bootstrap, runRuntimeCommand, projectionStore, requireDistribution, environmentValue };
