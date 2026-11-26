@@ -59,7 +59,7 @@ async fn failed_timeout_and_explicit_stop_preserve_evidence_and_per_call_retry()
         let keeper = Keeper {
             spec_path: temp.path().join("process.json"), spec, managed: managed.clone(), activity: activity.clone(),
             requests: tokio::sync::Mutex::new(()), delivered: AtomicBool::new(false), released: AtomicBool::new(false),
-            closed_at: std::sync::Mutex::new(None), stop: tokio::sync::Notify::new(),
+            stop: tokio::sync::Notify::new(),
         };
         let stop = |call: &str| KeeperRequest::Terminate { call: Some(call.into()), wait_ms: 0, max_output_bytes: 1024 };
         let first = if !timer {

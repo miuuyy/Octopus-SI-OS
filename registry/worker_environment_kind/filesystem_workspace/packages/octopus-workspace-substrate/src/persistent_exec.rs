@@ -22,8 +22,6 @@ const KEEPER_SPEC_SCHEMA_VERSION: u32 = 1;
 const KEEPER_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 const KEEPER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const KEEPER_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
-const DELIVERED_PROCESS_RETENTION: Duration = Duration::from_secs(300);
-const UNDELIVERED_PROCESS_RETENTION: Duration = Duration::from_secs(3600);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceProcessLimits {
@@ -1072,7 +1070,6 @@ struct Keeper {
     requests: tokio::sync::Mutex<()>,
     delivered: AtomicBool,
     released: AtomicBool,
-    closed_at: std::sync::Mutex<Option<tokio::time::Instant>>,
     stop: tokio::sync::Notify,
 }
 
@@ -1143,15 +1140,15 @@ pub async fn run_persistent_process_keeper(spec_path: PathBuf) -> Result<(), Str
         requests: tokio::sync::Mutex::new(()),
         delivered: AtomicBool::new(false),
         released: AtomicBool::new(false),
-        closed_at: std::sync::Mutex::new(None),
         stop: tokio::sync::Notify::new(),
     });
     let stop = keeper.stop.notified();
     tokio::pin!(stop);
+    let mut retirement_check = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             _ = &mut stop => break,
-            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+            _ = retirement_check.tick() => {
                 if keeper.retention_expired().await {
                     break;
                 }
@@ -1176,24 +1173,9 @@ pub async fn run_persistent_process_keeper(spec_path: PathBuf) -> Result<(), Str
 
 impl Keeper {
     async fn retention_expired(&self) -> bool {
-        let closed = self.managed.state.lock().await.closed;
-        if !closed {
-            return false;
-        }
-        let now = tokio::time::Instant::now();
-        let closed_at = {
-            let mut closed_at = self
-                .closed_at
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *closed_at.get_or_insert(now)
-        };
-        let retention = if self.delivered.load(Ordering::SeqCst) {
-            DELIVERED_PROCESS_RETENTION
-        } else {
-            UNDELIVERED_PROCESS_RETENTION
-        };
-        now.duration_since(closed_at) >= retention
+        // Poll outcomes are persisted before delivered is published. Replay does not
+        // require a resident keeper; unread output and running commands still do.
+        self.delivered.load(Ordering::SeqCst) && self.managed.state.lock().await.closed
     }
 
     async fn answer(&self, stream: tokio::net::UnixStream) -> Result<(), String> {
@@ -1216,7 +1198,7 @@ impl Keeper {
             .await
             .map_err(|error| format!("keeper response cannot be written: {error}"))?;
         let _ = writer.shutdown().await;
-        if self.released.load(Ordering::SeqCst) {
+        if self.released.load(Ordering::SeqCst) || self.delivered.load(Ordering::SeqCst) {
             self.stop.notify_one();
         }
         Ok(())

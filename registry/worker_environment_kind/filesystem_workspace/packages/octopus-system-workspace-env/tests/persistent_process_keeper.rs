@@ -55,7 +55,9 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
         .await
         .unwrap();
     assert!(written.running && written.chunks.is_empty());
+    assert!(keeper_alive(&root));
     drop(first_owner);
+    assert!(keeper_alive(&root), "running command survives owner loss");
 
     let next_owner = WorkspaceProcessManager::new(Some(store));
     assert_eq!(
@@ -79,6 +81,7 @@ async fn a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_
             .unwrap(),
         finished
     );
+    wait_keeper_stopped(&root).await;
     assert!(next_owner.list(&room).await.unwrap().is_empty());
     assert_eq!(start(&next_owner, &room, &sandbox, &cwd, &limits).await.unwrap(), started);
     assert_eq!(next_owner.write_and_poll(&room, &started.process_id, b"SURVIVED\n", 0, 1024, Some("movement:11")).await.unwrap(), written);
@@ -221,5 +224,102 @@ async fn nested_sandbox_timeout_closes_owned_processes_without_signaling_a_neigh
         let status = String::from_utf8(state.stdout).unwrap();
         assert!(status.trim().is_empty() || status.trim().starts_with('Z'), "process {pid}: {status}");
     }
+    }
+}
+
+fn keeper_alive(root: &Path) -> bool {
+    let output = std::process::Command::new("ps").args(["-Ao", "args="]).output().unwrap();
+    String::from_utf8_lossy(&output.stdout).lines().any(|line|
+        line.contains("--octopus-persistent-process-keeper") && line.contains(root.to_str().unwrap()))
+}
+
+async fn wait_keeper_stopped(root: &Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while keeper_alive(root) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("drained keeper must exit without a room release");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn drained_initial_outcome_retires_but_unread_output_survives_owner_loss() {
+    for unread in [false, true] {
+        let temporary = tempfile::Builder::new().prefix("keeper-drain").tempdir_in("/tmp").unwrap();
+        let root = std::fs::canonicalize(temporary.path()).unwrap();
+        for dir in ["durable", "ipc", "work"] {
+            std::fs::create_dir(root.join(dir)).unwrap();
+        }
+        let store = WorkspaceProcessStore::new(
+            &root.join("durable"),
+            &root.join("ipc"),
+            PathBuf::from(env!("CARGO_BIN_EXE_octopus-workspace-exec-tool")),
+        )
+        .unwrap();
+        let cwd = AbsPath::new(&root.join("work")).unwrap();
+        let sandbox = ProjectedSandbox::from_parts(
+            vec![cwd.clone()],
+            Vec::new(),
+            vec![AbsPath::new(Path::new("/")).unwrap()],
+            NetworkCeiling::Denied,
+        );
+        let room = WorkerEnvironmentId::derive(root.to_str().unwrap().as_bytes());
+        let limits = WorkspaceProcessLimits {
+            max_processes_per_worker_environment: 2,
+            max_buffered_output_bytes: 4096,
+            max_buffered_output_events: 64,
+            max_input_bytes: 64,
+            process_timeout: Duration::from_secs(30),
+            cleanup_timeout: Duration::from_secs(5),
+        };
+        let manager = WorkspaceProcessManager::new(Some(store.clone()));
+        let initial = manager
+            .start(
+                &room,
+                &sandbox,
+                ProcessSandboxMode::Disabled,
+                vec!["/bin/sh".into(), "-c".into(), "printf abcdef".into()],
+                cwd.as_path().to_path_buf(),
+                BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+                false,
+                10_000,
+                if unread { 1 } else { 4096 },
+                limits,
+                Some("drain:start"),
+            )
+            .await
+            .unwrap();
+        assert!(initial.closed && initial.exited);
+        assert_eq!(initial.continuation_available, unread);
+        drop(manager);
+        let next = WorkspaceProcessManager::new(Some(store));
+        if unread {
+            assert!(keeper_alive(&root));
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            assert!(keeper_alive(&root), "unread output retains its keeper without a client");
+            assert_eq!(next.list(&room).await.unwrap().len(), 1);
+            let drained = next
+                .write_and_poll(&room, &initial.process_id, b"", 100, 4096, Some("drain:poll"))
+                .await
+                .unwrap();
+            assert!(!drained.continuation_available && drained.closed);
+            wait_keeper_stopped(&root).await;
+            assert_eq!(
+                next.write_and_poll(&room, &initial.process_id, b"", 100, 4096, Some("drain:poll"))
+                    .await
+                    .unwrap(),
+                drained
+            );
+        } else {
+            wait_keeper_stopped(&root).await;
+        }
+        assert!(next.list(&room).await.unwrap().is_empty());
+        assert!(
+            next.write_and_poll(&room, &initial.process_id, b"", 0, 4096, Some("drain:new"))
+                .await
+                .unwrap_err()
+                .contains("retired")
+        );
     }
 }
