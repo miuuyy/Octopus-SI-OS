@@ -18,6 +18,13 @@ fn native_progress_is_admitted_before_the_next_provider_output() {
 }
 
 #[test]
+fn trailing_progress_after_turn_output_closes_terminal_handoff() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(native_terminal_handoff_cases(Some(30)));
+    }).unwrap().join().unwrap();
+}
+
+#[test]
 fn registry_unstable_pending_keeps_native_turn_and_delivers_exact_tool_output() {
     std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
@@ -1270,6 +1277,39 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             let current=RunRecord::from_bytes(&std::fs::read(&plan.run_write.path).unwrap()).unwrap();
             let settled=&current.interface_state[&descriptor.id]["pending_handoff"];
             assert_eq!((settled["source_movement_seq"].clone(),settled["terminal"].clone()),(json!(source_seq),json!(true)));
+            return;
+        }
+        if settlement_phase==Some(30) {
+            let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id) && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.message")).unwrap();
+            let file=artifact(&root.join("message"),"operator.message",json!({"text":"start","message_id":"initial"}));
+            let row=edge(&ctx,&initial,cp,&file,MovementKind::InterfaceOutbound,descriptor.id.clone());
+            let input=source_envelope(&ctx,root,&row,file);let source_seq=append(&ctx,row);
+            let handoff=ProviderHandoffSession::new(&ctx).unwrap().from_invocation(&ctx,&descriptor,&run,&input,source_seq,&initial).unwrap();
+            state["context_generation"]=json!(before_context+1);
+            let output=artifact(&ctx.interface_var_dir().join("turn-out"),"turn.agent_message",json!({"label":"turn.agent_message","phase":"commentary","text":"Calling tool","codex_continuity":state}));
+            let usage=artifact(&ctx.interface_var_dir().join("usage"),"turn.token_usage",json!({"label":"turn.token_usage"}));
+            let (sender,receiver_emissions)=tokio::sync::mpsc::unbounded_channel();
+            let (terminal_sender,terminal_receiver)=tokio::sync::oneshot::channel();
+            sender.send(ProviderStreamEmission::Turn(ProviderEmission{artifact:output,route:ProviderEmissionRoute::ClientProjection})).unwrap();
+            sender.send(ProviderStreamEmission::Progress(ProviderEmission{artifact:usage,route:ProviderEmissionRoute::ClientProjection})).unwrap();
+            drop(sender); terminal_sender.send(true).unwrap();
+            let broker=CodexTurnControlBroker::new(Some(source_seq));
+            let forward=forward_provider_emissions(EmissionForwarding { ctx:&ctx,descriptor:&descriptor,control:&broker,handoff:handoff.clone(), interrupted_effects:InterruptedEffectArbiter::new(ctx.clone()), durable_interrupted_continuity:None,native_terminal_source:None, source_envelope:input.clone(),run:run.clone(),source_artifact:input.artifact.clone(), result_source_movement_seq:source_seq,resolving_interrupted_result:false },receiver_emissions,terminal_receiver);
+            let gate=async {
+                assert_eq!(pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&input.artifact,0,1,true,0,false).await[0].0,"turn.agent_message");
+                assert_eq!(pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&input.artifact,0,1,true,22,true).await[0].0,"turn.token_usage");
+            };
+            assert_eq!(tokio::time::timeout(std::time::Duration::from_secs(5),async{tokio::join!(forward,gate)}).await.unwrap().0.unwrap().outputs,2);
+            let after=std::fs::read(&plan.run_write.path).unwrap(); let current=RunRecord::from_bytes(&after).unwrap();
+            let settled=&current.interface_state[&descriptor.id]["pending_handoff"];
+            assert_eq!((settled["source_movement_seq"].clone(),settled["terminal"].clone()),(json!(source_seq),json!(true)));
+            assert!(!octopus_run_authoring::open_standing_handoff_before(&ctx,&current,&descriptor.id,source_seq+10).unwrap());
+            let next_cp=current.checkpoints.iter().find(|cp|current.active_checkpoints.contains(&cp.id) && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.turn.control")).unwrap();
+            let ctrl=artifact(&root.join("ctrl"),"operator.turn.control",json!({"action":"stop","control_id":"stop-after-usage"}));
+            let ctrl_row=edge(&ctx,&after,next_cp,&ctrl,MovementKind::InterfaceOutbound,descriptor.id.clone());
+            let ctrl_input=source_envelope(&ctx,root,&ctrl_row,ctrl); let ctrl_seq=append(&ctx,ctrl_row);
+            let next_handoff=ProviderHandoffSession::new(&ctx).unwrap().from_invocation(&ctx,&descriptor,&run,&ctrl_input,ctrl_seq,&after).unwrap();
+            assert_eq!(Box::pin(next_handoff.recover_source()).await.unwrap(),ProviderSourceRecovery::Process);
             return;
         }
         if settlement_phase==Some(22) {

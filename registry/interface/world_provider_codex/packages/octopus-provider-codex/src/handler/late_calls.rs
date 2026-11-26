@@ -238,7 +238,7 @@ impl CodexAppServerInterfaceDriver {
             request_ids: self.next_request_id.clone(),
             pending_requests: self.pending_server_requests.clone(),
             scope: wake.scope.clone(),
-            output: Arc::downgrade(emit),
+            output: std::sync::Weak::new(),
             continuity,
             handoff_barrier: handoff_barrier.clone(),
             effect_gate: wake.effect_gate.clone(),

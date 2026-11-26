@@ -175,11 +175,27 @@ pub(crate) fn recovered_tool_handoff_receipt(
     output_root: &Path,
 ) -> Result<Option<ProviderEmission>, InterfaceDriverError> {
     use octopus_run_authoring::ProviderHandoffOutcome;
-    let Some(ProviderHandoffOutcome::Admitted { seq, artifact }) = outcomes.last() else {
+    let mut found = None;
+    for outcome in outcomes.iter().rev() {
+        let ProviderHandoffOutcome::Admitted { seq, artifact } = outcome else {
+            return Ok(None);
+        };
+        let matches = session
+            .iter()
+            .filter(|entry| entry.source_artifact == *artifact)
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [] => continue,
+            [effect] => {
+                found = Some((seq, artifact, *effect));
+                break;
+            }
+            _ => return Ok(None),
+        }
+    }
+    let Some((seq, artifact, effect)) = found else {
         return Ok(None);
     };
-    let matches = session.iter().filter(|entry| entry.source_artifact == *artifact).collect::<Vec<_>>();
-    let [effect] = matches.as_slice() else { return Ok(None); };
     if effect.label != TOOL_CALL_LABEL { return Ok(None); }
     let refused = |message: &str| InterfaceDriverError::FailedClosed(message.to_string());
     let runtime = invocation_runtime_metadata(input)?;

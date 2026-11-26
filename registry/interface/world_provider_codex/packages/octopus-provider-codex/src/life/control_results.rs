@@ -58,7 +58,7 @@ pub(crate) async fn hand_control_result(
         source_movement_seq,
         output,
         handoff_barrier,
-        effect_guard: _effect_guard,
+        effect_guard,
         result,
         recovery,
         defer_message_receipt,
@@ -105,6 +105,7 @@ pub(crate) async fn hand_control_result(
         return Ok(false);
     }
     if admitted_seq.is_none() {
+        drop(effect_guard);
         if let Some(barrier) = handoff_barrier {
             barrier.wait().await.map_err(|error| {
                 format!(

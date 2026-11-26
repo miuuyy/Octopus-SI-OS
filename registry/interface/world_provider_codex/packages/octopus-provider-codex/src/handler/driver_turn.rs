@@ -11,6 +11,11 @@ impl CodexAppServerInterfaceDriver {
         let lifecycle_held = context.lifecycle.is_some();
         self.drain_turn_with(context, thread_id, turn_id, &native_tools, &|event| {
             parallel_drain_admits(lifecycle_held, &native_tools, event)
+                && !matches!(
+                    event,
+                    AppServerEvent::ServerRequest(ServerRequest::DynamicToolCall { params, .. })
+                        if params.thread_id != thread_id || params.turn_id != turn_id
+                )
         })
         .await
     }
@@ -31,18 +36,19 @@ impl CodexAppServerInterfaceDriver {
         let mut client = self.client.lock().await;
         loop {
             if self.has_pending_request(context.scope).await {
-                let event = next_ready_event(&mut client);
-                let admitted = !context.turn_interrupted.load(std::sync::atomic::Ordering::Acquire)
-                    && event.as_ref().is_some_and(admits);
-                let step = match (event, admitted) {
-                    (Some(AppServerEvent::ServerNotification(notification)), true) => {
+                let event = if context.turn_interrupted.load(std::sync::atomic::Ordering::Acquire) {
+                    None
+                } else {
+                    take_next_parallel_event(&mut client, admits)
+                };
+                let step = match event {
+                    Some(AppServerEvent::ServerNotification(notification)) => {
                         self.drain_notification(context, thread_id, turn_id, provider_account_events_enabled, &mut drain, notification).await?
                     }
-                    (Some(AppServerEvent::ServerRequest(request)), true) => {
+                    Some(AppServerEvent::ServerRequest(request)) => {
                         self.drain_server_request(context, thread_id, turn_id, &mut drain, &mut client, request).await?
                     }
-                    (deferred, _) => {
-                        client.restore_ready_events(deferred.into_iter().collect());
+                    None => {
                         flush_pending_delta(sink, &mut drain.pending_delta, &mut drain.delta_seq)?;
                         let _effect_guard = context.effect_gate.clone().lock_owned().await;
                         if context.turn_interrupted.load(std::sync::atomic::Ordering::Acquire) {
@@ -55,7 +61,7 @@ impl CodexAppServerInterfaceDriver {
                             request_ids: self.next_request_id.clone(),
                             pending_requests: self.pending_server_requests.clone(),
                             scope: context.scope.clone(),
-                            output: Arc::downgrade(sink.emit),
+                            output: std::sync::Weak::new(),
                             continuity,
                             handoff_barrier: context.handoff_barrier.clone(),
                             effect_gate: context.effect_gate.clone(),
@@ -64,6 +70,10 @@ impl CodexAppServerInterfaceDriver {
                             turn_id: turn_id.to_string(),
                             late_calls,
                         });
+                        return Ok(TurnDrainOutcome::AwaitingResults);
+                    }
+                    Some(other) => {
+                        client.restore_ready_events(vec![other]);
                         return Ok(TurnDrainOutcome::AwaitingResults);
                     }
                 };
@@ -132,8 +142,25 @@ impl CodexAppServerInterfaceDriver {
     }
 }
 
-pub(crate) fn next_ready_event(client: &mut AppServerClient) -> Option<AppServerEvent> {
-    let mut ready = client.take_ready_events().into_iter();
+pub(crate) fn take_next_parallel_event(
+    client: &mut AppServerClient,
+    admits: &(dyn Fn(&AppServerEvent) -> bool + Sync),
+) -> Option<AppServerEvent> {
+    let ready = client.take_ready_events();
+    let has_call = ready
+        .iter()
+        .take_while(|event| admits(event))
+        .any(|event| {
+            matches!(
+                event,
+                AppServerEvent::ServerRequest(ServerRequest::DynamicToolCall { .. })
+            )
+        });
+    if !has_call {
+        client.restore_ready_events(ready);
+        return None;
+    }
+    let mut ready = ready.into_iter();
     let event = ready.next();
     client.restore_ready_events(ready.collect());
     event

@@ -147,6 +147,16 @@ fn successive_tool_results_use_admitted_session_continuity() {
         &runtime.run, &record).is_err());
     let receipt = recovered_tool_handoff_receipt(&descriptor, &old_input, 20, &current,
         &handed, &outcomes, temp.path()).unwrap().unwrap();
+    let mut with_standing = outcomes.clone();
+    with_standing.push(octopus_run_authoring::ProviderHandoffOutcome::Admitted {
+        seq: 31,
+        artifact: octopus_interfaces::ArtifactRef {
+            id: octopus_descriptors::ArtifactId::new("turn.token_usage:standing"),
+            content: octopus_ledger::ContentHash::of_bytes(b"{\"label\":\"turn.token_usage\"}"),
+        },
+    });
+    assert!(recovered_tool_handoff_receipt(&descriptor, &old_input, 20, &current,
+        &handed, &with_standing, temp.path()).unwrap().is_some());
     let value: serde_json::Value = serde_json::from_slice(&receipt.artifact.read_payload_bytes().unwrap()).unwrap();
     assert_eq!(value["label"], INTERFACE_CONTEXT_UPDATED_LABEL);
     assert_eq!(value["effect_artifact"], serde_json::to_value(&handed[2].source_artifact).unwrap());

@@ -389,7 +389,7 @@ impl ProviderOutputHandoff {
                 self.source_movement_seq
             ));
         }
-        let outcomes = self.hand_pending_items(&pending, &state.run_record_bytes).await?;
+        let mut outcomes = self.hand_pending_items(&pending, &state.run_record_bytes).await?;
         self.publish_admitted_context(state).await?;
         let record = RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?;
         self.restore_pending_context(state, &record, &pending)?;
@@ -408,7 +408,9 @@ impl ProviderOutputHandoff {
             &self.contributed_context_output_labels(),
         )?;
         if let Some(journal) = journal {
-            return self.recover_standing_journal(state, journal).await;
+            let (recovery, standing_outcomes) = self.recover_standing_journal(state, journal).await?;
+            outcomes.extend(standing_outcomes);
+            return Ok((recovery, outcomes));
         }
         Ok((
             ProviderSourceRecovery::Interrupted {

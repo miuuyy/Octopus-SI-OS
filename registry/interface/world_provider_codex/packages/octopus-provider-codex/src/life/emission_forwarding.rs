@@ -56,9 +56,17 @@ pub(crate) async fn forward_provider_emissions(
                         "interrupted result cannot emit progress outside its exact closure".into(),
                     );
                 }
-                forwarded.outputs += flush_stream_batch(&handoff, &mut pending, false).await?;
-                hand_stream_emission(&handoff, (emission, None, Vec::new()), false).await?;
-                forwarded.outputs += 1;
+                if pending.is_empty() {
+                    hand_stream_emission(&handoff, (emission, None, Vec::new()), false).await?;
+                    forwarded.outputs += 1;
+                } else {
+                    forwarded.outputs += hold_newest_stream_emission(
+                        &handoff,
+                        &mut pending,
+                        (emission, None, Vec::new()),
+                    )
+                    .await?;
+                }
             }
             ProviderStreamEmission::CurrentRunRecord {
                 expected_before_hash,
@@ -349,6 +357,11 @@ pub(crate) async fn forward_provider_emissions(
     )
     .await?;
     forwarded.outputs += flushed;
+    if terminal && last.is_none() && forwarded.outputs > 0 {
+        return Err(
+            "provider stream completed without closing its terminal handoff boundary".to_string(),
+        );
+    }
     if let Some(outcome) = last {
         if let Some(closure) = interrupted_closure {
             match outcome {

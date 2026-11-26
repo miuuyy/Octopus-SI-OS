@@ -24,6 +24,11 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
                 "callId":"call-a","namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":"a"}}}),
             json!({"id":"request-b","method":"item/tool/call","params":{"threadId":"thread-a","turnId":"turn-a",
                 "callId":"call-b","namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":"b"}}}),
+            json!({"method":"thread/tokenUsage/updated","params":{"threadId":"thread-a","turnId":"turn-a","tokenUsage":{
+                "total":{"totalTokens":40,"inputTokens":30,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},
+                "last":{"totalTokens":40,"inputTokens":30,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},
+                "modelContextWindow":32000
+            }}}),
         ] {
             socket.send(Message::Text(message.to_string().into())).await.unwrap();
         }
@@ -107,7 +112,8 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
         rollout_path: None,
     });
     let labels = codex_context_labels();
-    let projected = codex_client_projection_labels();
+    let mut projected = codex_client_projection_labels();
+    projected.insert(TURN_TOKEN_USAGE_LABEL.to_string());
     let rules = LiveStreamRules::from_private_config_or_disabled(&serde_json::Map::new()).unwrap();
     let streams = root.path().join("streams");
     let provider = InterfaceId::new("world_provider_codex");
@@ -120,7 +126,7 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
     let source = bound("turn-input", json!({"text":"look up a and b"}));
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut ready = Vec::new();
-        while ready.len() < 3 {
+        while ready.len() < 4 {
             ready.extend(driver.client.lock().await.take_ready_events());
             tokio::task::yield_now().await;
         }
@@ -220,6 +226,11 @@ async fn two_outstanding_dynamic_calls_resolve_in_reverse_order() {
     }
     let calls = emitted.iter().filter(|(index, label, _)| *index == 0 && label == TOOL_CALL_LABEL).collect::<Vec<_>>();
     assert_eq!(calls.len(), 2, "both buffered parallel calls are admitted before either result arrives");
+    assert_eq!(emitted.iter().rfind(|(index, _, _)| *index == 0).map(|(_, label, _)| label.as_str()), Some(TOOL_CALL_LABEL));
+    assert!(!emitted.iter().any(|(index, label, _)| *index == 0 && label == TURN_TOKEN_USAGE_LABEL));
+    assert_eq!(emitted.iter().rfind(|(index, _, _)| *index == 1).map(|(_, label, _)| label.as_str()), Some(INTERFACE_CONTEXT_UPDATED_LABEL));
+    assert!(!emitted.iter().any(|(index, label, _)| *index == 1 && label == TURN_TOKEN_USAGE_LABEL));
+    assert_eq!(emitted.iter().filter(|(index, label, _)| *index == 2 && label == TURN_TOKEN_USAGE_LABEL).count(), 2);
     for ((_, _, call), expected) in calls.iter().zip([vec!["call-a"], vec!["call-a", "call-b"]]) {
         let state: CodexContinuityState = serde_json::from_value(call[CODEX_CONTINUITY_FIELD].clone()).unwrap();
         assert_eq!(calls_of(&state), expected);
@@ -298,7 +309,8 @@ async fn a_lone_interface_operation_leaves_its_wait_in_context_before_the_reques
         static_context_fingerprint: Some(initial.static_context_fingerprint.clone()), native_context_fingerprint: None, rollout_path: None,
     });
     let labels = codex_context_labels();
-    let projected = codex_client_projection_labels();
+    let mut projected = codex_client_projection_labels();
+    projected.insert(TURN_TOKEN_USAGE_LABEL.to_string());
     let rules = LiveStreamRules::from_private_config_or_disabled(&serde_json::Map::new()).unwrap();
     let streams = root.path().join("streams");
     let provider = InterfaceId::new("world_provider_codex");

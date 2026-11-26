@@ -226,7 +226,7 @@ impl CodexAppServerInterfaceDriver {
         emit_native_effect(context.sink, &pending.turn_id, operation, bindings, amendment)?;
         context.control.publish(CodexTurnControlTarget::Suspended {
             handle, request_ids: self.next_request_id.clone(), pending_requests: self.pending_server_requests.clone(),
-            scope: context.scope.clone(), output: Arc::downgrade(context.sink.emit), continuity: context.sink.continuity_snapshot(),
+            scope: context.scope.clone(), output: std::sync::Weak::new(), continuity: context.sink.continuity_snapshot(),
             handoff_barrier: context.handoff_barrier.clone(), effect_gate: pending.effect_gate.clone(),
             turn_interrupted: pending.turn_interrupted.clone(), thread_id: pending.thread_id.clone(), turn_id: pending.turn_id.clone(),
             late_calls: None,
@@ -758,12 +758,17 @@ impl CodexAppServerInterfaceDriver {
         self.remove_pending_request(context.scope, &pending).await?;
         context.sink.settle_pending(&pending.key);
         context.sink.send_awaiting_results_receipt()?;
+        let output = if self.has_pending_request(context.scope).await {
+            std::sync::Weak::new()
+        } else {
+            Arc::downgrade(context.sink.emit)
+        };
         context.control.publish(CodexTurnControlTarget::Draining {
             handle: request_handle,
             request_ids: self.next_request_id.clone(),
             pending_requests: self.pending_server_requests.clone(),
             scope: context.scope.clone(),
-            output: Arc::downgrade(context.sink.emit),
+            output,
             continuity: context.sink.continuity_snapshot(),
             handoff_barrier: context.handoff_barrier.clone(),
             effect_gate: effect_gate.clone(),
