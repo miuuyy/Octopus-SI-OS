@@ -52,6 +52,12 @@ could protect, so its commands run like the user's own, as Codex's
 work there. Project-access and read-only rooms keep the sandbox.
 Do not treat a policy grant as equivalent to physical process isolation.
 
+On macOS, restricted platform defaults allow reading temporary directories but
+do not grant scratch writes to all of `/tmp` or `/var/tmp` (nor their
+`/private` aliases). A tool that needs temporary files must have an explicit
+writable root; the workspace runner selects its temporary directory beneath
+the projected writable roots.
+
 The two layers do not depend on each other. A room enforces the operation-level
 grant itself, and since the room is also the executor, a model cannot talk its
 way past it.

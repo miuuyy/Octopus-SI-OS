@@ -854,6 +854,53 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn macos_temporary_aliases_do_not_grant_writes_outside_the_leased_root() {
+        for (canonical, alias) in [("/private/tmp", "/tmp"), ("/private/var/tmp", "/var/tmp")] {
+            let temporary = tempfile::Builder::new()
+                .prefix("octopus-floor-")
+                .tempdir_in(canonical)
+                .unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let worktree = root.join("worktree");
+            std::fs::create_dir(&worktree).unwrap();
+            let ctx = ctx_for(&worktree, &worktree);
+            let caps = WorkerEnvCaps::from_kind_boundary(&git_worktree_spec());
+            let projected = project_sandbox(&git_worktree_spec(), &caps, &ctx).unwrap();
+            for (target, allowed) in [
+                (worktree.join("granted"), true),
+                (root.join("denied-canonical"), false),
+                (
+                    Path::new(alias)
+                        .join(root.file_name().unwrap())
+                        .join("denied-alias"),
+                    false,
+                ),
+            ] {
+                let result = run_sandboxed_in_room(
+                    &projected,
+                    ProcessSandboxMode::Enforced,
+                    &AbsPath::new(&worktree).unwrap(),
+                    vec!["/bin/mkdir".into(), target.to_string_lossy().into_owned()],
+                    Duration::from_secs(5),
+                    1024,
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+                assert!(!result.timed_out);
+                assert_eq!(
+                    result.exit_code == 0,
+                    allowed,
+                    "explicit roots, not temporary-directory aliases, decide write access: {}: {}",
+                    target.display(),
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                assert_eq!(target.exists(), allowed);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn macos_floor_runs_cwd_relative_file_probe_in_worktree() {
         let root = std::env::temp_dir().join(format!(
             "octo_floor_macos_{}_{}",
