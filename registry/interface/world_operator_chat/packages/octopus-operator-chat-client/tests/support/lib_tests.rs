@@ -1396,7 +1396,7 @@
         assert_eq!(pack["workspace_setup"]["agent_presets"].as_array().unwrap().iter().map(|preset| preset["id"].as_str().unwrap()).collect::<Vec<_>>(), vec!["computer-use"]);
         let manifest = read("app/distribution/local-packages/packages/world_operator_chat.json");
         let required = manifest["required_packages"].as_array().unwrap().iter().map(|v|v.as_str().unwrap()).collect::<BTreeSet<_>>();
-        assert_eq!(required,BTreeSet::from(["driver.browser_session","driver.desktop_session","driver.filesystem_workspace","driver.system_room","driver.code_mode","artifact.codex_context","world_provider_realtime","system_memory"]));
+        assert_eq!(required,BTreeSet::from(["driver.filesystem_workspace","driver.system_room","driver.code_mode","artifact.codex_context","system_memory"]));
         let desktop = read("app/distribution/local-packages/packages/driver.desktop_session.json");
         assert!(!desktop["required_packages"].as_array().unwrap().contains(&serde_json::json!("world_operator_chat")), "the client-to-desktop package dependency cannot cycle back to the client");
         let driver = read("app/distribution/local-packages/packages/driver.code_mode.json");

@@ -89,7 +89,16 @@
           "required": ["interface_id", "required_state"],
           "properties": {
             "interface_id": { "$ref": "#/$defs/id" },
-            "required_state": { "enum": ["account_readable", "credential_configured"] }
+            "required_state": { "enum": ["account_readable", "credential_configured"] },
+            "model_override": {
+              "type": "object",
+              "required": ["env_key", "value"],
+              "properties": {
+                "env_key": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+                "value": { "type": "string", "minLength": 1, "maxLength": 256 }
+              },
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },

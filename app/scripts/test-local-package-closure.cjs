@@ -562,7 +562,31 @@ async function boundedAgentPresetFixture(executable) {
     const planWrites = nativeHomePlan.writes.map(write => ({ ...write, destination: write.filePath, expectedBeforeDigest: write.expectedBeforeHash, afterDigest: crypto.createHash("sha256").update(write.content).digest("hex") }));
     const nativeHome = JSON.parse(planWrites.find(write => write.tag === `run:${nativeHomePlan.runId}`).content);
     const records = check.validatePlannedHomeRuns(validationRoots, nativeHomePlan, planWrites, nativeHome);
-    assert.equal(records.length, 9);
+    assert.equal(nativeHome.interface_state[nativeHomePlan.chatInterfaceId].voice_context, undefined);
+    await assert.rejects(fs.access(path.join(active, "interface", homeRecipe.voice.provider_interface_id, "interface.json")), { code: "ENOENT" });
+    const maintenance = nativeHome.interface_state[nativeHomePlan.modelInterfaceId].maintenance_observer;
+    const observer = maintenance.initial_record;
+    const projection = maintenance.projection_run.initial_record;
+    assert.equal(observer.id, maintenance.run);
+    assert.equal(projection.id, maintenance.projection_run.run);
+    const execution = [nativeHome, observer, projection];
+    const expected = execution.map(run => run.id);
+    for (const [index, run] of execution.entries()) {
+      const writers = Object.entries(run.interface_state).flatMap(([owner, state]) => {
+        const declaration = state.run_authoring_binding?.writer_run ?? state.writer_run;
+        if (!declaration) return [];
+        assert.equal(declaration.initial_record.interface_state[owner].file_writer_target.run, run.id);
+        return [declaration.run];
+      });
+      assert.equal(writers.length, index === 0 ? 2 : 1);
+      expected.push(...writers);
+    }
+    assert.equal(new Set(expected).size, expected.length);
+    assert.deepEqual(records.map(run => run.id).sort(), expected.sort());
+    for (const id of expected) {
+      assert.throws(() => check.validatePlannedHomeRuns(validationRoots, nativeHomePlan,
+        planWrites.filter(write => write.tag !== `run:${id}`), nativeHome), /omits|differs/);
+    }
     const writer = records.find(run => run.interface_state && Object.values(run.interface_state).some(state => state.file_writer_target));
     const changedWriter = planWrites.map(write => write.tag === `run:${writer.id}` ? { ...write, content: JSON.stringify({ ...writer, trace: `${writer.trace}:changed` }) } : write);
     assert.throws(() => check.validatePlannedHomeRuns(validationRoots, nativeHomePlan, changedWriter, nativeHome), /declared initial record/);

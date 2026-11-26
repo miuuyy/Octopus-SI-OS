@@ -200,10 +200,6 @@
     {
       "registry_kind": "mark",
       "owner": "ocr.text.contains"
-    },
-    {
-      "registry_kind": "mark",
-      "owner": "task.summary.received"
     }
   ],
   "required_packages": [

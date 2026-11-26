@@ -421,13 +421,10 @@
     }
   ],
   "required_packages": [
-    "driver.browser_session",
     "driver.system_room",
     "driver.code_mode",
-    "driver.desktop_session",
     "driver.filesystem_workspace",
     "artifact.codex_context",
-    "world_provider_realtime",
     "system_memory"
   ]
 }

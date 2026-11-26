@@ -26,7 +26,7 @@ type ProviderSpec = {
   native_stream_max_retries?: number;
   key?: { env: string; label: string; header?: string; prefix?: string };
   base_url?: { env: string; label: string };
-  model?: { env: string; label: string; slug: string; display_name: string; efforts?: Effort[] };
+  model?: { env: string; label: string; slug: string; display_name: string; context_window?: number; efforts?: Effort[] };
   cli?: {
     commands: string[];
     optional_commands?: string[];
@@ -179,6 +179,7 @@ function setupModel(spec: ProviderSpec): ModelRow[] {
   return [{
     slug: spec.model!.slug,
     display_name: spec.model!.display_name,
+    ...(spec.model!.context_window ? { context_window: spec.model!.context_window } : {}),
     input_modalities: ["text"],
     efforts: EFFORT_ORDER.filter((effort) => declared.includes(effort)),
     ...(declared.length ? { default_effort: "none" as const } : {}),

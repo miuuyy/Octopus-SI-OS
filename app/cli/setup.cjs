@@ -13,6 +13,8 @@ const { projectionReadRequest } = require("../electron/projectionReadContract.cj
 const { planClientAgentTemplate } = require("../electron/clientAgentCatalog.cjs");
 const { commitProjectionClientAuthoring } = require("../electron/clientWorkspaceAuthoring.cjs");
 const { taskRetirementBarrier, projectionStore, requireDistribution, environmentValue } = require("./environment.cjs");
+const { readInterfaceEnvironmentDeclarations, readInterfacePrivateEnvironmentDocument, validInterfaceEnvironmentName,
+  writeInterfacePrivateValues } = require("../electron/projection/privateConfiguration.cjs");
 
 const DIGEST = /^[a-f0-9]{64}$/;
 
@@ -260,6 +262,15 @@ function createSetupOwners(environment, options = {}) {
     return entries;
   }
 
+  async function modelOverrideScope(plan) {
+    const descriptor = await readProviderDescriptor(registryRoot, plan.provider.interface_id);
+    validateSetupModelOverride(descriptor, plan.workspace.request.home.providerModel, plan.provider.model_override);
+    const declarations = await readInterfaceEnvironmentDeclarations(descriptor, descriptor.id, path.join(registryRoot, "interface", descriptor.id));
+    const names = new Set(declarations.map((entry) => entry.name));
+    if (!names.has(plan.provider.model_override.env_key)) throw new Error("Provider model override is not declared by its life environment.");
+    return { descriptor, names, directory: path.join(environment.home, "interfaces", descriptor.id) };
+  }
+
   return {
     packages: {
       async probe(plan) {
@@ -369,7 +380,14 @@ function createSetupOwners(environment, options = {}) {
       },
     },
     provider: {
-      probe: metadata.setupOwner.probe,
+      async probe(plan) {
+        const proof = await metadata.setupOwner.probe(plan);
+        if (!proof || !plan.provider.model_override) return proof;
+        const scope = await modelOverrideScope(plan);
+        const saved = await readInterfacePrivateEnvironmentDocument(scope.directory, scope.descriptor.id, scope.names);
+        if (saved.values.get(plan.provider.model_override.env_key) !== plan.provider.model_override.value) return null;
+        return [...proof, setupReference("provider_observation", `${scope.descriptor.id}.model`, plan.provider.model_override)];
+      },
       async apply(plan) {
         checkCancelled(options.signal);
         if (plan.provider.required_state === "credential_configured") {
@@ -393,6 +411,15 @@ function createSetupOwners(environment, options = {}) {
               );
             },
           });
+          if (plan.provider.model_override) {
+            const scope = await modelOverrideScope(plan);
+            const saved = await readInterfacePrivateEnvironmentDocument(scope.directory, scope.descriptor.id, scope.names);
+            const { env_key: key, value } = plan.provider.model_override;
+            if (saved.values.has(key) && saved.values.get(key) !== value) {
+              throw new Error(`Provider '${scope.descriptor.id}' already has a different private model override. Resolve it before resuming setup.`);
+            }
+            await writeInterfacePrivateValues(scope.directory, scope.descriptor.id, scope.names, { [key]: value });
+          }
           if (!await metadata.setupOwner.probe(plan)) {
             throw new Error(`Provider '${plan.provider.interface_id}' credentials were configured without a readable private environment.`);
           }
@@ -601,8 +628,9 @@ async function collectChoices(environment, catalog, pack, options) {
     && models.some((row) => row.model === homeRecipe.default_model)
     ? homeRecipe.default_model
     : models.find((row) => row.isDefault)?.model ?? models[0].model;
+  const selection = setupModelSelection(providerDescriptor, options.model, models, environment);
   const model = await choose(options, "model", "Choose a model for Home", models.map((row) => ({ value: row.model, label: row.displayName })),
-    options.model, defaultModel);
+    selection.model, defaultModel);
   const modelRow = models.find((row) => row.model === model);
   if (!modelRow) throw new Error("Choose a model from the provider's current catalogue.");
   const defaultEffort = providerId === homeRecipe.provider_interface_id && model === homeRecipe.default_model
@@ -625,7 +653,32 @@ async function collectChoices(environment, catalog, pack, options) {
     validateProviderModelSelection([discoveredVoice], { providerInterfaceId: voiceProvider.id, providerModel: voiceModel, reasoningEffort: "" });
   }
   return { operationId: options.operationId ?? randomUUID(), workspaceName, workspaceGoal: options.workspaceGoal ?? workspaceName,
-    projects, providerId, requiredState, extraPackages, providerPackage, model, reasoningEffort, serviceTier, voiceModel, recommended, agentPresets: options.agentPresets };
+    projects, providerId, requiredState, extraPackages, providerPackage, model, modelOverride: selection.modelOverride,
+    reasoningEffort, serviceTier, voiceModel, recommended, agentPresets: options.agentPresets };
+}
+
+function validateSetupModelOverride(descriptor, model, override) {
+  const config = descriptor.interface_driver_config?.private_config;
+  const alias = config?.opencodex?.model_env_slug, envKey = config?.opencodex?.model_env;
+  if (!alias || !validInterfaceEnvironmentName(envKey) || model !== alias || override?.env_key !== envKey
+    || typeof override?.value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(override.value)
+    || override.value.split("/").some((part) => !part || part === "." || part === "..")
+    || !config.model_catalog?.some((row) => row.model === alias)
+    || !descriptor.interface_policy?.variables?.models?.default?.includes(alias)) {
+    throw new Error(`Provider '${descriptor.id}' has no valid declared model override. Use a catalogue model or an explicit upstream model ID for its configured alias.`);
+  }
+}
+
+function setupModelSelection(descriptor, requested, models, environment) {
+  const config = descriptor.interface_driver_config?.private_config?.opencodex;
+  if (requested === undefined || (models.some((row) => row.model === requested) && requested !== config?.model_env_slug)) {
+    return { model: requested };
+  }
+  if (!config?.model_env_slug) throw new Error(`Provider '${descriptor.id}' requires a model from its current catalogue; it declares no upstream model override.`);
+  const modelOverride = { env_key: config.model_env,
+    value: requested === config.model_env_slug ? environmentValue(environment, config.model_env) : requested };
+  validateSetupModelOverride(descriptor, config.model_env_slug, modelOverride);
+  return { model: config.model_env_slug, modelOverride };
 }
 
 function compileSetupPlan(pack, choices) {
@@ -694,7 +747,8 @@ function compileSetupPlan(pack, choices) {
   return {
     pack: { id: pack.id, manifest_digest: pack.manifest_digest, selected_recommended: [...choices.recommended].sort() },
     packages: [...plannedPackages.values()].sort(byId),
-    extensions: [], provider: { interface_id: providerId, required_state: requiredState },
+    extensions: [], provider: { interface_id: providerId, required_state: requiredState,
+      ...(choices.modelOverride ? { model_override: choices.modelOverride } : {}) },
     workspace: { request_digest: workspaceInitializeRequestDigest(request), request,
       project_defaults: defaults.sort((a, b) => a.package_id.localeCompare(b.package_id)) },
   };
@@ -715,10 +769,11 @@ async function verifySetupPlan(environment, plan) {
   const { extraPackages, providerPackage } = resolveProviderPackages(catalog, selected, providerId);
   const providerDescriptor = await readProviderDescriptor(environment.packageRoots.sourceRegistryRoot, providerId);
   const requiredState = providerSetupRequiredState(providerDescriptor);
+  if (plan.provider.model_override) validateSetupModelOverride(providerDescriptor, request.home.providerModel, plan.provider.model_override);
   const expected = compileSetupPlan(pack, {
     operationId: request.operationId, workspaceName: request.root.name, workspaceGoal: request.root.goal,
     projects: request.projects.map((row) => ({ ...row, ...row.presentation })),
-    providerId, requiredState, extraPackages, providerPackage,
+    providerId, requiredState, extraPackages, providerPackage, modelOverride: plan.provider.model_override,
     model: request.home.providerModel, reasoningEffort: request.home.reasoningEffort, serviceTier: request.home.serviceTier, voiceModel: request.home.voiceModel,
     recommended: plan.pack.selected_recommended, agentPresets: (request.agentPresets ?? []).map((row) => row.presetId),
   });
@@ -824,10 +879,13 @@ async function choose(options, id, prompt, choices, value, defaultValue) {
 function hasNewChoices(options) { return ["packId", "workspaceName", "workspaceGoal", "projectName", "projects", "providerId", "model", "reasoningEffort", "serviceTier", "voiceModel", "agentPresets"].some((key) => options[key] !== undefined) || options.recommended?.length > 0; }
 function assertSavedChoices(options, plan) {
   const expected = { packId: plan.pack.id, workspaceName: plan.workspace.request.root.name,
-    workspaceGoal: plan.workspace.request.root.goal, providerId: plan.workspace.request.home.providerInterfaceId, model: plan.workspace.request.home.providerModel,
+    workspaceGoal: plan.workspace.request.root.goal, providerId: plan.workspace.request.home.providerInterfaceId,
     reasoningEffort: plan.workspace.request.home.reasoningEffort, serviceTier: plan.workspace.request.home.serviceTier, voiceModel: plan.workspace.request.home.voiceModel };
   for (const [field, value] of Object.entries(expected)) {
     if (options[field] !== undefined && options[field] !== value) throw new Error(`Saved setup already chose ${field}. Rerun without replacement choices.`);
+  }
+  if (options.model !== undefined && ![plan.workspace.request.home.providerModel, plan.provider.model_override?.value].includes(options.model)) {
+    throw new Error("Saved setup already chose model. Rerun without replacement choices.");
   }
   if (options.projectName !== undefined && (plan.workspace.request.projects.length !== 1
     || plan.workspace.request.projects[0].name !== options.projectName)) throw new Error("Saved setup has a different Project selection.");

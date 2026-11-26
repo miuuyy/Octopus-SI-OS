@@ -34,7 +34,8 @@
           "openai/gpt-6.1-sol",
           "openai/gpt-6.1-terra",
           "openai/gpt-6-sol",
-          "openai/gpt-6-luna"
+          "openai/gpt-6-luna",
+          "openrouter-model"
         ]
       }
     }
@@ -2608,6 +2609,28 @@
             }
           ],
           "show_in_picker": true
+        },
+        {
+          "model": "openrouter-model",
+          "display_name": "Explicit OpenRouter model",
+          "description": "Explicit OpenRouter model through OpenRouter.",
+          "context_window": 131072,
+          "input_modalities": [
+            "text"
+          ],
+          "output_modalities": [
+            "text"
+          ],
+          "supports_tools": true,
+          "supports_reasoning": false,
+          "default_reasoning_effort": "none",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "none",
+              "description": "No reasoning"
+            }
+          ],
+          "show_in_picker": true
         }
       ],
       "model_catalog_operation": {
@@ -2752,6 +2775,8 @@
         "adapter": "openai-chat",
         "credential_owner_interface": "world_provider_openrouter",
         "registry_entry": "openrouter",
+        "model_env": "OCTOPUS_PROVIDER_OPENROUTER_MODEL",
+        "model_env_slug": "openrouter-model",
         "allow_private_network": false,
         "limits": {
           "max_request_bytes": 33554432,
@@ -3057,6 +3082,40 @@
               "supports_parallel_tool_calls": false,
               "context_window": 400000,
               "max_context_window": 1050000,
+              "effective_context_window_percent": 95,
+              "experimental_supported_tools": [],
+              "input_modalities": [
+                "text"
+              ],
+              "supports_search_tool": false,
+              "use_responses_lite": false
+            },
+            {
+              "slug": "openrouter-model",
+              "display_name": "Explicit OpenRouter model",
+              "description": "Explicit OpenRouter model through OpenRouter.",
+              "default_reasoning_level": "none",
+              "supported_reasoning_levels": [
+                {
+                  "effort": "none",
+                  "description": "No reasoning"
+                }
+              ],
+              "shell_type": "shell_command",
+              "visibility": "list",
+              "supported_in_api": true,
+              "priority": 9,
+              "base_instructions": "",
+              "supports_reasoning_summaries": false,
+              "default_reasoning_summary": "auto",
+              "support_verbosity": false,
+              "truncation_policy": {
+                "mode": "tokens",
+                "limit": 10000
+              },
+              "supports_parallel_tool_calls": false,
+              "context_window": 131072,
+              "max_context_window": 131072,
               "effective_context_window_percent": 95,
               "experimental_supported_tools": [],
               "input_modalities": [

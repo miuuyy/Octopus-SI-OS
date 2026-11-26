@@ -20,16 +20,13 @@ pub(super) fn template(
     identity: &PlannedIdentity,
     voice_update: bool,
 ) -> Result<BoundCheckpointTemplate, String> {
-    let voice = identity
-        .voice
-        .as_ref()
-        .ok_or("Home delivery requires its declared voice topology")?;
     let source = &interfaces(identity)[usize::from(voice_update)];
     let (label, recipient) = if voice_update {
-        (
-            "realtime.session.update",
-            voice.context.provider_id.as_str(),
-        )
+        let voice = identity
+            .voice
+            .as_ref()
+            .ok_or("Home delivery requires its declared voice topology")?;
+        ("realtime.session.update", voice.context.provider_id.as_str())
     } else {
         (
             "client.surface.document",
@@ -120,7 +117,10 @@ pub(super) fn plan(
         .ok_or("Home context requires its explicit absolute run_records_root")?;
     let root = registry.join("interface");
     let source = load_interface_descriptor(&root, &identity.worker_choice_interface)?;
-    for id in interfaces(identity) {
+    for id in interfaces(identity)
+        .into_iter()
+        .take(if identity.voice.is_some() { 3 } else { 1 })
+    {
         push_json_write(
             root.join(&id).join("interface.json"),
             sibling_descriptor_bytes(&source, &id, None, None)?,
@@ -146,18 +146,16 @@ pub(super) fn plan(
             writes,
         )?;
     }
-    let voice = identity
-        .voice
-        .as_ref()
-        .ok_or("Home delivery lost its voice declaration")?;
     let ids = interfaces(identity);
-    let contract = json!({
+    let mut contract = json!({
         "widget":{"interface":ids[0],"label":"client.surface.document","recipient_interface":identity.chat_interface_id,"document_contract":"artifact-home-widget-authoring"},
         "client_action":{"interface":ids[0],"label":"client.action","recipient_interface":identity.chat_interface_id,"schema":"octopus.client_action","schema_version":1,"actions":["open_surface","inspect_client","list_widgets","set_widget"],"result_label":CLIENT_ACTION_RESULT_LABEL},
-        "voice_update":{"run":voice.context.run_id,"interface":ids[1],"label":"realtime.session.update","recipient_interface":voice.context.provider_id,"payload":{"call_id":"copy from the admitted realtime.delegation artifact","correlation_id":"same admitted call correlation","update_id":"new stable identity for this one semantic update","delegation_id":"same admitted delegation or null","channel":"commentary","text":"Model-selected public progress or result, grounded in Task evidence"}},
         "run":identity.run_id,
         "authoring_artifact":authoring.id
     });
+    if let Some(voice) = &identity.voice {
+        contract["voice_update"] = json!({"run":voice.context.run_id,"interface":ids[1],"label":"realtime.session.update","recipient_interface":voice.context.provider_id,"payload":{"call_id":"copy from the admitted realtime.delegation artifact","correlation_id":"same admitted call correlation","update_id":"new stable identity for this one semantic update","delegation_id":"same admitted delegation or null","channel":"commentary","text":"Model-selected public progress or result, grounded in Task evidence"}});
+    }
     let text = format!(
         "Exact Home artifact delivery addresses for this run:\n{}\n\nFor widgets, client Extensions and client navigation use the actual granted client.mcp tool and its inspect_client/list_widgets/set_widget/publish_widget/open_file/open_client_surface catalogue operations with the stated System presentation interface. inspect_client reports the running client's Extensions folder, contracts, host vocabulary and every Extension's admission, review and runtime state before you change the client. The MCP adapter uses artifact.send under the same grant. inspect_client, list_widgets and set_widget wait for the client and return its actual saved state within the same tool call. For a long text document, save it with granted file tools and call open_file; it returns the readable target and requests its tab in the right Files pane. The correlated client.action.result returns to the system room; it does not become a new operator message. One set_widget call carries every change for any number of widgets from one inventory, with their exact widget_id/source_digest. Use that tool result to continue the request immediately, then give one concise confirmation. Do not end the turn to wait or poll for a result. These controls do not require Computer Use or source edits. During a live call, the client sends public progress to the voice commentary channel and streams public answers to the speakable channel, preserving the exact delegation and sending each text fragment once. The voice provider delegates a request to this run; use the same client controls and wait for their actual result before replying. Answer an admitted voice delegation with ordinary public output; do not call artifact.send merely to repeat that output. For independent Task returns or a deliberately separate voice update, use the actual granted artifact.send tool with the stated System interface, label, and payload. The runtime admits this artifact once and delivers it both to the listed recipient and to Home's exact text provider. Task workers can use the same return pins only after authoring those exact bindings, policy and readable role closure in their own runs. Never resend an admitted artifact to make it visible. Voice updates must copy call_id/correlation_id/delegation_id from actual admitted voice semantics, not private transport state or guessed values. A sent update is not speech-playback proof; inspect its realtime.session.updated evidence. Stopping voice does not cancel Tasks. Use artifact-home-widget-authoring for native/sandbox and persistent/transient document payloads and for installed client Extensions with their data sources.",
         pretty_json(&contract)?
@@ -321,7 +319,10 @@ pub(super) fn wire(
         .filter_map(Value::as_str)
         .map(String::from)
         .collect::<std::collections::BTreeSet<_>>();
-    let mut deliveries = vec![template(identity, false)?, template(identity, true)?];
+    let mut deliveries = vec![template(identity, false)?];
+    if identity.voice.is_some() {
+        deliveries.push(template(identity, true)?);
+    }
     if let Some(reply) = client_result_template(identity, topology)? { deliveries.push(reply); }
     for mut template in deliveries {
         for binding in context {

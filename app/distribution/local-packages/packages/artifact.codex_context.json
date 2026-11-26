@@ -58,6 +58,10 @@
     {
       "registry_kind": "artifact",
       "owner": "artifact-home-widget-authoring"
+    },
+    {
+      "registry_kind": "mark",
+      "owner": "task.summary.received"
     }
   ]
 }

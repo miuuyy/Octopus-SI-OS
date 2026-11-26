@@ -1,0 +1,212 @@
+{
+  "schema": "octopus.local_application_pack",
+  "schema_version": 1,
+  "id": "headless",
+  "version": "1.0.0",
+  "name": "Headless Pack",
+  "description": "API-key providers, memory, authoring, filesystem and process rooms for a server without desktop, browser or audio drivers.",
+  "components": [
+    {
+      "package_id": "world_cron",
+      "selection": "recommended",
+      "reason": "Provides time and inactivity triggers for ordinary runs."
+    },
+    {
+      "package_id": "world_watch",
+      "selection": "recommended",
+      "reason": "Provides a JSON-configured read-only sensor template for watching HTTP endpoints and local files."
+    },
+    {
+      "package_id": "world_memory_cron",
+      "selection": "recommended",
+      "reason": "Offers a trigger that consolidates Home memory after a quiet period: duplicates merged, contradictions settled, stale notes folded."
+    },
+    {
+      "package_id": "world_provider_codex",
+      "selection": "included",
+      "reason": "Supplies the shared provider adapter and native service-input owner; no ChatGPT sign-in is required for an API-key provider."
+    },
+    {
+      "package_id": "artifact.codex_context",
+      "selection": "included",
+      "reason": "Gives tasks the declared architecture and working-role context."
+    },
+    {
+      "package_id": "world_operator_chat",
+      "selection": "included",
+      "reason": "Provides the exact Home, task, and authoring interfaces without making the provider a runtime identity."
+    },
+    {
+      "package_id": "driver.system_room",
+      "selection": "included",
+      "reason": "Provides the narrowly granted file authoring room used to create Home and projected task checkpoints."
+    },
+    {
+      "package_id": "system_memory",
+      "selection": "included",
+      "reason": "Lets Home and tasks remember and find preferences, corrections and proven procedures with one call each."
+    },
+    {
+      "package_id": "driver.filesystem_workspace",
+      "selection": "included",
+      "reason": "Provides the direct project workspace for files, networked commands, PTY sessions, and persistent process control."
+    },
+    {
+      "package_id": "driver.process_session",
+      "selection": "included",
+      "reason": "Keeps isolated private process rooms available for explicit selection without adding them to ordinary coding tasks."
+    },
+    {
+      "package_id": "driver.git_worktree",
+      "selection": "included",
+      "reason": "Provides isolated code and file operations in selected project folders."
+    },
+    {
+      "package_id": "driver.code_mode",
+      "selection": "included",
+      "reason": "Provides the declared JavaScript room and artifact-bound persistent context for explicitly selected tasks."
+    },
+    {
+      "package_id": "world_provider_openrouter",
+      "selection": "included",
+      "reason": "Provides the default API-key provider with an explicit operator-selected model."
+    },
+    {
+      "package_id": "world_provider_gemini",
+      "selection": "recommended",
+      "reason": "Offers Gemini with a separately configured API key."
+    },
+    {
+      "package_id": "world_provider_opencode_go",
+      "selection": "recommended",
+      "reason": "Offers OpenCode Go with a separately configured API key."
+    },
+    {
+      "package_id": "world_github_watch",
+      "selection": "recommended",
+      "reason": "Offers a read-only GitHub event sensor."
+    },
+    {
+      "package_id": "world_quiet_watch",
+      "selection": "recommended",
+      "reason": "Offers quiet-period attention without a desktop."
+    }
+  ],
+  "extensions": [],
+  "workspace_setup": {
+    "selection": "included",
+    "home": {
+      "provider_interface_id": "world_provider_openrouter",
+      "provider_interface_ids": [
+        "world_provider_openrouter",
+        "world_provider_gemini",
+        "world_provider_opencode_go"
+      ],
+      "default_model": "anthropic/claude-sonnet-5",
+      "default_reasoning_effort": "none",
+      "worker_interface_id": "system_worker_operator_home",
+      "door_host_slots": {
+        "system_workspace_env": {
+          "workspace_root": "/",
+          "host_filesystem_root": "/"
+        }
+      },
+      "context_artifact_bindings": [
+        {
+          "id": "artifact-worker-role-template"
+        },
+        {
+          "id": "artifact-grounding-system-architecture"
+        },
+        {
+          "id": "artifact-codebase-layout"
+        },
+        {
+          "id": "artifact-worker-role-operator-home"
+        },
+        {
+          "id": "artifact-home-task-authoring"
+        },
+        {
+          "id": "artifact-spawn-literacy"
+        },
+        {
+          "id": "artifact-home-widget-authoring"
+        }
+      ],
+      "selected_worker_environment_kinds": [
+        "code_mode",
+        "filesystem_workspace",
+        "system_room"
+      ]
+    },
+    "task": {
+      "worker_interface_id": "system_worker_operator_task",
+      "context_artifact_bindings": [
+        {
+          "id": "artifact-worker-role-template"
+        },
+        {
+          "id": "artifact-grounding-system-architecture"
+        },
+        {
+          "id": "artifact-codebase-layout"
+        },
+        {
+          "id": "artifact-worker-role-operator-task"
+        },
+        {
+          "id": "artifact-home-task-authoring"
+        },
+        {
+          "id": "artifact-spawn-literacy"
+        },
+        {
+          "id": "artifact-home-widget-authoring"
+        }
+      ],
+      "selected_worker_environment_kinds": [
+        "code_mode",
+        "system_room"
+      ]
+    },
+    "project_defaults": [
+      {
+        "package_id": "driver.filesystem_workspace",
+        "default_for_new_tasks": true
+      },
+      {
+        "package_id": "driver.process_session",
+        "default_for_new_tasks": false
+      },
+      {
+        "package_id": "driver.git_worktree",
+        "default_for_new_tasks": false
+      },
+      {
+        "package_id": "world_provider_openrouter",
+        "default_for_new_tasks": true
+      }
+    ],
+    "triggers": [
+      {
+        "package_id": "world_memory_cron",
+        "template_interface_id": "world_memory_cron",
+        "interface_id": "world_memory_consolidation",
+        "quiet_period_seconds": 10800,
+        "task": {
+          "worker_interface_id": "system_worker_memory_consolidation",
+          "context_artifact_bindings": [
+            {
+              "id": "artifact-role-memory-consolidation"
+            }
+          ],
+          "selected_worker_environment_kinds": [
+            "system_room"
+          ]
+        }
+      }
+    ],
+    "agent_presets": []
+  }
+}

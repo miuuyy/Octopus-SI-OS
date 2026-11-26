@@ -59,6 +59,25 @@ pub(super) fn select(
         .as_ref()
         .ok_or("Home requires a declared voice provider contract")?;
     safe_segment(&selected.provider_interface_id, "Home voice provider")?;
+    let retained_voice = existing
+        .and_then(|run| run.get("interface_state"))
+        .and_then(|state| state.get(&identity.chat_interface_id))
+        .and_then(|state| state.get("voice_context"))
+        .is_some();
+    if requested_model.is_none()
+        && !retained_voice
+        && !topology
+            .interface_policies
+            .contains_key(&InterfaceId::new(&selected.provider_interface_id))
+        && !root
+            .join(&selected.provider_interface_id)
+            .join("interface.json")
+            .try_exists()
+            .map_err(|error| format!("Home voice provider cannot be inspected: {error}"))?
+    {
+        return Ok(None);
+    }
+
     let parts = Path::new(&selected.contract_file)
         .components()
         .collect::<Vec<_>>();

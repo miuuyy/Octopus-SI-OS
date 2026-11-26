@@ -813,9 +813,14 @@ pub(crate) fn build_chat_run_record(
                 "pinned_context_items": conversation.pinned_context_items,
                 "continued_from": conversation.continued_from,
                 "cycle_checkpoint_ids": cycle_checkpoint_ids,
-                "voice_context": identity.voice.as_ref().map(|voice| &voice.context),
             }),
         );
+        if let Some(voice) = &identity.voice {
+            interface_state
+                .get_mut(&identity.chat_interface_id)
+                .expect("client state was just inserted")["voice_context"] =
+                serde_json::json!(voice.context);
+        }
     }
     let mut provider_state = existing_provider_state.unwrap_or_else(|| {
         serde_json::json!({

@@ -74,7 +74,8 @@
       },
       "inherit_env_from_interface": [
         "/interface_driver_config/private_config/process_env_names",
-        "/interface_driver_config/transport/auth_env_key"
+        "/interface_driver_config/transport/auth_env_key",
+        "/interface_driver_config/private_config/opencodex/model_env"
       ]
     }
   ]

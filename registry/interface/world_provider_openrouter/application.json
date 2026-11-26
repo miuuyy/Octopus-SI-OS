@@ -19,6 +19,13 @@
         "label": "OpenRouter API key",
         "kind": "secret",
         "required": true
+      },
+      {
+        "interface": "world_provider_openrouter",
+        "pointer": "/interface_driver_config/private_config/opencodex/model_env",
+        "label": "Explicit upstream model ID (check route privacy before use)",
+        "kind": "text",
+        "required": false
       }
     ]
   }
