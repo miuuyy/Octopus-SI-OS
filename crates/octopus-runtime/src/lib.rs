@@ -4029,6 +4029,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ceiling_allowance_does_not_authorize_an_uninstalled_interface() {
+        let runtime = runtime_with_interface_catalog();
+        let target = InterfaceId::new("optional_not_installed");
+        let grant = grant_with_interfaces(&["optional_not_installed"], &[]);
+        assert!(grant.boundary.interfaces.contains(&target));
+        assert!(matches!(
+            runtime.require_known_interface(&target),
+            Err(RuntimeError::UnknownInterface(ref id)) if id == &target
+        ));
+    }
+
     #[tokio::test]
     async fn checkpoint_outbound_interface_must_exist_in_runtime_catalog() {
         let runtime = runtime_with_interface_catalog();

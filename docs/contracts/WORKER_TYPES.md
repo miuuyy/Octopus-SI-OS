@@ -104,6 +104,12 @@ A worker's tool surface is its formed policy. A run whose worker has no
 modifying tools hands deeper work on by emitting an artifact through the
 target's own pin binding, admitted by policy.
 
+Ceiling interface ids describe potential reach, not installation requirements.
+Minimal packs may leave some targets uninstalled. Startup summarizes those as
+informational; installed targets rejected by registry validation remain warnings.
+Neither class is available to active bindings: an unavailable target remains
+denied until its descriptor is installed and valid.
+
 ## Role artifacts
 
 A worker's role and prompt are not a field and not a file inside the pin. They

@@ -1992,21 +1992,11 @@ pub async fn build_embedded_spine(
     let root = &config.registry_root;
     let packages = RegistryPackages::load(root)
         .map_err(|error| format!("loading registry packages failed: {error}"))?;
-    if !packages.dangling_ceiling_refs.is_empty() {
-        let workers = packages
-            .dangling_ceiling_refs
-            .iter()
-            .map(|reference| &reference.worker)
-            .collect::<BTreeSet<_>>();
-        let interfaces = packages
-            .dangling_ceiling_refs
-            .iter()
-            .map(|reference| (&reference.field, &reference.target))
-            .collect::<BTreeSet<_>>();
-        eprintln!(
-            "policy     {} interface targets across {} worker ceilings are unavailable; requests to them will be refused. References: {}/interface/<worker>/policy.json (ceiling.interfaces)",
-            interfaces.len(), workers.len(), root.display()
-        );
+    for diagnostic in crate::registry_reference_graph::ceiling_reference_diagnostics(
+        &packages.dangling_ceiling_refs,
+        &packages.graph,
+    ) {
+        eprintln!("{diagnostic}");
     }
     let mut persisted_ee_instances = load_persisted_ee_instances(&config.ee_instances_root)?;
     let mut registry_files = RegistryFileCache::default();

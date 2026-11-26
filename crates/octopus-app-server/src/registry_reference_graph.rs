@@ -262,6 +262,45 @@ pub(crate) struct DanglingCeilingRef {
     pub(crate) target: RegistryNode,
 }
 
+/// Ceiling interfaces are potential reach, not installation dependencies.
+pub(crate) fn ceiling_reference_diagnostics(
+    references: &[DanglingCeilingRef],
+    graph: &RegistryReferenceGraph,
+) -> Vec<String> {
+    let mut messages = Vec::new();
+    for refused in [false, true] {
+        let selected = references
+            .iter()
+            .filter(|reference| graph.unavailable.contains_key(&reference.target) == refused)
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            continue;
+        }
+        let workers = selected
+            .iter()
+            .map(|reference| &reference.worker)
+            .collect::<BTreeSet<_>>();
+        let targets = selected
+            .iter()
+            .map(|reference| (&reference.field, &reference.target))
+            .collect::<BTreeSet<_>>();
+        messages.push(if refused {
+            format!(
+                "policy warning: {} rejected interface targets across {} worker ceilings; requests remain denied (see registry validation diagnostics)",
+                targets.len(),
+                workers.len()
+            )
+        } else {
+            format!(
+                "policy info: {} ceiling interface targets across {} workers are not installed; inactive until installed, requests remain denied",
+                targets.len(),
+                workers.len()
+            )
+        });
+    }
+    messages
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RegistryPackages {
     pub(crate) interfaces: Vec<(DescriptorName, InterfaceDescriptor)>,
@@ -1592,6 +1631,35 @@ fn load_activation_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ceiling_diagnostics_distinguish_absent_and_rejected_without_authorizing_either() {
+        let mut graph = RegistryReferenceGraph::default();
+        let absent = RegistryNode::interface("optional_target");
+        let rejected = RegistryNode::interface("invalid_target");
+        graph.refuse(rejected.clone(), "invalid descriptor");
+        let references = [absent.clone(), rejected.clone()]
+            .into_iter()
+            .map(|target| DanglingCeilingRef {
+                worker: "worker".into(),
+                field: "ceiling.interfaces".into(),
+                target,
+            })
+            .collect::<Vec<_>>();
+        let messages = ceiling_reference_diagnostics(&references, &graph);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].starts_with("policy info: 1"));
+        assert!(messages[0].contains("not installed"));
+        assert!(messages[1].starts_with("policy warning: 1"));
+        for target in [absent, rejected] {
+            assert!(!graph.is_available(&target));
+            let closure = graph
+                .validate_active_references("test", [("binding".into(), target.clone())])
+                .unwrap();
+            assert!(!closure.contains(&target));
+        }
+        assert!(ceiling_reference_diagnostics(&[], &graph).is_empty());
+    }
 
     #[test]
     fn closure_preserves_first_breadth_first_refusal_through_diamonds_and_cycles() {
