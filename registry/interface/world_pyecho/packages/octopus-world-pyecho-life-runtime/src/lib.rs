@@ -1200,6 +1200,35 @@ impl LedgerReplayReader {
     ) -> Result<InterfaceInvocationEnvelope, String> {
         self.reader.envelope(own)
     }
+
+    /// Capture an authoritative point-read using the same strict coordinates and
+    /// bounded artifact capture as sequential replay. A cache never grants access.
+    pub fn envelope_for_movement(
+        &self,
+        movement: Movement,
+    ) -> Result<InterfaceInvocationEnvelope, String> {
+        if movement.kind != MovementKind::InterfaceOutbound
+            || movement.to != Endpoint::Interface(self.reader.interface.clone())
+        {
+            return Err("replayed movement is not an outbound to this interface".into());
+        }
+        let metadata = movement
+            .invocation_metadata
+            .as_ref()
+            .and_then(|value| value.invocation())
+            .cloned()
+            .filter(|metadata| {
+                metadata
+                    .runtime()
+                    .is_some_and(|runtime| runtime.interface == self.reader.interface)
+            })
+            .ok_or("replayed movement carries mismatched invocation coordinates")?;
+        self.reader.envelope(&OwnOutboundMovement {
+            movement,
+            metadata: Ok(metadata),
+            cursor: TailCursor::default(),
+        })
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

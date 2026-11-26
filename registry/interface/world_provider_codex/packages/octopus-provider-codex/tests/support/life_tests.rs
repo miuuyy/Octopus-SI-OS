@@ -2294,3 +2294,63 @@
         assert!(!provider_may_sleep(&ctx, &deferred, &controls, &mut driver).await.unwrap(),
             "a deferred turn is held in the life's files and is released only by a life that stays awake");
     }
+
+    #[test]
+    fn provider_source_point_read_validates_index_hints_and_replays_on_miss() {
+        let temp = tempfile::tempdir().unwrap();
+        let descriptor = descriptor();
+        let ctx = context(temp.path(), &descriptor);
+        let run = RunId::new("run-a");
+        let source_artifact = artifact(temp.path(), "operator.message", json!({"text":"source"}));
+        let artifact_ref = cache_artifact(&ctx, &source_artifact);
+        let source = |seq| movement(seq, MovementKind::InterfaceOutbound,
+            Endpoint::Interface(InterfaceId::new("world_operator")), Endpoint::Interface(descriptor.id.clone()),
+            artifact_ref.clone());
+        write_movements(&ctx.movements_path, &[source(0), source(1)]);
+        assert!(source_failures::indexed_provider_source(&ctx, &run, 1).is_some());
+        let indexed = replay_provider_source(&ctx, &run, 1).unwrap().unwrap();
+        assert_eq!(indexed.seq, 1);
+        assert_eq!(indexed.envelope.artifact, artifact_ref);
+        assert!(replay_provider_source(&ctx, &RunId::new("other-run"), 1).unwrap().is_none());
+        assert!(replay_provider_source(&ctx, &run, 2).unwrap().is_none());
+
+        let mut file = std::fs::OpenOptions::new().append(true).open(&ctx.movements_path).unwrap();
+        serde_json::to_writer(&mut file, &source(2)).unwrap();
+        std::io::Write::write_all(&mut file, b"\n").unwrap();
+        drop(file);
+        assert!(source_failures::indexed_provider_source(&ctx, &run, 2).is_none());
+        assert_eq!(replay_provider_source(&ctx, &run, 2).unwrap().unwrap().seq, 2);
+
+        let mut changed = source(0);
+        changed.trace = TraceId("longer-authoritative-row".repeat(30));
+        let bytes = [changed, source(1), source(2)].iter()
+            .map(|m| format!("{}\n", serde_json::to_string(m).unwrap())).collect::<String>();
+        std::fs::write(&ctx.movements_path, bytes).unwrap();
+        assert!(source_failures::indexed_provider_source(&ctx, &run, 1).is_none());
+        assert_eq!(replay_provider_source(&ctx, &run, 1).unwrap().unwrap().seq, 1);
+
+        std::fs::remove_file(&ctx.ledger_index_path).unwrap();
+        assert_eq!(replay_provider_source(&ctx, &run, 1).unwrap().unwrap().envelope.artifact, indexed.envelope.artifact);
+        std::fs::write(&ctx.movements_path, b"malformed\n").unwrap();
+        assert!(replay_provider_source(&ctx, &run, 1).is_err());
+    }
+
+    #[test]
+    fn provider_source_indexed_replay_does_not_decode_unrelated_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let descriptor = descriptor();
+        let ctx = context(temp.path(), &descriptor);
+        let source_artifact = artifact(temp.path(), "operator.message", json!({"text":"source"}));
+        let artifact_ref = cache_artifact(&ctx, &source_artifact);
+        let source = |seq| movement(seq, MovementKind::InterfaceOutbound,
+            Endpoint::Interface(InterfaceId::new("world_operator")), Endpoint::Interface(descriptor.id.clone()),
+            artifact_ref.clone());
+        write_movements(&ctx.movements_path, &[source(0), source(1)]);
+        let mut bytes = std::fs::read(&ctx.movements_path).unwrap();
+        let end = bytes.iter().position(|b| *b == b'\n').unwrap();
+        bytes[..end].fill(b'x');
+        std::fs::write(&ctx.movements_path, bytes).unwrap();
+        assert_eq!(replay_provider_source(&ctx, &RunId::new("run-a"), 1).unwrap().unwrap().seq, 1);
+        std::fs::remove_file(&ctx.ledger_index_path).unwrap();
+        assert!(replay_provider_source(&ctx, &RunId::new("run-a"), 1).is_err());
+    }

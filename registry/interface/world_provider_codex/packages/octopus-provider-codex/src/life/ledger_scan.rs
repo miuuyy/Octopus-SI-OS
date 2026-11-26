@@ -195,6 +195,15 @@ pub(crate) fn read_indexed_movement_candidate(
             range.seq
         )
     })?;
+    if range.start_offset > 0 {
+        std::io::Seek::seek(file, std::io::SeekFrom::Start(range.start_offset - 1))
+            .map_err(|error| error.to_string())?;
+        let mut boundary = [0];
+        std::io::Read::read_exact(file, &mut boundary).map_err(|error| error.to_string())?;
+        if boundary != [b'\n'] {
+            return Err("indexed provider movement does not start at a ledger row boundary".into());
+        }
+    }
     std::io::Seek::seek(file, std::io::SeekFrom::Start(range.start_offset)).map_err(|error| {
         format!(
             "movement ledger '{}' cannot seek to indexed movement {}: {error}",

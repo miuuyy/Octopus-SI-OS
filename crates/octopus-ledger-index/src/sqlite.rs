@@ -962,6 +962,59 @@ impl LedgerSqliteReader {
         Ok(Some(movements))
     }
 
+    /// Bounded newest-row hints, returned in ascending sequence order.
+    pub fn tail_movement_rows_touching_run(
+        &self,
+        run: &str,
+        after_seq: u64,
+        before_seq: u64,
+        limit: usize,
+    ) -> Result<Option<Vec<IndexedMovementRowRange>>, SqliteIndexError> {
+        if after_seq >= before_seq {
+            return Ok(Some(Vec::new()));
+        }
+        let after_seq = sqlite_u64("tail lower sequence", after_seq)?;
+        let before_seq = sqlite_u64("tail upper sequence", before_seq)?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT seq, start_offset, end_offset FROM movements
+             WHERE seq >= ?2
+               AND seq < ?3
+               AND runtime_run = ?1
+             ORDER BY seq DESC LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![run, after_seq, before_seq, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )?;
+        let mut movements = Vec::new();
+        for row in rows {
+            let (seq, start_offset, end_offset) = row?;
+            let (Some(start_offset), Some(end_offset)) = (start_offset, end_offset) else {
+                return Ok(None);
+            };
+            if seq < 0 || start_offset < 0 || end_offset <= start_offset {
+                return Err(SqliteIndexError::InvalidRowRange {
+                    seq: seq.max(0) as u64,
+                    start_offset,
+                    end_offset,
+                });
+            }
+            movements.push(IndexedMovementRowRange {
+                seq: seq as u64,
+                start_offset: start_offset as u64,
+                end_offset: end_offset as u64,
+            });
+        }
+        movements.reverse();
+        Ok(Some(movements))
+    }
+
     pub fn movement_row_range(
         &self,
         seq: u64,

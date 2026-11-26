@@ -592,6 +592,12 @@ pub(crate) fn replay_provider_source(
     source_movement_seq: u64,
 ) -> Result<Option<QueuedTurn>, String> {
     let mut replay = LedgerReplayReader::open(ctx)?;
+    if let Some(movement) = indexed_provider_source(ctx, run, source_movement_seq) {
+        return Ok(Some(QueuedTurn {
+            envelope: replay.envelope_for_movement(movement)?,
+            seq: source_movement_seq,
+        }));
+    }
     while let Some(batch) = replay.read_batch(PROVIDER_CONTROL_READ_BATCH_LIMIT)? {
         for own in batch {
             if own.movement.seq.0 < source_movement_seq {
@@ -609,6 +615,28 @@ pub(crate) fn replay_provider_source(
         }
     }
     Ok(None)
+}
+
+// SQLite supplies only a byte-range hint. Missing, stale, malformed or unrelated
+// candidates fall back to authoritative sequential replay, never a false absence.
+pub(super) fn indexed_provider_source(
+    ctx: &InterfaceLiftContext,
+    run: &RunId,
+    seq: u64,
+) -> Option<octopus_ledger::Movement> {
+    let (mut file, snapshot_len, max_row_bytes) = open_arbitration_snapshot(ctx).ok()?;
+    let range = indexed_movement_row_hint(ctx, seq, snapshot_len)?;
+    let decoder = octopus_ledger_store::DurableMovementDecoder::for_log(&ctx.movements_path);
+    let movement = read_indexed_movement_candidate(ctx, &mut file, snapshot_len, max_row_bytes, &decoder, range).ok()?;
+    ensure_arbitration_snapshot_length(ctx, &file, snapshot_len).ok()?;
+    let metadata = movement.invocation_metadata.as_ref()?.invocation()?;
+    let runtime = metadata.runtime()?;
+    (movement.seq.0 == seq
+        && movement.kind == MovementKind::InterfaceOutbound
+        && movement.to == Endpoint::Interface(ctx.interface.clone())
+        && runtime.interface == ctx.interface
+        && &runtime.run == run)
+        .then_some(movement)
 }
 
 pub(crate) async fn backoff_or_give_up(
