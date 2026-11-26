@@ -162,10 +162,26 @@ length of the history. A frame after
 `asleep`, or `asleep` before readiness, fails the life closed. A life that
 watches the world by itself (a clock, a mailbox) never prints it. A socket
 intake — authoring, the operator chat, client maintenance — sleeps when no
-client is connected and wakes on the next connection. The system room's door
-sleeps after two idle minutes with no call in flight, and its tool processes
-end with it; doors whose tool processes hold a live session (a browser, a
-desktop, a shell) keep living. A model provider sleeps after two idle minutes
+client is connected and wakes on the next connection. The system room and
+filesystem workspace doors sleep after two idle minutes with no call or
+unresolved result in flight. Their cached tool processes end with them.
+Process-session, git-worktree, browser-session and desktop-session doors use the
+same idle period but additionally require that explicit room release has removed
+every cached tool owner. Cached owners are conservative session leases: command
+completion alone does not permit sleep. Failed release retains a sleep lease
+until a later successful explicit release. Their next arrival resumes the
+durable door frontier. Code-mode doors use the same owner lease and additionally
+require an empty handoff cache and a separate owner observer caught up through
+the door frontier. A live V8 context/cell, retained handoff or unresolved result
+therefore pins the door; there is no time-based eviction of contexts or
+sessions. A callback veto is rechecked after another idle interval, even with no
+new arrival. Desktop native helpers start on the first actual request, not
+transport readiness. The desktop host remains resident because its loopback
+viewer/control transport and retained observations/input leases are not handed
+off across sleep. Filesystem commands use separate durable process keepers: a
+running command, its unread output and exact replay receipts survive door sleep,
+and a later poll reattaches through the same room identity. Sleep does not
+release the worker environment or archive a run. A model provider sleeps after two idle minutes
 only when it holds no transport, no open turn and no deferred input; a turn that
 waits for a tool result is still open, so its provider keeps its process until
 the turn ends. An idle run holds no provider process, and its next input or a

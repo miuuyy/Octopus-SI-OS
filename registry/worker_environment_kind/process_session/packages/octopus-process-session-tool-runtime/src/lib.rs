@@ -103,6 +103,12 @@ pub type ToolDoorOutputDispatch = Arc<
 >;
 
 pub trait ToolDoorOutputHandler: Send + Sync {
+    /// A callback with retained state or a separate ledger observer must veto
+    /// sleep until that state is empty and its observer covers this frontier.
+    fn allows_idle_sleep(&self, _through_seq: u64) -> bool {
+        true
+    }
+
     fn output(
         &self,
         ctx: InterfaceLiftContext,
@@ -3323,6 +3329,7 @@ pub(crate) struct ToolProcessBrokerHost {
     output_callback: Option<ToolDoorOutputCallback>,
     routing: tokio::sync::Mutex<ToolProcessBrokerState>,
     shards: tokio::sync::Mutex<ToolProcessBrokerShards>,
+    unsettled_releases: tokio::sync::Mutex<BTreeSet<WorkerEnvironmentId>>,
     release_gates:
         std::sync::Mutex<BTreeMap<WorkerEnvironmentId, std::sync::Weak<tokio::sync::RwLock<()>>>>,
 }
@@ -3433,6 +3440,7 @@ impl ToolProcessBrokerHost {
             output_callback: None,
             routing: tokio::sync::Mutex::new(ToolProcessBrokerState::default()),
             shards: tokio::sync::Mutex::new(ToolProcessBrokerShards::default()),
+            unsettled_releases: tokio::sync::Mutex::new(BTreeSet::new()),
             release_gates: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
@@ -8084,14 +8092,47 @@ pub fn sleeping_tool_door_interface_life_with_output(
     output_callback: Option<ToolDoorOutputCallback>,
     idle_before_sleep: std::time::Duration,
 ) -> Result<InterfaceLiftFn, String> {
-    tool_door_interface_life(owner, decoder, output_callback, Some(idle_before_sleep))
+    tool_door_interface_life(
+        owner,
+        decoder,
+        output_callback,
+        Some(ToolDoorIdleSleep {
+            after: idle_before_sleep,
+            hold_cached_owners: false,
+        }),
+    )
+}
+
+/// Session owners are a conservative sleep lease: only explicit room release
+/// removes them. A completed command alone does not close its session handles.
+pub fn sleeping_session_tool_door_interface_life_with_output(
+    owner: ToolDoorOwner,
+    decoder: ToolDoorArtifactDecoder,
+    output_callback: Option<ToolDoorOutputCallback>,
+    idle_before_sleep: std::time::Duration,
+) -> Result<InterfaceLiftFn, String> {
+    tool_door_interface_life(
+        owner,
+        decoder,
+        output_callback,
+        Some(ToolDoorIdleSleep {
+            after: idle_before_sleep,
+            hold_cached_owners: true,
+        }),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ToolDoorIdleSleep {
+    after: std::time::Duration,
+    hold_cached_owners: bool,
 }
 
 fn tool_door_interface_life(
     owner: ToolDoorOwner,
     decoder: ToolDoorArtifactDecoder,
     output_callback: Option<ToolDoorOutputCallback>,
-    idle_before_sleep: Option<std::time::Duration>,
+    idle_before_sleep: Option<ToolDoorIdleSleep>,
 ) -> Result<InterfaceLiftFn, String> {
     owner.validate()?;
     Ok(Arc::new(move |ctx| {
@@ -8110,7 +8151,7 @@ async fn tool_door_life(
     owner: ToolDoorOwner,
     decoder: ToolDoorArtifactDecoder,
     output_callback: Option<ToolDoorOutputCallback>,
-    idle_before_sleep: Option<std::time::Duration>,
+    idle_before_sleep: Option<ToolDoorIdleSleep>,
 ) -> Result<(), String> {
     ctx.installation_root()?;
     let mut host = ToolProcessBrokerHost::new(owner.clone())?;
@@ -8130,7 +8171,7 @@ async fn tool_door_loop(
     owner: &ToolDoorOwner,
     host: Arc<ToolProcessBrokerHost>,
     decoder: ToolDoorArtifactDecoder,
-    idle_before_sleep: Option<std::time::Duration>,
+    idle_before_sleep: Option<ToolDoorIdleSleep>,
 ) -> Result<(), String> {
     let maximum_in_flight = owner.max_in_flight;
     let mut last_work = tokio::time::Instant::now();
@@ -8282,6 +8323,15 @@ async fn tool_door_loop(
             tokio::task::yield_now().await;
             continue;
         }
+        let may_sleep = if let Some(idle) = idle_before_sleep {
+            rows.is_empty()
+                && tasks.is_empty()
+                && (!idle.hold_cached_owners
+                    || (host.shards.lock().await.by_key.is_empty()
+                        && host.unsettled_releases.lock().await.is_empty()))
+        } else {
+            false
+        };
         tokio::select! {
             biased;
             _ = ctx.cancel.cancelled() => {
@@ -8307,9 +8357,17 @@ async fn tool_door_loop(
             changed = reader.wait_for_change(&ctx.cancel) => {
                 changed?;
             }
-            _ = tokio::time::sleep_until(last_work + idle_before_sleep.unwrap_or_default()),
-                if idle_before_sleep.is_some() && rows.is_empty() && tasks.is_empty() =>
+            _ = tokio::time::sleep_until(last_work + idle_before_sleep.map(|idle| idle.after).unwrap_or_default()),
+                if may_sleep =>
             {
+                if host
+                    .output_callback
+                    .as_ref()
+                    .is_some_and(|callback| !callback.allows_idle_sleep(reader.next_seq()))
+                {
+                    last_work = tokio::time::Instant::now();
+                    continue;
+                }
                 ctx.fall_asleep(reader.next_seq())?;
                 return Ok(());
             }
@@ -8449,6 +8507,10 @@ async fn execute_worker_environment_release(
         .await
     {
         Ok(formation) => {
+            host.unsettled_releases
+                .lock()
+                .await
+                .remove(&worker_environment_id);
             let artifact = serde_json::to_vec(&serde_json::json!({
                 "worker_environment_id": formation.worker_environment_id.as_str(),
             }))
@@ -8488,6 +8550,12 @@ async fn execute_worker_environment_release(
             }
         }
         Err(error) => {
+            // Cleanup may already have removed cached processes. Retain a sleep
+            // lease until a later explicit release proves the substrate closed.
+            host.unsettled_releases
+                .lock()
+                .await
+                .insert(worker_environment_id.clone());
             hand_tool_failure(
                 ctx,
                 source_movement_seq,
@@ -9554,19 +9622,222 @@ mod tool_process_private_boundary_tests {
         }
 
         #[tokio::test]
-        async fn an_idle_sleeping_door_falls_asleep_past_what_it_has_read() {
+        async fn a_callback_sleep_veto_is_rechecked_without_a_new_arrival() {
+            struct Guard(std::sync::atomic::AtomicBool);
+            impl ToolDoorOutputHandler for Guard {
+                fn allows_idle_sleep(&self, _: u64) -> bool {
+                    self.0.load(std::sync::atomic::Ordering::SeqCst)
+                }
+                fn output(
+                    &self,
+                    _: InterfaceLiftContext,
+                    _: ToolDoorOutputSource,
+                    _: InterfaceArtifactFile,
+                    _: ToolDoorOutputDispatch,
+                ) -> ToolDoorOutputFuture {
+                    unreachable!()
+                }
+            }
             fn decode(_: &InterfaceLiftContext, _: &InterfaceInvocationEnvelope, _: ToolDoorArtifactDecodePurpose) -> Result<Option<ToolCallArtifact>, ToolDoorArtifactDecodeError> {
                 Ok(None)
             }
-            let root = tempfile::tempdir().unwrap(); let root = root.path().canonicalize().unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let root = root.path().canonicalize().unwrap();
             let (ctx, _, _, _outputs, source) = completed_fixture(&root, 1).await;
             write_recovery_ledger(&root, &[source]);
-            let owner = ToolDoorOwner { worker_environment_kind:WorkerEnvironmentKindId::new("test.room"), door_interface:ctx.interface.clone(), max_in_flight:2, private_read_max_bytes:4096, root_slot_transform:None };
-            let door = tool_door_loop(&ctx, &owner, Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()), decode, Some(std::time::Duration::from_millis(50)));
-            tokio::time::timeout(std::time::Duration::from_secs(5), door).await
-                .expect("an idle sleeping door ends itself").unwrap();
-            assert_eq!(*ctx.asleep.lock().unwrap(), Some(1), "the door sleeps through the movement it handled");
-            assert_eq!(LedgerTailReader::open_named(&ctx, "tool-door").unwrap().next_seq(), 1);
+            let owner = ToolDoorOwner {
+                worker_environment_kind: WorkerEnvironmentKindId::new("code_mode"),
+                door_interface: ctx.interface.clone(),
+                max_in_flight: 2,
+                private_read_max_bytes: 4096,
+                root_slot_transform: None,
+            };
+            let guard = Arc::new(Guard(std::sync::atomic::AtomicBool::new(false)));
+            let mut host = ToolProcessBrokerHost::new(owner.clone()).unwrap();
+            host.output_callback = Some(guard.clone());
+            let door = tool_door_loop(
+                &ctx,
+                &owner,
+                Arc::new(host),
+                decode,
+                Some(ToolDoorIdleSleep {
+                    after: std::time::Duration::from_millis(20),
+                    hold_cached_owners: true,
+                }),
+            );
+            tokio::pin!(door);
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(150), &mut door).await.is_err());
+            assert_eq!(*ctx.asleep.lock().unwrap(), None);
+            guard.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::timeout(std::time::Duration::from_secs(5), &mut door)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(*ctx.asleep.lock().unwrap(), Some(1));
+        }
+
+        #[tokio::test]
+        async fn an_idle_sleeping_door_resumes_at_its_durable_frontier_without_replaying_work() {
+            for kind in ["desktop_session", "browser_session", "code_mode", "system_room"] {
+                fn decode(ctx: &InterfaceLiftContext, envelope: &InterfaceInvocationEnvelope, _: ToolDoorArtifactDecodePurpose) -> Result<Option<ToolCallArtifact>, ToolDoorArtifactDecodeError> {
+                    writeln!(
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(ctx.interface_var_dir().join("decoded"))
+                            .unwrap(),
+                        "{}",
+                        ctx.source_movement(envelope)?.seq.0
+                    )
+                    .unwrap();
+                    Ok(None)
+                }
+                let root = tempfile::tempdir().unwrap();
+                let root = root.path().canonicalize().unwrap();
+                let (ctx, _, _, _outputs, source) = completed_fixture(&root, 1).await;
+                write_recovery_ledger(&root, &[source.clone()]);
+                let owner = ToolDoorOwner {
+                    worker_environment_kind: WorkerEnvironmentKindId::new(kind),
+                    door_interface: ctx.interface.clone(),
+                    max_in_flight: 2,
+                    private_read_max_bytes: 4096,
+                    root_slot_transform: None,
+                };
+                for through in [1, 2] {
+                    let door = tool_door_loop(
+                        &ctx,
+                        &owner,
+                        Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()),
+                        decode,
+                        Some(ToolDoorIdleSleep {
+                            after: std::time::Duration::from_millis(50),
+                            hold_cached_owners: kind != "system_room",
+                        }),
+                    );
+                    tokio::time::timeout(std::time::Duration::from_secs(5), door)
+                        .await
+                        .expect("an idle sleeping door ends itself")
+                        .unwrap();
+                    assert_eq!(*ctx.asleep.lock().unwrap(), Some(through));
+                    assert_eq!(LedgerTailReader::open_named(&ctx, "tool-door").unwrap().next_seq(), through);
+                    if through == 1 {
+                        *ctx.asleep.lock().unwrap() = None;
+                        let mut second = source.clone();
+                        second.seq = Seq(1);
+                        second.lamport = Lamport(2);
+                        write_recovery_ledger(&root, &[source.clone(), second]);
+                    }
+                }
+                assert_eq!(
+                    std::fs::read_to_string(ctx.interface_var_dir().join("decoded")).unwrap(),
+                    "0
+1
+"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn a_sleeping_door_holds_cached_session_owners_until_explicit_release() {
+            fn decode(_: &InterfaceLiftContext, _: &InterfaceInvocationEnvelope, _: ToolDoorArtifactDecodePurpose) -> Result<Option<ToolCallArtifact>, ToolDoorArtifactDecodeError> {
+                Ok(None)
+            }
+            for kind in ["process_session", "git_worktree", "desktop_session", "browser_session", "code_mode"] {
+                let root = tempfile::tempdir().unwrap();
+                let root = root.path().canonicalize().unwrap();
+                let (ctx, _, _, _outputs, source) = completed_fixture(&root, 1).await;
+                write_recovery_ledger(&root, &[source.clone()]);
+                let owner = ToolDoorOwner {
+                    worker_environment_kind: WorkerEnvironmentKindId::new(kind),
+                    door_interface: ctx.interface.clone(),
+                    max_in_flight: 2,
+                    private_read_max_bytes: 4096,
+                    root_slot_transform: None,
+                };
+                let host = Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap());
+                let (_, formation) = super::test_formation("idle_session");
+                let key = super::test_process_key(&formation);
+                host.shards.lock().await.by_key.insert(
+                    key,
+                    Arc::new(tokio::sync::Mutex::new(ToolProcessBrokerState::default())),
+                );
+                let door = tool_door_loop(
+                    &ctx,
+                    &owner,
+                    Arc::clone(&host),
+                    decode,
+                    Some(ToolDoorIdleSleep {
+                        after: std::time::Duration::from_millis(20),
+                        hold_cached_owners: true,
+                    }),
+                );
+                tokio::pin!(door);
+                assert!(tokio::time::timeout(std::time::Duration::from_millis(150), &mut door).await.is_err());
+                assert_eq!(*ctx.asleep.lock().unwrap(), None, "a cached session owner pins the door");
+                host.take_worker_environment_processes(&formation.worker_environment_id).await;
+                assert!(host.shards.lock().await.by_key.is_empty());
+                // A release arrival wakes the ledger reader in production. Use a
+                // new no-op arrival here to exercise that same frontier path.
+                let mut second = source.clone();
+                second.seq = Seq(1);
+                second.lamport = Lamport(2);
+                host.unsettled_releases
+                    .lock()
+                    .await
+                    .insert(formation.worker_environment_id.clone());
+                write_recovery_ledger(&root, &[source.clone(), second.clone()]);
+                assert!(tokio::time::timeout(std::time::Duration::from_millis(150), &mut door).await.is_err());
+                assert_eq!(*ctx.asleep.lock().unwrap(), None, "failed release must retain the sleep lease");
+                host.unsettled_releases
+                    .lock()
+                    .await
+                    .remove(&formation.worker_environment_id);
+                let mut third = source.clone();
+                third.seq = Seq(2);
+                third.lamport = Lamport(3);
+                write_recovery_ledger(&root, &[source, second, third]);
+                tokio::time::timeout(std::time::Duration::from_secs(5), &mut door)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(*ctx.asleep.lock().unwrap(), Some(3));
+            }
+        }
+
+        #[tokio::test]
+        async fn a_sleeping_door_keeps_an_unresolved_result_and_its_original_frontier() {
+            for kind in ["desktop_session", "browser_session", "code_mode", "system_room"] {
+                fn decode(_: &InterfaceLiftContext, _: &InterfaceInvocationEnvelope, _: ToolDoorArtifactDecodePurpose) -> Result<Option<ToolCallArtifact>, ToolDoorArtifactDecodeError> {
+                    Err(ToolDoorArtifactDecodeError::AwaitingResults { call_sequences: vec![0] })
+                }
+                let root = tempfile::tempdir().unwrap();
+                let root = root.path().canonicalize().unwrap();
+                let (ctx, _, _, _outputs, source) = completed_fixture(&root, 1).await;
+                write_recovery_ledger(&root, &[source]);
+                let owner = ToolDoorOwner {
+                    worker_environment_kind: WorkerEnvironmentKindId::new(kind),
+                    door_interface: ctx.interface.clone(),
+                    max_in_flight: 2,
+                    private_read_max_bytes: 4096,
+                    root_slot_transform: None,
+                };
+                let door = tool_door_loop(
+                    &ctx,
+                    &owner,
+                    Arc::new(ToolProcessBrokerHost::new(owner.clone()).unwrap()),
+                    decode,
+                    Some(ToolDoorIdleSleep {
+                        after: std::time::Duration::from_millis(20),
+                        hold_cached_owners: kind != "system_room",
+                    }),
+                );
+                tokio::pin!(door);
+                assert!(tokio::time::timeout(std::time::Duration::from_millis(150), &mut door).await.is_err());
+                assert_eq!(*ctx.asleep.lock().unwrap(), None, "an unresolved result must not be abandoned for idle sleep");
+                assert_eq!(LedgerTailReader::open_named(&ctx, "tool-door").unwrap().next_seq(), 0);
+                ctx.cancel.cancel();
+                door.await.unwrap();
+            }
         }
     }
     use super::{
@@ -11697,6 +11968,39 @@ pub mod owner_contract_tests {
     }
 
     impl DoorFixture {
+        pub async fn sleep_empty_door(
+            &self,
+            kind: WorkerEnvironmentKindId,
+            callback: ToolDoorOutputCallback,
+            after: std::time::Duration,
+        ) -> Result<u64, String> {
+            let owner = ToolDoorOwner {
+                worker_environment_kind: kind,
+                door_interface: self.context.interface.clone(),
+                max_in_flight: 16,
+                private_read_max_bytes: 4096,
+                root_slot_transform: None,
+            };
+            let mut host = ToolProcessBrokerHost::new(owner.clone())?;
+            host.output_callback = Some(callback);
+            tool_door_loop(
+                &self.context,
+                &owner,
+                Arc::new(host),
+                default_tool_door_artifact_decoder,
+                Some(ToolDoorIdleSleep {
+                    after,
+                    hold_cached_owners: true,
+                }),
+            )
+            .await?;
+            self.context
+                .asleep
+                .lock()
+                .map_err(|_| "sleep lock poisoned")?
+                .ok_or_else(|| "door ended without sleeping".into())
+        }
+
         pub fn new(
             root: &Path,
             interface: InterfaceId,

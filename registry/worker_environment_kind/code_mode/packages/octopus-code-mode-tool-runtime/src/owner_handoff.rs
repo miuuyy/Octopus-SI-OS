@@ -24,6 +24,7 @@ use octopus_tool_handlers::{ToolCallArtifact, ToolResultArtifact};
 use serde_json::{Value, json};
 
 pub struct OwnerHandoff {
+    observed_frontier: std::sync::Mutex<Option<u64>>,
     states: tokio::sync::Mutex<BTreeMap<PathBuf, OwnerState>>,
     changed: Arc<tokio::sync::Notify>,
     #[cfg(test)]
@@ -151,6 +152,16 @@ enum ApplicationChange {
 struct OwnerOutputHandler(Arc<OwnerHandoff>);
 
 impl ToolDoorOutputHandler for OwnerOutputHandler {
+    fn allows_idle_sleep(&self, through_seq: u64) -> bool {
+        let Ok(states) = self.0.states.try_lock() else {
+            return false;
+        };
+        let Ok(frontier) = self.0.observed_frontier.lock() else {
+            return false;
+        };
+        states.is_empty() && frontier.is_some_and(|observed| observed >= through_seq)
+    }
+
     fn output(&self, ctx: InterfaceLiftContext, source: ToolDoorOutputSource,
         artifact: InterfaceArtifactFile, dispatch: ToolDoorOutputDispatch) -> ToolDoorOutputFuture {
         let owner = Arc::clone(&self.0);
@@ -219,6 +230,7 @@ impl OwnerHandoff {
 
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            observed_frontier: std::sync::Mutex::new(None),
             states: tokio::sync::Mutex::new(BTreeMap::new()),
             changed: Arc::new(tokio::sync::Notify::new()),
             #[cfg(test)]
@@ -229,7 +241,7 @@ impl OwnerHandoff {
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn with_json_format(json_format: Option<octopus_run_authoring::JsonFormat>) -> Arc<Self> {
-        Arc::new(Self { states: tokio::sync::Mutex::new(BTreeMap::new()), changed: Arc::new(tokio::sync::Notify::new()), json_format })
+        Arc::new(Self { observed_frontier: std::sync::Mutex::new(None), states: tokio::sync::Mutex::new(BTreeMap::new()), changed: Arc::new(tokio::sync::Notify::new()), json_format })
     }
 
     pub fn callback(self: &Arc<Self>) -> ToolDoorOutputCallback {
@@ -2039,6 +2051,10 @@ impl OwnerHandoff {
         let cancel = ctx.owner_cancel();
         let mut reader = LedgerTailReader::open_named(&ctx, "code-mode-owner-failure-return")?;
         loop {
+            *self
+                .observed_frontier
+                .lock()
+                .map_err(|_| "owner observer frontier lock poisoned")? = None;
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
@@ -2046,6 +2062,9 @@ impl OwnerHandoff {
                 self.reconcile_failure(&ctx, &mut reader, &own.movement).await?;
                 reader.commit_through(&own)?;
             }
+            // Match the door's global scan frontier even when this interface
+            // has never received a call. Every returned failure is settled above.
+            reader.advance_scanned()?;
             {
                 let mut states = self.states.lock().await;
                 for (root, state) in states.iter_mut() {
@@ -2090,7 +2109,43 @@ impl OwnerHandoff {
                     "owner readiness observation failed after reconciliation: {error}"
                 ));
             }
+            *self
+                .observed_frontier
+                .lock()
+                .map_err(|_| "owner observer frontier lock poisoned")? = Some(reader.next_seq());
             tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = &mut notified => {}, changed = reader.wait_for_change(&cancel) => changed? }
         }
+    }
+}
+
+#[cfg(test)]
+mod idle_sleep_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sleep_requires_empty_handoff_state_and_a_caught_up_observer() {
+        let owner = OwnerHandoff::new();
+        let callback = owner.callback();
+        assert!(
+            !callback.allows_idle_sleep(0),
+            "an unstarted observer is not empty-state proof"
+        );
+        *owner.observed_frontier.lock().unwrap() = Some(3);
+        assert!(callback.allows_idle_sleep(3));
+        assert!(
+            !callback.allows_idle_sleep(4),
+            "a lagging observer pins the door"
+        );
+        let held = owner.states.lock().await;
+        assert!(
+            !callback.allows_idle_sleep(3),
+            "busy handoff state fails closed"
+        );
+        drop(held);
+        *owner.observed_frontier.lock().unwrap() = None;
+        assert!(
+            !callback.allows_idle_sleep(3),
+            "active observer reconciliation pins the door"
+        );
     }
 }

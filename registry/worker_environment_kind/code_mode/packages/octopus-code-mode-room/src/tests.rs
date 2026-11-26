@@ -1131,6 +1131,64 @@ mod actual_file_write;
 mod actual_bound_surface;
 #[path = "../../octopus-code-mode-tool-runtime/src/owner_handoff.rs"]
 mod actual_owner_handoff;
+
+#[tokio::test]
+async fn untouched_code_mode_door_sleeps_after_a_nonzero_foreign_ledger_frontier() {
+    for history_len in [0, 37, 769] {
+        use octopus_ledger::{Endpoint, MovementDraft, MovementKind, MovementLog, TraceId};
+        use octopus_tool_door_runtime::{InterfaceHostIoLimits, owner_contract_tests::DoorFixture};
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let interface_dir = root.join("interface");
+        std::fs::create_dir(&interface_dir).unwrap();
+        let mut door = DoorFixture::new(
+            &root,
+            InterfaceId::new("system_code_mode_test"),
+            interface_dir,
+            InterfaceHostIoLimits {
+                max_control_frame_bytes: 65536,
+                max_stderr_bytes: 4096,
+                max_manifest_bytes: 65536,
+                max_payload_bytes: 1048576,
+            },
+        )
+        .unwrap();
+        std::fs::write(root.join("movements.jsonl"), []).unwrap();
+        // No arrival to this door, only the existing system-wide history.
+        for _ in 0..history_len {
+            door.append(MovementDraft {
+                trace: TraceId("foreign".into()),
+                kind: MovementKind::InterfaceOutbound,
+                from: Endpoint::Interface(InterfaceId::new("other_source")),
+                to: Endpoint::Interface(InterfaceId::new("other_target")),
+                artifact: None,
+                invocation_metadata: None,
+                causal_floor: None,
+            });
+        }
+        let owner = actual_owner_handoff::OwnerHandoff::new();
+        let cancel = door.context.owner_cancel();
+        let observer = tokio::spawn(owner.clone().observe(door.context.clone()));
+        let slept = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            door.sleep_empty_door(
+                WorkerEnvironmentKindId::new("code_mode"),
+                owner.callback(),
+                std::time::Duration::from_millis(25),
+            ),
+        )
+        .await;
+        cancel.cancel();
+        observer.await.unwrap().unwrap();
+        let through = slept
+            .expect("an untouched door must sleep without waiting for its first call")
+            .unwrap();
+        // A bounded scan can sleep before committing its final foreign-only
+        // tail; the wake frontier need not equal the global ledger's length.
+        assert!(through <= history_len && (history_len == 0 || through > 0));
+        assert!(owner.callback().allows_idle_sleep(through));
+    }
+}
 #[path = "failure_return_tests.rs"]
 mod failure_return_tests;
 

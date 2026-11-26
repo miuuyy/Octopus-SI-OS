@@ -1615,7 +1615,8 @@ pub async fn run_desktop_host() -> Result<(), String> {
         .with_application_preferences(preferences)?
         .with_presentation_timeout(config.timeout()),
     );
-    host.status().await?;
+    // Readiness publishes the transport, not a native desktop observation.
+    // NativeExecutor starts its helper on the first actual desktop request.
     publication.publish(address)?;
     let mut stdout = tokio::io::stdout();
     stdout
@@ -1971,5 +1972,31 @@ mod unavailable_executor_tests {
             host.status().await.expect("status").status,
             "unavailable"
         );
+    }
+}
+
+#[cfg(test)]
+mod lazy_native_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn preparing_desktop_host_does_not_spawn_native_until_first_request() {
+        let root = tempfile::tempdir().unwrap();
+        // An echo process is sufficient to prove lifecycle without accessing a desktop.
+        let executor = Arc::new(crate::native_client::NativeExecutor::new(
+            PathBuf::from("/bin/cat"),
+            4096,
+            std::time::Duration::from_secs(2),
+        ));
+        let host = DesktopHost::new(executor.clone(), root.path().join("state")).unwrap();
+        assert!(executor.retained_process_id().await.is_err());
+        // Echo is deliberately not the native protocol: failure must still be
+        // reported on demand, rather than replaced with a readiness placeholder.
+        assert!(host.status().await.is_err());
+        let pid = executor.retained_process_id().await.unwrap();
+        assert!(host.status().await.is_err());
+        assert_eq!(executor.retained_process_id().await.unwrap(), pid);
+        executor.shutdown().await.unwrap();
+        assert!(executor.retained_process_id().await.is_err());
     }
 }

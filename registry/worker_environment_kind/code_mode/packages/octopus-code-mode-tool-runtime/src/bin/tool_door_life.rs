@@ -1,13 +1,15 @@
 #[path = "../owner_handoff.rs"]
 mod owner_handoff;
 
+const IDLE_BEFORE_SLEEP: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let interface = std::env::var("OCTOPUS_INTERFACE_ID")
         .map(octopus_descriptors::InterfaceId::new)
         .expect("OCTOPUS_INTERFACE_ID is required by the code-mode door life");
     let handoff = owner_handoff::OwnerHandoff::new();
-    let door = octopus_tool_door_runtime::owned_tool_door_interface_life_with_output(
+    let door = octopus_tool_door_runtime::sleeping_session_tool_door_interface_life_with_output(
         octopus_tool_door_runtime::ToolDoorOwner {
             worker_environment_kind: octopus_descriptors::WorkerEnvironmentKindId::new("code_mode"),
             door_interface: interface,
@@ -17,6 +19,7 @@ async fn main() {
         },
         octopus_code_mode_room::decode_code_mode_door_artifact,
         Some(handoff.callback()),
+        IDLE_BEFORE_SLEEP,
     )
     .expect("owned tool-door configuration is valid");
     let life: octopus_tool_door_runtime::InterfaceLiftFn = std::sync::Arc::new(move |ctx| {

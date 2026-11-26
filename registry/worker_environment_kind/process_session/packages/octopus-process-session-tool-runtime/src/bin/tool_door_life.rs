@@ -1,10 +1,12 @@
+const IDLE_BEFORE_SLEEP: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let interface = std::env::var("OCTOPUS_INTERFACE_ID")
         .map(octopus_descriptors::InterfaceId::new)
         .expect("OCTOPUS_INTERFACE_ID is required by the process-session door life");
     if let Err(error) = octopus_process_session_tool_runtime::run_spawned_interface_life(
-        octopus_process_session_tool_runtime::owned_tool_door_interface_life(
+        octopus_process_session_tool_runtime::sleeping_session_tool_door_interface_life_with_output(
             octopus_process_session_tool_runtime::ToolDoorOwner {
                 worker_environment_kind: octopus_descriptors::WorkerEnvironmentKindId::new(
                     "process_session",
@@ -14,6 +16,9 @@ async fn main() {
                 private_read_max_bytes: 4096,
                 root_slot_transform: None,
             },
+            octopus_process_session_tool_runtime::default_tool_door_artifact_decoder,
+            None,
+            IDLE_BEFORE_SLEEP,
         )
         .expect("owned tool-door configuration is valid"),
     )

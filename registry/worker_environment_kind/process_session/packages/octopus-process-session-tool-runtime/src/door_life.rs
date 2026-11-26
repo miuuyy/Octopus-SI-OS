@@ -2266,7 +2266,9 @@ impl LedgerTailReader {
             .await
     }
 
-    pub(crate) fn advance_scanned(&mut self) -> Result<(), String> {
+    /// Advance past scanned history after the owner has handled and committed
+    /// every returned arrival. Foreign movements alone do not call commit_through.
+    pub fn advance_scanned(&mut self) -> Result<(), String> {
         if self.resume_without_wait {
             if self.cursor != self.pending_cursor {
                 self.foreign_catch_up_pending = true;
