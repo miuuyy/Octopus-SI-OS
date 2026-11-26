@@ -1,4 +1,28 @@
 use super::*;
+use base64::Engine as _;
+
+const NATIVE_CONTEXT_VERSION: &str = "octopus.native-context.v1";
+
+fn native_context_id(source: u64, name: &str) -> String {
+    // Hash a framed tuple, not concatenated strings. Preserve all 256 bits
+    // while keeping the Responses message ID ASCII and below 64 bytes.
+    let framed = serde_json::to_vec(&(NATIVE_CONTEXT_VERSION, source, name))
+        .expect("native context identity is JSON serializable");
+    let digest = sha2::Sha256::digest(&framed);
+    format!("msg_{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest))
+}
+
+fn native_context_fingerprint(
+    thread: &str,
+    context: &BTreeMap<String, AdditionalContextEntry>,
+) -> Result<String, serde_json::Error> {
+    Ok(octopus_ledger::ContentHash::of_bytes(&serde_json::to_vec(&(
+        NATIVE_CONTEXT_VERSION,
+        thread,
+        context,
+    ))?)
+    .to_hex())
+}
 
 // additionalContext is a small client annotation channel: Codex truncates each
 // value to 1,000 tokens. Bound history and formed policy are complete messages.
@@ -12,7 +36,7 @@ pub(crate) fn native_context_items(
             AdditionalContextKind::Application => ("developer", name.clone()),
         };
         serde_json::json!({
-            "type":"message", "id":format!("octopus-context-{source}-{name}"),
+            "type":"message", "id":native_context_id(source, &name),
             "role":role, "content":[{"type":"input_text",
                 "text":format!("<{tag}>\n{}\n</{tag}>", entry.value)}],
         })
@@ -44,6 +68,16 @@ fn recorded_native_context(path: &Path, thread: &str, items: &[serde_json::Value
         }
         if row["type"] != "response_item" { continue; }
         let actual = &row["payload"];
+        if actual["id"].as_str().is_some_and(|id| id.starts_with("octopus-context-")) {
+            return Err(refuse("legacy native context IDs require a fresh native thread".into()));
+        }
+        if !items.iter().any(|item| item["id"] == actual["id"])
+            && items.iter().any(|item| {
+                item["content"] == actual["content"] && item["role"] == actual["role"]
+            })
+        {
+            return Err(refuse("context message identity was changed".into()));
+        }
         if let Some(expected) = items.iter().find(|item| item["id"] == actual["id"]) {
             let id = expected["id"].as_str().expect("context message id");
             if !found.insert(id.to_string()) || actual["type"] != expected["type"]
@@ -67,8 +101,8 @@ impl CodexAppServerInterfaceDriver {
         context: BTreeMap<String, AdditionalContextEntry>,
         recovering: bool,
     ) -> Result<(), InterfaceDriverError> {
-        let fingerprint = octopus_ledger::ContentHash::of_bytes(&serde_json::to_vec(&(thread, &context))
-            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?).to_hex();
+        let fingerprint = native_context_fingerprint(thread, &context)
+            .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
         if self.transport_state.lock().await.get(scope)
             .is_some_and(|state| state.native_context_fingerprint.as_ref() == Some(&fingerprint)) {
             return Ok(());
@@ -106,6 +140,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_fingerprint_cannot_bypass_versioned_recovery_validation() {
+        let context = native_turn_context(None, Some("policy".into()), None);
+        let legacy = octopus_ledger::ContentHash::of_bytes(&serde_json::to_vec(&("thread", &context)).unwrap()).to_hex();
+        let current = native_context_fingerprint("thread", &context).unwrap();
+        assert_ne!(legacy, current);
+        assert_eq!(current, native_context_fingerprint("thread", &context).unwrap());
+    }
+
+    #[test]
+    fn native_context_ids_are_bounded_ascii_and_domain_separated() {
+        let names = ["short".to_string(), "octopus_checkpoint_bindings".repeat(10000),
+            "arbitrary / Unicode 🐙".to_string(), "1-name".to_string()];
+        let mut seen = BTreeSet::new();
+        for source in [0, 1, 42, u64::MAX] {
+            let context = names.iter().map(|name| (name.clone(), AdditionalContextEntry {
+                kind: AdditionalContextKind::Application, value: "content".into(),
+            })).collect();
+            for (name, item) in names.iter().collect::<BTreeSet<_>>().iter().zip(native_context_items(source, context)) {
+                let id = item["id"].as_str().unwrap();
+                assert!(id.starts_with("msg_"));
+                assert_eq!(id.len(), 47);
+                assert!(id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'));
+                assert!(seen.insert(id.to_string()));
+                assert_eq!(id, native_context_id(source, name));
+            }
+        }
+        assert_ne!(native_context_id(1, "23"), native_context_id(12, "3"));
+    }
+
+    #[test]
     fn native_context_preserves_roles_and_recovers_only_exact_complete_messages() {
         let history = "earlier decision\n".repeat(30_000);
         let policy = "declared permission\n".repeat(1_000);
@@ -132,6 +196,13 @@ mod tests {
         let mut changed = items.clone();
         changed[0]["content"][0]["text"] = serde_json::json!("truncated");
         write(&changed);
+        assert!(recorded_native_context(&path, "thread", &items).is_err());
+        let mut renamed = items.clone();
+        renamed[0]["id"] = serde_json::json!("msg_altered");
+        write(&renamed);
+        assert!(recorded_native_context(&path, "thread", &items).is_err());
+        renamed[0]["id"] = serde_json::json!("octopus-context-42-octopus_bound_context");
+        write(&renamed);
         assert!(recorded_native_context(&path, "thread", &items).is_err());
         let mut duplicated = items.clone();
         duplicated.push(items[0].clone());

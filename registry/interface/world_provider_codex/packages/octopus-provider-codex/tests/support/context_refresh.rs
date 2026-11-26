@@ -491,7 +491,9 @@ async fn changed_native_tools_continue_from_the_exact_completed_effect() {
         .unwrap();
         assert!(finished.expect("context refresh"));
         let repeated = injected_context.lock().unwrap().take().unwrap().as_array().unwrap().iter().map(|item| {
-            let name = item["id"].as_str().unwrap().strip_prefix(&format!("octopus-context-{}-", sink.source_movement_seq)).unwrap();
+            let text = item["content"][0]["text"].as_str().unwrap();
+            let tag = text.lines().next().unwrap().strip_prefix('<').unwrap().strip_suffix('>').unwrap();
+            let name = if item["role"] == "developer" { tag } else { tag.strip_prefix("external_").unwrap() };
             let kind = if item["role"] == "developer" { AdditionalContextKind::Application } else { AdditionalContextKind::Untrusted };
             let tag = if kind == AdditionalContextKind::Application { name.to_string() } else { format!("external_{name}") };
             let value = item["content"][0]["text"].as_str().unwrap().strip_prefix(&format!("<{tag}>\n")).unwrap()
