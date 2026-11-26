@@ -1,4 +1,5 @@
 const fs = require("node:fs/promises");
+const { createReadStream } = require("node:fs");
 const path = require("node:path");
 const {
   inspectLocalPackageCatalog,
@@ -134,10 +135,40 @@ async function diagnoseZeroLedgerGhostRuns(roots) {
   }
   if (running.length === 0) return { checks, findings: [] };
   const ledgerPath = path.join(octopusHome, "ledger", "movements.jsonl");
-  let ledger;
+  const wanted = new Set(running.map((run) => run.id));
+  const observed = new Set();
+  const stream = createReadStream(ledgerPath, { encoding: "utf8" });
+  let lineNumber = 0;
+  const inspectLine = (line) => {
+    lineNumber += 1;
+    if (!line) return;
+    let movement;
+    try {
+      movement = JSON.parse(line);
+    } catch (error) {
+      const malformed = new Error(`doctor ledger line ${lineNumber} is malformed: ${errorMessage(error)}`);
+      malformed.code = "doctor_ledger_malformed";
+      throw malformed;
+    }
+    for (const runId of movementRunIds(movement)) {
+      if (wanted.has(runId)) observed.add(runId);
+    }
+  };
   try {
-    ledger = await fs.readFile(ledgerPath, "utf8");
+    let pending = "";
+    for await (const chunk of stream) {
+      pending += chunk;
+      let start = 0;
+      let end;
+      while ((end = pending.indexOf("\n", start)) !== -1) {
+        inspectLine(pending.slice(start, end));
+        start = end + 1;
+      }
+      pending = pending.slice(start);
+    }
+    if (pending) inspectLine(pending);
   } catch (error) {
+    if (error?.code === "doctor_ledger_malformed") throw error;
     return {
       checks,
       findings: [finding(
@@ -147,17 +178,8 @@ async function diagnoseZeroLedgerGhostRuns(roots) {
         "Restore read access to the authoritative movements.jsonl before changing any run status.",
       )],
     };
-  }
-  const observed = new Set();
-  for (const [index, line] of ledger.split("\n").entries()) {
-    if (!line) continue;
-    let movement;
-    try {
-      movement = JSON.parse(line);
-    } catch (error) {
-      throw new Error(`doctor ledger line ${index + 1} is malformed: ${errorMessage(error)}`);
-    }
-    for (const runId of movementRunIds(movement)) observed.add(runId);
+  } finally {
+    stream.destroy();
   }
   return {
     checks,
