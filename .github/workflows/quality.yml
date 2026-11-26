@@ -105,6 +105,8 @@ jobs:
           node --test scripts/support/native-publication.test.cjs
           node scripts/test-local-packages.cjs --consent-recipe
           export OCTOPUS_NATIVE_NODE_HEADERS="$(node native/runtime.cjs headers)"
+          node scripts/build-cli.cjs
+          node --test scripts/test-package-drift.cjs scripts/test-client-doctor-ledger.cjs scripts/test-cli-storage.cjs
           node scripts/test-safe-self-update.cjs
           node --test scripts/test-cli-target.cjs scripts/test-cli-package.cjs scripts/test-release-linux.cjs scripts/test-install-linux.cjs
           node scripts/test-client-extensions.cjs
@@ -343,6 +345,7 @@ jobs:
           cargo test --locked -p octopus-app --bin octopus tests::offline_home_bootstrap_initializes_empty_home_idempotently_without_daemon -- --exact
           node app/scripts/test-local-packages.cjs --dedup
           npm --prefix app run test:cli
+          npm --prefix app run test:headless-setup
 
   native-client:
     runs-on: macos-latest
