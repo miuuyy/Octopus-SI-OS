@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
+    branches: [main]
     paths-ignore:
       - "docs/**"
       - "README.md"
@@ -103,6 +104,7 @@ jobs:
         run: |
           node --test scripts/support/native-publication.test.cjs
           node scripts/test-local-packages.cjs --consent-recipe
+          export OCTOPUS_NATIVE_NODE_HEADERS="$(node native/runtime.cjs headers)"
           node scripts/test-safe-self-update.cjs
           node --test scripts/test-cli-target.cjs scripts/test-cli-package.cjs scripts/test-release-linux.cjs scripts/test-install-linux.cjs
           node scripts/test-client-extensions.cjs
@@ -297,8 +299,8 @@ jobs:
       - name: Interface executable freshness and receipt checks
         run: cargo nextest run --locked -p octopus-interface-transport --lib -E 'test(imported_executable_receipt_) | test(life_fingerprint_) | test(reconciliation_reads_) | test(private_env) | test(every_repository_life_)'
 
-      - name: Ledger readers wake on changes, not on their own reads
-        run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources)'
+      - name: Tool-door sleep, wake boundaries and ledger reader continuity
+        run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources) | test(sleeping_door) | test(callback_sleep_veto) | test(host_shutdown_detaches_and_same_formation_can_restart)'
 
       - name: Standalone mcp-identity-guard contracts
         run: cargo test --manifest-path examples/mcp-identity-guard/Cargo.toml --locked
@@ -316,7 +318,7 @@ jobs:
       - name: Coder and workspace command ownership and continuity
         run: |
           cargo test --locked -p octopus-system-coder-env -p octopus-system-workspace-env --lib keep_kind_owned_command_routing
-          cargo test --locked -p octopus-system-workspace-env --test persistent_process_keeper a_room_command_outlives_its_tool_process_and_the_next_one_receives_its_exact_outcome -- --exact
+          cargo test --locked -p octopus-system-workspace-env --test persistent_process_keeper
 
       - name: File tools write and read only under their declared roots, beside a root that does not resolve
         run: cargo test --locked -p octopus-system-room-env --lib --test tool_process_lifecycle -- file_write_process read_evidence_and_paged_listing_respect_exact_room_roots file_tools_refuse_a_path_under_an_exposed_root_their_descriptor_does_not_declare
@@ -463,6 +465,9 @@ jobs:
       - name: Package verifier, Home admission, provider recovery and voice contracts
         run: |
           cargo nextest run --locked -p octopus-app-server -p octopus-operator-chat-client -p octopus-run-authoring -p octopus-provider-codex -p octopus-realtime-signaling --lib --test worker_interface_cross_run_fan_out --test conditioned_publication --test run_composition --test checked_input_writers --test notification_coverage -E 'not binary(run_composition) | test(input_revision_cli_preserves_payload_intent_and_requires_checked_writer_results)'
+
+      - name: macOS workspace floor denies undeclared temporary writes
+        run: cargo test --locked -p octopus-workspace-substrate --lib sandboxed_exec
 
       - name: Projected evidence reaches the observer provider
         run: cargo test --locked -p octopus-operator-chat-client --test maintenance_observer movement_gate::scripted_provider_request_receives_exact_projected_evidence -- --exact
