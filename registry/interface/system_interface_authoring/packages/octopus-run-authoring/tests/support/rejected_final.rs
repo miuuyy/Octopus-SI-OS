@@ -83,7 +83,7 @@ async fn rejected_final_replacement_preserves_proof_and_recovers_crashes() {
                     std::fs::write(&h.run_path,&peer_bytes).unwrap();
                     let error=replacement_checked_write(&mut f,&saved.authored).unwrap_err();
                     assert!(error.contains("optimistic hash mismatch"),"{error}");
-                    assert!(authoring_retry::rebase_authored_run(&record_bytes,&serde_json::to_vec(&peer).unwrap(),&saved.authored,&h.config,saved.authored.json_format).unwrap_err().contains("refusing rebase before write"));
+                    assert!(authoring_retry::rebase_authored_run(None, &record_bytes,&serde_json::to_vec(&peer).unwrap(),&saved.authored,&h.config,saved.authored.json_format).unwrap_err().contains("refusing rebase before write"));
                     drop(sending);assert_eq!(std::fs::read(&h.run_path).unwrap(),peer_bytes);assert!(rx.try_recv().is_err());break;
                 }
                 if mode=="tamper" {

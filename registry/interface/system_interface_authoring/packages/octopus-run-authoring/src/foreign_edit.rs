@@ -184,6 +184,7 @@ pub(super) fn transition_from(
         after,
         call: write.call.clone(),
         result: write.result.clone(),
+        capability_payload: None,
         foreign: true,
     }))
 }

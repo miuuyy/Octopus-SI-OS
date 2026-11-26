@@ -91,6 +91,8 @@ pub(crate) fn refuse_selected_consent_state(record: &RunRecord, provider: &Inter
 
 #[derive(Clone, Debug)]
 pub struct CheckedRunTransition {
+    /// Captured by the evidence reader from an admitted blob or the declared provider owner root.
+    pub capability_payload: Option<std::sync::Arc<[u8]>>,
     pub writer: CheckedRunWriter,
     pub before: Vec<u8>,
     pub after: Vec<u8>,

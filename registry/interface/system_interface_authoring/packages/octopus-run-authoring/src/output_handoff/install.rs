@@ -173,6 +173,7 @@ impl ProviderOutputHandoff {
                         ));
                     }
                     planned = authoring_retry::rebase_authored_run(
+                        Some((&self.ctx.interface_var_dir(), self.ctx.required_host_io_limits()?.max_payload_bytes)),
                         &before,
                         &current,
                         authored,

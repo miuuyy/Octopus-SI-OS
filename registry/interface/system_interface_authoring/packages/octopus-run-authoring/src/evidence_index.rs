@@ -151,6 +151,8 @@ impl ProviderLedgerEvidenceIndex {
             mark_arrival_coordinates: HashMap::new(),
             coordinate_artifacts: HashMap::new(),
             coordinate_outbounds: HashMap::new(),
+            readable_artifact_sets: Default::default(),
+            last_read_authority: None,
             coordinate_marks: HashMap::new(),
             retained_delivery,
             ledger_file: None,
@@ -542,6 +544,37 @@ impl ProviderLedgerEvidenceIndex {
                         .insert(movement.seq.0, admission.artifact_label.clone());
                 }
             }
+            // The same authority commonly accompanies thousands of inputs. Keep
+            // one immutable set per distinct read authority, not a deep copy per
+            // historical source. Equality is exact; no permissions are merged.
+            let readable_artifacts = if let Some((_, readable)) = self
+                .last_read_authority
+                .as_ref()
+                .filter(|(access, _)| access == &metadata.grant.artifact_access)
+            {
+                readable.clone()
+            } else {
+                let readable = Arc::new(
+                    metadata
+                        .grant
+                        .artifact_access
+                        .iter()
+                        .filter(|(_, access)| access.read)
+                        .map(|(id, _)| ArtifactId::new(id))
+                        .collect::<BTreeSet<_>>(),
+                );
+                let readable = self
+                    .readable_artifact_sets
+                    .get(&readable)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        self.readable_artifact_sets.insert(readable.clone());
+                        readable
+                    });
+                self.last_read_authority =
+                    Some((metadata.grant.artifact_access.clone(), readable.clone()));
+                readable
+            };
             self.coordinate_outbounds
                 .entry(coordinate)
                 .or_default()
@@ -555,7 +588,7 @@ impl ProviderLedgerEvidenceIndex {
                     checkpoint_binding_policy: metadata.checkpoint_binding_policy.clone(),
                     required_verified_artifacts: metadata.required_verified_artifacts.clone(),
                     artifact_binding_refs: metadata.artifact_binding_refs.clone(),
-                    readable_artifacts: metadata.grant.artifact_access.iter().filter(|(_, access)| access.read).map(|(id, _)| ArtifactId::new(id)).collect(),
+                    readable_artifacts,
                     role_artifacts: metadata.grant.role_artifacts.clone(),
                 });
         }

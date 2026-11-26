@@ -56,7 +56,202 @@ struct AppliedAmendment {
 struct CapabilityEffectEvidence {
     manifest_path: PathBuf,
     manifest: String,
-    payload: String,
+    payload: EffectPayload,
+}
+
+// Untagged strings preserve the exact legacy wire representation.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum EffectPayload {
+    Inline(String),
+    Stored(EffectPayloadRef),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectPayloadRef {
+    schema_version: u32,
+    content_hash: String,
+    byte_count: u64,
+}
+
+impl EffectPayloadRef {
+    pub(super) fn read_snapshot<R: CheckedRunEvidenceReader + ?Sized>(
+        &self,
+        reader: &mut R,
+    ) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        if self.byte_count > reader.max_payload_bytes() {
+            return Err("capability proof exceeds reader bound".into());
+        }
+        let bytes = reader.snapshot(
+            &ContentHash::from_hex(&self.content_hash).ok_or("invalid capability proof hash")?,
+        )?;
+        self.verify(&bytes)?;
+        Ok(bytes)
+    }
+
+    pub(super) fn has_snapshot(&self, blobs: &Path) -> Result<bool, String> {
+        self.validate()?;
+        match std::fs::symlink_metadata(blobs.join(&self.content_hash)) {
+            Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+            Ok(_) => Err("capability proof blob must be a regular file, not a symlink".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema_version != 1
+            || self.byte_count == 0
+            || ContentHash::from_hex(&self.content_hash)
+                .is_none_or(|hash| hash.to_hex() != self.content_hash)
+        {
+            return Err("invalid capability payload proof reference".into());
+        }
+        Ok(())
+    }
+
+    fn verify(&self, bytes: &[u8]) -> Result<(), String> {
+        self.validate()?;
+        if bytes.len() as u64 != self.byte_count
+            || ContentHash::of_bytes(bytes).to_hex() != self.content_hash
+        {
+            return Err("capability payload proof digest or length mismatch".into());
+        }
+        Ok(())
+    }
+}
+
+// The root is supplied by the owner context, never by a record or manifest path.
+pub(super) fn read_payload_proof(
+    var_dir: &Path,
+    reference: &EffectPayloadRef,
+    maximum: u64,
+) -> Result<Vec<u8>, String> {
+    reference.validate()?;
+    if reference.byte_count > maximum {
+        return Err("capability payload proof exceeds reader bound".into());
+    }
+    let directory = proof_directory(var_dir, false)?;
+    let path = directory.join(&reference.content_hash);
+    if std::fs::symlink_metadata(&path)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("capability payload proof cannot be a symlink".into());
+    }
+    let bytes = octopus_interfaces::read_artifact_carrier_file_bounded(&path, reference.byte_count)
+        .map_err(|e| e.to_string())?;
+    reference.verify(&bytes)?;
+    Ok(bytes)
+}
+
+fn proof_directory(var_dir: &Path, create: bool) -> Result<PathBuf, String> {
+    if !var_dir.is_absolute() {
+        return Err("capability proof root must be an explicit absolute owner directory".into());
+    }
+    let root = var_dir.canonicalize().map_err(|e| e.to_string())?;
+    let mut directory = root;
+    for name in ["capability-proofs", "v1"] {
+        directory.push(name);
+        if create {
+            match std::fs::create_dir(&directory) {
+                Ok(()) => {
+                    std::fs::File::open(directory.parent().unwrap())
+                        .and_then(|f| f.sync_all())
+                        .map_err(|e| e.to_string())?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        if !std::fs::symlink_metadata(&directory)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_dir()
+        {
+            return Err("capability proof directory must be an owned directory, not a symlink".into());
+        }
+    }
+    Ok(directory)
+}
+
+fn store_payload_proof(var_dir: &Path, bytes: &[u8]) -> Result<EffectPayloadRef, String> {
+    use std::io::Write;
+    let reference = EffectPayloadRef {
+        schema_version: 1,
+        content_hash: ContentHash::of_bytes(bytes).to_hex(),
+        byte_count: bytes.len() as u64,
+    };
+    let directory = proof_directory(var_dir, true)?;
+    let path = directory.join(&reference.content_hash);
+    // A partial prior publication is refused, never overwritten or repaired.
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(bytes)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())?;
+            std::fs::File::open(&directory)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| e.to_string())?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(e) => return Err(e.to_string()),
+    }
+    read_payload_proof(var_dir, &reference, reference.byte_count)?;
+    std::fs::File::open(&path)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    std::fs::File::open(&directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    Ok(reference)
+}
+
+fn transition_reference(transition: &CheckedRunTransition) -> Result<Option<EffectPayloadRef>, String> {
+    let before: Value = serde_json::from_slice(&transition.before).map_err(|e| e.to_string())?;
+    let after: Value = serde_json::from_slice(&transition.after).map_err(|e| e.to_string())?;
+    let get = |v: &Value| {
+        v.get("interface_state")
+            .and_then(|v| v.get(transition.writer.owner.as_str()))
+            .and_then(|v| v.get(AMENDMENT))
+            .cloned()
+    };
+    if get(&before) == get(&after) {
+        return Ok(None);
+    }
+    let Some(value) = get(&after) else {
+        return Ok(None);
+    };
+    let proof: AppliedAmendment = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    match proof.effect.payload {
+        EffectPayload::Inline(_) => Ok(None),
+        EffectPayload::Stored(reference) => {
+            reference.validate()?;
+            Ok(Some(reference))
+        }
+    }
+}
+
+pub(super) fn capture_transition_payload(
+    reader: &mut impl CheckedRunEvidenceReader,
+    transition: &mut CheckedRunTransition,
+) -> Result<(), String> {
+    if let Some(reference) = transition_reference(transition)? {
+        let bytes = reader.capability_payload_proof(&transition.writer.owner, &reference)?;
+        reference.verify(&bytes)?;
+        transition.capability_payload = Some(bytes.into());
+    }
+    Ok(())
 }
 
 fn topology(record: &RunRecord, provider: &InterfaceId) -> Result<BoundRunAuthoringTopology, String> {
@@ -515,12 +710,26 @@ fn validate_effect_payload(bridge: &ProviderCapabilityBridge, bytes: &[u8]) -> R
     Ok(())
 }
 
-fn validate_effect(record: &RunRecord, bridge: &ProviderCapabilityBridge, effect: &CapabilityEffectEvidence, provider: &InterfaceId) -> Result<(), String> {
+fn validate_effect(
+    record: &RunRecord,
+    bridge: &ProviderCapabilityBridge,
+    effect: &CapabilityEffectEvidence,
+    provider: &InterfaceId,
+    captured: Option<&[u8]>,
+) -> Result<(), String> {
+    let payload = match &effect.payload {
+        EffectPayload::Inline(value) => value.as_bytes(),
+        EffectPayload::Stored(reference) => {
+            let bytes = captured.ok_or("capability amendment requires its durable payload proof")?;
+            reference.verify(bytes)?;
+            bytes
+        }
+    };
     let pending = pending_handoff(record, provider)?.ok_or("capability amendment lost its pending effect")?;
     let [item] = pending.items.as_slice() else { return Err("capability amendment requires one exact pending effect".into()); };
-    let artifact = InterfaceArtifactFile::from_captured_snapshot(&effect.manifest_path, effect.manifest.as_bytes().to_vec(), effect.payload.as_bytes().to_vec()).map_err(|e|e.to_string())?;
+    let artifact = InterfaceArtifactFile::from_captured_snapshot(&effect.manifest_path, effect.manifest.as_bytes().to_vec(), payload.to_vec()).map_err(|e|e.to_string())?;
     let manifest = artifact.read_manifest().map_err(|e|e.to_string())?;
-    let payload_hash = ContentHash::of_bytes(effect.payload.as_bytes()).to_hex();
+    let payload_hash = ContentHash::of_bytes(payload).to_hex();
     if manifest.payload_content_hash.as_deref() != Some(payload_hash.as_str()) {
         return Err("capability amendment evidence requires a canonical payload_content_hash matching its captured payload".into());
     }
@@ -533,7 +742,7 @@ fn validate_effect(record: &RunRecord, bridge: &ProviderCapabilityBridge, effect
         || item.checkpoint.outbound_interface_bindings[0].interface != bridge.return_interface {
         return Err("capability amendment evidence differs from its persisted pending effect".into());
     }
-    validate_effect_payload(bridge, effect.payload.as_bytes())
+    validate_effect_payload(bridge, payload)
 }
 
 fn with_ordinary_results(planned: &BoundRunAuthoringTopology, ordinary: &RunRecord) -> Result<BoundRunAuthoringTopology, String> {
@@ -673,8 +882,13 @@ pub(super) fn apply_to_authored_run(current: &[u8], authored: &mut AuthoredRun, 
     let [item] = authored.pending_handoff.items.as_slice() else { return Err("capability amendment requires one pending effect".into()); };
     let (artifact, _) = load_pending_artifact(var_dir, item)?;
     let snapshot = artifact.read_bounded(u64::MAX, u64::MAX).map_err(|e|e.to_string())?;
-    let effect = CapabilityEffectEvidence { manifest_path: artifact.manifest_path().to_path_buf(),
-        manifest:String::from_utf8(snapshot.manifest_bytes).map_err(|e|e.to_string())?,payload:String::from_utf8(snapshot.payload_bytes).map_err(|e|e.to_string())? };
+    let mut effect = CapabilityEffectEvidence {
+        manifest_path: artifact.manifest_path().to_path_buf(),
+        manifest: String::from_utf8(snapshot.manifest_bytes).map_err(|e| e.to_string())?,
+        payload: EffectPayload::Inline(
+            String::from_utf8(snapshot.payload_bytes).map_err(|e| e.to_string())?,
+        ),
+    };
     let mut after: Value = serde_json::from_str(&authored.content).map_err(|e| e.to_string())?;
     let ordinary_patch = authored.patch.clone();
     apply_delta(&before, &mut after, &delta, config, &amendment.amendment_key)?;
@@ -682,7 +896,12 @@ pub(super) fn apply_to_authored_run(current: &[u8], authored: &mut AuthoredRun, 
     if pending.items != authored.pending_handoff.items || pending.terminal != authored.pending_handoff.terminal || pending.source_movement_seq != authored.pending_handoff.source_movement_seq {
         return Err("capability amendment changed accepted effect or source coordinates".into());
     }
-    validate_effect(&record(&after)?, &amendment.bridge, &effect, &config.provider_interface)?;
+    validate_effect(&record(&after)?, &amendment.bridge, &effect, &config.provider_interface, None)?;
+    if let EffectPayload::Inline(payload) = &effect.payload {
+        if payload.len() > 65536 {
+            effect.payload = EffectPayload::Stored(store_payload_proof(var_dir, payload.as_bytes())?);
+        }
+    }
     let proof = AppliedAmendment { amendment_key: amendment.amendment_key.clone(), bridge: amendment.bridge.clone(), delta: delta.clone(), ordinary_patch, effect };
     after["interface_state"][config.provider_interface.as_str()][AMENDMENT] = json!(proof);
     let bytes = JsonFormat::Compact.encode(&after)?;
@@ -750,7 +969,7 @@ pub(super) fn checked_ordinary(transition: &CheckedRunTransition) -> Result<Opti
         file_write_tool: transition.writer.tool.clone(), file_write_label: transition.writer.call_label.clone(),
         file_write_result_label: transition.writer.result_label.clone(),
     };
-    amended_ordinary(&transition.before, &transition.after, &transition.writer.owner, &profile)
+    amended_ordinary(&transition.before, &transition.after, &transition.writer.owner, &profile, transition.capability_payload.as_deref())
 }
 
 pub(super) fn saved_ordinary(before: &[u8], after: &[u8], config: &RunAuthoringConfig) -> Result<Option<Vec<u8>>, String> {
@@ -758,10 +977,51 @@ pub(super) fn saved_ordinary(before: &[u8], after: &[u8], config: &RunAuthoringC
         file_write_tool: config.file_write_tool.clone(), file_write_label: config.file_write_label.clone(),
         file_write_result_label: config.file_write_result_label.clone(),
     };
-    amended_ordinary(before, after, &config.provider_interface, &profile)
+    amended_ordinary(before, after, &config.provider_interface, &profile, None)
 }
 
-fn amended_ordinary(before_bytes: &[u8], after_bytes: &[u8], provider: &InterfaceId, profile: &RunAuthoringProfile) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn saved_ordinary_in(
+    before: &[u8],
+    after: &[u8],
+    config: &RunAuthoringConfig,
+    var_dir: &Path,
+    maximum: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    let profile = RunAuthoringProfile {
+        file_write_tool: config.file_write_tool.clone(),
+        file_write_label: config.file_write_label.clone(),
+        file_write_result_label: config.file_write_result_label.clone(),
+    };
+    let prior: Value = serde_json::from_slice(before).map_err(|e| e.to_string())?;
+    let next: Value = serde_json::from_slice(after).map_err(|e| e.to_string())?;
+    let get = |v: &Value| {
+        v.get("interface_state")
+            .and_then(|v| v.get(config.provider_interface.as_str()))
+            .and_then(|v| v.get(AMENDMENT))
+            .cloned()
+    };
+    let captured = if get(&prior) != get(&next) {
+        match get(&next)
+            .map(serde_json::from_value::<AppliedAmendment>)
+            .transpose()
+            .map_err(|e| e.to_string())?
+        {
+            Some(AppliedAmendment {
+                effect: CapabilityEffectEvidence {
+                    payload: EffectPayload::Stored(reference),
+                    ..
+                },
+                ..
+            }) => Some(read_payload_proof(var_dir, &reference, maximum)?),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    amended_ordinary(before, after, &config.provider_interface, &profile, captured.as_deref())
+}
+
+fn amended_ordinary(before_bytes: &[u8], after_bytes: &[u8], provider: &InterfaceId, profile: &RunAuthoringProfile, captured: Option<&[u8]>) -> Result<Option<Vec<u8>>, String> {
     let before = RunRecord::from_bytes(before_bytes).map_err(|e| e.to_string())?;
     let after = RunRecord::from_bytes(after_bytes).map_err(|e| e.to_string())?;
     let prior = before.interface_state.get(provider).and_then(|state| state.get(AMENDMENT));
@@ -771,7 +1031,7 @@ fn amended_ordinary(before_bytes: &[u8], after_bytes: &[u8], provider: &Interfac
     exact(&proof.amendment_key, "key")?;
     let profile = profile.clone();
     validate_delta(&before, &proof.delta, &profile)?;
-    validate_effect(&after, &proof.bridge, &proof.effect, provider)?;
+    validate_effect(&after, &proof.bridge, &proof.effect, provider, captured)?;
     if !same_future_contract(&topology(&before, provider)?, &proof.delta.before)
         || !same_future_contract(&topology(&after, provider)?, &proof.delta.after) {
         return Err("checked capability transition has stale topology evidence".into());

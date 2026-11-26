@@ -421,6 +421,48 @@ pub fn separate_owner_writer_run(
     Ok(initial)
 }
 
+/// Checkpoints of an exact, active separate-writer call/result pair. These are
+/// standing routes, not evidence of an outstanding tool invocation. Observation
+/// consumers must still inspect admitted movements for calls, errors and refusals.
+/// This projection grants no authority and does not validate an authoring effect.
+pub fn standing_writer_checkpoints(record: &RunRecord) -> BTreeSet<CheckpointId> {
+    if record.active_checkpoints.len() != 2 {
+        return BTreeSet::new();
+    }
+    for owner in record.interface_state.keys() {
+        let Ok(target) = target(record, owner) else {
+            continue;
+        };
+        if target.provider != *owner
+            || target.run == record.id
+            || target.source == target.door
+            || target.door == *owner
+        {
+            continue;
+        }
+        let active = record
+            .active_checkpoints
+            .iter()
+            .filter_map(|id| record.checkpoint(id))
+            .collect::<Vec<_>>();
+        if active.len() != 2 {
+            continue;
+        }
+        let call = active.iter().find(|cp| {
+            cp.inbound_interface() == Some(&target.source)
+                && cp.outbound_interfaces().eq([&target.door])
+                && !cp.required_verified_artifacts.is_empty()
+        });
+        let result = active.iter().find(|cp| {
+            cp.inbound_interface() == Some(&target.door) && cp.outbound_interfaces().eq([owner])
+        });
+        if let (Some(call), Some(result)) = (call, result) {
+            return BTreeSet::from([call.id.clone(), result.id.clone()]);
+        }
+    }
+    BTreeSet::new()
+}
+
 fn target(record: &RunRecord, provider: &InterfaceId) -> Result<Target, String> {
     serde_json::from_value(
         record
@@ -1525,14 +1567,16 @@ fn settle_target_attempt(
     };
     let hash = args.writes[1].after_hash();
     if applied {
-        let transition = CheckedRunTransition {
+        let mut transition = CheckedRunTransition {
             writer: declared.clone(),
             before: args.writes[1].before(maximum)?.into_bytes(),
             after: args.writes[1].content(maximum)?.into_bytes(),
             call,
             result,
+            capability_payload: None,
             foreign: false,
         };
+        capability_amendment::capture_transition_payload(reader, &mut transition)?;
         validate_checked_owner_transition(&transition)?;
         generated_artifacts::validate_generated_transition(reader, &transition)?;
         validate_verified_input_transition(reader, &transition)?;
@@ -1704,8 +1748,14 @@ impl ProviderOutputHandoff {
             }
             let original = RunRecord::from_bytes(&before).map_err(|error| error.to_string())?;
             let original_config = attempt_config(&original, &self.config)?;
-            let stepped_bytes = capability_amendment::saved_ordinary(&before, prospective.as_bytes(), &original_config)?
-                .unwrap_or_else(|| prospective.as_bytes().to_vec());
+            let stepped_bytes = capability_amendment::saved_ordinary_in(
+                &before,
+                prospective.as_bytes(),
+                &original_config,
+                &self.ctx.interface_var_dir(),
+                self.ctx.required_host_io_limits()?.max_payload_bytes,
+            )?
+            .unwrap_or_else(|| prospective.as_bytes().to_vec());
             let stepped = RunRecord::from_bytes(&stepped_bytes).map_err(|e| e.to_string())?;
             if !result_inputs::saved_definition_transition(&original, &stepped, &original_config)? {
                 source_settlement::validate_transition(&original, &stepped, &original_config)?;
@@ -1815,8 +1865,14 @@ impl ProviderOutputHandoff {
                     // OrderedArguments::checked_call; the target intent is exact.
                     let mut target = attempt.authored.clone();
                     target.authoring_result_checkpoint = previous.authored.authoring_result_checkpoint.clone();
-                    authoring_retry::validate_rebased_authored_run(original.as_bytes(), before_bytes.as_bytes(),
-                        &previous.authored, &target, &original_config)?;
+                    authoring_retry::validate_rebased_authored_run(
+                        Some((&self.ctx.interface_var_dir(), self.ctx.required_host_io_limits()?.max_payload_bytes)),
+                        original.as_bytes(),
+                        before_bytes.as_bytes(),
+                        &previous.authored,
+                        &target,
+                        &original_config,
+                    )?;
                 }
             }
             selected = Some(attempt);
@@ -1897,8 +1953,14 @@ impl ProviderOutputHandoff {
                         "refused target write has no exact independent checked advance".into(),
                     );
                 }
-                planned =
-                    authoring_retry::rebase_authored_run(before, &current, &planned, &self.config, Some(JsonFormat::Compact))?;
+                planned = authoring_retry::rebase_authored_run(
+                    Some((&self.ctx.interface_var_dir(), self.ctx.required_host_io_limits()?.max_payload_bytes)),
+                    before,
+                    &current,
+                    &planned,
+                    &self.config,
+                    Some(JsonFormat::Compact),
+                )?;
                 state.run_record_bytes = current;
                 if let Some(last) = chain.last() {
                     state.run_record_evidence_seq = Some(last.call.seq.0);

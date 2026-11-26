@@ -273,6 +273,8 @@ struct ProviderLedgerEvidenceIndex {
     mark_arrival_coordinates: HashMap<(String, String, String, u64), UniqueArrivalCoordinate>,
     coordinate_artifacts: HashMap<RuntimeCoordinateKey, Vec<(ArtifactRef, u64)>>,
     coordinate_outbounds: HashMap<RuntimeCoordinateKey, Vec<IndexedOutboundArtifact>>,
+    readable_artifact_sets: std::collections::HashSet<Arc<BTreeSet<ArtifactId>>>,
+    last_read_authority: Option<(BTreeMap<String, octopus_policy::ArtifactAccess>, Arc<BTreeSet<ArtifactId>>)>,
     coordinate_marks: HashMap<(String, RuntimeCoordinateKey, String, String), UniqueEvidence>,
     retained_delivery: pending_delivery::Ledger,
     ledger_file: Option<ledger_rows::LedgerFile>,
@@ -292,7 +294,7 @@ struct IndexedOutboundArtifact {
     checkpoint_binding_policy: Option<CheckpointBindingPolicySnapshot>,
     required_verified_artifacts: Vec<RequiredVerifiedArtifact>,
     artifact_binding_refs: Vec<ArtifactRef>,
-    readable_artifacts: BTreeSet<ArtifactId>,
+    readable_artifacts: Arc<BTreeSet<ArtifactId>>,
     role_artifacts: Vec<String>,
 }
 
@@ -477,7 +479,7 @@ pub use failed_source::{payload_carries_session_context, FailedSourceHandoffErro
 mod writer_run;
 pub mod placement;
 pub mod foreign_edit;
-pub use writer_run::{separate_writer_run, separate_owner_writer_run, owner_writer_binding, OwnerWriterEdit, OwnerWriterEvidence, WriterRunBinding};
+pub use writer_run::{standing_writer_checkpoints, separate_writer_run, separate_owner_writer_run, owner_writer_binding, OwnerWriterEdit, OwnerWriterEvidence, WriterRunBinding};
 mod source_replay;
 mod source_settlement;
 pub use source_settlement::PendingSourceSettlement;

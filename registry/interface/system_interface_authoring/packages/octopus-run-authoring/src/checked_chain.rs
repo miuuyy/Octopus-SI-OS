@@ -11,6 +11,13 @@ pub struct CheckedRunEvidence<'a> {
 
 pub trait CheckedRunEvidenceReader {
     fn max_payload_bytes(&self) -> u64;
+    fn capability_payload_proof(
+        &mut self,
+        _provider: &InterfaceId,
+        reference: &capability_amendment::EffectPayloadRef,
+    ) -> Result<Vec<u8>, String> {
+        reference.read_snapshot(self)
+    }
     fn source_context_snapshot(&mut self, _record: &RunRecord, _config: &RunAuthoringConfig, _source: u64, _rebase: &[ArtifactRef]) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
         Err("checked reader does not provide exact source context evidence".into())
     }
@@ -214,6 +221,25 @@ impl<'a> FileCheckedRunReader<'a> {
 }
 
 impl CheckedRunEvidenceReader for FileCheckedRunReader<'_> {
+    fn capability_payload_proof(
+        &mut self,
+        provider: &InterfaceId,
+        reference: &capability_amendment::EffectPayloadRef,
+    ) -> Result<Vec<u8>, String> {
+        if reference.has_snapshot(self.evidence.blobs_dir)? {
+            return reference.read_snapshot(self);
+        }
+        let ctx = self
+            .provider_context
+            .as_ref()
+            .filter(|ctx| ctx.interface == *provider)
+            .ok_or("capability proof requires the exact declared provider owner context or admitted blob")?;
+        capability_amendment::read_payload_proof(
+            &ctx.interface_var_dir(),
+            reference,
+            self.evidence.max_payload_bytes,
+        )
+    }
     fn max_payload_bytes(&self) -> u64 { self.evidence.max_payload_bytes }
     fn source_context_snapshot(&mut self, record: &RunRecord, config: &RunAuthoringConfig, source: u64, rebase: &[ArtifactRef]) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
         source_withdrawal::source_snapshot_from_evidence(self.evidence, self.provider_context.as_ref(), record, config, source, rebase)
@@ -437,7 +463,8 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 let effect = ordered.checked_result(writer,metadata,&snapshot,&result,reader.max_payload_bytes(),candidate.call.seq.0)?;
                 if effect == writer_run::OrderedTargetEffect::Refused || writer_run::target_untouched(&result, effect) { continue; }
                 let prospective = apply_run_json_patch(&candidate.before,&candidate.arguments.patch,&candidate.arguments.expected_after_hash, candidate.arguments.json_format)?.into_bytes();
-                let transition = CheckedRunTransition {writer:candidate.writer,before:candidate.before,after:prospective,call:candidate.call,result:movement,foreign:false};
+                let mut transition = CheckedRunTransition {writer:candidate.writer,before:candidate.before,after:prospective,call:candidate.call,result:movement,capability_payload:None,foreign:false};
+                capability_amendment::capture_transition_payload(reader, &mut transition)?;
                 if matches!(effect, writer_run::OrderedTargetEffect::Uncertain | writer_run::OrderedTargetEffect::UncertainWriter) {
                     if uncertain.len() >= 1024 { return Err("checked uncertain transitions exceed their evidence bound".into()); }
                     uncertain.push(transition);
@@ -475,7 +502,8 @@ pub(crate) fn checked_run_file_chain_with_reader(
                 || !snapshot_record.active_checkpoints.contains(&checkpoint.id) || candidate.call.seq >= movement.seq {
                 return Err("checked run result differs from its exact admitted write and prospective snapshot".into());
             }
-            let transition = CheckedRunTransition { writer: candidate.writer, before: candidate.before, after: prospective, call: candidate.call, result: movement, foreign: false };
+            let mut transition = CheckedRunTransition { writer: candidate.writer, before: candidate.before, after: prospective, call: candidate.call, result: movement, capability_payload: None, foreign: false };
+            capability_amendment::capture_transition_payload(reader, &mut transition)?;
             if transitions.len() >= 1024 { return Err("checked authoring transitions exceed their evidence bound".into()); }
             generated_artifacts::validate_generated_transition(reader,&transition)?;
             input_artifacts::validate_input_transition(reader, &transition)?;

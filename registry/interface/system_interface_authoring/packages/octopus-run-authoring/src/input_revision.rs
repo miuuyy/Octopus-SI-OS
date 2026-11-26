@@ -683,6 +683,9 @@ struct PayloadHistoryReader<'a, R: ?Sized>(&'a mut R);
 
 impl<R: CheckedRunEvidenceReader + ?Sized> CheckedRunEvidenceReader for PayloadHistoryReader<'_, R> {
     fn max_payload_bytes(&self) -> u64 { self.0.max_payload_bytes() }
+    fn capability_payload_proof(&mut self, provider: &InterfaceId, reference: &capability_amendment::EffectPayloadRef) -> Result<Vec<u8>, String> {
+        self.0.capability_payload_proof(provider, reference)
+    }
     fn source_context_snapshot(&mut self, record: &RunRecord, config: &RunAuthoringConfig, source: u64, rebase: &[ArtifactRef]) -> Result<(serde_json::Value, Vec<(ArtifactRef, u64)>), String> {
         self.0.source_context_snapshot(record, config, source, rebase)
     }

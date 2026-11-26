@@ -171,7 +171,14 @@ pub(crate) fn persisted_authoring_attempt(
         {
             return Err("provider authoring retry changed its original intent or independent write evidence".into());
         }
-        authoring_retry::validate_rebased_authored_run(before, current, &previous.authored, &next.authored, config)?;
+        authoring_retry::validate_rebased_authored_run(
+            Some((&ctx.interface_var_dir(), ctx.required_host_io_limits()?.max_payload_bytes)),
+            before,
+            current,
+            &previous.authored,
+            &next.authored,
+            config,
+        )?;
     }
     Ok(ordered.pop().map(|(attempt, _, _)| attempt))
 }

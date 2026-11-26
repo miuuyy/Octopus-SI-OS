@@ -150,6 +150,7 @@ fn exercise_independent_provider_owner(handoff: &ProviderOutputHandoff, initial:
         after: next.content.as_bytes().to_vec(),
         call: ledger_row(100),
         result: ledger_row(101),
+        capability_payload: None,
         foreign: false,
     };
     validate_checked_owner_transition(&transition).unwrap();
@@ -218,6 +219,7 @@ fn exercise_peer_verified_input_lifecycle(
         after,
         call: ledger_row(100),
         result: ledger_row(101),
+        capability_payload: None,
         foreign: false,
     };
     validate_checked_owner_transition(&change(

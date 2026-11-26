@@ -748,19 +748,21 @@ fn merge_checkpoint_ids(
 }
 
 pub(super) fn validate_rebased_authored_run(
+    proof_store: Option<(&Path, u64)>,
     before: &[u8],
     current: &[u8],
     previous: &AuthoredRun,
     next: &AuthoredRun,
     config: &RunAuthoringConfig,
 ) -> Result<(), String> {
-    if rebase_authored_run(before, current, previous, config, next.json_format)? != *next {
+    if rebase_authored_run(proof_store, before, current, previous, config, next.json_format)? != *next {
         return Err("provider authoring retry changed its original intent or independent write evidence".into());
     }
     Ok(())
 }
 
 pub(super) fn rebase_authored_run(
+    proof_store: Option<(&Path, u64)>,
     before: &[u8],
     current: &[u8],
     authored: &AuthoredRun,
@@ -873,7 +875,11 @@ pub(super) fn rebase_authored_run(
         let topology: BoundRunAuthoringTopology = serde_json::from_value(merged["interface_state"][config.provider_interface.as_str()][RUN_AUTHORING_BINDING].clone()).map_err(|error| error.to_string())?;
         declared_config.checkpoints = topology.checkpoints;
     }
-    let stepped = match capability_amendment::saved_ordinary(protected, content.as_bytes(), config)? {
+    let ordinary = match proof_store {
+        Some((root, maximum)) => capability_amendment::saved_ordinary_in(protected, content.as_bytes(), config, root, maximum)?,
+        None => capability_amendment::saved_ordinary(protected, content.as_bytes(), config)?,
+    };
+    let stepped = match ordinary {
         Some(step) => {
             declared_config = attempt_config(&actual, config)?;
             RunRecord::from_bytes(&step).map_err(|error| error.to_string())?

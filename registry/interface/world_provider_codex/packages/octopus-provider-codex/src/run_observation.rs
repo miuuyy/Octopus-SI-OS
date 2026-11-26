@@ -207,11 +207,12 @@ pub(crate) struct ObservedRuns {
     pub counts_by_phase: BTreeMap<String, usize>,
 }
 
-fn run_priority_tier(phase: &str, has_refusal: bool, has_external_inputs: bool) -> u8 {
+fn run_priority_tier(phase: &str, has_refusal: bool, has_external_inputs: bool, standing_writer: bool) -> u8 {
     match phase {
         "awaiting_tool_result" | "turn_open" => 0,
         "error" => 1,
         _ if has_refusal => 1,
+        _ if standing_writer => 4,
         _ if has_external_inputs => 2,
         _ => 3,
     }
@@ -265,25 +266,22 @@ pub(crate) fn format_list_runs_response(
     let other_slice = observed.other_runs.as_deref().unwrap_or(&[]);
     let other_tiers = observed.other_tiers.as_deref().unwrap_or(&[]);
 
-    for tier in 0..=3u8 {
-        for (idx, row) in observed.declared_peer_runs.iter().enumerate() {
-            if observed.declared_peer_tiers.get(idx).copied().unwrap_or(3) != tier {
-                continue;
-            }
-            let cost = serde_json::to_vec(row).map(|b| b.len() + 1).unwrap_or(usize::MAX);
-            if cost <= remaining {
-                remaining -= cost;
-                selected_peers.push((idx, row.clone()));
-            }
-        }
-        for (idx, row) in other_slice.iter().enumerate() {
-            if other_tiers.get(idx).copied().unwrap_or(3) != tier {
-                continue;
-            }
-            let cost = serde_json::to_vec(row).map(|b| b.len() + 1).unwrap_or(usize::MAX);
-            if cost <= remaining {
-                remaining -= cost;
-                selected_others.push((idx, row.clone()));
+    // Direct connections own the budget before the discovery-only inventory.
+    // Preserve activity priority within each group, not across their boundary.
+    for (rows, tiers, selected) in [
+        (observed.declared_peer_runs.as_slice(), observed.declared_peer_tiers.as_slice(), &mut selected_peers),
+        (other_slice, other_tiers, &mut selected_others),
+    ] {
+        for tier in 0..=4u8 {
+            for (idx, row) in rows.iter().enumerate() {
+                if tiers.get(idx).copied().unwrap_or(3) != tier {
+                    continue;
+                }
+                let cost = serde_json::to_vec(row).map(|b| b.len() + 1).unwrap_or(usize::MAX);
+                if cost <= remaining {
+                    remaining -= cost;
+                    selected.push((idx, row.clone()));
+                }
             }
         }
     }
@@ -498,6 +496,7 @@ pub(crate) fn observe_runs_pulse(
             phase,
             activity.get("recent_refusal").is_some(),
             !bindings.external_inputs.is_empty(),
+            bindings.standing_writer,
         );
         let mut entry = json!({
             "interface_id": interface_id,
@@ -563,6 +562,7 @@ pub(crate) fn observe_runs_pulse(
                 phase,
                 activity.get("recent_refusal").is_some(),
                 !bindings.external_inputs.is_empty(),
+                bindings.standing_writer,
             );
             let mut entry = json!({
                 "run_id": run_id,
@@ -643,6 +643,7 @@ fn attach_record_metadata(target: &mut Value, record: &RunRecord, bindings: &Run
 }
 
 struct RunBindingsSummary {
+    standing_writer: bool,
     title: Option<String>,
     archived: bool,
     provider_interface_id: Option<String>,
@@ -657,6 +658,7 @@ struct RunBindingsSummary {
 impl RunBindingsSummary {
     fn empty() -> Self {
         Self {
+            standing_writer: false,
             title: None,
             archived: false,
             provider_interface_id: None,
@@ -744,13 +746,14 @@ fn inspect_run_bindings(record: &RunRecord, cache: &mut DescriptorCache<'_>) -> 
         });
 
     let mut summary = RunBindingsSummary::empty();
+    summary.standing_writer = !octopus_run_authoring::standing_writer_checkpoints(record).is_empty();
     if record.active_checkpoints.is_empty() {
         summary.archived = true;
     }
     let mut external_inputs = BTreeSet::new();
 
     for iface_id in &all_interfaces {
-        let Some(descriptor) = cache.descriptor(iface_id).cloned() else {
+        let Some(descriptor) = cache.descriptor(iface_id) else {
             continue;
         };
         let role = descriptor.role.0.as_str();
@@ -840,6 +843,9 @@ fn build_run_activity(
         return (json!({ "phase": "unreadable" }), "unreadable");
     }
 
+    let standing_writer_waits = record
+        .map(octopus_run_authoring::standing_writer_checkpoints)
+        .unwrap_or_default();
     let empty = VecDeque::new();
     let rows = movements.unwrap_or(&empty);
 
@@ -905,8 +911,13 @@ fn build_run_activity(
                 if bindings.door_interfaces.contains(to_id) {
                     let call_label = label.clone().unwrap_or_else(|| "tool.call".into());
                     pending_doors.insert(to_id.to_string(), (call_label, seq, ts));
-                    turn_open = true;
-                } else if to_provider {
+                    if standing_writer_waits.is_empty() {
+                        turn_open = true;
+                    }
+                } else if to_provider
+                    && standing_writer_waits.is_empty()
+                    && label.as_deref() != Some("interface.context.updated")
+                {
                     turn_open = true;
                     last_error = None;
                     recent_refusal = None;
@@ -938,7 +949,9 @@ fn build_run_activity(
                         }
                         _ => {}
                     }
-                } else if bindings.world_inbound_interfaces.contains(from_id) {
+                } else if bindings.world_inbound_interfaces.contains(from_id)
+                    && label.as_deref() != Some("interface.context.updated")
+                {
                     turn_open = true;
                     last_error = None;
                     recent_refusal = None;
@@ -967,7 +980,9 @@ fn build_run_activity(
             if !active_set.contains(checkpoint.id.as_str()) {
                 continue;
             }
-            if checkpoint.required_verified_artifacts.is_empty() {
+            if checkpoint.required_verified_artifacts.is_empty()
+                || standing_writer_waits.contains(&checkpoint.id)
+            {
                 continue;
             }
             let Some(iface) = checkpoint.inbound_interface() else {
@@ -997,10 +1012,22 @@ fn build_run_activity(
         })
     });
 
+    // A tail-derived open flag can outlive the provider's recorded idle
+    // transition. Queued context is not liveness evidence; preserve actual
+    // pending calls below and let a running record keep its open phase.
+    if record.is_some_and(|rec| rec.status.as_str() == Some("idle"))
+        && last_artifact_label.as_deref() == Some("interface.context.updated")
+    {
+        turn_open = false;
+    }
     let record_running = record.is_some_and(|rec| rec.status.as_str() == Some("running"));
     let phase = if last_movement_seq.is_none() {
         if record_running {
             "turn_open"
+        } else if !standing_writer_waits.is_empty()
+            && record.is_some_and(|rec| rec.status.as_str() == Some("idle"))
+        {
+            "idle"
         } else {
             "not_started"
         }
@@ -1111,7 +1138,7 @@ fn try_load_via_sqlite_index(
     let mut by_run: BTreeMap<String, VecDeque<Movement>> = BTreeMap::new();
     for run_id in target_runs {
         let rows = reader
-            .movement_rows_touching_run(run_id, 0, progress.watermark)
+            .tail_movement_rows_touching_run(run_id, 0, progress.watermark, MAX_TAIL_MOVEMENTS_PER_RUN)
             .ok()??;
         let skip = rows.len().saturating_sub(MAX_TAIL_MOVEMENTS_PER_RUN);
         let mut queue = VecDeque::with_capacity(rows.len().saturating_sub(skip));
@@ -1129,7 +1156,7 @@ fn try_load_via_sqlite_index(
             let (movement, _) = decoder
                 .decode_projection(&buf, (range.seq + 1) as usize)
                 .ok()?;
-            if movement.seq.0 != range.seq {
+            if movement.seq.0 != range.seq || movement.run().map(|r| r.as_str()) != Some(run_id.as_str()) {
                 return None;
             }
             queue.push_back(movement);
@@ -1451,6 +1478,44 @@ mod tests {
     }
 
     #[test]
+    fn queued_context_is_not_a_provider_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let record = write_run(tmp.path(), "run_idle", "idle", &[], &[]);
+        let mut bindings = RunBindingsSummary::empty();
+        bindings.provider_interfaces.insert("provider".into());
+        bindings.world_inbound_interfaces.insert("peer".into());
+        let row = |kind, from: &str, to: &str, label: &str| Movement {
+            seq: octopus_ledger::Seq(1), lamport: octopus_ledger::Lamport(2), recorded_at_unix_ms: 1,
+            trace: TraceId("context".into()), kind,
+            from: Endpoint::Interface(from.into()), to: Endpoint::Interface(to.into()),
+            artifact: Some(artifact_with_hash(label, ContentHash::of_bytes(b"{}"))),
+            invocation_metadata: None,
+        };
+        for movement in [
+            row(MovementKind::InterfaceOutbound, "peer", "provider", "interface.context.updated"),
+            row(MovementKind::InterfaceArrival, "peer", "worker", "interface.context.updated"),
+        ] {
+            let rows = VecDeque::from([movement]);
+            let (activity, phase) = build_run_activity(Some(&record), &bindings, Some(&rows), true, None, 5_189_000);
+            assert_eq!(phase, "idle");
+            assert_eq!(activity["last_artifact_label"], "interface.context.updated");
+        }
+        let rows = VecDeque::from([
+            row(MovementKind::InterfaceArrival, "provider", "worker", "turn.started"),
+            row(MovementKind::InterfaceOutbound, "peer", "provider", "interface.context.updated"),
+        ]);
+        assert_eq!(build_run_activity(Some(&record), &bindings, Some(&rows), true, None, 2).1, "idle");
+        let queued = VecDeque::from([
+            row(MovementKind::InterfaceArrival, "provider", "worker", "turn.started"),
+            row(MovementKind::InterfaceArrival, "provider", "worker", "interface.context.updated"),
+        ]);
+        assert_eq!(build_run_activity(Some(&record), &bindings, Some(&queued), true, None, 5_189_000).1, "idle");
+        let mut running = record.clone();
+        running.status = json!("running");
+        assert_eq!(build_run_activity(Some(&running), &bindings, Some(&queued), true, None, 5_189_000).1, "turn_open");
+    }
+
+    #[test]
     fn topology_separates_system_world_and_private_copies() {
         let tmp = tempfile::tempdir().unwrap();
         let reg = tmp.path().join("registry");
@@ -1578,6 +1643,11 @@ mod tests {
 
         let mut index = LedgerSqliteIndex::open(&ledger.join("index.sqlite")).unwrap();
         index.ingest_from(&log).unwrap();
+        let reader = LedgerSqliteReader::open(&ledger.join("index.sqlite")).unwrap();
+        let all = reader.movement_rows_touching_run("run_errored", 0, 3).unwrap().unwrap();
+        let tail = reader.tail_movement_rows_touching_run("run_errored", 0, 3, 1).unwrap().unwrap();
+        assert_eq!(all.last().map(|r| r.seq), tail.last().map(|r| r.seq));
+        assert!(reader.tail_movement_rows_touching_run("run_errored", 0, 3, 0).unwrap().unwrap().is_empty());
 
         log.try_append(MovementDraft {
             trace: TraceId("t3b".into()),
@@ -1621,6 +1691,14 @@ mod tests {
         assert_eq!(peer["activity"]["phase"], json!("awaiting_tool_result"));
         assert_eq!(peer["activity"]["pending_tool_calls"].as_array().unwrap().len(), 1);
 
+        let indexed_activity = gated.source_activity.clone();
+        let original_index = ctx.ledger_index_path.clone();
+        ctx.ledger_index_path = ledger.join("absent.sqlite");
+        let fallback = observe_runs_pulse(&home, &peers, Some(&roots), Some(&ctx), false);
+        assert_eq!(fallback.source_activity["phase"], indexed_activity["phase"]);
+        assert_eq!(fallback.source_activity["last_movement_seq"], indexed_activity["last_movement_seq"]);
+        assert_eq!(fallback.declared_peer_runs[0]["activity"]["phase"], gated.declared_peer_runs[0]["activity"]["phase"]);
+        ctx.ledger_index_path = original_index;
         let full = observe_runs_pulse(&home, &peers, Some(&roots), Some(&ctx), true);
         assert_eq!(full.archived_runs_count, Some(1));
         let others = full.other_runs.unwrap();
@@ -1759,5 +1837,145 @@ mod tests {
 
         let other_rows = decoded["other_runs"].as_array().unwrap();
         assert_eq!(other_rows[0]["run_id"], json!("run_other_active"));
+    }
+
+    fn write_separate_writer(runs: &Path, id: &str) -> RunRecord {
+        let record = write_run(runs, id, "idle",
+            &[("call", "system_authoring_source"), ("result", "system_door_ws")],
+            &[("call", "system_door_ws"), ("result", "world_provider_p1")]);
+        let mut value = serde_json::to_value(record).unwrap();
+        value["interface_state"] = json!({"world_provider_p1": {"file_writer_target": {
+            "run": "run_owner", "provider": "world_provider_p1",
+            "source": "system_authoring_source", "door": "system_door_ws", "generation": 0
+        }}});
+        value["checkpoints"][0]["required_verified_artifacts"] = json!([{
+            "artifact_label": "tool.call", "verifier": "tool_call_allowed",
+            "mark": "tool.call.allowed", "params": {}
+        }]);
+        write_json(&runs.join(format!("{id}.json")), &value);
+        RunRecord::from_bytes(&serde_json::to_vec(&value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn separate_writer_standing_routes_do_not_imply_a_pending_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let record = write_separate_writer(tmp.path(), "arbitrary_companion");
+        assert_eq!(run_priority_tier("idle", false, true, true), 4);
+        assert_eq!(run_priority_tier("turn_open", false, true, true), 0);
+        assert_eq!(run_priority_tier("idle", true, true, true), 1);
+        let mut bindings = RunBindingsSummary::empty();
+        bindings.door_interfaces = BTreeSet::from(["system_authoring_source".into(), "system_door_ws".into()]);
+        bindings.provider_interfaces.insert("world_provider_p1".into());
+        let row = |kind, from: &str, to: &str, label: &str| Movement {
+            seq: octopus_ledger::Seq(1), lamport: octopus_ledger::Lamport(2), recorded_at_unix_ms: 1,
+            trace: TraceId("t".into()), kind,
+            from: Endpoint::Interface(InterfaceId::new(from)), to: Endpoint::Interface(InterfaceId::new(to)),
+            artifact: Some(artifact_with_hash(label, ContentHash::of_bytes(b"{}"))),
+            invocation_metadata: None,
+        };
+        assert_eq!(build_run_activity(Some(&record), &bindings, None, true, None, 1000).1, "idle");
+        let done = row(MovementKind::InterfaceArrival, "system_door_ws", "world_provider_p1", "tool.result");
+        let (activity, phase) = build_run_activity(Some(&record), &bindings, Some(&VecDeque::from([done.clone()])), true, None, 1000);
+        assert_eq!(phase, "idle");
+        assert!(activity.get("pending_tool_calls").is_none());
+        let emitted = row(MovementKind::InterfaceOutbound, "system_authoring_source", "system_door_ws", "tool.call");
+        let forwarded = row(MovementKind::InterfaceOutbound, "system_door_ws", "world_provider_p1", "tool.result");
+        assert_eq!(build_run_activity(Some(&record), &bindings, Some(&VecDeque::from([emitted.clone(), done.clone(), forwarded])), true, None, 1000).1, "idle");
+        let started = row(MovementKind::InterfaceArrival, "world_provider_p1", "worker", "turn.started");
+        assert_eq!(build_run_activity(Some(&record), &bindings, Some(&VecDeque::from([started])), true, None, 1000).1, "turn_open");
+        let (activity, phase) = build_run_activity(Some(&record), &bindings, Some(&VecDeque::from([emitted])), true, None, 1000);
+        assert_eq!(phase, "awaiting_tool_result");
+        assert_eq!(activity["pending_tool_calls"].as_array().unwrap().len(), 1);
+        let mut running = record.clone();
+        running.status = json!("running");
+        assert_eq!(build_run_activity(Some(&running), &bindings, Some(&VecDeque::from([done.clone()])), true, None, 1000).1, "turn_open");
+        let err = row(MovementKind::InterfaceArrival, "world_provider_p1", "worker", "turn.error");
+        assert_eq!(build_run_activity(Some(&record), &bindings, Some(&VecDeque::from([err])), true, None, 1000).1, "error");
+        let refused = row(MovementKind::DeliveryRefused, "system_authoring_source", "system_door_ws", "tool.call");
+        let (activity, phase) = build_run_activity(Some(&record), &bindings, Some(&VecDeque::from([refused])), true, None, 1000);
+        assert_eq!(run_priority_tier(phase, activity.get("recent_refusal").is_some(), false, true), 1);
+        let mut ordinary = record.clone();
+        ordinary.interface_state.clear();
+        assert_eq!(build_run_activity(Some(&ordinary), &bindings, Some(&VecDeque::from([done])), true, None, 1000).1, "awaiting_tool_result");
+        let mut malformed = serde_json::to_value(&record).unwrap();
+        malformed["interface_state"]["world_provider_p1"]["file_writer_target"]["run"] = json!(record.id);
+        let malformed = RunRecord::from_bytes(&serde_json::to_vec(&malformed).unwrap()).unwrap();
+        assert!(octopus_run_authoring::standing_writer_checkpoints(&malformed).is_empty());
+        let mut incomplete = record.clone();
+        incomplete.active_checkpoints.pop();
+        assert!(octopus_run_authoring::standing_writer_checkpoints(&incomplete).is_empty());
+    }
+
+    #[test]
+    fn peer_budget_is_protected_from_busy_discovery_inventory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reg, runs, ledger) = (tmp.path().join("registry"), tmp.path().join("runs"), tmp.path().join("ledger"));
+        std::fs::create_dir_all(&ledger).unwrap();
+        write_iface(&reg, &json!({"id":"world_provider_p1","interface_type":"world","role":"provider","direction":"bidirectional","source_names":["p"],"interface_driver_ref":"codex"}));
+        for id in ["system_door_ws", "system_authoring_source"] {
+            write_iface(&reg, &json!({"id":id,"interface_type":"system","role":"system","direction":"bidirectional","source_names":["tool"],"interface_driver_ref":""}));
+        }
+        let home = write_run(&runs, "home", "idle", &[("provider", "world_provider_p1")], &[]);
+        let mut peers = BTreeMap::new();
+        for i in 0..22 {
+            let id = format!("peer_{i:02}");
+            write_run(&runs, &id, "idle", &[("provider", "world_provider_p1")], &[]);
+            peers.insert(format!("input_{i:02}"), Some(id));
+        }
+        write_run(&runs, "ordinary_unconnected", "running", &[("provider", "world_provider_p1")], &[]);
+        let mut log = DurableLog::open(ledger.join("movements.jsonl")).unwrap();
+        for i in 0..55 {
+            let id = format!("companion_{i:02}");
+            write_separate_writer(&runs, &id);
+            log.try_append(MovementDraft {
+                trace: TraceId("t".into()), kind: MovementKind::InterfaceArrival,
+                from: Endpoint::Interface(InterfaceId::new("system_door_ws")),
+                to: Endpoint::Interface(InterfaceId::new("world_provider_p1")),
+                artifact: Some(artifact_with_hash("tool.result", ContentHash::of_bytes(b"{}"))),
+                invocation_metadata: Some(runtime_meta(&id, "world_provider_p1", DeliveryVerdict::Admitted { seq: i })),
+                causal_floor: None,
+            }).unwrap();
+        }
+        let (arrivals, _rx) = tokio::sync::mpsc::channel(1);
+        let ctx = InterfaceLiftContext::unprivileged(
+            InterfaceId::new("world_provider_p1"), tmp.path().into(), None, tmp.path().into(),
+            ledger.join("movements.jsonl"), ledger.join("blobs"), ledger.join("index.sqlite"),
+            Default::default(), arrivals, tokio_util::sync::CancellationToken::new(),
+        );
+        let roots = CompositionRoots {
+            registry_root: reg, run_records_root: runs,
+            ee_instances_root: tmp.path().join("ees"), interface_private_state_root: tmp.path().join("var"),
+        };
+        let observed = observe_runs_pulse(&home, &peers, Some(&roots), Some(&ctx), true);
+        assert_eq!(observed.declared_peer_runs_total, 22);
+        assert_eq!(observed.other_runs_total, Some(56));
+        assert_eq!(observed.other_runs.as_ref().unwrap()[0]["run_id"], "ordinary_unconnected");
+        assert_eq!(observed.other_tiers.as_ref().unwrap()[0], 0);
+        assert!(observed.other_tiers.as_ref().unwrap()[1..].iter().all(|t| *t == 4));
+        assert_eq!(observed.counts_by_phase.get("awaiting_tool_result"), None);
+        assert_eq!(observed.counts_by_phase.get("idle"), Some(&55));
+        let response = format_list_runs_response(json!({"run_id":"home"}), "worker".into(), None, &observed);
+        assert_eq!(response["declared_peer_runs"].as_array().unwrap().len(), 22);
+        assert!(response.get("declared_peer_runs_omitted").is_none());
+        assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_LIST_RUNS_BYTES);
+        assert_eq!(response["other_runs_total"], json!(56));
+        assert_eq!(response["other_runs_omitted"].as_u64().unwrap() as usize + response["other_runs"].as_array().unwrap().len(), 56);
+        let mut busy = observed;
+        busy.other_tiers = Some(vec![0; busy.other_runs.as_ref().unwrap().len()]);
+        for row in busy.other_runs.as_mut().unwrap() { row["padding"] = json!("x".repeat(1600)); }
+        let response = format_list_runs_response(json!({"run_id":"home"}), "worker".into(), None, &busy);
+        assert_eq!(response["declared_peer_runs"].as_array().unwrap().len(), 22);
+        assert_eq!(response["truncated"], json!(true));
+        assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_LIST_RUNS_BYTES);
+        busy.declared_peer_tiers[20] = 0;
+        busy.declared_peer_tiers[21] = 1;
+        for row in &mut busy.declared_peer_runs { row["padding"] = json!("p".repeat(1800)); }
+        let response = format_list_runs_response(json!({"run_id":"home"}), "worker".into(), None, &busy);
+        let peer_rows = response["declared_peer_runs"].as_array().unwrap();
+        assert!(peer_rows.iter().any(|r| r["run_id"] == "peer_20"));
+        assert!(peer_rows.iter().any(|r| r["run_id"] == "peer_21"));
+        assert!(response["other_runs"].as_array().unwrap().is_empty());
+        assert_eq!(response["declared_peer_runs_omitted"].as_u64().unwrap() as usize + peer_rows.len(), 22);
+        assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_LIST_RUNS_BYTES);
     }
 }

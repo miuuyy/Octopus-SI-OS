@@ -3317,7 +3317,7 @@
             let connected_bytes = encode(&observed);
             assert!(checked_selected_run_advance_state(&ctx, &run_path, &connected_bytes, authored.content.as_bytes(), 23, &handoff.config).unwrap().is_empty());
             let publication = handoff.author_context_publication(authored.content.as_bytes(), &authored.pending_handoff).unwrap();
-            let rebased = authoring_retry::rebase_authored_run(authored.content.as_bytes(), &encode(&observed), &publication, &handoff.config, Some(JsonFormat::Compact)).unwrap();
+            let rebased = authoring_retry::rebase_authored_run(None, authored.content.as_bytes(), &encode(&observed), &publication, &handoff.config, Some(JsonFormat::Compact)).unwrap();
             let rebased_record = RunRecord::from_bytes(rebased.content.as_bytes()).unwrap();
             assert_eq!(rebased.pending_handoff, publication.pending_handoff);
             assert_eq!(rebased_record.checkpoint(&CheckpointId::new(id)), RunRecord::from_bytes(&encode(&observed)).unwrap().checkpoint(&CheckpointId::new(id)));
@@ -3326,7 +3326,7 @@
             let mut history = observed.clone();
             history["interface_state"][provider.as_str()]["context_generation"] = serde_json::json!(200);
             assert!(checked_selected_run_advance_state(&ctx, &run_path, authored.content.as_bytes(), &encode(&history), 23, &handoff.config).is_err(), "an empty writer set cannot prove changed history");
-            assert!(authoring_retry::rebase_authored_run(authored.content.as_bytes(), &encode(&history), &publication, &handoff.config, Some(JsonFormat::Compact)).is_err());
+            assert!(authoring_retry::rebase_authored_run(None, authored.content.as_bytes(), &encode(&history), &publication, &handoff.config, Some(JsonFormat::Compact)).is_err());
             for mutation in 0..4 {
                 let mut invalid = observed.clone();
                 match mutation {
@@ -3336,7 +3336,7 @@
                     _ => invalid["interface_state"][provider.as_str()]["pending_handoff"]["items"][0]["checkpoint"]["id"] = serde_json::json!(id),
                 }
                 assert!(output_connections::extension(authored.content.as_bytes(), &encode(&invalid), &handoff.config).is_err(), "invalid outgoing mutation {mutation}");
-                assert!(authoring_retry::rebase_authored_run(authored.content.as_bytes(), &encode(&invalid), &publication, &handoff.config, Some(JsonFormat::Compact)).is_err(), "invalid outgoing retry {mutation}");
+                assert!(authoring_retry::rebase_authored_run(None, authored.content.as_bytes(), &encode(&invalid), &publication, &handoff.config, Some(JsonFormat::Compact)).is_err(), "invalid outgoing retry {mutation}");
             }
             let mut input_change = observed;
             input_change["interface_state"][provider.as_str()][RUN_AUTHORING_BINDING]["checkpoints"][0]["include_context"] = serde_json::json!(false);
@@ -3532,7 +3532,7 @@
             let rejection = authoring_retry::rejected_write(&rejection_ctx, &handoff.config, &authored).unwrap().unwrap();
             assert_eq!(rejection.result_seq, 25);
             assert!(matches!(rejection.evidence, authoring_retry::RejectionEvidence::ToolResult { call_seq: 24, .. }));
-            let rebased = authoring_retry::rebase_authored_run(&run_bytes, &current, &authored, &handoff.config, Some(JsonFormat::Compact)).unwrap();
+            let rebased = authoring_retry::rebase_authored_run(None, &run_bytes, &current, &authored, &handoff.config, Some(JsonFormat::Compact)).unwrap();
             assert_eq!(rebased.before_hash, hash.to_hex());
             assert_eq!(rebased.pending_handoff, authored.pending_handoff);
             assert_eq!(serde_json::from_str::<serde_json::Value>(&rebased.content).unwrap()["interface_state"]["system_tool_profile_test"], concurrent["interface_state"]["system_tool_profile_test"]);
@@ -3553,21 +3553,21 @@
             };
             let old = cold_read(&run_bytes, &old).unwrap();
             for format in [None, Some(JsonFormat::Compact)] {
-                let planned = authoring_retry::rebase_authored_run(&run_bytes, &current, &old, &handoff.config, format).unwrap();
+                let planned = authoring_retry::rebase_authored_run(None, &run_bytes, &current, &old, &handoff.config, format).unwrap();
                 let saved = cold_read(&current, &planned).unwrap();
                 assert_eq!(saved, planned);
                 assert_eq!(saved.json_format, format);
-                authoring_retry::validate_rebased_authored_run(&run_bytes, &current, &old, &saved, &handoff.config).unwrap();
+                authoring_retry::validate_rebased_authored_run(None, &run_bytes, &current, &old, &saved, &handoff.config).unwrap();
                 let mut altered = saved.clone();
                 altered.json_format = if format.is_none() { Some(JsonFormat::Compact) } else { None };
                 assert!(cold_read(&current, &altered).is_err());
-                assert!(authoring_retry::validate_rebased_authored_run(&run_bytes, &current, &old, &altered, &handoff.config).is_err());
+                assert!(authoring_retry::validate_rebased_authored_run(None, &run_bytes, &current, &old, &altered, &handoff.config).is_err());
                 altered = saved.clone();
                 altered.content.push(' ');
-                assert!(authoring_retry::validate_rebased_authored_run(&run_bytes, &current, &old, &altered, &handoff.config).is_err());
+                assert!(authoring_retry::validate_rebased_authored_run(None, &run_bytes, &current, &old, &altered, &handoff.config).is_err());
                 altered.after_hash = ContentHash::of_bytes(altered.content.as_bytes()).to_hex();
                 assert!(cold_read(&current, &altered).is_err());
-                assert!(authoring_retry::validate_rebased_authored_run(&run_bytes, &current, &old, &altered, &handoff.config).is_err());
+                assert!(authoring_retry::validate_rebased_authored_run(None, &run_bytes, &current, &old, &altered, &handoff.config).is_err());
             }
             if let Some(octopus_ledger::MovementMetadata::Delivery(metadata)) = refused_rows[25].invocation_metadata.as_mut() {
                 metadata.runtime.as_mut().unwrap().epoch += 1;
@@ -3991,13 +3991,13 @@
         let mut call = ledger_row(100);
         call.invocation_metadata = Some(InvocationMetadata::new(GrantProjection { mark_outcomes:marks.iter().cloned().collect(), ..Default::default() }).into());
         for (before, after) in [(&initial, authored_request.content.as_bytes()), (&authored_request.content.as_bytes().to_vec(), authored_response.content.as_bytes())] {
-            let change = CheckedRunTransition {writer:writer.clone(),before:before.to_vec(),after:after.to_vec(),call:call.clone(),result:ledger_row(101),foreign:false};
+            let change = CheckedRunTransition {writer:writer.clone(),before:before.to_vec(),after:after.to_vec(),call:call.clone(),result:ledger_row(101),capability_payload:None,foreign:false};
             validate_checked_provider_transition(&change).unwrap();
             validate_verified_input_transition(&mut reader, &change).unwrap();
         }
         let mut wrong:serde_json::Value=serde_json::from_str(&authored_response.content).unwrap();
         wrong["interface_state"][provider.as_str()]["pending_handoff"]["source_movement_seq"]=serde_json::json!(0);
-        let forged=CheckedRunTransition {writer,before:authored_request.content.as_bytes().to_vec(),after:serde_json::to_vec(&wrong).unwrap(),call,result:ledger_row(101),foreign:false};
+        let forged=CheckedRunTransition {writer,before:authored_request.content.as_bytes().to_vec(),after:serde_json::to_vec(&wrong).unwrap(),call,result:ledger_row(101),capability_payload:None,foreign:false};
         assert!(validate_verified_input_transition(&mut reader, &forged).is_err());
         let session = ProviderHandoffSession::new(&handoff.ctx).unwrap();
         validate_retired_verified_input(
@@ -5872,7 +5872,7 @@
             concurrent["active_checkpoints"].as_array_mut().unwrap().push(serde_json::json!("independent_input"));
             concurrent["interface_state"]["system_independent_input"] = serde_json::json!({"owned_checkpoint_ids":["independent_input"]});
             let mut current_bytes = serde_json::to_vec_pretty(&concurrent).unwrap(); current_bytes.push(b'\n');
-            let rebased = authoring_retry::rebase_authored_run(&before, &current_bytes, &next, &handoff.config, Some(JsonFormat::Compact)).unwrap();
+            let rebased = authoring_retry::rebase_authored_run(None, &before, &current_bytes, &next, &handoff.config, Some(JsonFormat::Compact)).unwrap();
             let merged: serde_json::Value = serde_json::from_str(&rebased.content).unwrap();
             assert_eq!(merged["interface_state"]["system_independent_input"], concurrent["interface_state"]["system_independent_input"]);
             assert!(merged["checkpoints"].as_array().unwrap().contains(&independent));
@@ -5880,7 +5880,7 @@
             assert_eq!(rebased.pending_handoff, next.pending_handoff);
             assert_ne!(rebased.after_hash, next.after_hash);
             concurrent["interface_state"][handoff.config.provider_interface.as_str()]["context_generation"] = serde_json::json!(9999);
-            assert!(authoring_retry::rebase_authored_run(&before, &serde_json::to_vec(&concurrent).unwrap(), &next, &handoff.config, Some(JsonFormat::Compact)).is_err());
+            assert!(authoring_retry::rebase_authored_run(None, &before, &serde_json::to_vec(&concurrent).unwrap(), &next, &handoff.config, Some(JsonFormat::Compact)).is_err());
             std::fs::write(&handoff.run_path, &before).unwrap();
             let mut different = next.clone();
             different.content.push(' ');

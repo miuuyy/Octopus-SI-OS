@@ -10,6 +10,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provider_read_authority_sharing_preserves_exact_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = ProviderLedgerEvidenceIndex::new("provider".into(), dir.path().join("movements.jsonl"), 1_048_576);
+        let mut grant = octopus_ledger::GrantProjection::default();
+        grant.artifact_access.insert("readable".into(), Default::default());
+        for seq in 0..4 {
+            if seq == 2 { grant.artifact_access.clear(); }
+            if seq == 3 { grant.artifact_access.insert("readable".into(), Default::default()); }
+            let metadata = octopus_ledger::InvocationMetadata::new(grant.clone()).with_runtime(
+                octopus_ledger::RuntimeInvocationMetadata {
+                    run: "run_test".into(), ee: "ee_test".into(), worker: "worker".into(),
+                    checkpoint: "checkpoint".into(), interface: "provider".into(), epoch: 1, run_record_hash: None,
+                },
+            );
+            let movement = Movement {
+                seq: octopus_ledger::Seq(seq), lamport: octopus_ledger::Lamport(seq + 1),
+                recorded_at_unix_ms: seq, trace: octopus_ledger::TraceId(format!("trace-{seq}")),
+                kind: MovementKind::InterfaceOutbound,
+                from: Endpoint::Interface("source".into()), to: Endpoint::Interface("provider".into()),
+                artifact: Some(ArtifactRef { id: format!("artifact-{seq}").into(), content: ContentHash::of_bytes(b"probe") }),
+                invocation_metadata: Some(metadata.into()),
+            };
+            index.note(&movement).unwrap();
+        }
+        let outbounds = index.coordinate_outbounds.values().next().unwrap();
+        assert_eq!(outbounds.len(), 4);
+        assert!(Arc::ptr_eq(&outbounds[0].readable_artifacts, &outbounds[1].readable_artifacts));
+        assert!(!Arc::ptr_eq(&outbounds[0].readable_artifacts, &outbounds[2].readable_artifacts));
+        assert!(outbounds[0].readable_artifacts.contains(&ArtifactId::new("readable")));
+        assert!(outbounds[2].readable_artifacts.is_empty());
+        assert!(Arc::ptr_eq(&outbounds[0].readable_artifacts, &outbounds[3].readable_artifacts));
+        assert_eq!(index.readable_artifact_sets.len(), 2);
+    }
+
+    #[test]
     fn cold_provider_index_materializes_only_its_own_grants() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("movements.jsonl");

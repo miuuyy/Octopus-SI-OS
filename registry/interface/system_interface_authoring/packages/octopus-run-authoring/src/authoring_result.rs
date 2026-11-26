@@ -682,8 +682,14 @@ pub(crate) fn validate_authoring_attempt_source(
     let candidate = RunRecord::from_bytes(content.as_bytes()).map_err(|error| {
         format!("provider authoring failure source call carries a malformed run: {error}")
     })?;
-    let stepped_bytes = capability_amendment::saved_ordinary(record_bytes, content.as_bytes(), config)?
-        .unwrap_or_else(|| content.as_bytes().to_vec());
+    let stepped_bytes = capability_amendment::saved_ordinary_in(
+        record_bytes,
+        content.as_bytes(),
+        config,
+        &ctx.interface_var_dir(),
+        ctx.required_host_io_limits()?.max_payload_bytes,
+    )?
+    .unwrap_or_else(|| content.as_bytes().to_vec());
     let stepped = RunRecord::from_bytes(&stepped_bytes).map_err(|error| error.to_string())?;
     if !result_inputs::saved_definition_transition(record, &stepped, config)? {
         source_settlement::validate_transition(record, &stepped, config)?;

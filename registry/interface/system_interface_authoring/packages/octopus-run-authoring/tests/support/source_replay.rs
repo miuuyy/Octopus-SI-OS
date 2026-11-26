@@ -506,7 +506,7 @@ fn failed_owner_input_static_revision_requires_checked_terminal_source() {
         assert!(proof.refs_for(&coordinate, &foreign, &hash, checkpoint).is_err());
         foreign = source.clone(); foreign.artifact_binding_refs[0].content = ContentHash::of_bytes(b"other revision");
         assert!(proof.refs_for(&coordinate, &foreign, &hash, checkpoint).is_err());
-        foreign = source.clone(); foreign.readable_artifacts.clear();
+        foreign = source.clone(); Arc::make_mut(&mut foreign.readable_artifacts).clear();
         assert!(proof.refs_for(&coordinate, &foreign, &hash, checkpoint).is_err());
         assert!(proof.refs_for(&coordinate, &source, &ContentHash::of_bytes(b"other snapshot"), checkpoint).is_err());
         let mut other = checkpoint.clone(); other.epoch.0 += 1;
@@ -1010,7 +1010,7 @@ async fn outstanding_results_preserve_context_and_require_exact_consumption() {
         file_write_result_label:"write.result".into() };
     let mut created = CheckedRunTransition { writer:declared_provider_run_writer(&before, &"provider".into(), &profile).unwrap(),
         before:initial.clone(), after:first.content.as_bytes().to_vec(), call:fixture.rows[2].clone(), result:fixture.rows[3].clone(),
-        foreign: false, };
+        capability_payload: None, foreign: false, };
     let mut metadata = created.call.invocation_metadata.as_ref().unwrap().invocation().unwrap().clone();
     metadata.grant.mark_outcomes.clear();
     created.call.invocation_metadata = Some(metadata.into());
@@ -1478,7 +1478,7 @@ fn payload_readiness_proves_completed_newer_inputs() {
         let selected = prepare_provider_input_payloads(h.run_path.clone(),&current,&writer,InterfaceId::new("room"),
             vec![artifact_identity(&selection,&h.var_dir).unwrap().artifact]).unwrap();
         let mut call = fixture.rows.last().unwrap().clone(); call.seq = octopus_ledger::Seq(cutoff);
-        let transition = CheckedRunTransition {writer:writer.clone(),before:current.clone(),after:selected.content.into_bytes(),call:call.clone(),result:call,foreign:false};
+        let transition = CheckedRunTransition {writer:writer.clone(),before:current.clone(),after:selected.content.into_bytes(),call:call.clone(),result:call,capability_payload:None,foreign:false};
         let mut reader = FileCheckedRunReader::open(&evidence,None).unwrap();
         assert_eq!(input_revision::validate_rearm_evidence(&mut reader,&transition,&h.run_path).is_ok(),mode=="completed","historical {mode}");
         if mode == "completed" {
