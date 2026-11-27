@@ -18,6 +18,8 @@ async function requestComposerPrediction(options, input) {
     const { chat, terminal } = source;
     const registry = path.join(home, "registry");
     const provider = segment(chat.provider_bound_interface_id);
+    const sourceProvider = terminal?.event_data?._movement?.from?.Interface;
+    if (typeof sourceProvider === "string" && sourceProvider && sourceProvider !== provider) return null;
     const descriptor = await json(path.join(registry, "interface", provider, "interface.json"));
     if (descriptor.id !== provider || descriptor.interface_driver_ref !== config.provider_driver
       || descriptor.interface_driver_config?.private_config?.opencodex) return null;

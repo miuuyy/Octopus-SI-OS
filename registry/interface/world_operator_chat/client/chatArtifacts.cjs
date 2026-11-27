@@ -244,11 +244,16 @@ async function readOperatorChatArtifacts(options, request) {
           } : {}),
         });
         if (label === LIVE_STREAM_ARTIFACT_LABEL) {
+          const sourceInterfaceId = endpointInterfaceId(row.from);
+          const sourceRole = sourceRoles.get(sourceInterfaceId);
+          if (sourceRole !== "provider") {
+            throw new Error(`sealed turn.stream source '${sourceInterfaceId}' is not a provider interface`);
+          }
           const parsed = parseOperatorTurnStream(
             requiredBuffer(resolved?.payloadBytes, "sealed turn.stream payloadBytes"),
             {
               complete: true,
-              providerInterfaceId: liveContext.providerInterfaceId,
+              providerInterfaceId: sourceInterfaceId,
               runId,
             },
           );
@@ -266,8 +271,8 @@ async function readOperatorChatArtifacts(options, request) {
             config,
             event,
             interfaceId,
-            providerInterfaceId: liveContext.providerInterfaceId,
-            providerRole: liveContext.providerRole,
+            providerInterfaceId: sourceInterfaceId,
+            providerRole: sourceRole,
             runId,
           })));
           const fullyConsumed = selected.cursor.offset === parsed.completeEndOffset
