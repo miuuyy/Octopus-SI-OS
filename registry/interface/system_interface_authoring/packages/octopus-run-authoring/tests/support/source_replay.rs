@@ -2736,3 +2736,70 @@ async fn operation_results_wait_per_call_and_a_gated_answer_rearms_the_same_wait
     assert!(!fixture.handoff.config.checkpoints.contains(&wait));
     result_inputs::validate_saved(&fixture.handoff.ctx, &waiting, &settled, &fixture.handoff.config).unwrap();
 }
+
+#[tokio::test]
+async fn non_refreshing_write_flushes_prior_deferred_publication_and_validator_rejects_dropping_it() {
+    let mut fixture = CompletedInputReplayFixture::new();
+    let h = &mut fixture.handoff;
+    h.run_path = h.run_path.canonicalize().unwrap();
+    h.ctx.root_slots.insert("run_records_root".into(), h.run_path.parent().unwrap().to_path_buf());
+    h.granted_mark_outcomes.insert("tool.result.received".into());
+    let door = vec![AuthoredInterfaceBinding::all("result_room".into())];
+    {
+        let tool = h.config.checkpoints.iter_mut().find(|cp| cp.role == RunAuthoringCheckpointRole::ProviderToolOutput).unwrap();
+        tool.outbound_interface_bindings = door.clone();
+        tool.result_receiving.insert("read".into(), serde_json::from_value(serde_json::json!({
+            "mark":"tool.result.received","artifact_label":"read.result","verifier":"result_correspondence","params":{}
+        })).unwrap());
+    }
+    h.bound_topology.checkpoints = h.config.checkpoints.clone();
+    let mut seed: serde_json::Value = serde_json::from_slice(&std::fs::read(&h.run_path).unwrap()).unwrap();
+    seed["interface_state"]["provider"][RUN_AUTHORING_BINDING] = serde_json::to_value(&h.bound_topology).unwrap();
+    seed["checkpoints"].as_array_mut().unwrap().iter_mut().find(|cp| cp["id"] == "tool").unwrap()["outbound_interface_bindings"] =
+        serde_json::to_value(door).unwrap();
+    let initial = serde_json::to_vec(&seed).unwrap();
+    std::fs::write(&h.run_path, &initial).unwrap();
+    h.state.try_lock().unwrap().run_record_bytes = initial.clone();
+    fixture.rows.clear();
+    let input_file = fixture.input_file.clone();
+    fixture.edge(&initial, &"input".into(), &input_file, "provider".into(), MovementKind::InterfaceOutbound);
+    let call = fixture.output(true, true, true);
+    assert!(call.pending_handoff.deferred_publication && call.pending_handoff.context_publication.is_some());
+    let call_id = call.pending_handoff.items[0].artifact_id.clone();
+    let before = fixture.reload_definition();
+    let before_generation = before.interface_state[&InterfaceId::new("provider")]["context_generation"].as_u64().unwrap();
+    assert!(!current_context_artifacts(&before, &fixture.handoff.config).unwrap().contains(&call_id));
+    let written = std::fs::read(&fixture.handoff.run_path).unwrap();
+
+    let ack = InterfaceArtifactFile::write(fixture.handoff.var_dir.join("ack"), "reply", br#"{"acknowledged":true}"#).unwrap();
+    let mut context_with_unconsumed = fixture.handoff.state.try_lock().unwrap().context_artifacts.clone();
+    let unconsumed = ArtifactId::new("operator.message:unconsumed");
+    append_artifact(&mut context_with_unconsumed, unconsumed.clone());
+    let obs = fixture.handoff.author_run_with_bindings(
+        &written,
+        &context_with_unconsumed,
+        &[PreparedHandoff {
+            identity: artifact_identity(&ack, &fixture.handoff.var_dir).unwrap(),
+            output_checkpoint: fixture.handoff.config.checkpoint_for_role(RunAuthoringCheckpointRole::ProviderArtifactOutput).unwrap().clone(),
+            verified_inputs: Vec::new(),
+        }],
+        false,
+        None,
+        false,
+        true,
+        &[],
+    ).unwrap();
+    let observed = RunRecord::from_bytes(obs.content.as_bytes()).unwrap();
+    assert!(!obs.pending_handoff.deferred_publication && obs.pending_handoff.context_publication.is_none());
+    assert_eq!(observed.interface_state[&InterfaceId::new("provider")]["context_generation"].as_u64().unwrap(), before_generation);
+    let published_ids = current_context_artifacts(&observed, &fixture.handoff.config).unwrap();
+    assert!(published_ids.contains(&call_id));
+    assert!(!published_ids.contains(&unconsumed));
+    result_inputs::validate_saved(&fixture.handoff.ctx, &before, &observed, &fixture.handoff.config).unwrap();
+
+    let mut forged = observed.clone();
+    for checkpoint in &mut forged.checkpoints {
+        checkpoint.artifact_bindings.retain(|binding| binding.id != call_id);
+    }
+    assert!(result_inputs::validate_saved(&fixture.handoff.ctx, &before, &forged, &fixture.handoff.config).is_err());
+}

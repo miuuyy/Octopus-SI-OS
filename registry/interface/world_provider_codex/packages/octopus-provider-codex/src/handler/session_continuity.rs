@@ -695,8 +695,8 @@ pub(crate) fn session_evidence_targets_pending(
                 ));
             }
             if let Some(operation) = native_pending_operation(pending)? {
-                return operation.advance(&evidence.payload)
-                    .map(|step| matches!(step, NativeStep::Complete { .. }))
+                return operation
+                    .receipt_completes(&evidence.payload)
                     .map_err(InterfaceDriverError::FailedClosed);
             }
             Ok(true)

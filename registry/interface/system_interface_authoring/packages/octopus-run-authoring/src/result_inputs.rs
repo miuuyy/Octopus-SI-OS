@@ -1239,10 +1239,32 @@ fn validate_snapshot_publication(
     let Some(pending) = persisted_pending_handoff(after, &config.provider_interface)? else {
         return Ok(());
     };
-    let Some(target) = &pending.context_publication else {
+    if pending.withdrawal.is_some()
+        || pending.replacement.is_some()
+        || pending.settlement_of.is_some()
+    {
         return Ok(());
+    }
+    let prior = persisted_pending_handoff(before, &config.provider_interface)?;
+    let target = match &pending.context_publication {
+        Some(target) => target.clone(),
+        None if prior.as_ref().is_some_and(|prior| prior.deferred_publication) => {
+            current_context_bindings(after, &config.checkpoints)?
+                .into_iter()
+                .map(|binding| binding.id)
+                .collect()
+        }
+        None => return Ok(()),
     };
-    let context = current_context_bindings(before, &config.checkpoints)?;
+    let supersedes_refused_self = pending.source_without_context
+        && prior
+            .as_ref()
+            .is_some_and(|prior| prior.source_movement_seq == pending.source_movement_seq);
+    let context = if supersedes_refused_self {
+        current_context_bindings(before, &config.checkpoints)?
+    } else {
+        effective_context_bindings(before, &config.checkpoints, &config.provider_interface)?
+    };
     let mut static_context = current_mandatory_role_artifacts(before, config)?;
     static_context.extend(
         config

@@ -314,6 +314,17 @@ impl ProviderOutputHandoff {
             serde_json::json!(result_inputs::expected_run_status(terminal, &next_topology)),
         );
         replace_owned_frontier(root, &previous_frontier, next_frontier, &next_frontier_ids)?;
+        let prior_deferred_publication = if continuation.is_none() {
+            persisted_pending_handoff(&record, &self.config.provider_interface)?
+                .filter(|pending| {
+                    pending.deferred_publication
+                        && !(self.failed_source
+                            && pending.source_movement_seq == self.source_movement_seq)
+                })
+                .and_then(|pending| pending.context_publication)
+        } else {
+            None
+        };
         if refresh_context {
             replace_context_checkpoints(
                 root,
@@ -321,6 +332,19 @@ impl ProviderOutputHandoff {
                 &record.id,
                 &batch_prefix,
                 &artifact_bindings,
+            )?;
+        } else if let Some(deferred) = &prior_deferred_publication {
+            let mut flushed = mandatory_role_artifacts.clone();
+            for artifact in deferred {
+                append_artifact(&mut flushed, artifact.clone());
+            }
+            let flushed_bindings = bind(&flushed)?;
+            replace_context_checkpoints(
+                root,
+                &self.config,
+                &record.id,
+                &batch_prefix,
+                &flushed_bindings,
             )?;
         }
         if let Some(template) = consumed_context_free_independent_input

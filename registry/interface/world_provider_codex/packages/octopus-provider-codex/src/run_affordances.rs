@@ -586,6 +586,74 @@ impl NativePending {
         }
     }
 
+    pub fn receipt_completes(&self, result: &Value) -> Result<bool, String> {
+        let receipt: ToolResultArtifact = serde_json::from_value(result.clone())
+            .map_err(|error| format!("native operation result is malformed: {error}"))?;
+        if receipt.tool != self.effect.tool
+            || receipt.correlation_id.as_deref() != Some(self.effect.correlation_id.as_str())
+        {
+            return Err("native operation result belongs to another tool or correlation".into());
+        }
+        if !receipt.ok {
+            return Ok(true);
+        }
+        let body = receipt.body.ok_or("native result has no body")?;
+        match &self.state {
+            NativePhase::CurrentRun { stage, plan }
+            | NativePhase::PinnedCurrentRun { stage, plan, .. } => match stage {
+                CurrentRunStage::Dependencies => {
+                    validate_file_receipt(&self.effect, &body, &plan.dependency_files)?;
+                    Ok(false)
+                }
+                CurrentRunStage::Activation => {
+                    validate_file_receipt(&self.effect, &body, &plan.activation_files)?;
+                    Ok(false)
+                }
+                CurrentRunStage::Readback => {
+                    let path = self
+                        .effect
+                        .arguments
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or("current-run readback lost its exact path")?;
+                    let content = body
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or("current-run readback has no content")?;
+                    let hash = ContentHash::of_bytes(content.as_bytes()).to_hex();
+                    if body.get("path").and_then(Value::as_str) != Some(path)
+                        || body.get("content_hash").and_then(Value::as_str) != Some(hash.as_str())
+                        || body.get("bytes").and_then(Value::as_u64) != Some(content.len() as u64)
+                    {
+                        return Err("current-run readback differs from its exact file receipt".into());
+                    }
+                    let record = RunRecord::from_bytes(content.as_bytes()).map_err(|e| e.to_string())?;
+                    if record.id.as_str() != self.source_run {
+                        return Err("current-run readback names another run".into());
+                    }
+                    validate_installed(&record, &plan.amendment)?;
+                    Ok(true)
+                }
+            },
+            NativePhase::Applying { files, seed, .. }
+            | NativePhase::PinnedApplying { files, seed, .. } => {
+                validate_file_receipt(&self.effect, &body, files)?;
+                Ok(seed.is_none())
+            }
+            NativePhase::AppliedSeeding { .. }
+            | NativePhase::PinnedAppliedSeeding { .. }
+            | NativePhase::Seeding { .. }
+            | NativePhase::Sending { .. } => {
+                parse_delivery_verdict(body)?;
+                Ok(true)
+            }
+            NativePhase::Writing { files, .. } => {
+                validate_file_receipt(&self.effect, &body, files)?;
+                Ok(false)
+            }
+        }
+    }
+
     pub fn advance(&self, result: &Value) -> Result<NativeStep, String> {
         let receipt: ToolResultArtifact = serde_json::from_value(result.clone())
             .map_err(|error| format!("native operation result is malformed: {error}"))?;
@@ -621,7 +689,7 @@ impl NativePending {
                 ..
             } => {
                 validate_file_receipt(&self.effect, &body, files)?;
-                readback_files(files)?;
+                readback_files_after_write(&self.effect, files, &validation_roots.run_records_root)?;
                 self.validate_publication_reads(&validation_roots.registry_root)?;
                 let mut validation = validate_registry_candidate(validation_roots, &[])?;
                 let unexpected = validation.stages[0]
@@ -1803,6 +1871,149 @@ fn readback_files(files: &[FileProof]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn readback_files_after_write(
+    effect: &NativeEffect,
+    files: &[FileProof],
+    run_records_root: &Path,
+) -> Result<(), String> {
+    for proof in files {
+        let metadata = std::fs::symlink_metadata(&proof.path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "native authoring readback has no exact regular file at '{}'",
+                proof.path.display()
+            ));
+        }
+        let bytes = std::fs::read(&proof.path).map_err(|error| error.to_string())?;
+        if metadata.len() == proof.bytes
+            && ContentHash::of_bytes(&bytes).to_hex() == proof.after_hash
+        {
+            continue;
+        }
+        if live_run_advanced_after_write(effect, proof, run_records_root, &bytes)? {
+            continue;
+        }
+        if metadata.len() != proof.bytes {
+            return Err(format!(
+                "native authoring readback has no exact regular file at '{}'",
+                proof.path.display()
+            ));
+        }
+        return Err(format!(
+            "native authoring readback changed at '{}'",
+            proof.path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn live_run_advanced_after_write(
+    effect: &NativeEffect,
+    proof: &FileProof,
+    run_records_root: &Path,
+    live_bytes: &[u8],
+) -> Result<bool, String> {
+    if proof.path.parent() != Some(run_records_root)
+        || proof.path.extension().and_then(|ext| ext.to_str()) != Some("json")
+    {
+        return Ok(false);
+    }
+    let Some(run_stem) = proof.path.file_stem().and_then(|stem| stem.to_str()) else {
+        return Ok(false);
+    };
+    let Some(writes) = effect.arguments.get("writes").and_then(Value::as_array) else {
+        return Ok(false);
+    };
+    let mut matched = writes.iter().filter(|entry| {
+        entry
+            .get("path")
+            .and_then(|value| serde_json::from_value::<PathBuf>(value.clone()).ok())
+            .as_ref()
+            == Some(&proof.path)
+    });
+    let (Some(entry), None) = (matched.next(), matched.next()) else {
+        return Ok(false);
+    };
+    let Some(authored_content) = entry.get("content").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    if authored_content.len() as u64 != proof.bytes
+        || ContentHash::of_bytes(authored_content.as_bytes()).to_hex() != proof.after_hash
+    {
+        return Ok(false);
+    }
+    let Ok(authored) = RunRecord::from_bytes(authored_content.as_bytes()) else {
+        return Ok(false);
+    };
+    let Ok(live) = RunRecord::from_bytes(live_bytes) else {
+        return Ok(false);
+    };
+    if live.id != authored.id
+        || live.id.as_str() != run_stem
+        || live.ee != authored.ee
+        || live.worker != authored.worker
+    {
+        return Ok(false);
+    }
+    Ok(run_record_runtime_advanced(&authored, &live))
+}
+
+fn run_record_runtime_advanced(authored: &RunRecord, live: &RunRecord) -> bool {
+    let mut advanced = false;
+    for (interface, old_state) in &authored.interface_state {
+        let Some(new_state) = live.interface_state.get(interface) else {
+            return false;
+        };
+        if let Some(old_gen) = old_state
+            .get("authoring_generation")
+            .and_then(Value::as_u64)
+        {
+            let Some(new_gen) = new_state
+                .get("authoring_generation")
+                .and_then(Value::as_u64)
+            else {
+                return false;
+            };
+            if new_gen < old_gen {
+                return false;
+            }
+            if new_gen > old_gen {
+                advanced = true;
+            }
+        }
+        if let Some(old_gen) = old_state
+            .get("file_writer_target")
+            .and_then(|value| value.get("generation"))
+            .and_then(Value::as_u64)
+        {
+            let Some(new_gen) = new_state
+                .get("file_writer_target")
+                .and_then(|value| value.get("generation"))
+                .and_then(Value::as_u64)
+            else {
+                return false;
+            };
+            if new_gen < old_gen {
+                return false;
+            }
+            if new_gen > old_gen {
+                advanced = true;
+            }
+        }
+    }
+    for old_cp in &authored.checkpoints {
+        if let Some(new_cp) = live.checkpoint(&old_cp.id) {
+            if new_cp.epoch.0 < old_cp.epoch.0 {
+                return false;
+            }
+            if new_cp.epoch.0 > old_cp.epoch.0 {
+                advanced = true;
+            }
+        }
+    }
+    advanced
 }
 
 fn parse_delivery_verdict(body: Value) -> Result<DeliveryVerdict, String> {

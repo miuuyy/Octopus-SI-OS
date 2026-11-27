@@ -1048,3 +1048,71 @@ fn native_creation_scopes_provider_model_effort_and_tier_defaults_to_matching_co
     assert_eq!(switched_provider.service_tier, None);
     assert!(affordances.composition_request(&metadata, &request.admitted_parent_record, "e", serde_json::from_value(json!({"text": "Reject", "model": ""})).unwrap()).is_err());
 }
+
+#[test]
+fn native_applying_readback_accepts_live_run_generation_advance_and_receipt_completes_without_disk() {
+    use octopus_interfaces::InterfaceArtifactFile;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let request = support::fixture(&root);
+    let plan = plan_run_composition(&request).unwrap();
+    let authored = AuthoredRunComposition {
+        run_patch: None,
+        run_id: plan.run_id.clone(),
+        writes: composition_candidate_writes(&plan),
+        publication_read_refs: Vec::new(),
+        outgoing_bindings: vec![ProviderOutgoingBinding {
+            interface: plan.receive_interface_id.clone().into(),
+            artifact_label: plan.seed.label.clone(),
+            artifact_bindings: vec!["role-system_worker_template".into()],
+        }],
+        seed: Some(plan.seed.clone()),
+    };
+    let (affordances, metadata) = exact_affordances(&request);
+    let NativeStep::Effect { effect, pending, .. } = affordances
+        .plan_call(&metadata, &request.admitted_parent_record, &request.admitted_parent_record,
+            "apply-live", "create_run", &json!({"creation_key":"live-advance","authored":authored}), None)
+        .unwrap()
+    else { panic!("create refused"); };
+    let payload = serde_json::to_vec(&json!({"tool":effect.tool,"arguments":effect.arguments,"correlation_id":effect.correlation_id})).unwrap();
+    let kinds = vec!["system_room".to_string()];
+    let envelope = InterfaceInvocationEnvelope {
+        artifact: ArtifactRef { id: "tool.call".into(), content: ContentHash::of_bytes(&payload) },
+        artifact_file: InterfaceArtifactFile::write(root.join("calls"), "tool.call", &payload).unwrap(),
+        artifact_binding_payloads: vec![],
+        metadata: Some(serde_json::from_value(json!({"grant":{"worker_environment_kinds":kinds}})).unwrap()),
+    };
+    let body = octopus_system_room_env::execute_file_write_result(
+        &envelope, &effect.arguments, &kinds,
+        &BTreeMap::from([
+            ("registry_root".into(), request.roots.registry_root.clone()),
+            ("ee_instances_root".into(), request.roots.ee_instances_root.clone()),
+            ("run_records_root".into(), request.roots.run_records_root.clone()),
+        ]),
+        &root.join("effects"), 8 * 1024 * 1024,
+    ).unwrap();
+    let receipt = json!(ToolResultArtifact::success(&effect.tool, Some(effect.correlation_id.clone()), body));
+
+    let original_run = std::fs::read_to_string(&plan.run_write.path).unwrap();
+    let mut live_run: Value = serde_json::from_str(&original_run).unwrap();
+    let provider_key = plan.provider_interface_id.as_str();
+    let authored_gen = live_run["interface_state"][provider_key]["authoring_generation"].as_u64().unwrap();
+    live_run["interface_state"][provider_key]["authoring_generation"] = json!(authored_gen + 1);
+    std::fs::write(&plan.run_write.path, serde_json::to_vec(&live_run).unwrap()).unwrap();
+    let NativeStep::Effect { .. } = pending.advance(&receipt).unwrap() else {
+        panic!("live authoring_generation advance must pass readback");
+    };
+
+    let mut regressed = live_run;
+    regressed["interface_state"][provider_key]["authoring_generation"] = json!(authored_gen);
+    std::fs::write(&plan.run_write.path, format!("{}\n", serde_json::to_string(&regressed).unwrap())).unwrap();
+    assert!(pending.advance(&receipt).unwrap_err().contains("readback"));
+
+    std::fs::remove_file(&plan.run_write.path).unwrap();
+    assert!(pending.advance(&receipt).is_err());
+    assert!(!pending.receipt_completes(&receipt).unwrap());
+    let mut unseeded_wire = json!(pending);
+    unseeded_wire["state"]["seed"] = Value::Null;
+    let unseeded: NativePending = serde_json::from_value(unseeded_wire).unwrap();
+    assert!(unseeded.receipt_completes(&receipt).unwrap());
+}

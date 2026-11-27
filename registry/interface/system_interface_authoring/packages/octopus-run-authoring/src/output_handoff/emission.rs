@@ -477,6 +477,27 @@ impl ProviderOutputHandoff {
             return Ok(outcomes);
         }
         let refresh_context = own_refresh || state.deferred_context_generations > 0;
+        if !continuation && withdrawal.is_none() {
+            if let Some(prior) =
+                persisted_pending_handoff(&record, &active.config.provider_interface)?
+                    .filter(|pending| {
+                        pending.deferred_publication
+                            && !(self.failed_source
+                                && pending.source_movement_seq == self.source_movement_seq)
+                    })
+            {
+                if active
+                    .pending_handoff_evidence(&prior)?
+                    .iter()
+                    .any(Option::is_none)
+                {
+                    return Err(
+                        "provider cannot supersede an unadmitted deferred context publication"
+                            .into(),
+                    );
+                }
+            }
+        }
         let mut authored = if continuation {
             active.author_completed_source_continuation(&state.run_record_bytes, &next_context, &prepared)?
         } else {

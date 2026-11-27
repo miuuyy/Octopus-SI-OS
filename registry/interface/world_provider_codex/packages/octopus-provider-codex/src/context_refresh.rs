@@ -439,7 +439,6 @@ fn native_history_orphans(
     let mut known = BTreeMap::<String, (String, serde_json::Value)>::new();
     let mut open = BTreeMap::<String, (String, serde_json::Value)>::new();
     let mut cells = BTreeMap::<String, (String, InterruptedNativeCellWait)>::new();
-    let mut seen_cells = BTreeSet::new();
     let mut wait_cells = BTreeMap::new();
     loop {
         line.clear();
@@ -551,7 +550,10 @@ fn native_history_orphans(
                     if !from_compaction {
                         if call["type"] == "custom_tool_call" && call["name"] == "exec" {
                             if let Some(cell) = native_yielded_cell(&item) {
-                                if !seen_cells.insert(cell.clone()) {
+                                if cells
+                                    .get(&cell)
+                                    .is_some_and(|(owner, _)| owner == &turn)
+                                {
                                     return Err(refused("native history repeats a yielded cell identity".into()));
                                 }
                                 cells.insert(cell, (turn, InterruptedNativeCellWait { exec: call, yielded: item }));
@@ -586,8 +588,9 @@ fn native_history_orphans(
                 ))
             })?;
             if !from_compaction {
+                let turn_cells = cells.values().filter(|(owner, _)| owner == &turn).count();
                 if let Some((_, evidence)) = native_wait_cell(&item).and_then(|cell| cells.get(&cell))
-                    .filter(|(owner, _)| owner == &turn && cells.len() == 1) {
+                    .filter(|(owner, _)| owner == &turn && turn_cells == 1) {
                     wait_cells.insert(id.clone(), evidence.clone());
                 }
             }
@@ -628,8 +631,9 @@ fn native_history_orphans(
         size,
         blake3::Hasher::finalize(&hash).to_hex().to_string(),
         open.into_values().map(|(turn, call)| {
+            let turn_cells = cells.values().filter(|(owner, _)| owner == &turn).count();
             let wait = native_wait_cell(&call).and_then(|cell| cells.get(&cell))
-                .filter(|(owner, _)| owner == &turn && cells.len() == 1)
+                .filter(|(owner, _)| owner == &turn && turn_cells == 1)
                 .filter(|(_, evidence)| call["call_id"].as_str().and_then(|id| wait_cells.get(id)) == Some(evidence))
                 .map(|(_, evidence)| evidence.clone());
             (turn, call, wait)

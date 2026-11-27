@@ -814,3 +814,56 @@ fn selected_home_retains_native_history_retirement_evidence() {
     assert_eq!(std::fs::read(home.join("ledger/movements.jsonl")).unwrap(),ledger_before);
     eprintln!("Selected context {} retains exact result6566/closure6592; original native prefix proves its orphan. Full current history also has an unfinished function call; current pending prevents retirement",current.context_generation);
 }
+
+#[test]
+fn native_history_permits_reused_cell_id_across_completed_or_earlier_turns_and_rejects_same_turn_collision() {
+    let temp = tempfile::tempdir().unwrap();
+    let (path, _, settled, session) = interrupted_native_history_fixture(temp.path());
+    let labels = codex_context_labels();
+    let base: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let write_rows = |rows: &[serde_json::Value]| {
+        std::fs::write(&path, rows.iter().map(|row| format!("{row}\n")).collect::<String>()).unwrap();
+    };
+    let mut interrupted = base.clone();
+    interrupted.push(serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"outer-exec","output":"Script running with cell ID 1\nWall time 1.0 seconds\nOutput:\n"}}));
+    interrupted.push(serde_json::json!({"type":"response_item","payload":{"type":"function_call","call_id":"outer-wait","name":"wait","arguments":"{\"cell_id\":\"1\",\"max_tokens\":12000,\"yield_time_ms\":20000}"}}));
+
+    let mut after_completed = interrupted.clone();
+    after_completed.splice(1..1, [
+        serde_json::json!({"type":"turn_context","payload":{"turn_id":"turn-earlier"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","call_id":"earlier-exec","name":"exec","input":"await tools.ping()"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"earlier-exec","output":"Script running with cell ID 1\nWall time 0.5 seconds\nOutput:\n"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"function_call","call_id":"earlier-wait","name":"wait","arguments":"{\"cell_id\":\"1\",\"yield_time_ms\":1000}"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"earlier-wait","output":"Script completed\nWall time 0.5 seconds\nOutput:\n"}}),
+    ]);
+    write_rows(&after_completed);
+    let proof = context_refresh::prove_native_history_retirement(&path, &settled, &session, &labels).unwrap().unwrap();
+    assert_eq!(serde_json::to_value(&proof).unwrap()["calls"][0]["interrupted_cell_wait"]["exec"]["call_id"], "outer-exec");
+
+    let mut after_restart = interrupted.clone();
+    after_restart.splice(1..1, [
+        serde_json::json!({"type":"turn_context","payload":{"turn_id":"turn-before-restart"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","call_id":"earlier-exec","name":"exec","input":"await tools.ping()"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"earlier-exec","output":"Script running with cell ID 1\nWall time 0.5 seconds\nOutput:\n"}}),
+    ]);
+    write_rows(&after_restart);
+    let proof = context_refresh::prove_native_history_retirement(&path, &settled, &session, &labels).unwrap().unwrap();
+    assert_eq!(serde_json::to_value(&proof).unwrap()["calls"][0]["interrupted_cell_wait"]["exec"]["call_id"], "outer-exec");
+
+    let mut duplicate = interrupted;
+    duplicate.splice(4..4, [
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","call_id":"second-exec","name":"exec","input":"await tools.ping()"}}),
+        serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"second-exec","output":"Script running with cell ID 1\nWall time 0.5 seconds\nOutput:\n"}}),
+    ]);
+    write_rows(&duplicate);
+    assert!(
+        context_refresh::prove_native_history_retirement(&path, &settled, &session, &labels)
+            .unwrap_err()
+            .to_string()
+            .contains("repeats a yielded cell identity")
+    );
+}
