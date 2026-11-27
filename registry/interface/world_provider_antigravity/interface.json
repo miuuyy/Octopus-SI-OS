@@ -2438,6 +2438,10 @@
             {
               "effort": "high",
               "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
             }
           ],
           "show_in_picker": true
@@ -2738,6 +2742,10 @@
                 {
                   "effort": "high",
                   "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "effort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
                 }
               ],
               "shell_type": "shell_command",
