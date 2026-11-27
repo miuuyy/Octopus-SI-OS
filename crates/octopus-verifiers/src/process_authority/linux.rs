@@ -129,7 +129,7 @@ pub fn prepare_room(
         }
     });
     for root in roots {
-        policy.add_path(root, FileAccess::Execute, false)?;
+        policy.add_path(root, FileAccess::Execute, false, false)?;
     }
     policy.compact();
     prepared(policy, executable, args)
@@ -200,6 +200,13 @@ fn project_uncompacted(
         allow_sandbox_delegation: authority.allow_sandbox_delegation,
         allow_process_signals: authority.allow_process_signals,
     };
+    let exact_directories: BTreeSet<PathBuf> = authority
+        .writable_exact_parents
+        .iter()
+        .cloned()
+        .chain(path_ancestors(&authority.writable_exact))
+        .chain(path_ancestors(&authority.readable_exact))
+        .collect();
     for (paths, access, exact) in [
         (&authority.readable, FileAccess::Read, false),
         (&authority.writable, FileAccess::Write, false),
@@ -209,14 +216,19 @@ fn project_uncompacted(
         (&authority.executable_exact, FileAccess::Execute, true),
     ] {
         for path in paths {
-            policy.add_path(path.clone(), access, exact)?;
+            policy.add_path(
+                path.clone(),
+                access,
+                exact,
+                exact && exact_directories.contains(path),
+            )?;
         }
     }
     let mut pending = authority.executable.clone();
     pending.extend(authority.executable_exact.iter().cloned());
     pending.insert(executable.to_path_buf());
     for path in runtime_executables(pending)? {
-        policy.add_path(path, FileAccess::Execute, true)?;
+        policy.add_path(path, FileAccess::Execute, true, false)?;
     }
     for path in ["/lib", "/lib64", "/usr/lib", "/usr/lib64"] {
         policy.add_system_path(path, FileAccess::Map)?;
@@ -261,7 +273,13 @@ fn project_uncompacted(
     paths.extend(authority.readable_exact.iter().cloned());
     paths.extend(authority.writable_exact.iter().cloned());
     for path in path_ancestors(&paths) {
-        policy.add_path(path, FileAccess::Read, true)?;
+        policy.files.push(FileRule {
+            selector: FileSelector::Exact {
+                path,
+                directory: true,
+            },
+            access: FileAccess::Read,
+        });
     }
     let mut writable = authority.writable.clone();
     writable.extend(authority.writable_exact.iter().cloned());
@@ -274,7 +292,15 @@ fn project_uncompacted(
             access: FileAccess::CreateDirectory,
         });
     }
-    let mut publication_targets = authority.writable_exact.clone();
+    let mut publication_targets: BTreeSet<PathBuf> = authority
+        .writable_exact
+        .iter()
+        .filter(|path| {
+            !authority.writable_exact_parents.contains(*path)
+                && (path.is_dir() || !exact_directories.contains(*path))
+        })
+        .cloned()
+        .collect();
     publication_targets.extend(
         authority
             .writable
@@ -457,10 +483,16 @@ impl LinuxProcessPolicy {
         self.files = compacted;
     }
 
-    fn add_path(&mut self, path: PathBuf, access: FileAccess, exact: bool) -> Result<(), String> {
+    fn add_path(
+        &mut self,
+        path: PathBuf,
+        access: FileAccess,
+        exact: bool,
+        known_directory: bool,
+    ) -> Result<(), String> {
         let directory = match std::fs::metadata(&path) {
             Ok(metadata) => metadata.is_dir(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => !exact,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => known_directory || !exact,
             Err(error) => {
                 return Err(format!(
                     "Linux authority cannot inspect '{}': {error}",
@@ -479,7 +511,7 @@ impl LinuxProcessPolicy {
 
     fn add_system_path(&mut self, path: &str, access: FileAccess) -> Result<(), String> {
         match std::fs::canonicalize(path) {
-            Ok(path) => self.add_path(path, access, false),
+            Ok(path) => self.add_path(path, access, false, false),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
                 "Linux runtime resource '{path}' cannot be resolved: {error}"
@@ -488,8 +520,26 @@ impl LinuxProcessPolicy {
     }
 
     fn add_publication(&mut self, path: &Path) -> Result<(), String> {
-        use octopus_file_storage::publication::PublicationFileSelector;
         if path.is_dir() {
+            let projection = octopus_file_storage::publication::directory_publication_access(path)
+                .map_err(|error| {
+                    format!(
+                        "directory publication authority for '{}' failed: {error}",
+                        path.display()
+                    )
+                })?;
+            for tree in projection.directory_tree_reads {
+                self.files.push(FileRule {
+                    selector: FileSelector::Tree { path: tree },
+                    access: FileAccess::Read,
+                });
+            }
+            self.add_publication_rules(
+                projection.directory_reads,
+                projection.directory_creates,
+                projection.file_reads,
+                projection.file_writes,
+            );
             return Ok(());
         }
         let projection =
@@ -499,12 +549,26 @@ impl LinuxProcessPolicy {
                     path.display()
                 )
             })?;
+        self.add_publication_rules(
+            projection.directory_reads,
+            projection.directory_creates,
+            projection.file_reads,
+            projection.file_writes,
+        );
+        Ok(())
+    }
+
+    fn add_publication_rules(
+        &mut self,
+        directory_reads: Vec<PathBuf>,
+        directory_creates: Vec<PathBuf>,
+        file_reads: Vec<octopus_file_storage::publication::PublicationFileSelector>,
+        file_writes: Vec<octopus_file_storage::publication::PublicationFileSelector>,
+    ) {
+        use octopus_file_storage::publication::PublicationFileSelector;
         for (paths, access) in [
-            (projection.directory_reads, FileAccess::Read),
-            (
-                projection.directory_creates,
-                FileAccess::CreatePrivateDirectory,
-            ),
+            (directory_reads, FileAccess::Read),
+            (directory_creates, FileAccess::CreatePrivateDirectory),
         ] {
             for path in paths {
                 self.files.push(FileRule {
@@ -517,8 +581,8 @@ impl LinuxProcessPolicy {
             }
         }
         for (selectors, access) in [
-            (projection.file_reads, FileAccess::Read),
-            (projection.file_writes, FileAccess::Write),
+            (file_reads, FileAccess::Read),
+            (file_writes, FileAccess::Write),
         ] {
             for selector in selectors {
                 let selector = match selector {
@@ -539,7 +603,6 @@ impl LinuxProcessPolicy {
                 self.files.push(FileRule { selector, access });
             }
         }
-        Ok(())
     }
 
     fn path_is_writable(&self, target: &Path) -> bool {
@@ -1190,6 +1253,86 @@ mod tests {
     }
 
     #[test]
+    fn nonexistent_parent_write_argument_projects_exact_directory_write_without_grandparent_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap().join("registry/tool");
+        std::fs::create_dir_all(&root).unwrap();
+        let new_dir = root.join("new-tool");
+        let target = new_dir.join("tool.json");
+        let exe = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let spec = ProcessAuthoritySpec {
+            write_argument_paths: vec![ProcessArgumentPathSpec {
+                pointer: "/path".into(),
+                within_root_slots: BTreeSet::from(["registry_tool_root".into()]),
+                include_parent: true,
+            }],
+            ..ProcessAuthoritySpec::default()
+        };
+        let slots = BTreeMap::from([("registry_tool_root".into(), root.clone())]);
+        let resolved = spec
+            .resolve_for_invocation(&root, &slots, &BTreeMap::new(), &serde_json::json!({ "path": target }), [], [], [], [])
+            .unwrap();
+        let projected = project(&resolved.authority, &exe).unwrap();
+        assert!(projected.files.contains(&exact(new_dir.to_str().unwrap(), true, FileAccess::Write)));
+        assert!(projected.files.contains(&exact(new_dir.to_str().unwrap(), true, FileAccess::CreateDirectory)));
+        assert!(projected.files.contains(&exact(new_dir.join(".octopus-publication").to_str().unwrap(), true, FileAccess::CreatePrivateDirectory)));
+        assert!(!projected.files.contains(&exact(root.join(".octopus-publication").to_str().unwrap(), true, FileAccess::CreatePrivateDirectory)));
+        let rendered = projected.apparmor_profile(&profile_name(), 1000).unwrap();
+        assert!(rendered.contains(&format!("  \"{}/\" rwkl,\n", new_dir.display())));
+        assert!(rendered.contains(&format!("  \"{}\" rwkl,\n", target.display())));
+        assert!(!projected.path_is_writable(&root.join("sibling/tool.json")));
+    }
+
+    #[test]
+    fn directory_write_argument_projects_bounded_directory_publication_without_siblings() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap().join("registry/tool");
+        let target_dir = root.join("old-tool");
+        let sibling_dir = root.join("keep-tool");
+        let target_file = target_dir.join("tool.json");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::write(&target_file, "{}").unwrap();
+        let exe = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let spec = ProcessAuthoritySpec {
+            write_argument_paths: ["/deletes/*/path", "/empty_directories/*"]
+                .into_iter()
+                .map(|pointer| ProcessArgumentPathSpec {
+                    pointer: pointer.into(),
+                    within_root_slots: BTreeSet::from(["registry_tool_root".into()]),
+                    include_parent: true,
+                })
+                .collect(),
+            ..ProcessAuthoritySpec::default()
+        };
+        let slots = BTreeMap::from([("registry_tool_root".into(), root.clone())]);
+        let parent_coord = root.join(".octopus-publication");
+        let parent_history = parent_coord.join("history");
+        let coord_rule = exact(parent_coord.to_str().unwrap(), true, FileAccess::CreatePrivateDirectory);
+        let hist_rule = exact(parent_history.to_str().unwrap(), true, FileAccess::CreatePrivateDirectory);
+        for args in [
+            serde_json::json!({ "deletes": [], "empty_directories": [target_dir] }),
+            serde_json::json!({ "deletes": [{ "path": target_file }], "empty_directories": [target_dir] }),
+        ] {
+            let resolved = spec.resolve_for_invocation(&root, &slots, &BTreeMap::new(), &args, [], [], [], []).unwrap();
+            let projected = project(&resolved.authority, &exe).unwrap();
+            assert!(projected.files.contains(&exact("/", true, FileAccess::Read)));
+            assert!(projected.files.contains(&tree(target_dir.join(".octopus-publication").to_str().unwrap(), FileAccess::Read)));
+            let coord_pos = projected.files.iter().position(|r| r == &coord_rule).unwrap();
+            let hist_pos = projected.files.iter().position(|r| r == &hist_rule).unwrap();
+            assert!(coord_pos < hist_pos);
+            assert!(projected.path_is_writable(&parent_coord.join("dir-00.plan")));
+            assert!(projected.path_is_writable(&parent_history.join("directory-00.json")));
+            assert!(!projected.path_is_readable(&sibling_dir.join("tool.json")));
+            assert!(!projected.path_is_writable(&sibling_dir));
+            let rendered = projected.apparmor_profile(&profile_name(), 1000).unwrap();
+            assert!(rendered.contains("  \"/\" rk,\n"));
+            assert!(rendered.contains(&format!("  \"{}/\" rwkl,\n", target_dir.display())));
+            assert!(rendered.contains(&format!("  \"{}/.octopus-publication/**\" rk,\n", target_dir.display())));
+        }
+    }
+
+    #[test]
     fn the_installed_parser_accepts_every_profile_shape() {
         let parser = Path::new("/usr/sbin/apparmor_parser");
         if !parser.is_file() || !Path::new("/etc/apparmor.d/abi/4.0").is_file() {
@@ -1203,6 +1346,16 @@ mod tests {
             .map(|(i, (n, l, d))| (format!("shape-{i} ({n},{l},{d})"), profile(n, l, d)))
             .collect();
         profiles.push(("quiet-deny".into(), quiet_deny_index_policy().apparmor_profile(&profile_name(), 1000).unwrap()));
+        let dir_pub = policy_with(vec![
+            exact("/", true, FileAccess::Read),
+            exact("/var/tmp/octopus-dir", true, FileAccess::Write),
+            tree("/var/tmp/octopus-dir/.octopus-publication", FileAccess::Read),
+            exact("/var/tmp/.octopus-publication", true, FileAccess::CreatePrivateDirectory),
+            exact("/var/tmp/.octopus-publication/history", true, FileAccess::CreatePrivateDirectory),
+            names("/var/tmp/.octopus-publication", "dir-", ".plan", FileAccess::Write),
+            names("/var/tmp/.octopus-publication/history", "directory-", ".json", FileAccess::Write),
+        ]);
+        profiles.push(("directory-publication".into(), dir_pub.apparmor_profile(&profile_name(), 1000).unwrap()));
         for (index, (label, contents)) in profiles.into_iter().enumerate() {
             let path = directory.join(format!("shape-{index}"));
             std::fs::write(&path, contents).unwrap();

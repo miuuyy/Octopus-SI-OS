@@ -38,6 +38,23 @@ function taskRetirementBarrier(environment) {
   };
 }
 
+function buildLaunchPath(runtimeBinary, installationRoot, userRoot, inheritedPath) {
+  const parts = [];
+  const appendUnique = (dir) => {
+    if (typeof dir === "string" && dir.length > 0 && !parts.includes(dir)) parts.push(dir);
+  };
+  appendUnique(path.dirname(runtimeBinary));
+  appendUnique(path.join(installationRoot, "bin"));
+  for (const part of (inheritedPath ?? "").split(path.delimiter)) appendUnique(part);
+  const localBin = path.join(userRoot, ".local", "bin");
+  if (!parts.includes(localBin)) {
+    try {
+      if (fs.statSync(localBin).isDirectory()) parts.push(localBin);
+    } catch {}
+  }
+  return parts.join(path.delimiter);
+}
+
 function resolveEnvironment(options = {}) {
   return resolveEnvironmentPaths(options, false);
 }
@@ -89,7 +106,7 @@ function resolveEnvironmentPaths(options, packageInspection) {
     OCTOPUS_RUNTIME_BIN: runtimeBinary,
     OCTOPUS_MACHINE_CODEX_AUTH_FILE: path.join(codexHome, "auth.json"),
     OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE: path.join(codexHome, "auth.lock"),
-    PATH: [path.dirname(runtimeBinary), path.join(installationRoot, "bin"), merged.PATH ?? ""].join(path.delimiter),
+    PATH: buildLaunchPath(runtimeBinary, installationRoot, userRoot, merged.PATH),
   };
   const endpoint = normalizedEndpoint(options.endpoint ?? merged.OCTOPUS_APP_LISTEN ?? "", home, "world_operator_chat");
   if (!endpoint.startsWith("unix://")) throw new Error("The local terminal client requires a Unix runtime endpoint.");

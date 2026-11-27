@@ -549,7 +549,19 @@ test("CLI up --foreground validates flags, fails closed if running, forwards sig
     assert.equal(dumped.OCTOPUS_MACHINE_CODEX_AUTH_FILE, path.join(root, ".codex/auth.json"));
     assert.ok(dumped.PATH.split(path.delimiter).includes(customNodeDir), dumped.PATH);
     assert.ok(dumped.PATH.split(path.delimiter).includes(path.dirname(process.execPath)), dumped.PATH);
+    const localBin = path.join(root, ".local", "bin");
+    assert.ok(!dumped.PATH.split(path.delimiter).includes(localBin), dumped.PATH);
     env.close();
+
+    await fs.mkdir(localBin, { recursive: true });
+    const envWithLocalBin = envMod.exports.createEnvironment({
+      home: path.join(root, "home"),
+      userHome: root,
+      installationRoot: distRoot,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    assert.ok(envWithLocalBin.launchEnv.PATH.split(path.delimiter).includes(localBin), envWithLocalBin.launchEnv.PATH);
+    envWithLocalBin.close();
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

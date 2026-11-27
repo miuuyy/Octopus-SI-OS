@@ -95,6 +95,68 @@ fn file_access_projection_is_read_only_and_limits_metadata_to_one_target() {
 }
 
 #[test]
+fn directory_access_projection_is_read_only_and_limits_metadata_to_one_directory() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temporary.path()).unwrap();
+    let dir = root.join("selected-dir");
+    let sibling = root.join("sibling-dir");
+    let regular = root.join("regular-file");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::create_dir(&sibling).unwrap();
+    std::fs::write(&regular, b"x").unwrap();
+    let access = directory_publication_access(&dir).unwrap();
+    let parent_coord = root.join(COORDINATION_DIRECTORY);
+    let parent_history = parent_coord.join("history");
+    let allows = |selectors: &[PublicationFileSelector], path: &Path| selectors.iter().any(|selector| match selector {
+        PublicationFileSelector::Exact(exact) => exact == path,
+        PublicationFileSelector::Names { directory, prefix, suffix } => path.parent() == Some(directory.as_path())
+            && path.file_name().is_some_and(|name| name.as_encoded_bytes().starts_with(prefix.as_encoded_bytes())
+                && name.as_encoded_bytes().ends_with(suffix.as_encoded_bytes())),
+    });
+    assert_eq!(access.directory_creates, [parent_coord.clone(), parent_history.clone()]);
+    assert_eq!(access.directory_tree_reads, [dir.join(COORDINATION_DIRECTORY)]);
+    assert!(!parent_coord.exists() && !dir.join(COORDINATION_DIRECTORY).exists());
+    assert!(access.directory_reads.contains(&PathBuf::from("/")));
+    assert!(access.directory_reads.contains(&dir));
+    for metadata in [
+        directory::marker(&dir),
+        directory::marker(&dir).with_extension("1.0.tmp"),
+        parent_coord.join("dir-abc.lock"),
+        parent_coord.join("dir-abc.plan"),
+        parent_coord.join("dir-abc.0.prepared"),
+        parent_coord.join("dir-abc.1.0.tmp"),
+        parent_history.join("directory-abc.json"),
+        parent_history.join("file-abc.tmp"),
+        parent_history.join("reclaim-abc.json"),
+    ] {
+        assert!(allows(&access.file_reads, &metadata) && allows(&access.file_writes, &metadata), "{metadata:?}");
+    }
+    let sibling_file = Target::coordinates(sibling.clone());
+    for denied in [
+        directory::marker(&sibling),
+        sibling_file.lock_path(),
+        sibling_file.pending(),
+        sibling.join("inside"),
+    ] {
+        assert!(!allows(&access.file_reads, &denied) && !allows(&access.file_writes, &denied), "{denied:?}");
+    }
+    assert!(directory_publication_access(&regular).is_err());
+    assert!(directory_publication_access(Path::new("relative")).is_err());
+    assert!(directory_publication_access(&parent_coord.join("dir")).is_err());
+
+    let destination = root.join("moved-dir");
+    let movement = directory_move(&dir, &destination);
+    assert_eq!(publish_directory_moves("dir-op", &[movement]).unwrap().receipts[0].outcome, PublicationOutcome::Applied);
+    let replay = file_publication_access(&dir).unwrap();
+    assert!(replay.file_reads.iter().any(|selector| matches!(
+        selector,
+        PublicationFileSelector::Exact(path)
+            if path.parent() == Some(parent_history.as_path())
+                && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("directory-") && n.ends_with(".json"))
+    )));
+}
+
+#[test]
 fn recovery_precedes_supersession_and_never_executes_another_pending_write() {
     for boundary in [Interruption::Prepared, Interruption::Linked, Interruption::Installed] {
         let root = tempfile::tempdir().unwrap();

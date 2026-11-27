@@ -25,6 +25,7 @@ pub struct ProcessAuthority {
     executable: BTreeSet<PathBuf>,
     readable_exact: BTreeSet<PathBuf>,
     writable_exact: BTreeSet<PathBuf>,
+    writable_exact_parents: BTreeSet<PathBuf>,
     executable_exact: BTreeSet<PathBuf>,
     executable_links: BTreeSet<PathBuf>,
     quiet_deny_write_exact: BTreeSet<PathBuf>,
@@ -134,6 +135,7 @@ impl ProcessAuthority {
             executable,
             readable_exact,
             writable_exact,
+            writable_exact_parents: BTreeSet::new(),
             executable_exact,
             executable_links: BTreeSet::new(),
             quiet_deny_write_exact: BTreeSet::new(),
@@ -178,6 +180,11 @@ impl ProcessAuthority {
 
     fn with_executable_links(mut self, links: BTreeSet<PathBuf>) -> Self {
         self.executable_links = links;
+        self
+    }
+
+    fn with_writable_exact_parents(mut self, parents: BTreeSet<PathBuf>) -> Self {
+        self.writable_exact_parents = parents;
         self
     }
 
@@ -331,21 +338,24 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             arguments,
             &roots,
         )
-        .map_err(refused)?;
+        .map_err(refused)?
+        .all();
         let writable = resolve_argument_paths(
             "write_argument_paths",
             &self.write_argument_paths,
             arguments,
             &roots,
         )
-        .map_err(refused)?;
+        .map_err(refused)?
+        .all();
         let executable = resolve_argument_paths(
             "executable_argument_paths",
             &self.executable_argument_paths,
             arguments,
             &roots,
         )
-        .map_err(refused)?;
+        .map_err(refused)?
+        .all();
         Ok(ResolvedInvocationPaths {
             readable,
             writable,
@@ -599,6 +609,7 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             let parent = command.parent().ok_or("resolved executable has no parent directory")?;
             readable.insert(normalize_existing_path(parent.join(&binding.relative_path))?);
         }
+        let mut writable_exact_parents = BTreeSet::new();
         let has_argument_paths = !self.read_argument_paths.is_empty()
             || !self.write_argument_paths.is_empty()
             || !self.executable_argument_paths.is_empty();
@@ -606,24 +617,32 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             let arguments = arguments.ok_or_else(|| {
                 "process authority declares invocation paths outside an invocation".to_string()
             })?;
-            readable_exact.extend(resolve_argument_paths(
-                "read_argument_paths",
-                &self.read_argument_paths,
-                arguments,
-                &root_slots,
-            )?);
-            writable_exact.extend(resolve_argument_paths(
+            readable_exact.extend(
+                resolve_argument_paths(
+                    "read_argument_paths",
+                    &self.read_argument_paths,
+                    arguments,
+                    &root_slots,
+                )?
+                .all(),
+            );
+            let write_arguments = resolve_argument_paths(
                 "write_argument_paths",
                 &self.write_argument_paths,
                 arguments,
                 &root_slots,
-            )?);
-            executable_exact.extend(resolve_argument_paths(
-                "executable_argument_paths",
-                &self.executable_argument_paths,
-                arguments,
-                &root_slots,
-            )?);
+            )?;
+            writable_exact_parents = write_arguments.pure_parents();
+            writable_exact.extend(write_arguments.all());
+            executable_exact.extend(
+                resolve_argument_paths(
+                    "executable_argument_paths",
+                    &self.executable_argument_paths,
+                    arguments,
+                    &root_slots,
+                )?
+                .all(),
+            );
         }
         readable.extend(extra_readable);
         writable.extend(extra_writable);
@@ -643,7 +662,8 @@ impl ProcessAuthoritySpecExecution for ProcessAuthoritySpec {
             self.allow_process_signals,
             self.sandbox_mode,
         )?
-        .with_executable_links(executable_links);
+        .with_executable_links(executable_links)
+        .with_writable_exact_parents(writable_exact_parents);
         Ok(ResolvedProcessAuthority {
             authority,
             root_slots,
@@ -930,16 +950,39 @@ fn resolve_optional_environment_subpaths(
     Ok(paths)
 }
 
+#[derive(Default)]
+struct ResolvedArgumentPaths {
+    targets: BTreeSet<PathBuf>,
+    parents: BTreeSet<PathBuf>,
+}
+
+impl ResolvedArgumentPaths {
+    fn all(&self) -> BTreeSet<PathBuf> {
+        self.targets
+            .iter()
+            .chain(&self.parents)
+            .cloned()
+            .collect()
+    }
+
+    fn pure_parents(&self) -> BTreeSet<PathBuf> {
+        self.parents
+            .difference(&self.targets)
+            .cloned()
+            .collect()
+    }
+}
+
 fn resolve_argument_paths(
     field: &str,
     declarations: &[ProcessArgumentPathSpec],
     arguments: &serde_json::Value,
     root_slots: &BTreeMap<String, PathBuf>,
-) -> Result<BTreeSet<PathBuf>, String> {
+) -> Result<ResolvedArgumentPaths, String> {
     if declarations.is_empty() {
-        return Ok(BTreeSet::new());
+        return Ok(ResolvedArgumentPaths::default());
     }
-    let mut resolved = BTreeSet::new();
+    let mut resolved = ResolvedArgumentPaths::default();
     for declaration in declarations {
         let values = values_at_pointer_pattern(arguments, &declaration.pointer)?;
         for value in values {
@@ -989,12 +1032,12 @@ fn resolve_argument_paths(
                         path.display()
                     ));
                 }
-                resolved.insert(parent.to_path_buf());
+                resolved.parents.insert(parent.to_path_buf());
             }
-            resolved.insert(path);
+            resolved.targets.insert(path);
         }
     }
-    if resolved.is_empty() {
+    if resolved.targets.is_empty() && resolved.parents.is_empty() {
         return Err(format!(
             "process authority {field} selected no invocation paths"
         ));
@@ -1483,6 +1526,11 @@ fn prepare_macos(
         publication.directory_reads,
         Some("DIRECTORY"),
     )?;
+    append_macos_access(
+        &mut policy,
+        "file-read* file-test-existence",
+        publication.directory_tree_reads,
+    )?;
     append_macos_typed_exact_access(
         &mut policy,
         "file-write-create",
@@ -1742,6 +1790,7 @@ fn add_macos_lexical_aliases(paths: &mut BTreeSet<PathBuf>) {
 #[derive(Default)]
 struct MacosFilePublicationAccess {
     directory_reads: BTreeSet<PathBuf>,
+    directory_tree_reads: BTreeSet<PathBuf>,
     directory_creates: BTreeSet<PathBuf>,
     read_files: BTreeSet<Vec<MacosRegexAtom>>,
     write_files: BTreeSet<Vec<MacosRegexAtom>>,
@@ -1771,43 +1820,102 @@ impl MacosRegexAtom {
 
 #[cfg(target_os = "macos")]
 fn macos_file_publication_access(authority: &ProcessAuthority) -> Result<MacosFilePublicationAccess, String> {
-    use octopus_file_storage::publication::{COORDINATION_DIRECTORY, PublicationFileSelector, file_publication_access};
-    let mut targets = authority.writable_exact.clone();
+    use octopus_file_storage::publication::{
+        COORDINATION_DIRECTORY, PublicationFileSelector, directory_publication_access,
+        file_publication_access,
+    };
+    let exact_directories: BTreeSet<PathBuf> = authority
+        .writable_exact_parents
+        .iter()
+        .cloned()
+        .chain(path_ancestors(&authority.writable_exact))
+        .chain(path_ancestors(&authority.readable_exact))
+        .collect();
+    let mut targets = authority
+        .writable_exact
+        .iter()
+        .filter(|path| !authority.writable_exact_parents.contains(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     targets.extend(authority.writable.iter().filter(|path| path.is_file()).cloned());
     let mut access = MacosFilePublicationAccess::default();
     for target in targets {
-        match std::fs::symlink_metadata(&target) {
-            Ok(metadata) if !metadata.is_file() => continue,
-            Ok(_) => (),
-            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => (),
+        let is_directory = match std::fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.is_dir() => true,
+            Ok(metadata) if metadata.is_file() => false,
+            Ok(_) => continue,
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {
+                if exact_directories.contains(&target) {
+                    continue;
+                }
+                false
+            }
             Err(error) => return Err(format!("file publication authority target cannot be inspected: {error}")),
-        }
+        };
         let parent = target.parent().ok_or_else(|| "file publication authority target has no parent".to_string())?;
         let local = parent.join(COORDINATION_DIRECTORY);
-        let ancestors = parent.ancestors().map(Path::to_path_buf).collect::<BTreeSet<_>>();
+        let local_history = local.join("history");
+        let mut ancestors = parent.ancestors().map(Path::to_path_buf).collect::<BTreeSet<_>>();
+        if is_directory {
+            ancestors.insert(target.clone());
+        }
         let metadata = ancestors.iter().map(|ancestor| ancestor.join(COORDINATION_DIRECTORY)).collect::<BTreeSet<_>>();
         let history = metadata.iter().map(|root| root.join("history")).collect::<BTreeSet<_>>();
-        let projection = file_publication_access(&target).map_err(|error| format!("file publication authority for '{}' failed: {error}", target.display()))?;
-        for path in projection.directory_reads {
+        let (directory_reads, directory_tree_reads, directory_creates, file_reads, file_writes) = if is_directory {
+            let projection = directory_publication_access(&target)
+                .map_err(|error| format!("directory publication authority for '{}' failed: {error}", target.display()))?;
+            (
+                projection.directory_reads,
+                projection.directory_tree_reads,
+                projection.directory_creates,
+                projection.file_reads,
+                projection.file_writes,
+            )
+        } else {
+            let projection = file_publication_access(&target)
+                .map_err(|error| format!("file publication authority for '{}' failed: {error}", target.display()))?;
+            (
+                projection.directory_reads,
+                Vec::new(),
+                projection.directory_creates,
+                projection.file_reads,
+                projection.file_writes,
+            )
+        };
+        for path in directory_reads {
             validate_macos_publication_path(&path, true)?;
             if !ancestors.contains(&path) && !metadata.contains(&path) && !history.contains(&path) {
                 return Err("file publication projection reads an unrelated directory".into());
             }
             access.directory_reads.insert(path);
         }
-        for path in projection.directory_creates {
+        let expected_tree_read = target.join(COORDINATION_DIRECTORY);
+        for path in directory_tree_reads {
             validate_macos_publication_path(&path, true)?;
-            if path != local { return Err("file publication projection creates an unrelated directory".into()); }
+            if path != expected_tree_read {
+                return Err("directory publication projection reads an unrelated metadata tree".into());
+            }
+            access.directory_tree_reads.insert(path);
+        }
+        for path in directory_creates {
+            validate_macos_publication_path(&path, true)?;
+            let allowed_create = path == local || (is_directory && path == local_history);
+            if !allowed_create {
+                return Err("file publication projection creates an unrelated directory".into());
+            }
             access.directory_reads.insert(path.clone());
             access.directory_creates.insert(path);
         }
-        for (writable, selectors) in [(false, projection.file_reads), (true, projection.file_writes)] {
+        for (writable, selectors) in [(false, file_reads), (true, file_writes)] {
             for selector in selectors {
+                let allowed_write_dir = |directory: &Path| {
+                    directory == local.as_path() || (is_directory && directory == local_history.as_path())
+                };
                 match selector {
                     PublicationFileSelector::Exact(path) => {
                         validate_macos_publication_path(&path, false)?;
                         let directory = path.parent().ok_or_else(|| "file publication selector has no parent".to_string())?;
-                        if if writable { directory != local.as_path() } else { !metadata.contains(directory) && !history.contains(directory) } {
+                        if if writable { !allowed_write_dir(directory) } else { !metadata.contains(directory) && !history.contains(directory) } {
                             return Err("file publication projection selects unrelated metadata".into());
                         }
                         let name = path.file_name().ok_or_else(|| "file publication selector has no file name".to_string())?;
@@ -1815,7 +1923,9 @@ fn macos_file_publication_access(authority: &ProcessAuthority) -> Result<MacosFi
                     }
                     PublicationFileSelector::Names { directory, prefix, suffix } => {
                         validate_macos_publication_path(&directory, true)?;
-                        if directory != local || [&prefix, &suffix].into_iter().any(|part| part.is_empty() || part.as_encoded_bytes().contains(&b'/')) {
+                        if !allowed_write_dir(&directory)
+                            || [&prefix, &suffix].into_iter().any(|part| part.is_empty() || part.as_encoded_bytes().contains(&b'/'))
+                        {
                             return Err("file publication projection has an unbounded filename selector".into());
                         }
                         let mut names = macos_regex_atoms(&prefix)?;
@@ -3074,6 +3184,61 @@ mod native_path_tests {
             .args(["--exact", "process_authority::native_path_tests::macos_developer_shim_disables_xcrun_cache_and_grants_sdk_metadata", "--nocapture"])
             .output().unwrap();
         assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn macos_directory_publication_and_nonexistent_parent_arguments_stay_bounded() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let base = std::fs::canonicalize(temp.path()).expect("canonical");
+        let root = base.join("registry/tool");
+        let profiles = base.join("profiles");
+        let target_dir = root.join("old-tool");
+        let sibling_dir = root.join("keep-tool");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::create_dir_all(&profiles).unwrap();
+        let slots = BTreeMap::from([("registry_tool_root".to_string(), root.clone())]);
+
+        let write_spec = ProcessAuthoritySpec {
+            write_argument_paths: vec![ProcessArgumentPathSpec {
+                pointer: "/path".to_string(),
+                within_root_slots: BTreeSet::from(["registry_tool_root".to_string()]),
+                include_parent: true,
+            }],
+            ..ProcessAuthoritySpec::default()
+        };
+        let new_dir = root.join("new-tool");
+        let write_resolved = write_spec
+            .resolve_for_invocation(&root, &slots, &BTreeMap::new(), &serde_json::json!({ "path": new_dir.join("tool.json") }), [], [], [], [])
+            .unwrap();
+        assert_eq!(write_resolved.authority.writable_exact_parents, BTreeSet::from([new_dir.clone()]));
+        let write_pub = macos_file_publication_access(&write_resolved.authority).unwrap();
+        assert_eq!(write_pub.directory_creates, BTreeSet::from([new_dir.join(".octopus-publication")]));
+        assert!(write_pub.directory_tree_reads.is_empty());
+
+        let delete_spec = ProcessAuthoritySpec {
+            write_argument_paths: vec![ProcessArgumentPathSpec {
+                pointer: "/empty_directories/*".to_string(),
+                within_root_slots: BTreeSet::from(["registry_tool_root".to_string()]),
+                include_parent: true,
+            }],
+            ..ProcessAuthoritySpec::default()
+        };
+        let delete_resolved = delete_spec
+            .resolve_for_invocation(&root, &slots, &BTreeMap::new(), &serde_json::json!({ "empty_directories": [target_dir] }), [], [], [], [])
+            .unwrap();
+        assert_eq!(delete_resolved.authority.writable_exact_parents, BTreeSet::from([root.clone()]));
+        let delete_pub = macos_file_publication_access(&delete_resolved.authority).unwrap();
+        assert_eq!(
+            delete_pub.directory_creates,
+            BTreeSet::from([root.join(".octopus-publication"), root.join(".octopus-publication/history")])
+        );
+        assert_eq!(delete_pub.directory_tree_reads, BTreeSet::from([target_dir.join(".octopus-publication")]));
+        let prepared = delete_resolved.authority.prepare("/usr/bin/true", &[], &base, None, &profiles).unwrap();
+        let profile = std::fs::read_to_string(&prepared.args[1]).unwrap();
+        assert!(profile.contains(&format!("(subpath \"{}/.octopus-publication\")", target_dir.display())));
+        assert!(profile.contains(&format!("(literal \"{}/.octopus-publication/history\")", root.display())));
+        assert!(!profile.contains(&sibling_dir.to_string_lossy().as_ref()));
     }
 }
 

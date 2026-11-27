@@ -140,29 +140,54 @@ pub(super) struct FileAccess {
 }
 
 pub(super) fn file_access(path: &Path) -> io::Result<FileAccess> {
+    access_for(path, true, true)
+}
+
+pub(super) fn directory_access(path: &Path) -> io::Result<FileAccess> {
+    access_for(path, false, true)
+}
+
+fn access_for(path: &Path, include_files: bool, include_directories: bool) -> io::Result<FileAccess> {
     let mut ancestors = Vec::new();
     let (roots, writable_parent) = roots_with_ancestry(path, &mut ancestors)?;
     let mut access = FileAccess { ancestors, directories: Vec::new(), files: Vec::new(), writable_parent };
-    let mut receipts = BTreeMap::<String, PublicationReceipt>::new();
+    let mut file_receipts = BTreeMap::<String, PublicationReceipt>::new();
+    let mut directory_receipts = BTreeMap::<(String, usize), DirectoryMoveReceipt>::new();
     for root in roots {
         let history = root.path.join("history");
         access.directories.push(history.clone());
         let Some(directory) = private_directory(&root.directory, std::ffi::OsStr::new("history"))? else { continue; };
         for name in native::names(&directory, 16384)? {
             let Some(name) = name.to_str() else { continue; };
-            if !name.starts_with("file-") || !name.ends_with(".json") { continue; }
-            let record: RetainedRecord = read_from(&directory, name, DIRECTORY_LIMIT)?
-                .ok_or_else(|| invalid("publication history disappeared during access projection"))?;
-            validate(&record, name)?;
-            let RetainedReceipt::File(receipt) = record.original else {
-                return Err(invalid("file history contains a different receipt type"));
-            };
-            if receipt.path == path {
-                if receipts.get(&receipt.operation_id).is_some_and(|prior| prior != &receipt) {
-                    return Err(invalid("immutable publication history contains conflicting receipts"));
+            if include_files && name.starts_with("file-") && name.ends_with(".json") {
+                let record: RetainedRecord = read_from(&directory, name, DIRECTORY_LIMIT)?
+                    .ok_or_else(|| invalid("publication history disappeared during access projection"))?;
+                validate(&record, name)?;
+                let RetainedReceipt::File(receipt) = record.original else {
+                    return Err(invalid("file history contains a different receipt type"));
+                };
+                if receipt.path == path {
+                    if file_receipts.get(&receipt.operation_id).is_some_and(|prior| prior != &receipt) {
+                        return Err(invalid("immutable publication history contains conflicting receipts"));
+                    }
+                    file_receipts.insert(receipt.operation_id.clone(), receipt);
+                    access.files.push(history.join(name));
                 }
-                receipts.insert(receipt.operation_id.clone(), receipt);
-                access.files.push(history.join(name));
+            } else if include_directories && name.starts_with("directory-") && name.ends_with(".json") {
+                let record: RetainedRecord = read_from(&directory, name, DIRECTORY_LIMIT)?
+                    .ok_or_else(|| invalid("publication history disappeared during access projection"))?;
+                validate(&record, name)?;
+                let RetainedReceipt::Directory(receipt) = record.original else {
+                    return Err(invalid("directory history contains a different receipt type"));
+                };
+                if receipt.movement.source == path {
+                    let key = (receipt.operation_id.clone(), receipt.index);
+                    if directory_receipts.get(&key).is_some_and(|prior| prior != &receipt) {
+                        return Err(invalid("immutable publication history contains conflicting receipts"));
+                    }
+                    directory_receipts.insert(key, receipt);
+                    access.files.push(history.join(name));
+                }
             }
         }
     }

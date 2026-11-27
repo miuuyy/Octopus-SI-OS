@@ -191,8 +191,11 @@ process or its actual child without a recycled PID. A process already confined b
 only with declared sandbox-delegation authority. AppArmor labels that stack
 that enforced profile with `unconfined` retain the same lease check. A stack
 containing another profile is refused. Another user namespace cannot
-reach that delegation. Exact file grants include the publication protocol's
-bounded metadata filenames, without granting adjacent files.
+reach that delegation. Exact file and directory grants include the publication protocol's bounded
+metadata filenames and history paths (and, for an explicit directory target,
+read access to its own metadata directory), without granting adjacent files or
+directories. An `include_parent` directory keeps its exact directory authority
+even before it exists on disk.
 Before exec, the native launcher prepares the exact ancestor and publication
 directories as the ordinary user, without following symlinks; the profile
 grants reads and locks without making those parents writable. Preparation
