@@ -100,8 +100,10 @@ function createClientWindowCloseHost({ authorize, accessTokenForSender, onQuitAp
       record.readiness = "renderer-gone";
       record.protectedDocument = false;
     });
-    on(record.sender, "did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
-      if (!isMainFrame || isInPlace) return;
+    on(record.sender, "did-start-navigation", (event, _url, isInPlace, isMainFrame) => {
+      const sameDocument = typeof event?.isSameDocument === "boolean" ? event.isSameDocument : Boolean(isInPlace);
+      const mainFrame = typeof event?.isMainFrame === "boolean" ? event.isMainFrame : Boolean(isMainFrame);
+      if (!mainFrame || sameDocument) return;
       invalidate(record);
       record.navigating = true;
     });
@@ -109,6 +111,16 @@ function createClientWindowCloseHost({ authorize, accessTokenForSender, onQuitAp
       record.navigating = false;
       record.protectedDocument = false;
       record.readiness = "initializing";
+    });
+    on(record.sender, "did-fail-load", (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+      if (!isMainFrame) return;
+      if (typeof record.sender.isLoadingMainFrame === "function" && record.sender.isLoadingMainFrame()) return;
+      record.navigating = false;
+    });
+    on(record.sender, "did-stop-loading", () => {
+      if (!record.navigating) return;
+      if (typeof record.sender.isLoadingMainFrame === "function" && record.sender.isLoadingMainFrame()) return;
+      record.navigating = false;
     });
     on(record.sender, "will-prevent-unload", () => {
       if (action?.windows.has(record)) cancelAction("cancelled");

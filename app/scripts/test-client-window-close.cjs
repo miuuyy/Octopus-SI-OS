@@ -170,6 +170,10 @@ test("navigation, unregister, new windows and destruction cancel stale decisions
   b.webContents.emit("did-start-navigation", event(), "file:///next", false, true);
   assert.equal(a.cancellations().at(-1).reason, "invalidated"); assert.deepEqual(f.effects, []);
   assert.equal(b.close().defaultPrevented, true); await assert.rejects(b.bridge.registerClientWindowCloseGuard(), /navigation/);
+  b.webContents.emit("did-fail-load", event(), -3, "ERR_ABORTED", "file:///next", true);
+  b.guard = await b.bridge.registerClientWindowCloseGuard();
+  b.webContents.emit("did-start-navigation", event(), "file:///next-2", false, true);
+  await assert.rejects(b.bridge.registerClientWindowCloseGuard(), /navigation/);
   b.webContents.emit("did-navigate"); b.guard = await b.bridge.registerClientWindowCloseGuard();
   f.quit(); const added = f.add(3); assert.equal(a.cancellations().at(-1).reason, "invalidated"); await tick(); assert.deepEqual(f.effects, []);
   a.close(); await a.bridge.unregisterClientWindowCloseGuard(old); assert.equal(a.close().defaultPrevented, true);

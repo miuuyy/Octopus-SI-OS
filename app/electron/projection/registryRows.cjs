@@ -292,6 +292,20 @@ function isSettledFileStat(stat, observedBeforeReadMs) {
   );
 }
 
+async function readRegularJsonDocumentWithRetry(file, label, maxAttempts = 4) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await readRegularJsonDocument(file, label);
+    } catch (error) {
+      attempt += 1;
+      const message = String(error?.message ?? error);
+      if (!/ changed while it was read$/.test(message) || attempt >= maxAttempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 15));
+    }
+  }
+}
+
 async function readRunRecords(runRecordsRoot, warnings = [], cache = null) {
   const files = await listDirectFiles(runRecordsRoot, isRunRecordJsonPath);
   const uniqueFiles = Array.from(new Set(files)).sort();
@@ -318,7 +332,7 @@ async function readRunRecords(runRecordsRoot, warnings = [], cache = null) {
     let fileStat;
     let observedBeforeReadMs;
     try {
-      const document = await readRegularJsonDocument(file, `run record ${file}`);
+      const document = await readRegularJsonDocumentWithRetry(file, `run record ${file}`);
       record = document.document;
       recordDigest = document.digest;
       fileStat = document.stat;

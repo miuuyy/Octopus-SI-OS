@@ -383,6 +383,43 @@ test("settled run records reuse cached parses while rewritten records reread imm
   }
 });
 
+test("readRunRecords retries transient concurrent run record replacement instead of dropping the run", async () => {
+  const { readRunRecords } = require("../electron/projection/registryRows.cjs");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "oct-run-record-race-"));
+  const runPath = path.join(root, "run.json");
+  const base = { id: "run_voice", ee: "ee", worker: "worker", trace: "trace", status: "running", active_checkpoints: [], checkpoints: [] };
+  const originalReadFile = fs.readFile;
+  let injectedRace = false;
+  let attempts = 0;
+  fs.readFile = async (target, ...rest) => {
+    const data = await originalReadFile(target, ...rest);
+    if (!injectedRace && typeof target === "string" && path.resolve(target) === path.resolve(runPath)) {
+      injectedRace = true;
+      attempts += 1;
+      const tempPath = `${runPath}.tmp`;
+      await fs.writeFile(tempPath, JSON.stringify({ ...base, status: "idle" }));
+      await fs.rename(tempPath, runPath);
+    } else if (typeof target === "string" && path.resolve(target) === path.resolve(runPath)) {
+      attempts += 1;
+    }
+    return data;
+  };
+  try {
+    await fs.writeFile(runPath, JSON.stringify(base));
+    const warnings = [];
+    const result = await readRunRecords(root, warnings, new Map());
+    assert.equal(attempts, 2);
+    assert.deepEqual(warnings, []);
+    assert.equal(result.invalidRecords.length, 0);
+    assert.equal(result.records.length, 1);
+    assert.equal(result.records[0].run_id, "run_voice");
+    assert.equal(result.records[0].record_status, "idle");
+  } finally {
+    fs.readFile = originalReadFile;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("scoped applications and drivers projections cache independently and refresh on owner edits", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "oct-scoped-proj-")));
   const home = path.join(root, "home"), sourceRegistry = path.join(root, "source/registry"), localLibrary = path.join(root, "source/packages");

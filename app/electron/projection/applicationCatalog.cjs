@@ -10,6 +10,7 @@ const { parseApplicationManifest } = require("./sidecars.cjs");
 const { isPathInside, mapConcurrentOrdered, requiredSafeRegistryId, stringValue } = require("./values.cjs");
 
 const APPLICATION_SNAPSHOT_CACHE_MAX = 1024;
+const SOURCE_EXCLUDES = new Set([".DS_Store", ".git", "__pycache__", "node_modules", "target"]);
 const applicationSnapshotCache = new Map();
 
 async function readApplicationPackageCatalog(activeRegistryRoot, localRegistryRoot, warnings, names = null) {
@@ -142,6 +143,9 @@ async function snapshotApplicationPackageDirectory(interfaceRoot, interfaceId, s
     const entries = (await fs.readdir(current, { withFileTypes: true }))
       .sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
+      if ((sourceKind === "local" || sourceKind === "bundled") && SOURCE_EXCLUDES.has(entry.name)) {
+        continue;
+      }
       const entryPath = path.join(current, entry.name);
       const relativePath = path.join(relativeDirectory, entry.name);
       const stat = await fs.lstat(entryPath, { bigint: true });
