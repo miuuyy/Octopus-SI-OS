@@ -41,7 +41,7 @@ mod capture;
 mod downloads;
 
 #[path = "browser_actions.rs"]
-mod actions;
+pub(crate) mod actions;
 
 #[path = "browser_locators.rs"]
 mod locators;

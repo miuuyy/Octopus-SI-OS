@@ -2230,3 +2230,13 @@ async fn cdp_cookies_omits_empty_urls_and_loopback_accepts_ipv6() {
     ws_task.abort();
     assert_eq!(*cookie_params.lock().unwrap(), vec![json!({}), json!({"urls": ["https://example.com/"]})]);
 }
+
+#[test]
+fn ordered_ax_nodes_deduplicates_identical_nodes_and_rejects_conflicts() {
+    let root = json!({"nodeId": "1", "role": {"value": "RootWebArea"}, "childIds": ["2"]});
+    let leaf = json!({"nodeId": "2", "role": {"value": "InlineTextBox"}, "name": {"value": "·"}, "childIds": []});
+    let ordered = crate::browser_session::actions::ordered_ax_nodes(&[root.clone(), leaf.clone(), leaf.clone()]).unwrap();
+    assert_eq!(ordered, vec![root.clone(), leaf.clone()]);
+    let conflict = json!({"nodeId": "2", "role": {"value": "InlineTextBox"}, "name": {"value": "other"}, "childIds": []});
+    assert!(crate::browser_session::actions::ordered_ax_nodes(&[root, leaf, conflict]).unwrap_err().contains("duplicated"));
+}

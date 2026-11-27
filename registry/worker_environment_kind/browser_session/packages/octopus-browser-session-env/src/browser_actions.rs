@@ -1405,10 +1405,12 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
                         .map(str::to_string)
                 })
                 .collect();
+            let mut seen_roots = BTreeSet::new();
             let roots: Vec<Value> = child_nodes
                 .iter()
-                .filter(|node| !ids.contains(node["nodeId"].as_str().unwrap_or("")))
-                .map(|node| node["nodeId"].clone())
+                .filter_map(|node| node["nodeId"].as_str())
+                .filter(|id| !ids.contains(*id) && seen_roots.insert(*id))
+                .map(|id| json!(id))
                 .collect();
             if !nodes[owner]["childIds"].is_array() {
                 nodes[owner]["childIds"] = json!([]);
@@ -2488,21 +2490,27 @@ const scaleX=rect.width/offsetWidth,scaleY=rect.height/offsetHeight;
 return {status:'ready',left:rect.left+(Number(this.clientLeft)||0)*scaleX,top:rect.top+(Number(this.clientTop)||0)*scaleY,scaleX,scaleY,width,height};
 "###;
 
-pub(super) fn ordered_ax_nodes(nodes: &[Value]) -> Result<Vec<Value>, String> {
+pub(crate) fn ordered_ax_nodes(nodes: &[Value]) -> Result<Vec<Value>, String> {
     let mut index = BTreeMap::new();
+    let mut unique_ids = Vec::new();
     let mut children = BTreeSet::new();
     for node in nodes {
         let id = node["nodeId"].as_str().ok_or("AX node has no identity")?;
-        if index.insert(id, node).is_some() {
-            return Err("AX node identity is duplicated".into());
+        if let Some(existing) = index.get(id) {
+            if *existing != node {
+                return Err("AX node identity is duplicated".into());
+            }
+            continue;
         }
+        index.insert(id, node);
+        unique_ids.push(id);
         for child in node["childIds"].as_array().into_iter().flatten() {
             children.insert(child.as_str().ok_or("AX child is malformed")?);
         }
     }
-    let mut pending = nodes
+    let mut pending = unique_ids
         .iter()
-        .filter_map(|node| node["nodeId"].as_str())
+        .copied()
         .filter(|id| !children.contains(id))
         .rev()
         .collect::<Vec<_>>();
@@ -2525,7 +2533,7 @@ pub(super) fn ordered_ax_nodes(nodes: &[Value]) -> Result<Vec<Value>, String> {
                 .rev(),
         );
     }
-    if ordered.len() != nodes.len() {
+    if ordered.len() != index.len() {
         return Err("AX tree contains unreachable nodes".into());
     }
     Ok(ordered)
