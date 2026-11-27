@@ -154,10 +154,16 @@ impl InputRecordedRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct TerminalSealEvidence {
-    source_movement_seq: u64,
+pub(crate) struct TerminalSealEvidence {
+    pub(crate) source_movement_seq: u64,
     label: String,
     artifact_payload_blake3: String,
+}
+
+impl TerminalSealEvidence {
+    pub(crate) fn matches_artifact(&self, label: &str, payload_blake3: &str) -> bool {
+        self.label == label && self.artifact_payload_blake3 == payload_blake3
+    }
 }
 
 pub(crate) fn artifact_payload_blake3(file: &InterfaceArtifactFile) -> Result<String, String> {
@@ -670,7 +676,10 @@ impl LiveTurnStream {
         }))
     }
 
-    pub(crate) fn preceding_seal(&mut self, source: u64) -> Result<Option<(u64, String)>, String> {
+    pub(crate) fn preceding_seal(
+        &mut self,
+        source: u64,
+    ) -> Result<Option<(TerminalSealEvidence, String)>, String> {
         let Some(prior) = self.pending_terminal.clone().filter(|seal| seal.source_movement_seq < source) else {
             return Ok(None);
         };
@@ -678,7 +687,7 @@ impl LiveTurnStream {
             self.seal_terminal(prior.source_movement_seq, &prior.label, &prior.artifact_payload_blake3)?;
         }
         let hash = self.sealed_manifest_hash.clone().ok_or("previous terminal stream has no sealed body")?;
-        Ok(Some((prior.source_movement_seq, hash)))
+        Ok(Some((prior, hash)))
     }
 
     pub(crate) fn seal_terminal(
@@ -696,7 +705,9 @@ impl LiveTurnStream {
             artifact_payload_blake3: terminal_artifact_payload_blake3.to_string(),
         };
         if let Some(existing) = self.pending_terminal.as_ref() {
-            if existing != &terminal {
+            if source_movement_seq < existing.source_movement_seq
+                || !existing.matches_artifact(terminal_label, terminal_artifact_payload_blake3)
+            {
                 return Err(
                     "Codex live stream terminal replay differs from the sealed boundary"
                         .to_string(),
@@ -1427,6 +1438,8 @@ mod tests {
             .seal_terminal(11, "interface.artifact.output", &"a".repeat(64))
             .unwrap();
         assert_eq!(replayed.manifest_path(), sealed.manifest_path());
+        assert!(replay.seal_terminal(8, "interface.artifact.output", &"a".repeat(64)).is_err());
+        assert!(replay.seal_terminal(11, "turn.error", &"a".repeat(64)).is_err());
         assert!(
             replay
                 .seal_terminal(11, "interface.artifact.output", &"b".repeat(64),)

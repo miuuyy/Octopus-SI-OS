@@ -1039,14 +1039,27 @@ fn native_creation_scopes_provider_model_effort_and_tier_defaults_to_matching_co
         "tools": request.selected_tools,
         "door_host_slots": request.door_host_slots,
     })).unwrap());
-    let switched_model = affordances.composition_request(&metadata, &request.admitted_parent_record, "m", serde_json::from_value(json!({"text": "Switch", "model": "fixture-b"})).unwrap()).unwrap();
+    let compose = |key, args| {
+        affordances.composition_request(
+            &metadata, &request.admitted_parent_record, key, serde_json::from_value(args).unwrap(),
+        )
+    };
+    let same_model = compose("same", json!({"text": "Keep", "model": request.model})).unwrap();
+    assert_eq!(same_model.service_tier.as_deref(), Some("priority"));
+    let switched_model = compose("model", json!({"text": "Switch", "model": "fixture-b"})).unwrap();
     assert_eq!(switched_model.reasoning_effort, "");
-    assert_eq!(switched_model.service_tier.as_deref(), Some("priority"));
-    let switched_provider = affordances.composition_request(&metadata, &request.admitted_parent_record, "p", serde_json::from_value(json!({"text": "Switch", "provider_interface_id": "world_provider_other"})).unwrap()).unwrap();
+    assert_eq!(switched_model.service_tier, None);
+    let explicit_tier = compose("tier", json!({
+        "text": "Switch", "model": "fixture-b", "service_tier": "priority",
+    })).unwrap();
+    assert_eq!(explicit_tier.service_tier.as_deref(), Some("priority"));
+    let switched_provider = compose("provider", json!({
+        "text": "Switch", "provider_interface_id": "world_provider_other",
+    })).unwrap();
     assert_eq!(switched_provider.model, "");
     assert_eq!(switched_provider.reasoning_effort, "");
     assert_eq!(switched_provider.service_tier, None);
-    assert!(affordances.composition_request(&metadata, &request.admitted_parent_record, "e", serde_json::from_value(json!({"text": "Reject", "model": ""})).unwrap()).is_err());
+    assert!(compose("invalid", json!({"text": "Reject", "model": ""})).is_err());
 }
 
 #[test]

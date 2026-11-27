@@ -277,6 +277,14 @@ impl TurnSink<'_> {
         mut output: CodexTurnOutput,
         append_boundary: bool,
     ) -> Result<ProviderEmission, InterfaceDriverError> {
+        let bytes = self.encode_output_with_continuity(&mut output)?;
+        self.materialize_encoded(output, &bytes, append_boundary)
+    }
+
+    fn encode_output_with_continuity(
+        &self,
+        output: &mut CodexTurnOutput,
+    ) -> Result<Vec<u8>, InterfaceDriverError> {
         let continuity = self.advance_continuity(self.context_output_labels.contains(&output.label))?;
         let continuity = continuity
             .map(|continuity| {
@@ -302,11 +310,19 @@ impl TurnSink<'_> {
                 })?
                 .insert(CODEX_CONTINUITY_FIELD.to_string(), continuity);
         }
-        let output_bytes = serde_json::to_vec(&output.value).map_err(|e| {
+        serde_json::to_vec(&output.value).map_err(|e| {
             InterfaceDriverError::Protocol(format!("failed to encode provider output: {e}"))
-        })?;
+        })
+    }
+
+    fn materialize_encoded(
+        &self,
+        output: CodexTurnOutput,
+        bytes: &[u8],
+        append_boundary: bool,
+    ) -> Result<ProviderEmission, InterfaceDriverError> {
         let file =
-            materialize_codex_emitted_artifact(self.output_root, &output.label, &output_bytes)?;
+            materialize_codex_emitted_artifact(self.output_root, &output.label, bytes)?;
         if append_boundary
             && let Some(stream) = self.live_stream.lock().expect("live stream lock").as_mut()
         {
@@ -564,7 +580,7 @@ impl TurnSink<'_> {
         let preceding_seal = self.live_stream.lock().expect("live stream lock").as_mut()
             .map(|stream| stream.preceding_seal(self.source_movement_seq))
             .transpose().map_err(InterfaceDriverError::FailedClosed)?.flatten();
-        if let Some((source, hash)) = &preceding_seal {
+        if preceding_seal.is_some() {
             let correlation = closure.value["correlation_id"].as_str().ok_or_else(||
                 InterfaceDriverError::FailedClosed("late result has no call identity".into()))?;
             let state = source_continuity.as_ref().ok_or_else(||
@@ -574,9 +590,6 @@ impl TurnSink<'_> {
             if closure.value["thread_id"] != state.thread_id || closure.value["turn_id"] != pending_turn_id(wait) {
                 return Err(InterfaceDriverError::FailedClosed("late result belongs to another native turn".into()));
             }
-            // The full result is the closure's source_artifact. Its original
-            // turn already has an immutable stream and cannot receive more events.
-            closure.value["preceding_stream"] = serde_json::json!({"source_movement_seq":source,"payload_blake3":hash});
         }
         if native_terminal.is_some() {
             if closure.value.get("native_terminal_source_continuity").is_none() {
@@ -669,13 +682,30 @@ impl TurnSink<'_> {
         }
         self.normalize_output_label(&mut closure)?;
         let closure_label = closure.label.clone();
-        let closure = self.materialize_normalized(closure, false)?;
-        let closure_artifact_payload_blake3 = artifact_payload_blake3(&closure.artifact)
-            .map_err(InterfaceDriverError::FailedClosed)?;
-        let stream = if preceding_seal.is_some() { None } else {
-            self.seal_live_stream(&closure_label, &closure_artifact_payload_blake3)?
+        let mut bytes = self.encode_output_with_continuity(&mut closure)?;
+        // A redelivery proves the same terminal artifact, even at a later movement.
+        // A different outstanding call can only reference the already sealed stream.
+        let late_result = if let Some((seal, stream_hash)) = &preceding_seal
+            && !seal.matches_artifact(&closure_label, blake3::hash(&bytes).to_hex().as_str())
+        {
+            closure.value["preceding_stream"] = serde_json::json!({
+                "source_movement_seq": seal.source_movement_seq,
+                "payload_blake3": stream_hash,
+            });
+            bytes = serde_json::to_vec(&closure.value)
+                .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+            true
+        } else {
+            false
         };
-        if stream.is_none() && activity.is_none() && preceding_seal.is_none() && !activity_already_admitted {
+        let closure = self.materialize_encoded(closure, &bytes, false)?;
+        let stream = if late_result {
+            None
+        } else {
+            let hash = artifact_payload_blake3(&closure.artifact).map_err(InterfaceDriverError::FailedClosed)?;
+            self.seal_live_stream(&closure_label, &hash)?
+        };
+        if stream.is_none() && activity.is_none() && !late_result && !activity_already_admitted {
             return Err(InterfaceDriverError::FailedClosed(
                 "interrupted-result closure has neither a sealed stream nor legacy activity"
                     .to_string(),
