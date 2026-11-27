@@ -1473,7 +1473,7 @@ fn prepare_macos(
     let mut writable_ancestor_sources = writable.clone();
     writable_ancestor_sources.extend(writable_exact.iter().cloned());
     let writable_ancestors = path_ancestors(&writable_ancestor_sources);
-    let publication = macos_file_publication_access(authority)?;
+    let mut publication = macos_file_publication_access(authority)?;
     let mut paths = BTreeSet::new();
     paths.extend(readable.iter().cloned());
     paths.extend(writable.iter().cloned());
@@ -1481,12 +1481,30 @@ fn prepare_macos(
     paths.extend(writable_exact.iter().cloned());
     paths.insert(cwd.to_path_buf());
     let ancestors = path_ancestors(&paths);
-    let mut directory_reads = ancestors.clone();
+    let directory_reads = ancestors.clone();
     if authority.allow_sandbox_delegation {
         for path in &paths {
-            directory_reads.extend(octopus_file_storage::publication::publication_ancestor_directories(path)
-                .map_err(|error| format!("publication ancestry for '{}' is unavailable: {error}", path.display()))?);
+            let ancestry = octopus_file_storage::publication::publication_ancestor_access(path)
+                .map_err(|error| format!("publication ancestry for '{}' is unavailable: {error}", path.display()))?;
+            publication.directory_reads.extend(ancestry.directory_reads);
+            for selector in ancestry.file_reads {
+                match selector {
+                    octopus_file_storage::publication::PublicationFileSelector::Exact(file) => {
+                        let directory = file.parent().ok_or_else(|| "publication ancestry file has no parent".to_string())?;
+                        let name = file.file_name().ok_or_else(|| "publication ancestry file has no file name".to_string())?;
+                        insert_macos_publication_files(&mut publication, directory, macos_regex_atoms(name)?, false)?;
+                    }
+                    octopus_file_storage::publication::PublicationFileSelector::Names { directory, prefix, suffix } => {
+                        let mut names = macos_regex_atoms(&prefix)?;
+                        names.push(MacosRegexAtom::AnyName);
+                        names.extend(macos_regex_atoms(&suffix)?);
+                        insert_macos_publication_files(&mut publication, &directory, names, false)?;
+                    }
+                }
+            }
         }
+        let write_files = &publication.write_files;
+        publication.read_files.retain(|path| !write_files.contains(path));
     }
     let mut policy = String::from(
         "(version 1)\n(deny default)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow process-info* (target same-sandbox))\n(allow sysctl-read)\n(allow sysctl-write (sysctl-name \"kern.grade_cputype\"))\n(allow iokit-open (iokit-registry-entry-class \"RootDomainUserClient\"))\n(allow ipc-posix-sem)\n(allow ipc-posix-shm-read-data ipc-posix-shm-write-create ipc-posix-shm-write-unlink)\n(allow pseudo-tty)\n(allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\") (global-name \"com.apple.system.opendirectoryd.membership\") (global-name \"com.apple.PowerManagement.control\") (global-name \"com.apple.cfprefsd.daemon\") (global-name \"com.apple.cfprefsd.agent\") (local-name \"com.apple.cfprefsd.agent\"))\n(allow file-read* file-test-existence (subpath \"/private/etc\") (subpath \"/etc\") (subpath \"/private/var/db/timezone\") (subpath \"/usr/share/icu\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/null\") (literal \"/dev/zero\"))\n(allow file-read* file-write* file-test-existence (subpath \"/dev/fd\") (literal \"/dev/null\") (literal \"/dev/zero\"))\n(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\") (regex #\"^/dev/ttys[0-9]+\"))\n(allow file-read* file-test-existence (literal \"/\"))\n",

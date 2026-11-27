@@ -16,8 +16,9 @@ mod native;
 mod reclaim;
 
 pub use access::{
-    DirectoryPublicationAccess, FilePublicationAccess, PublicationFileSelector,
-    directory_publication_access, file_publication_access, publication_ancestor_directories,
+    DirectoryPublicationAccess, FilePublicationAccess, PublicationAncestorAccess,
+    PublicationFileSelector, directory_publication_access, file_publication_access,
+    publication_ancestor_access, publication_ancestor_directories,
 };
 pub use directory::{DirectoryEntry, DirectoryEntryKind, DirectoryMove, DirectoryMoveReceipt,
     DirectoryPreimage, DirectoryPublicationResult, publish_directory_moves, snapshot_directory};

@@ -318,23 +318,19 @@ fn project_uncompacted(
     }
     if authority.allow_sandbox_delegation {
         for path in &paths {
-            for ancestor in octopus_file_storage::publication::publication_ancestor_directories(
-                path,
-            )
-            .map_err(|error| {
-                format!(
-                    "publication ancestry for '{}' is unavailable: {error}",
-                    path.display()
-                )
-            })? {
-                policy.files.push(FileRule {
-                    selector: FileSelector::Exact {
-                        path: ancestor,
-                        directory: true,
-                    },
-                    access: FileAccess::Read,
-                });
-            }
+            let ancestry = octopus_file_storage::publication::publication_ancestor_access(path)
+                .map_err(|error| {
+                    format!(
+                        "publication ancestry for '{}' is unavailable: {error}",
+                        path.display()
+                    )
+                })?;
+            policy.add_publication_rules(
+                ancestry.directory_reads,
+                Vec::new(),
+                ancestry.file_reads,
+                Vec::new(),
+            );
         }
     }
     Ok(policy)
@@ -1330,6 +1326,39 @@ mod tests {
             assert!(rendered.contains(&format!("  \"{}/\" rwkl,\n", target_dir.display())));
             assert!(rendered.contains(&format!("  \"{}/.octopus-publication/**\" rk,\n", target_dir.display())));
         }
+    }
+
+    #[test]
+    fn sandbox_delegation_grants_bounded_ancestor_history_reads() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = std::fs::canonicalize(temp.path()).unwrap().join("state");
+        let runs = state.join("runs");
+        std::fs::create_dir_all(&runs).unwrap();
+        let exe = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let authority = ProcessAuthority::resolve(
+            [runs],
+            Vec::<PathBuf>::new(),
+            Vec::<PathBuf>::new(),
+            Vec::<PathBuf>::new(),
+            Vec::<PathBuf>::new(),
+            Vec::<PathBuf>::new(),
+            false,
+            false,
+            false,
+            true,
+            false,
+            octopus_descriptors::ProcessSandboxMode::Enforced,
+        )
+        .unwrap();
+        let projected = project(&authority, &exe).unwrap();
+        let history = state.join(".octopus-publication/history");
+        assert!(projected.path_is_readable(&history.join("file-abc.json")));
+        assert!(projected.path_is_readable(&history.join("directory-abc.json")));
+        assert!(!projected.path_is_writable(&history.join("directory-abc.json")));
+        assert!(!projected.path_is_readable(&state.join("unrelated.json")));
+        let rendered = projected.apparmor_profile(&profile_name(), 1000).unwrap();
+        assert!(rendered.contains(&format!("  \"{}/directory-*.json\" rk,\n", history.display())));
+        assert!(rendered.contains(&format!("  \"{}/file-*.json\" rk,\n", history.display())));
     }
 
     #[test]

@@ -24,15 +24,38 @@ pub struct DirectoryPublicationAccess {
     pub file_writes: Vec<PublicationFileSelector>,
 }
 
-pub fn publication_ancestor_directories(path: &Path) -> io::Result<Vec<PathBuf>> {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublicationAncestorAccess {
+    pub directory_reads: Vec<PathBuf>,
+    pub file_reads: Vec<PublicationFileSelector>,
+}
+
+pub fn publication_ancestor_access(path: &Path) -> io::Result<PublicationAncestorAccess> {
     namespace::validate_absolute(path)?;
-    let mut directories = BTreeSet::new();
+    let mut directory_reads = BTreeSet::new();
+    let mut file_reads = BTreeSet::new();
     for parent in path.parent().into_iter().flat_map(Path::ancestors) {
-        directories.insert(parent.to_path_buf());
-        directories.insert(parent.join(COORDINATION_DIRECTORY));
-        directories.insert(parent.join(COORDINATION_DIRECTORY).join("history"));
+        let coord = parent.join(COORDINATION_DIRECTORY);
+        let history = coord.join("history");
+        directory_reads.insert(parent.to_path_buf());
+        directory_reads.insert(coord);
+        directory_reads.insert(history.clone());
+        for prefix in ["file-", "directory-"] {
+            file_reads.insert(PublicationFileSelector::Names {
+                directory: history.clone(),
+                prefix: prefix.into(),
+                suffix: ".json".into(),
+            });
+        }
     }
-    Ok(directories.into_iter().collect())
+    Ok(PublicationAncestorAccess {
+        directory_reads: directory_reads.into_iter().collect(),
+        file_reads: file_reads.into_iter().collect(),
+    })
+}
+
+pub fn publication_ancestor_directories(path: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(publication_ancestor_access(path)?.directory_reads)
 }
 
 pub fn file_publication_access(path: &Path) -> io::Result<FilePublicationAccess> {
