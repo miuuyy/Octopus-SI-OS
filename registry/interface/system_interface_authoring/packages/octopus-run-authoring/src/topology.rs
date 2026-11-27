@@ -556,23 +556,13 @@ pub(crate) fn validate_checkpoint_topology(
             ));
         }
     }
-    let active_output_matches = frontier_records
-        .iter()
-        .filter(|checkpoint| {
-            output_templates.iter().any(|template| {
-                checkpoint_record_matches_template(checkpoint, template, &record.id)
-                    && checkpoint_role_bindings_match(
-                        checkpoint,
-                        &mandatory_role_bindings,
-                        template,
-                    )
-            })
-        })
-        .count();
-    let validate_rearmed_frontier = || -> Result<(), String> {
+    let validate_rearmed_frontier = |allow_standing: bool| -> Result<(), String> {
+        let mut claimed = BTreeSet::new();
+        let mut unmatched_templates = Vec::new();
         for template in &output_templates {
             let matches = frontier_records
                 .iter()
+                .copied()
                 .filter(|checkpoint| {
                     checkpoint_record_matches_template(checkpoint, template, &record.id)
                         && checkpoint_role_bindings_match(
@@ -581,19 +571,110 @@ pub(crate) fn validate_checkpoint_topology(
                             template,
                         )
                 })
-                .count();
-            if matches != 1 {
-                return Err(format!(
-                    "provider run '{}' rearmed frontier matches {} output template '{}'",
-                    record.id.as_str(),
-                    matches,
-                    template.name
-                ));
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [checkpoint] => {
+                    if !claimed.insert(checkpoint.id.clone()) {
+                        return Err(format!(
+                            "provider run '{}' rearmed frontier overlaps output template '{}'",
+                            record.id.as_str(),
+                            template.name
+                        ));
+                    }
+                }
+                [] if allow_standing => unmatched_templates.push(*template),
+                _ => {
+                    return Err(format!(
+                        "provider run '{}' rearmed frontier matches {} output template '{}'",
+                        record.id.as_str(),
+                        matches.len(),
+                        template.name
+                    ));
+                }
             }
         }
-        if active_output_matches != output_templates.len()
-            || frontier.len() != output_templates.len() + authoring_count
-        {
+        let standing_ids = if allow_standing {
+            let provider_bound = frontier_records
+                .iter()
+                .copied()
+                .filter(|checkpoint| checkpoint.inbound_interface() == Some(provider))
+                .collect::<Vec<_>>();
+            let standing_ids = standing_routes::classify_standing_frontier(
+                &provider_bound,
+                &claimed,
+                templates,
+                provider,
+                &mandatory_role_bindings,
+            )?;
+            let mut matched_standing_owners = BTreeSet::new();
+            for template in &unmatched_templates {
+                let matches = provider_bound
+                    .iter()
+                    .copied()
+                    .filter(|checkpoint| {
+                        standing_ids.contains(&checkpoint.id)
+                            && standing_routes::standing_instance_owner(
+                                checkpoint,
+                                templates,
+                                provider,
+                                &mandatory_role_bindings,
+                            )
+                            .is_some_and(|owner| owner.name == template.name)
+                    })
+                    .collect::<Vec<_>>();
+                let [checkpoint] = matches.as_slice() else {
+                    return Err(format!(
+                        "provider run '{}' rearmed frontier matches {} output template '{}'",
+                        record.id.as_str(),
+                        matches.len(),
+                        template.name
+                    ));
+                };
+                if let Some(expected) =
+                    standing_routes::expected_standing_names(templates, provider, template)
+                {
+                    if standing_routes::delivered_names(checkpoint).as_ref() != Some(&expected) {
+                        return Err(format!(
+                            "provider run '{}' standing route '{}' does not cover all standing labels of output template '{}'",
+                            record.id.as_str(),
+                            checkpoint.id.as_str(),
+                            template.name
+                        ));
+                    }
+                }
+                matched_standing_owners.insert(template.name.as_str());
+            }
+            for checkpoint in provider_bound
+                .iter()
+                .copied()
+                .filter(|checkpoint| standing_ids.contains(&checkpoint.id))
+            {
+                let Some(owner) = standing_routes::standing_instance_owner(
+                    checkpoint,
+                    templates,
+                    provider,
+                    &mandatory_role_bindings,
+                ) else {
+                    return Err(format!(
+                        "provider run '{}' rearmed frontier contains unclassified checkpoint topology",
+                        record.id.as_str()
+                    ));
+                };
+                if owner.name != standing_routes::STANDING_DISPATCH_NAME
+                    && !matched_standing_owners.contains(owner.name.as_str())
+                {
+                    return Err(format!(
+                        "provider run '{}' rearmed frontier contains duplicate standing route '{}'",
+                        record.id.as_str(),
+                        checkpoint.id.as_str()
+                    ));
+                }
+            }
+            standing_ids
+        } else {
+            BTreeSet::new()
+        };
+        if claimed.len() + standing_ids.len() + authoring_count != frontier.len() {
             return Err(format!(
                 "provider run '{}' rearmed frontier contains unclassified checkpoint topology",
                 record.id.as_str()
@@ -636,14 +717,14 @@ pub(crate) fn validate_checkpoint_topology(
                 }
             }
             Err(error) if pending.terminal => {
-                validate_rearmed_frontier().map_err(|rearmed_error| {
+                validate_rearmed_frontier(true).map_err(|rearmed_error| {
                     format!("{error}; completed terminal frontier is not rearmed: {rearmed_error}")
                 })?;
             }
             Err(error) => return Err(error),
         }
     } else {
-        validate_rearmed_frontier()?;
+        validate_rearmed_frontier(false)?;
     }
     let mut active_inputs = Vec::new();
     for checkpoint in record

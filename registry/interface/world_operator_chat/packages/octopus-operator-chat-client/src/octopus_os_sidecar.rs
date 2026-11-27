@@ -177,7 +177,7 @@ pub(crate) fn preserve_octopus_os_client_configuration(
         }
         if !presentation.name.is_empty()
             && (presentation.name.trim() != presentation.name
-                || presentation.name.chars().count() > 80)
+                || presentation.name.chars().count() > 150)
         {
             return Err(format!(
                 "Octopus OS presentation '{}' contains an invalid name",

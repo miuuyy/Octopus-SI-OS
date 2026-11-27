@@ -6359,6 +6359,98 @@ fn provider_operation_allowlist_validates_rearms_and_rejects_unauthorized_mutati
 }
 
 #[test]
+fn completed_terminal_frontier_revision_accepts_standing_routes_and_rejects_drift() {
+    let provider = InterfaceId::new("world_provider_test");
+    let allow = |iface: &str, names: &[&str]| AuthoredInterfaceBinding {
+        interface: InterfaceId::new(iface),
+        config: InterfaceBindingConfig {
+            artifact_policy: BindingArtifactPolicy::Allow {
+                names: names.iter().map(|n| (*n).to_string()).collect(),
+                namespaces: Vec::new(),
+            },
+        },
+    };
+    let outs = |ids: &[&str]| ids.iter().map(|id| all_binding(*id)).collect::<Vec<_>>();
+    let tpl = |name: &str, role, inbound, outbound, req| RunAuthoringCheckpoint {
+        name: name.into(), role, result_receiving: BTreeMap::new(), static_artifact_bindings: Vec::new(),
+        owner_authoring: None, interface_binding: inbound, outbound_interface_bindings: outbound,
+        include_context: false, required_verified_artifacts: req,
+    };
+    let cp = |id: &str, inbound: AuthoredInterfaceBinding, out: Vec<AuthoredInterfaceBinding>, req: Vec<RequiredVerifiedArtifact>| {
+        serde_json::json!({
+            "id": id, "run": "run_test", "trace": format!("trace:run_test:{id}"), "epoch": 0,
+            "interface_binding": inbound, "outbound_interface_bindings": out,
+            "artifact_bindings": [], "required_verified_artifacts": req,
+        })
+    };
+    let tool_req = vec![RequiredVerifiedArtifact {
+        artifact_label: "tool.call".into(), verifier: "tool_call_allowed".into(),
+        mark: "tool.call.allowed".into(), params: serde_json::json!({"tools": ["file.read"]}),
+    }];
+    let build = |term_out: &[&str], err_out: &[&str], tpl_err_out: &[&str], stream_names: &[&str], terminal: bool, extra: bool| {
+        let templates = vec![
+            tpl("input", RunAuthoringCheckpointRole::Stable, all_binding("world_input_test"), outs(&["world_provider_test"]), vec![]),
+            tpl("tool_out", RunAuthoringCheckpointRole::ProviderToolOutput, all_binding("world_provider_test"), outs(&["system_workspace_env"]), tool_req.clone()),
+            tpl("derived_stream", RunAuthoringCheckpointRole::ProviderArtifactOutput, allow("world_provider_test", &["turn.started", "tool.call", "turn.completed"]), outs(&["world_client_test"]), vec![]),
+            tpl("terminal", RunAuthoringCheckpointRole::ProviderArtifactOutput, allow("world_provider_test", &["interface.artifact.output"]), outs(term_out), vec![]),
+            tpl("recorded", RunAuthoringCheckpointRole::ProviderArtifactOutput, allow("world_provider_test", &["turn.interrupted.result", "turn.error"]), outs(tpl_err_out), vec![]),
+            tpl("authoring_call", RunAuthoringCheckpointRole::AuthoringCall, all_binding("system_interface_authoring_test"), outs(&["system_context_authoring_test"]), vec![]),
+            tpl("authoring_result", RunAuthoringCheckpointRole::AuthoringResult, all_binding("system_context_authoring_test"), outs(&["world_provider_test"]), vec![]),
+        ];
+        let mut cps = vec![
+            cp("cp_input", all_binding("world_input_test"), outs(&["world_provider_test"]), vec![]),
+            cp("cp_tool_out", all_binding("world_provider_test"), outs(&["system_workspace_env"]), tool_req.clone()),
+            cp("cp_terminal", allow("world_provider_test", &["interface.artifact.output"]), outs(term_out), vec![]),
+            cp("cp_standing_derived_stream", allow("world_provider_test", stream_names), outs(&["world_client_test"]), vec![]),
+            cp("cp_standing_recorded", allow("world_provider_test", &["turn.error", "turn.interrupted.result"]), outs(err_out), vec![]),
+            cp("cp_standing_transport_dispatch_standing", allow("world_provider_test", &[PROVIDER_TRANSPORT_DISPATCH_LABEL]), vec![], vec![]),
+            cp("cp_authoring_call", all_binding("system_interface_authoring_test"), outs(&["system_context_authoring_test"]), vec![]),
+            cp("cp_authoring_result", all_binding("system_context_authoring_test"), outs(&["world_provider_test"]), vec![]),
+        ];
+        let mut frontier = vec!["cp_tool_out", "cp_terminal", "cp_standing_derived_stream", "cp_standing_recorded", "cp_standing_transport_dispatch_standing", "cp_authoring_call", "cp_authoring_result"];
+        if extra {
+            cps.push(cp("cp_extra", allow("world_provider_test", &["rogue.label"]), outs(&["world_client_test"]), vec![]));
+            frontier.push("cp_extra");
+        }
+        let mut active = vec!["cp_input"];
+        active.extend(frontier.iter().copied());
+        let pending = serde_json::json!({
+            "source_movement_seq": 1,
+            "terminal": terminal,
+            "items": [{
+                "artifact_id": "interface.artifact.output:1",
+                "artifact_content_hash": "0".repeat(64),
+                "artifact_label": "interface.artifact.output",
+                "manifest_relative_path": "emitted/out.json",
+                "checkpoint": {
+                    "id": "cp_terminal", "epoch": 0,
+                    "interface_binding": allow("world_provider_test", &["interface.artifact.output"]),
+                    "outbound_interface_bindings": outs(&["world_client_test"]),
+                    "artifact_bindings": [], "required_verified_artifacts": []
+                }
+            }]
+        });
+        let value = serde_json::json!({
+            "id": "run_test", "ee": "ee_test", "worker": "system_worker_test", "trace": "trace:run_test", "status": "idle",
+            "interface_state": {"world_provider_test": {"context_generation": 0, "authoring_generation": 1, "frontier_checkpoint_ids": frontier, "pending_handoff": pending}},
+            "checkpoints": cps, "active_checkpoints": active,
+        });
+        (RunRecord::from_bytes(&serde_json::to_vec(&value).unwrap()).unwrap(), templates)
+    };
+    let both = ["world_client_test", "system_service_input_center"];
+    let (ok, templates) = build(&both, &both, &both, &["turn.completed", "turn.started"], true, false);
+    validate_checkpoint_topology(&ok, &provider, &templates, None).unwrap();
+    let (missing, templates) = build(&both, &both, &both, &["turn.completed"], true, false);
+    assert!(validate_checkpoint_topology(&missing, &provider, &templates, None).unwrap_err().contains("does not cover all standing labels"));
+    let (drift, templates) = build(&both, &["world_client_test"], &both, &["turn.completed", "turn.started"], true, false);
+    assert!(validate_checkpoint_topology(&drift, &provider, &templates, None).is_err());
+    let (in_flight, templates) = build(&both, &both, &both, &["turn.completed", "turn.started"], false, false);
+    assert!(validate_checkpoint_topology(&in_flight, &provider, &templates, None).is_err());
+    let (extra, templates) = build(&both, &both, &both, &["turn.completed", "turn.started"], true, true);
+    assert!(validate_checkpoint_topology(&extra, &provider, &templates, None).unwrap_err().contains("unclassified checkpoint topology"));
+}
+
+#[test]
 #[ignore = "requires explicitly selected read-only ledger performance evidence"]
 fn selected_retained_delivery_cost() {
     let home = PathBuf::from(std::env::var("OCTOPUS_BENCH_HOME").unwrap());

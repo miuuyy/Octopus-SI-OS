@@ -96,6 +96,10 @@ fn compute_replacements(
                 update_file_mode,
             ) {
                 line_index = idx + 1;
+            } else if looks_like_unified_diff_hunk_header(ctx_line) {
+                return Err(ApplyPatchError::ComputeReplacements(format!(
+                    "Failed to find context '{ctx_line}' in {path}: unified-diff line-number headers like '@@ -1,3 +1,4 @@' are not supported; use bare '@@' or '@@ <exact anchor line from file>'"
+                )));
             } else {
                 return Err(ApplyPatchError::ComputeReplacements(format!(
                     "Failed to find context '{ctx_line}' in {path}"
@@ -188,6 +192,34 @@ fn compute_replacements(
     replacements.sort_by_key(|(index, _, _)| *index);
 
     Ok(replacements)
+}
+
+fn looks_like_unified_diff_hunk_header(context: &str) -> bool {
+    let parse_range = |token: &str, prefix: char| -> bool {
+        let Some(rest) = token.strip_prefix(prefix) else {
+            return false;
+        };
+        let mut parts = rest.split(',');
+        let first_ok = parts
+            .next()
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()));
+        let second_ok = match parts.next() {
+            None => true,
+            Some(digits) => !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+        };
+        first_ok && second_ok && parts.next().is_none()
+    };
+    let mut parts = context.split_whitespace();
+    let Some(old_range) = parts.next() else {
+        return false;
+    };
+    let Some(new_range) = parts.next() else {
+        return false;
+    };
+    let Some(closing) = parts.next() else {
+        return false;
+    };
+    parse_range(old_range, '-') && parse_range(new_range, '+') && closing == "@@"
 }
 
 fn apply_replacements(mut lines: Vec<String>, replacements: &[Replacement]) -> Vec<String> {

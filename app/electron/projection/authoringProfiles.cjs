@@ -15,7 +15,7 @@ function parseOctopusOsPresentation(value, file) {
     throw new Error(`Octopus OS presentation projects must be an array: ${file}`);
   }
   const name = stringValue(value.name);
-  if (value.name !== undefined && (!name || [...name].length > 80 || name !== value.name)) {
+  if (value.name !== undefined && (!name || [...name].length > 150 || name !== value.name)) {
     throw new Error(`Octopus OS presentation name is invalid: ${file}`);
   }
   const seenEeIds = new Set();

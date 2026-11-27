@@ -17,10 +17,15 @@
     }
   },
   "supported_worker_environment_kinds": ["filesystem_workspace"],
-  "description": "Apply a Begin Patch edit inside the formed direct workspace or an additional filesystem root explicitly granted to this task; success and partial failure carry changed paths and before/after content identities.",
+  "description": "Apply a *** Begin Patch edit inside the formed direct workspace or an additional filesystem root explicitly granted to this task; success and partial failure carry changed paths and before/after content identities. Update hunks use bare '@@' or '@@ <exact anchor line from file>' — never unified-diff line numbers ('@@ -1,3 +1,4 @@').",
   "args_schema": {
     "type": "object",
-    "properties": {"patch": {"type": "string"}},
+    "properties": {
+      "patch": {
+        "type": "string",
+        "description": "Patch enclosed in '*** Begin Patch' and '*** End Patch' with '*** Add File: <path>', '*** Update File: <path>' (optional '*** Move to: <path>'), or '*** Delete File: <path>' sections. Start each update hunk with bare '@@' or '@@ <exact anchor line>' followed by ' ' context, '-' removed, and '+' added lines; do not use unified-diff line numbers like '@@ -1,3 +1,4 @@'."
+      }
+    },
     "required": ["patch"],
     "additionalProperties": false
   },

@@ -8,12 +8,12 @@
   "components": [
     {
       "package_id": "world_cron",
-      "selection": "recommended",
+      "selection": "included",
       "reason": "Provides time and inactivity triggers for ordinary runs."
     },
     {
       "package_id": "world_watch",
-      "selection": "recommended",
+      "selection": "included",
       "reason": "Provides a JSON-configured read-only sensor template for watching HTTP endpoints and local files."
     },
     {

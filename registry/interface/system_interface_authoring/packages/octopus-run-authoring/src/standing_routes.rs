@@ -119,7 +119,7 @@ fn standing_owner<'a>(
         .then_some(owner)
 }
 
-fn delivered_names(checkpoint: &CheckpointRecord) -> Option<BTreeSet<String>> {
+pub(super) fn delivered_names(checkpoint: &CheckpointRecord) -> Option<BTreeSet<String>> {
     if !checkpoint.required_verified_artifacts.is_empty() {
         return Some(
             checkpoint
@@ -133,6 +133,23 @@ fn delivered_names(checkpoint: &CheckpointRecord) -> Option<BTreeSet<String>> {
         Some(binding) => policy_names(&binding.config.artifact_policy),
         None => Some(BTreeSet::new()),
     }
+}
+
+pub(super) fn expected_standing_names(
+    templates: &[RunAuthoringCheckpoint],
+    provider: &InterfaceId,
+    template: &RunAuthoringCheckpoint,
+) -> Option<BTreeSet<String>> {
+    let names = policy_names(&template.interface_binding.config.artifact_policy)?;
+    Some(
+        names
+            .into_iter()
+            .filter(|name| {
+                standing_owner(templates, provider, name)
+                    .is_some_and(|owner| owner.name == template.name)
+            })
+            .collect(),
+    )
 }
 
 fn delivers(checkpoint: &CheckpointRecord, artifact_label: &str) -> bool {
@@ -220,7 +237,7 @@ pub(super) fn materialize_standing_routes(
         .collect())
 }
 
-fn standing_instance_owner(
+pub(super) fn standing_instance_owner(
     checkpoint: &CheckpointRecord,
     templates: &[RunAuthoringCheckpoint],
     provider: &InterfaceId,

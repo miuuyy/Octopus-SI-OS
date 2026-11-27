@@ -10,6 +10,7 @@ use octopus_interfaces::{Direction, InterfaceDescriptor, InterfaceType};
 use octopus_ledger::{ContentHash, Endpoint, Movement, MovementKind, MovementMetadata};
 use octopus_ledger_index::LedgerSqliteReader;
 use octopus_ledger_store::DurableMovementDecoder;
+use octopus_operator_chat_client::input_intake::InputIntakeConfig;
 use octopus_operator_chat_client::run_composition::CompositionRoots;
 use octopus_run_record::RunRecord;
 use serde_json::{Value, json};
@@ -23,7 +24,7 @@ const MAX_PEER_INTERFACES_BYTES: usize = 4 * 1024;
 const MAX_DESCRIPTOR_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ERROR_BLOB_BYTES: u64 = 256 * 1024;
 const MAX_EXCERPT_CHARS: usize = 300;
-const MAX_TITLE_CHARS: usize = 96;
+const MAX_TITLE_CHARS: usize = 150;
 const MAX_GOAL_CHARS: usize = 240;
 const DEFAULT_MAX_ROW_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -446,20 +447,39 @@ pub(crate) fn observe_runs_pulse(
     }
     target_run_ids.extend(candidate_other_ids.iter().cloned());
 
-    let ledger_tails = life_ctx.and_then(|ctx| load_tail_movements_by_run(ctx, &target_run_ids));
+    let mut intake_targets: BTreeMap<String, (String, IntakeRoute)> = BTreeMap::new();
+    for (intake_iface, route) in &source_bindings.intake_interfaces {
+        intake_targets.insert(
+            intake_iface.clone(),
+            (source_record.id.as_str().to_string(), route.clone()),
+        );
+    }
+    for run_id in &target_run_ids {
+        if let Some(bindings) = bindings_by_id.get(run_id) {
+            for (intake_iface, route) in &bindings.intake_interfaces {
+                intake_targets.insert(intake_iface.clone(), (run_id.clone(), route.clone()));
+            }
+        }
+    }
+
+    let loaded_movements = life_ctx
+        .and_then(|ctx| load_tail_movements_by_run(ctx, &target_run_ids, &intake_targets));
     let blobs_dir = life_ctx.map(|ctx| ctx.blobs_dir.as_path());
 
-    let (source_activity, source_phase) = build_run_activity(
+    let (source_activity, source_phase) = build_run_activity_with_intake(
         Some(source_record),
         &source_bindings,
-        ledger_tails
+        loaded_movements
             .as_ref()
-            .and_then(|map| map.get(source_record.id.as_str())),
-        ledger_tails.is_some(),
+            .and_then(|loaded| loaded.by_run.get(source_record.id.as_str())),
+        loaded_movements
+            .as_ref()
+            .and_then(|loaded| loaded.latest_intake_by_run.get(source_record.id.as_str())),
+        loaded_movements.is_some(),
         blobs_dir,
         now_ms,
     );
-    let source_provider_activity = if ledger_tails.is_some() {
+    let source_provider_activity = if loaded_movements.is_some() {
         source_phase.to_string()
     } else {
         "not_observed".to_string()
@@ -477,11 +497,16 @@ pub(crate) fn observe_runs_pulse(
         } else {
             bindings_by_id.get(&run_id).unwrap_or(&empty_bindings)
         };
-        let (activity, phase) = build_run_activity(
+        let (activity, phase) = build_run_activity_with_intake(
             record,
             bindings,
-            ledger_tails.as_ref().and_then(|map| map.get(&run_id)),
-            ledger_tails.is_some(),
+            loaded_movements
+                .as_ref()
+                .and_then(|loaded| loaded.by_run.get(&run_id)),
+            loaded_movements
+                .as_ref()
+                .and_then(|loaded| loaded.latest_intake_by_run.get(&run_id)),
+            loaded_movements.is_some(),
             blobs_dir,
             now_ms,
         );
@@ -543,11 +568,16 @@ pub(crate) fn observe_runs_pulse(
                 continue;
             };
             let bindings = bindings_by_id.get(&run_id).unwrap_or(&empty_bindings);
-            let (activity, phase) = build_run_activity(
+            let (activity, phase) = build_run_activity_with_intake(
                 Some(record),
                 bindings,
-                ledger_tails.as_ref().and_then(|map| map.get(&run_id)),
-                ledger_tails.is_some(),
+                loaded_movements
+                    .as_ref()
+                    .and_then(|loaded| loaded.by_run.get(&run_id)),
+                loaded_movements
+                    .as_ref()
+                    .and_then(|loaded| loaded.latest_intake_by_run.get(&run_id)),
+                loaded_movements.is_some(),
                 blobs_dir,
                 now_ms,
             );
@@ -642,6 +672,25 @@ fn attach_record_metadata(target: &mut Value, record: &RunRecord, bindings: &Run
     }
 }
 
+#[derive(Clone)]
+struct IntakeRoute {
+    writer_door: String,
+    writer_result_label: String,
+    input_label: String,
+}
+
+#[derive(Clone)]
+struct IntakeWakeup {
+    seq: u64,
+    at_unix_ms: u64,
+    label: Option<String>,
+}
+
+struct LoadedRunMovements {
+    by_run: BTreeMap<String, VecDeque<Movement>>,
+    latest_intake_by_run: BTreeMap<String, BTreeMap<String, IntakeWakeup>>,
+}
+
 struct RunBindingsSummary {
     standing_writer: bool,
     title: Option<String>,
@@ -653,6 +702,7 @@ struct RunBindingsSummary {
     external_inputs: Vec<String>,
     world_inbound_interfaces: BTreeSet<String>,
     door_interfaces: BTreeSet<String>,
+    intake_interfaces: BTreeMap<String, IntakeRoute>,
 }
 
 impl RunBindingsSummary {
@@ -668,6 +718,7 @@ impl RunBindingsSummary {
             external_inputs: Vec::new(),
             world_inbound_interfaces: BTreeSet::new(),
             door_interfaces: BTreeSet::new(),
+            intake_interfaces: BTreeMap::new(),
         }
     }
 }
@@ -750,6 +801,22 @@ fn inspect_run_bindings(record: &RunRecord, cache: &mut DescriptorCache<'_>) -> 
     if record.active_checkpoints.is_empty() {
         summary.archived = true;
     }
+    for (iface, state) in &record.interface_state {
+        if let Some(declaration) = state.get("input_intake")
+            && let Ok(config) = serde_json::from_value::<InputIntakeConfig>(declaration.clone())
+            && config.validate(iface).is_ok()
+            && config.run == record.id.as_str()
+        {
+            summary.intake_interfaces.insert(
+                iface.as_str().to_string(),
+                IntakeRoute {
+                    writer_door: config.writer.door.as_str().to_string(),
+                    writer_result_label: config.writer.result_label,
+                    input_label: config.input_label,
+                },
+            );
+        }
+    }
     let mut external_inputs = BTreeSet::new();
 
     for iface_id in &all_interfaces {
@@ -831,10 +898,23 @@ fn extract_provider_model_and_effort(
     (model, effort)
 }
 
+#[cfg(test)]
 fn build_run_activity(
     record: Option<&RunRecord>,
     bindings: &RunBindingsSummary,
     movements: Option<&VecDeque<Movement>>,
+    ledger_readable: bool,
+    blobs_dir: Option<&Path>,
+    now_ms: u64,
+) -> (Value, &'static str) {
+    build_run_activity_with_intake(record, bindings, movements, None, ledger_readable, blobs_dir, now_ms)
+}
+
+fn build_run_activity_with_intake(
+    record: Option<&RunRecord>,
+    bindings: &RunBindingsSummary,
+    movements: Option<&VecDeque<Movement>>,
+    latest_intakes: Option<&BTreeMap<String, IntakeWakeup>>,
     ledger_readable: bool,
     blobs_dir: Option<&Path>,
     now_ms: u64,
@@ -859,6 +939,7 @@ fn build_run_activity(
     let mut pending_doors: BTreeMap<String, (String, u64, u64)> = BTreeMap::new();
     let mut recent_refusal: Option<Value> = None;
     let mut last_error: Option<(u64, u64, String, Option<ContentHash>)> = None;
+    let mut last_intake_delivery_seq: BTreeMap<String, u64> = BTreeMap::new();
 
     for movement in rows {
         let seq = movement.seq.0;
@@ -875,6 +956,16 @@ fn build_run_activity(
         last_movement_kind = Some(movement_kind_str(&movement.kind));
         if label.is_some() {
             last_artifact_label = label.clone();
+        }
+
+        if let Some(route) = bindings.intake_interfaces.get(from_id)
+            && label.as_deref() == Some(route.input_label.as_str())
+            && matches!(
+                movement.kind,
+                MovementKind::InterfaceArrival | MovementKind::InterfaceOutbound
+            )
+        {
+            last_intake_delivery_seq.insert(from_id.to_string(), seq);
         }
 
         let from_provider = bindings.provider_interfaces.contains(from_id);
@@ -1020,6 +1111,34 @@ fn build_run_activity(
     {
         turn_open = false;
     }
+    let tail_full = rows.len() == MAX_TAIL_MOVEMENTS_PER_RUN;
+    let tail_min_seq = rows.front().map(|m| m.seq.0);
+    let pending_intake = latest_intakes.and_then(|intakes| {
+        intakes
+            .iter()
+            .filter(|(intake_iface, wakeup)| {
+                last_intake_delivery_seq
+                    .get(intake_iface.as_str())
+                    .is_none_or(|delivered| *delivered <= wakeup.seq)
+                    && !(tail_full && tail_min_seq.is_some_and(|min| wakeup.seq < min))
+            })
+            .max_by_key(|(_, wakeup)| wakeup.seq)
+            .map(|(_, wakeup)| wakeup)
+    });
+    if let Some(wakeup) = pending_intake {
+        turn_open = true;
+        if last_error.as_ref().is_some_and(|(seq, ..)| *seq < wakeup.seq) {
+            last_error = None;
+        }
+        if last_movement_seq.is_none_or(|seq| wakeup.seq > seq) {
+            last_movement_seq = Some(wakeup.seq);
+            last_movement_at_unix_ms = Some(wakeup.at_unix_ms);
+            last_movement_kind = Some("interface_outbound");
+            if wakeup.label.is_some() {
+                last_artifact_label = wakeup.label.clone();
+            }
+        }
+    }
     let record_running = record.is_some_and(|rec| rec.status.as_str() == Some("running"));
     let phase = if last_movement_seq.is_none() {
         if record_running {
@@ -1061,6 +1180,10 @@ fn build_run_activity(
     if let Some(label) = last_artifact_label {
         activity.insert("last_artifact_label".into(), json!(label));
     }
+    if let Some(wakeup) = pending_intake {
+        activity.insert("pending_intake_seq".into(), json!(wakeup.seq));
+        activity.insert("pending_intake_at_unix_ms".into(), json!(wakeup.at_unix_ms));
+    }
     if let Some(ts) = last_provider_activity_at_unix_ms {
         activity.insert("last_provider_activity_at_unix_ms".into(), json!(ts));
     }
@@ -1080,16 +1203,74 @@ fn build_run_activity(
     (Value::Object(activity), phase)
 }
 
+fn is_admitted_intake_wakeup(movement: &Movement, intake_iface: &str, route: &IntakeRoute) -> bool {
+    if movement.kind != MovementKind::InterfaceOutbound
+        || endpoint_interface(&movement.to) != intake_iface
+    {
+        return false;
+    }
+    let label = movement.artifact.as_ref().map(|a| artifact_label(&a.id));
+    if label.as_deref() == Some("interface.context.updated") {
+        return false;
+    }
+    if endpoint_interface(&movement.from) == route.writer_door
+        && label.as_deref() == Some(route.writer_result_label.as_str())
+    {
+        return false;
+    }
+    !matches!(
+        movement
+            .invocation_metadata
+            .as_ref()
+            .and_then(MovementMetadata::delivery_verdict),
+        Some(octopus_ledger::DeliveryVerdict::Refused { .. })
+    )
+}
+
+fn record_intake_wakeup(
+    latest_intake_by_run: &mut BTreeMap<String, BTreeMap<String, IntakeWakeup>>,
+    run_id: &str,
+    intake_iface: &str,
+    movement: &Movement,
+) {
+    let entry = latest_intake_by_run
+        .entry(run_id.to_string())
+        .or_default();
+    if entry
+        .get(intake_iface)
+        .is_some_and(|existing| existing.seq >= movement.seq.0)
+    {
+        return;
+    }
+    entry.insert(
+        intake_iface.to_string(),
+        IntakeWakeup {
+            seq: movement.seq.0,
+            at_unix_ms: movement.recorded_at_unix_ms,
+            label: movement.artifact.as_ref().map(|a| artifact_label(&a.id)),
+        },
+    );
+}
+
 fn load_tail_movements_by_run(
     ctx: &InterfaceLiftContext,
     target_runs: &BTreeSet<String>,
-) -> Option<BTreeMap<String, VecDeque<Movement>>> {
-    if target_runs.is_empty() {
-        return Some(BTreeMap::new());
+    intake_targets: &BTreeMap<String, (String, IntakeRoute)>,
+) -> Option<LoadedRunMovements> {
+    if target_runs.is_empty() && intake_targets.is_empty() {
+        return Some(LoadedRunMovements {
+            by_run: BTreeMap::new(),
+            latest_intake_by_run: BTreeMap::new(),
+        });
     }
     let mut file = match File::open(&ctx.movements_path) {
         Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(BTreeMap::new()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Some(LoadedRunMovements {
+                by_run: BTreeMap::new(),
+                latest_intake_by_run: BTreeMap::new(),
+            });
+        }
         Err(_) => return None,
     };
     let snapshot_len = file.metadata().ok()?.len();
@@ -1106,6 +1287,7 @@ fn load_tail_movements_by_run(
         max_row_bytes,
         &decoder,
         target_runs,
+        intake_targets,
     ) {
         return Some(indexed);
     }
@@ -1117,7 +1299,11 @@ fn load_tail_movements_by_run(
         max_row_bytes,
         &decoder,
         target_runs,
-        BTreeMap::new(),
+        intake_targets,
+        LoadedRunMovements {
+            by_run: BTreeMap::new(),
+            latest_intake_by_run: BTreeMap::new(),
+        },
     )
 }
 
@@ -1128,7 +1314,8 @@ fn try_load_via_sqlite_index(
     max_row_bytes: u64,
     decoder: &DurableMovementDecoder,
     target_runs: &BTreeSet<String>,
-) -> Option<BTreeMap<String, VecDeque<Movement>>> {
+    intake_targets: &BTreeMap<String, (String, IntakeRoute)>,
+) -> Option<LoadedRunMovements> {
     let reader = LedgerSqliteReader::open(&ctx.ledger_index_path).ok()?;
     let progress = reader.progress().ok()?;
     if progress.durable_end_offset > snapshot_len {
@@ -1166,6 +1353,39 @@ fn try_load_via_sqlite_index(
         }
     }
 
+    let mut latest_intake_by_run: BTreeMap<String, BTreeMap<String, IntakeWakeup>> = BTreeMap::new();
+    for (intake_iface, (run_id, route)) in intake_targets {
+        let rows = reader
+            .movement_rows_for_runtime_interface(intake_iface, 0, progress.watermark)
+            .ok()??;
+        for range in rows.into_iter().rev() {
+            if range.end_offset > snapshot_len || range.end_offset <= range.start_offset {
+                return None;
+            }
+            let len = range.end_offset - range.start_offset;
+            if len > max_row_bytes {
+                return None;
+            }
+            file.seek(SeekFrom::Start(range.start_offset)).ok()?;
+            let mut buf = vec![0u8; len as usize];
+            file.read_exact(&mut buf).ok()?;
+            let (movement, _) = decoder
+                .decode_projection(&buf, (range.seq + 1) as usize)
+                .ok()?;
+            if movement.seq.0 != range.seq {
+                return None;
+            }
+            if is_admitted_intake_wakeup(&movement, intake_iface, route) {
+                record_intake_wakeup(&mut latest_intake_by_run, run_id, intake_iface, &movement);
+                break;
+            }
+        }
+    }
+
+    let loaded = LoadedRunMovements {
+        by_run,
+        latest_intake_by_run,
+    };
     if progress.durable_end_offset < snapshot_len {
         return scan_movements_into_tails(
             file,
@@ -1174,11 +1394,12 @@ fn try_load_via_sqlite_index(
             max_row_bytes,
             decoder,
             target_runs,
-            by_run,
+            intake_targets,
+            loaded,
         );
     }
 
-    Some(by_run)
+    Some(loaded)
 }
 
 fn scan_movements_into_tails(
@@ -1188,8 +1409,9 @@ fn scan_movements_into_tails(
     max_row_bytes: u64,
     decoder: &DurableMovementDecoder,
     target_runs: &BTreeSet<String>,
-    mut by_run: BTreeMap<String, VecDeque<Movement>>,
-) -> Option<BTreeMap<String, VecDeque<Movement>>> {
+    intake_targets: &BTreeMap<String, (String, IntakeRoute)>,
+    mut loaded: LoadedRunMovements,
+) -> Option<LoadedRunMovements> {
     file.seek(SeekFrom::Start(start_offset)).ok()?;
     let remaining = snapshot_len.saturating_sub(start_offset);
     let mut reader = BufReader::new(file.take(remaining));
@@ -1212,10 +1434,16 @@ fn scan_movements_into_tails(
             line_index += 1;
             continue;
         };
+        let to_id = endpoint_interface(&movement.to);
+        if let Some((run_id, route)) = intake_targets.get(to_id)
+            && is_admitted_intake_wakeup(&movement, to_id, route)
+        {
+            record_intake_wakeup(&mut loaded.latest_intake_by_run, run_id, to_id, &movement);
+        }
         if let Some(run_id) = movement.run() {
             let key = run_id.as_str();
             if target_runs.contains(key) {
-                let queue = by_run.entry(key.to_string()).or_default();
+                let queue = loaded.by_run.entry(key.to_string()).or_default();
                 if queue.len() == MAX_TAIL_MOVEMENTS_PER_RUN {
                     queue.pop_front();
                 }
@@ -1225,7 +1453,7 @@ fn scan_movements_into_tails(
         line_index += 1;
     }
 
-    Some(by_run)
+    Some(loaded)
 }
 
 fn read_error_excerpt(blobs_dir: &Path, hash: &ContentHash) -> Option<String> {
@@ -1977,5 +2205,101 @@ mod tests {
         assert!(response["other_runs"].as_array().unwrap().is_empty());
         assert_eq!(response["declared_peer_runs_omitted"].as_u64().unwrap() as usize + peer_rows.len(), 22);
         assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_LIST_RUNS_BYTES);
+    }
+
+    #[test]
+    fn observe_runs_pulse_marks_pending_intake_wakeup_as_turn_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (reg, runs, ledger) = (tmp.path().join("registry"), tmp.path().join("runs"), tmp.path().join("ledger"));
+        std::fs::create_dir_all(&ledger).unwrap();
+        let long_title = "T".repeat(150);
+        write_iface(&reg, &json!({"id":"world_provider_p1","interface_type":"world","role":"provider","direction":"bidirectional","source_names":["p"],"interface_driver_ref":"codex"}));
+        write_iface(&reg, &json!({"id":"world_chat_peer","interface_type":"world","role":"user","direction":"bidirectional","source_names":["c"],"interface_driver_ref":"app_server"}));
+        write_json(&reg.join("interface/world_chat_peer/octopus_os.json"), &json!({"presentation":{"name": long_title}}));
+
+        let home = write_run(&runs, "run_home", "idle", &[("cp_prov", "world_provider_p1")], &[]);
+        let peer_base = write_run(&runs, "run_peer", "idle", &[("cp_prov", "world_provider_p1"), ("cp_chat", "world_chat_peer")], &[]);
+        let mut peer_val = serde_json::to_value(peer_base).unwrap();
+        peer_val["interface_state"] = json!({"system_service_input_peer": {"input_intake": {
+            "schema_version": 1, "run": "run_peer", "provider_interface": "world_provider_p1",
+            "writer": {"owner":"system_service_input_peer","source":"system_service_input_peer","door":"system_room_peer","tool":"file.write","call_label":"tool.call","result_label":"file.write.result"},
+            "writer_required_verified_artifacts": [{
+                "artifact_label": "tool.call", "verifier": "tool_call_allowed", "mark": "tool.call.allowed",
+                "params": {"tools": ["file.write"], "metadata_matches": [{"payload": "/arguments/expected_before_hash", "metadata": "/runtime/run_record_hash"}]}
+            }],
+            "profile": {"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"},
+            "provider_profile": {"file_write_tool":"file.write","file_write_label":"tool.call","file_write_result_label":"file.write.result"},
+            "input_label": "provider.peer.input", "artifact_bindings": []
+        }}});
+        write_json(&runs.join("run_peer.json"), &peer_val);
+
+        let mut log = DurableLog::open(ledger.join("movements.jsonl")).unwrap();
+        let mut blobs = DurableBlobs::open(ledger.join("blobs")).unwrap();
+        let ok_hash = blobs.try_put(b"{}").unwrap();
+        log.try_append(MovementDraft {
+            trace: TraceId("t0".into()), kind: MovementKind::InterfaceArrival,
+            from: Endpoint::Interface("world_provider_p1".into()), to: Endpoint::Interface("system_worker_operator_task".into()),
+            artifact: Some(artifact_with_hash("turn.completed", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_peer", "world_provider_p1", DeliveryVerdict::Admitted { seq: 0 })),
+            causal_floor: None,
+        }).unwrap();
+        log.try_append(MovementDraft {
+            trace: TraceId("t1".into()), kind: MovementKind::InterfaceOutbound,
+            from: Endpoint::Interface("system_room_home".into()), to: Endpoint::Interface("system_service_input_peer".into()),
+            artifact: Some(artifact_with_hash("provider.peer.message", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_home", "system_service_input_peer", DeliveryVerdict::Admitted { seq: 1 })),
+            causal_floor: None,
+        }).unwrap();
+        log.try_append(MovementDraft {
+            trace: TraceId("t2".into()), kind: MovementKind::InterfaceOutbound,
+            from: Endpoint::Interface("system_room_peer".into()), to: Endpoint::Interface("system_service_input_peer".into()),
+            artifact: Some(artifact_with_hash("file.write.result", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_writer_peer", "system_service_input_peer", DeliveryVerdict::Admitted { seq: 2 })),
+            causal_floor: None,
+        }).unwrap();
+        let mut index = LedgerSqliteIndex::open(&ledger.join("index.sqlite")).unwrap();
+        index.ingest_from(&log).unwrap();
+
+        let (arrivals, _rx) = tokio::sync::mpsc::channel(1);
+        let mut ctx = InterfaceLiftContext::unprivileged(
+            "world_provider_p1".into(), tmp.path().into(), None, tmp.path().into(),
+            ledger.join("movements.jsonl"), ledger.join("blobs"), ledger.join("index.sqlite"),
+            Default::default(), arrivals, tokio_util::sync::CancellationToken::new(),
+        );
+        let roots = CompositionRoots {
+            registry_root: reg, run_records_root: runs,
+            ee_instances_root: tmp.path().join("ees"), interface_private_state_root: tmp.path().join("var"),
+        };
+        let peers = BTreeMap::from([("system_service_input_peer".to_string(), Some("run_peer".to_string()))]);
+
+        for use_index in [true, false] {
+            ctx.ledger_index_path = if use_index { ledger.join("index.sqlite") } else { ledger.join("absent.sqlite") };
+            let observed = observe_runs_pulse(&home, &peers, Some(&roots), Some(&ctx), false);
+            let row = &observed.declared_peer_runs[0];
+            assert_eq!(row["title"], json!(long_title));
+            assert_eq!(row["activity"]["phase"], json!("turn_open"));
+            assert_eq!(row["activity"]["pending_intake_seq"], json!(1));
+            assert_eq!(row["activity"]["last_movement_seq"], json!(1));
+        }
+
+        log.try_append(MovementDraft {
+            trace: TraceId("t3".into()), kind: MovementKind::InterfaceOutbound,
+            from: Endpoint::Interface("system_service_input_peer".into()), to: Endpoint::Interface("world_provider_p1".into()),
+            artifact: Some(artifact_with_hash("provider.peer.input", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_peer", "world_provider_p1", DeliveryVerdict::Admitted { seq: 3 })),
+            causal_floor: None,
+        }).unwrap();
+        log.try_append(MovementDraft {
+            trace: TraceId("t4".into()), kind: MovementKind::InterfaceArrival,
+            from: Endpoint::Interface("world_provider_p1".into()), to: Endpoint::Interface("system_worker_operator_task".into()),
+            artifact: Some(artifact_with_hash("turn.completed", ok_hash)),
+            invocation_metadata: Some(runtime_meta("run_peer", "world_provider_p1", DeliveryVerdict::Admitted { seq: 4 })),
+            causal_floor: None,
+        }).unwrap();
+        index.ingest_from(&log).unwrap();
+        ctx.ledger_index_path = ledger.join("index.sqlite");
+        let settled = observe_runs_pulse(&home, &peers, Some(&roots), Some(&ctx), false);
+        assert_eq!(settled.declared_peer_runs[0]["activity"]["phase"], json!("idle"));
+        assert!(settled.declared_peer_runs[0]["activity"].get("pending_intake_seq").is_none());
     }
 }

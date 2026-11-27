@@ -154,7 +154,7 @@ async function generateTaskTitle(options, input) {
   if (!result.ok) throw new Error(result.error || "Task title generation failed");
   const title = result.value?.title;
   if (!result.value || Object.keys(result.value).join() !== "title" || typeof title !== "string"
-      || !title.trim() || [...title].length > 80 || /[\r\n\u0000-\u001f]/.test(title)) throw new Error("Generated task title is malformed");
+      || !title.trim() || [...title].length > 150 || /[\r\n\u0000-\u001f]/.test(title)) throw new Error("Generated task title is malformed");
   const latest = await options.readSource(runId);
   if (!latest || latest.input.artifact_id !== source.input.artifact_id) return null;
   const sidecar = path.join(registry, "interface", segment(latest.chat.chat_interface_id), "octopus_os.json");

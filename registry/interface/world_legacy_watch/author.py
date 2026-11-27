@@ -981,7 +981,7 @@ def author(arguments):
     home_path = os.path.realpath(arguments.home)
     layout = home_layout(home_path)
     title = arguments.title.strip()
-    require(title and title == arguments.title and len(title) <= 80, "--title must be trimmed, non-empty and at most 80 characters")
+    require(title and title == arguments.title and len(title) <= 150, "--title must be trimmed, non-empty and at most 150 characters")
     planner, runtime = bundled_binaries(arguments)
     notice_label, instructions = kit_sources()
     records = run_records(layout)

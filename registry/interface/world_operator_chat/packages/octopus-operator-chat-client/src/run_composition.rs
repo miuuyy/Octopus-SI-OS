@@ -987,9 +987,9 @@ fn validate_request(request: &RunCompositionRequest) -> Result<(), String> {
     if let Some(title) = &request.communication.client_title {
         if request.communication.client_template_interface_id.is_none()
             || title.is_empty() || title.trim() != title
-            || title.chars().count() > 80 || title.chars().any(char::is_control)
+            || title.chars().count() > 150 || title.chars().any(char::is_control)
         {
-            return Err("client_title requires a new client and an exact, nonempty display name of at most 80 characters without control characters".into());
+            return Err("client_title requires a new client and an exact, nonempty display name of at most 150 characters without control characters".into());
         }
     }
     if let Some(template) = &request.communication.client_template_interface_id {

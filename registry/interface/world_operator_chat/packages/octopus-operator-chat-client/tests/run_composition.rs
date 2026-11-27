@@ -863,7 +863,9 @@ fn selected_client_template_authors_a_private_client_without_reusing_the_callers
     assert_eq!(sidecar["authoring_profile"]["worker_choice_interface"], request.worker_template_interface_id);
     assert!(record["checkpoints"].as_array().unwrap().iter().any(|cp| cp["interface_binding"]["interface"] == *client));
     assert!(!plan.run_write.content.contains("MUST NOT COPY"));
-    for invalid in ["", " name", "name\ninside", &"x".repeat(81)] {
+    request.communication.client_title = Some("x".repeat(150));
+    assert!(plan_run_composition(&request).is_ok());
+    for invalid in ["", " name", "name\ninside", &"x".repeat(151)] {
         request.communication.client_title = Some(invalid.into());
         assert!(plan_run_composition(&request).unwrap_err().contains("client_title"));
     }

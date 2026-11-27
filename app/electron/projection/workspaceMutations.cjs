@@ -1,7 +1,7 @@
 module.exports = { mutateOctopusOsWorkspace };
 
 const path = require("node:path");
-const { createOctopusOsAgentTemplate, mutateOctopusOsAgentTemplate, requiredAgentName } = require("./agentTemplates.cjs");
+const { createOctopusOsAgentTemplate, mutateOctopusOsAgentTemplate } = require("./agentTemplates.cjs");
 const { configureOctopusOsApplication, configureOctopusOsDriver, configureOctopusOsProjectDefaults } = require("./applicationConfiguration.cjs");
 const { readRegularJsonDocument } = require("./jsonFiles.cjs");
 const { mutateLocalPackageInventory, requireOctopusOsScope, workspaceProjectMutationScope } = require("./localPackageInventory.cjs");
@@ -66,7 +66,7 @@ async function mutateOctopusOsWorkspace(registryRoot, octopusHomeRoot, scope, re
     }
     if (action === "rename_task") {
       const runId = requiredSafeRegistryId(request.runId, "runId");
-      const name = requiredAgentName(request.name);
+      const name = requiredTaskName(request.name);
       const task = snapshot.clientRuns.find((row) => row.run_id === runId && row.surface_role === "task");
       if (!task) throw new Error(`Task '${runId}' is not an editable task in this Home.`);
       if (typeof hooks.commitClientAuthoring !== "function") throw new Error("Client authoring transaction is unavailable.");
@@ -186,4 +186,17 @@ async function mutateOctopusOsWorkspace(registryRoot, octopusHomeRoot, scope, re
   } finally {
     release();
   }
+}
+
+function requiredTaskName(value) {
+  if (
+    typeof value !== "string"
+    || !value
+    || value.trim() !== value
+    || [...value].length > 150
+    || /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error("Task name must be trimmed text up to 150 characters");
+  }
+  return value;
 }

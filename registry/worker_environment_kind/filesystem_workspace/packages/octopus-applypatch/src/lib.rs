@@ -1506,4 +1506,30 @@ mod tests {
         assert!(!root.join("new/file.txt").exists());
         assert!(!root.join("remove.txt").exists());
     }
+
+    #[tokio::test]
+    async fn test_unified_diff_hunk_header_fails_closed_with_actionable_hint() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("sample.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let patch = wrap_patch("*** Update File: sample.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma");
+
+        let mut stderr = Vec::new();
+        let err = apply_patch(
+            &patch,
+            &PathUri::from_host_native_path(&root).expect("absolute test path"),
+            &mut Vec::new(),
+            &mut stderr,
+            LOCAL_FS.as_ref(),
+            None,
+        )
+        .await
+        .expect_err("unified diff line-number hunk header must fail closed");
+
+        let message = err.to_string();
+        assert!(message.contains("Failed to find context '-1,3 +1,3 @@'"), "{message}");
+        assert!(message.contains("use bare '@@'"), "{message}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nbeta\ngamma\n");
+    }
 }
