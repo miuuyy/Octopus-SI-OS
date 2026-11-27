@@ -19,7 +19,7 @@ const bundle = buildSync({
   packages: "external", define: { "import.meta.url": "__configUrl" },
 }).outputFiles[0].text;
 
-function loadDevServer() {
+function loadDevServer(overrides = {}) {
   const world = { events: [], loaderOptions: [], required: [], chatBatch: null };
   world.chatClient = {
     readOperatorChatArtifacts: async (deps, request) => {
@@ -53,6 +53,7 @@ function loadDevServer() {
   };
   const devRequire = Object.assign((id) => {
     world.required.push(id);
+    if (Object.hasOwn(overrides, id)) return overrides[id]();
     return electronModules[id] ? electronModules[id](realRequire(id)) : realRequire(id);
   }, { resolve: realRequire.resolve, cache: {} });
   const externals = {
@@ -149,4 +150,11 @@ test("dev interface artifacts consult the chat client only for chat interfaces, 
   const invalid = await call("/__octopus/operator-chat-artifacts", { token, body: { runId: "run-1" } });
   assert.equal(invalid.status, 400);
   assert.match(invalid.body.error, /from_interface_role/);
+});
+
+test("dev server fails closed at startup when node:sqlite is unavailable", () => {
+  assert.throws(
+    () => loadDevServer({ "node:sqlite": () => { throw new Error("No such built-in module: node:sqlite"); } }),
+    /requires Node\.js with built-in node:sqlite/,
+  );
 });

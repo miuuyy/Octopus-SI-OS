@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "main": "electron/main.cjs",
   "scripts": {
     "postinstall": "node scripts/rebuild-native.cjs",

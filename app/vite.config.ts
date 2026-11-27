@@ -15,11 +15,12 @@ function octopusClientServer(): Plugin {
   return {
     name: "octopus-client-server",
     configureServer(server: ViteDevServer) {
+      const appDir = APP_DIR;
+      assertDevServerPrerequisites(appDir, require);
       const { createClientAccessController } = require("./electron/clientAccess.cjs");
       const { createClientProjectionStore } = require("./electron/clientDataSource.cjs");
       const { projectionReadRequest } = require("./electron/projectionReadContract.cjs");
       const { createClientSurfaceDocumentStore, filterClientSurfaceSnapshot } = require("./electron/surfaceDocuments.cjs");
-      const appDir = APP_DIR;
       const repoRoot = path.resolve(appDir, "..");
       const octopusHome = (process.env.OCTOPUS_HOME ?? "").trim() || path.join(os.homedir(), ".octopus");
       const installationRoot = (() => {
@@ -507,6 +508,33 @@ function configuredAbsolutePath(value: string | undefined, fallback: string, fie
   if (!configured) return fallback;
   if (!path.isAbsolute(configured)) throw new Error(`${field} must be absolute`);
   return configured;
+}
+
+function assertDevServerPrerequisites(appDir: string, loadModule: NodeRequire) {
+  let sqlite: { DatabaseSync?: unknown } | null = null;
+  try {
+    sqlite = loadModule("node:sqlite");
+  } catch (error) {
+    throw new Error(
+      `Octopus client dev server requires Node.js with built-in node:sqlite (Node 24 LTS; current: ${process.versions.node}): ${formatError(error)}`,
+    );
+  }
+  if (typeof sqlite?.DatabaseSync !== "function") {
+    throw new Error(
+      `Octopus client dev server requires Node.js with node:sqlite DatabaseSync (Node 24 LTS; current: ${process.versions.node}).`,
+    );
+  }
+  const manifest = JSON.parse(fsSync.readFileSync(path.join(appDir, "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const missingPackages = Object.keys(manifest.dependencies ?? {}).filter(
+    (name) => !fsSync.existsSync(path.join(appDir, "node_modules", name, "package.json")),
+  );
+  if (missingPackages.length > 0) {
+    throw new Error(
+      `Octopus client dev server cannot start with missing packages (${missingPackages.join(", ")}); run \`npm ci --prefix app\` first.`,
+    );
+  }
 }
 
 function formatError(error: unknown) {

@@ -1,8 +1,32 @@
+const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
 const appRoot = path.resolve(__dirname, "..");
+
+function assertDevPrerequisites() {
+  let sqlite = null;
+  try {
+    sqlite = require("node:sqlite");
+  } catch (error) {
+    throw new Error(
+      `Octopus client dev requires Node.js with built-in node:sqlite (Node 24 LTS; current: ${process.versions.node}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (typeof sqlite?.DatabaseSync !== "function") {
+    throw new Error(`Octopus client dev requires Node.js with node:sqlite DatabaseSync (Node 24 LTS; current: ${process.versions.node}).`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+  const missing = Object.keys(manifest.dependencies ?? {}).filter(
+    (name) => !fs.existsSync(path.join(appRoot, "node_modules", name, "package.json")),
+  );
+  if (missing.length > 0) {
+    throw new Error(`Octopus client dev cannot start with missing packages (${missing.join(", ")}); run \`npm ci --prefix app\` first.`);
+  }
+}
+
+assertDevPrerequisites();
 const sync = spawnSync(process.execPath, [path.join(__dirname, "sync-gesture-assets.cjs")], {
   cwd: appRoot,
   stdio: "inherit",
