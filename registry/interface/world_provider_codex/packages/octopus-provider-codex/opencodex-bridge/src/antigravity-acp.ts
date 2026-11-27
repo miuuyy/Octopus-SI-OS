@@ -199,10 +199,18 @@ export async function downloadVerifiedArchive(
 ): Promise<void> {
   const timeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  const response = await (options.fetchImpl ?? fetch)(url, { signal, redirect: "error" });
+  const response = await (options.fetchImpl ?? fetch)(url, {
+    signal,
+    redirect: "error",
+    headers: { "accept-encoding": "identity" },
+  });
   if (!response.ok) throw new AntigravityAccountError("download_failed", `Google's Antigravity ACP server download answered HTTP ${response.status}.`);
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && /^\d+$/.test(contentLength.trim()) && Number(contentLength.trim()) !== expectedBytes) {
+  const encoding = response.headers.get("content-encoding")?.trim().toLowerCase() ?? "";
+  const compressed = encoding.length > 0 && encoding !== "identity";
+  const advertisedLength = compressed
+    ? response.headers.get("x-identity-content-length")
+    : response.headers.get("content-length");
+  if (advertisedLength !== null && /^\d+$/.test(advertisedLength.trim()) && Number(advertisedLength.trim()) !== expectedBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw new AntigravityAccountError("invalid_release", "Google's Antigravity ACP server archive does not match its pinned size.");
   }

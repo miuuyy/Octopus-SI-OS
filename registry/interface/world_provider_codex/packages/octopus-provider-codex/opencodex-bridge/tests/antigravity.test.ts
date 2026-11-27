@@ -231,12 +231,29 @@ test("Antigravity streams verified zip installation and diagnoses missing, corru
     }
 
     const progress: string[] = [];
+    let requestedAcceptEncoding: string | null = null;
     const paths = await installAntigravityAcp(directory, {
       hostKey: "linux-x64",
       assetOverride: syntheticAsset,
       onProgress: (message) => progress.push(message),
-      fetchImpl: (async () => streamedResponse(archive)) as typeof fetch,
+      fetchImpl: (async (_url, init) => {
+        requestedAcceptEncoding = new Headers(init?.headers).get("accept-encoding");
+        return new Response(new ReadableStream({
+          start(controller) {
+            for (let i = 0; i < archive.length; i += 257) controller.enqueue(archive.subarray(i, i + 257));
+            controller.close();
+          },
+        }), {
+          status: 200,
+          headers: {
+            "content-encoding": "gzip",
+            "content-length": String(Math.max(1, archive.length - 57)),
+            "x-identity-content-length": String(archive.length),
+          },
+        });
+      }) as typeof fetch,
     });
+    expect(requestedAcceptEncoding).toBe("identity");
     expect(progress).toEqual([`Downloading Google's Antigravity ACP server ${release.version}`, "Verifying the Antigravity ACP server"]);
     expect(await readFile(paths.executable)).toEqual(exeBytes);
     expect(await readFile(paths.harness)).toEqual(harnessBytes);
