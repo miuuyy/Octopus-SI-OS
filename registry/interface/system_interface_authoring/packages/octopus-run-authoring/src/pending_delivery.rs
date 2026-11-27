@@ -49,14 +49,13 @@ impl Ledger {
         self.observed_length = length;
         file.seek(std::io::SeekFrom::Start(self.offset))
             .map_err(|error| error.to_string())?;
-        let mut reader = std::io::BufReader::new(file);
+        let mut reader = std::io::BufReader::new(file.take(length - self.offset));
         loop {
             let row = match read_bounded_ledger_row(&mut reader, self.max_row_bytes)? {
                 BoundedLedgerRow::Complete(row) => row,
-                BoundedLedgerRow::Partial => {
-                    return Err("retained provider output requires a complete ledger prefix".into());
-                }
-                BoundedLedgerRow::Eof => return Ok(()),
+                // A writer can still be appending the last row. Its first byte
+                // remains at self.offset until its terminating newline arrives.
+                BoundedLedgerRow::Partial | BoundedLedgerRow::Eof => return Ok(()),
             };
             // Reading this interface's delivery evidence does not hydrate every
             // other interface's grants. The global cursor still checks every

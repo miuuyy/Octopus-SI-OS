@@ -299,12 +299,13 @@ pub(crate) async fn retain_completed_source_control(
     ctx: &InterfaceLiftContext, descriptor: &InterfaceDescriptor, auth: &CodexRuntimeAuth,
     driver: &mut Option<Arc<CodexAppServerInterfaceDriver>>, control: &CodexTurnControlBroker,
     interrupted: &InterruptedEffectArbiter, run: &RunId, turn: &QueuedTurn, handoff: &ProviderOutputHandoff,
+    outcomes: &[ProviderHandoffOutcome],
 ) -> Result<(), String> {
     if let Some(continuity) = interrupted.durable_continuity(run).await? {
         return control.publish_recovered_interrupted_pending(&continuity);
     }
-    let continuity = crate::handler::completed_source_pending_continuity(descriptor, &turn.envelope,
-        &handoff.current_run_record_bytes().await, &handoff.current_session_context_artifacts().await)
+    let continuity = crate::handler::completed_source_pending_continuity(ctx, descriptor, run, &turn.envelope, turn.seq, outcomes,
+        handoff.context_generation().await?, &handoff.current_session_context_artifacts().await)
         .map_err(|error| error.to_string())?;
     if let Some(continuity) = continuity {
         if driver.is_none() {
@@ -390,7 +391,7 @@ pub(crate) async fn restore_completed_provider_sources(
         let Some(proof) = crate::handler::stopped_result::prove(descriptor, &turn.envelope, source, &record, &context, &outcomes)
             .map_err(|error| error.to_string())? else {
                 let broker = CodexTurnControlBroker::new(Some(source));
-                retain_completed_source_control(ctx, descriptor, auth, driver, &broker, interrupted, &run, &turn, &handoff).await?;
+                retain_completed_source_control(ctx, descriptor, auth, driver, &broker, interrupted, &run, &turn, &handoff, &outcomes).await?;
                 if !broker.is_finished() { active_controls.lock().await.insert(run.to_string(), broker); }
                 continue;
             };

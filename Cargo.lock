@@ -5228,6 +5228,7 @@ dependencies = [
  "async-trait",
  "blake3",
  "libc",
+ "notify",
  "octopus-descriptors",
  "octopus-file-storage",
  "octopus-ledger",
@@ -5238,6 +5239,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -6185,7 +6188,6 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "libc",
- "notify",
  "octopus-descriptors",
  "octopus-interface-projection",
  "octopus-interface-transport",

@@ -190,10 +190,7 @@ pub(crate) fn parallel_drain_admits(
         AppServerEvent::ServerNotification(ServerNotification::Error(error)) => {
             matches!(provider_error_output(error), ProviderErrorOutput::Retrying(_))
         }
-        AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(completed)) => !matches!(
-            &completed.item,
-            ThreadItem::AgentMessage { phase: Some(MessagePhase::FinalAnswer), .. }
-        ),
+        AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(completed)) => completed.item.final_answer().is_none(),
         AppServerEvent::ServerNotification(_) => true,
         AppServerEvent::ServerRequest(ServerRequest::DynamicToolCall { params, .. }) => {
             !lifecycle_held && !native_tools.contains(&params.tool)

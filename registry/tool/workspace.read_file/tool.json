@@ -4,6 +4,7 @@
   "handler_config": {"operation": "read_file"},
   "process": {
     "bin": "target/debug/octopus-workspace-fs-tool",
+    "interrupted_effect_recovery": "reinvoke_exact_artifact",
     "inherit_env": ["PATH"],
     "authority": {
       "read_root_slots": ["registry_worker_environment_kind_root", "workspace_root"],

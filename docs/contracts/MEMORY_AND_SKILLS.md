@@ -65,6 +65,10 @@ affect whether the knowledge is usable. Useful failures and partial results can
 also be retained. Capture and consolidation preserve these distinctions and the
 entry's audience.
 
+For a forwarded input, the projection selects the original fields by its verified
+manifest label. A follow-up can quote an error message or an interruption
+receipt alongside the worker's answer.
+
 The projection's byte limit covers the complete artifact, including its model
 text and any original input attached after source verification. When it is too
 large, the package removes older optional evidence, counts omitted references,

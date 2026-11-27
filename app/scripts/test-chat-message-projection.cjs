@@ -421,6 +421,8 @@ test('provider labels keep their transcript meaning, row identity and movement o
   assert.equal(operatorChatEventKind(protocol.errorOutputLabel, protocol, {}), 'error');
   assert.equal(operatorChatEventKind('agent.message.delta', protocol, { phase: 'commentary' }), 'commentary_delta');
   assert.equal(operatorChatEventKind('agent.message.delta', protocol, { phase: 'final_answer' }), 'message_delta');
+  assert.equal(operatorChatEventKind('agent.message.delta', protocol, {phase:'final_answer',delivery:'async'}), 'commentary_delta');
+  assert.equal(operatorChatEventKind('turn.agent_message', protocol, {phase:'final_answer',delivery:'async'}), 'commentary');
   assert.equal(operatorChatEventKind('turn.reasoning.delta', protocol, {}), 'reasoning_delta');
   assert.equal(operatorChatEventKind('turn.context.compaction', protocol, {}), 'compaction');
   assert.equal(operatorChatEventText({ text: 'summary' }, 'compaction'), '');

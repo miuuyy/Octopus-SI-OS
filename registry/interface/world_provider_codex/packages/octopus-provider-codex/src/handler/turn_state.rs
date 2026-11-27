@@ -361,11 +361,7 @@ impl NativeTerminalEvidence {
             return Err(InterfaceDriverError::FailedClosed("native terminal notification conflicts with the exact thread/read evidence".into()));
         }
         let mut outputs = Vec::new();
-        let finals = turn.items.iter().filter_map(|item| match item {
-            ThreadItem::AgentMessage { id, text, phase: Some(MessagePhase::FinalAnswer) } => Some((id, text)),
-            _ => None,
-        }).collect::<Vec<_>>();
-        if !finals.is_empty() || turn.status == TurnStatus::Completed {
+        if turn.status == TurnStatus::Completed || turn.items.iter().any(|item| item.final_answer().is_some()) {
             let (id, text) = completed_turn_final_message(&turn)?;
             let mut output = CodexTurnOutput::final_message(&self.thread_id, &turn.id, id, text, None);
             if let Some(completed_at_ms) = self.turn.get("items").and_then(serde_json::Value::as_array)

@@ -1496,7 +1496,7 @@ impl RunAffordances {
                 exact_string(&tier, "service_tier")?;
                 Some(tier)
             }
-            None if same_provider => defaults.service_tier.clone(),
+            None if same_model => defaults.service_tier.clone(),
             None => None,
         };
         Ok(RunCompositionRequest {

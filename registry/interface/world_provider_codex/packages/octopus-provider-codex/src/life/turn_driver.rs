@@ -144,7 +144,7 @@ pub(crate) async fn drive_turn_with_retries_inner(
             interrupted_effects
                 .recover_completed_source(run, turn.seq, &recovered_outcomes)
                 .await?;
-            retain_completed_source_control(ctx, descriptor, runtime_auth, driver, control, interrupted_effects, run, &turn, &handoff).await?;
+            retain_completed_source_control(ctx, descriptor, runtime_auth, driver, control, interrupted_effects, run, &turn, &handoff, &recovered_outcomes).await?;
             return Ok(());
         }
         ProviderSourceRecovery::Interrupted {
@@ -511,7 +511,7 @@ pub(crate) async fn drive_turn_with_retries_inner(
                         interrupted_effects
                             .recover_completed_source(run, turn.seq, &recovered_outcomes)
                             .await?;
-                        retain_completed_source_control(ctx, descriptor, runtime_auth, driver, control, interrupted_effects, run, &turn, &handoff).await?;
+                        retain_completed_source_control(ctx, descriptor, runtime_auth, driver, control, interrupted_effects, run, &turn, &handoff, &recovered_outcomes).await?;
                         return Ok(());
                     }
                     ProviderSourceRecovery::Interrupted {

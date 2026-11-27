@@ -1573,9 +1573,10 @@ fn switched_provider_and_model_resolve_target_defaults_and_reject_unsupported_ef
     let mut request = fixture(root);
     let fixture_path = "registry/interface/world_provider_fixture/interface.json";
     let mut primary: Value = serde_json::from_slice(&std::fs::read(root.join(fixture_path)).unwrap()).unwrap();
+    primary["interface_driver_config"]["private_config"]["service_tier"] = json!("ultrafast");
     primary["interface_driver_config"]["private_config"]["model_catalog"] = json!([
-        {"model": "fixture-a", "default_reasoning_effort": "xhigh", "supported_reasoning_efforts": ["xhigh"]},
-        {"model": "fixture-b", "default_reasoning_effort": "low", "supported_reasoning_efforts": ["low", "high"]}
+        {"model": "fixture-a", "service_tiers": [{"id":"ultrafast"}], "default_reasoning_effort": "xhigh", "supported_reasoning_efforts": ["xhigh"]},
+        {"model": "fixture-b", "service_tiers": [{"id":"priority"}], "default_reasoning_effort": "low", "supported_reasoning_efforts": ["low", "high"]}
     ]);
     write(root, fixture_path, primary);
     let mut secondary: Value = serde_json::from_slice(&std::fs::read(root.join(fixture_path)).unwrap()).unwrap();
@@ -1602,9 +1603,17 @@ fn switched_provider_and_model_resolve_target_defaults_and_reject_unsupported_ef
         }
         write(root, file, value);
     }
+    assert_eq!(plan_run_composition(&request).unwrap().service_tier.as_deref(), Some("ultrafast"));
     request.model = "fixture-b".into();
     request.reasoning_effort = String::new();
-    assert_eq!(plan_run_composition(&request).unwrap().reasoning_effort, "low");
+    let target = plan_run_composition(&request).unwrap();
+    assert_eq!(target.reasoning_effort, "low");
+    assert_eq!(target.service_tier, None);
+    request.service_tier = Some("ultrafast".into());
+    assert!(plan_run_composition(&request).unwrap_err().contains("does not support service tier"));
+    request.service_tier = Some("priority".into());
+    assert_eq!(plan_run_composition(&request).unwrap().service_tier.as_deref(), Some("priority"));
+    request.service_tier = None;
     request.provider_interface_id = "world_provider_other".into();
     request.model = String::new();
     let switched = plan_run_composition(&request).unwrap();

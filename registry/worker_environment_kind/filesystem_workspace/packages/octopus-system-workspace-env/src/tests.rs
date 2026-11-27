@@ -333,6 +333,8 @@ async fn read_file_returns_bounded_utf8_content_with_exact_continuation_offset()
         load_tool_descriptor_from_dir(&registry_root().join("tool"), "workspace.read_file")
             .unwrap()
             .unwrap();
+    assert_eq!(descriptor.process.interrupted_effect_recovery,
+        octopus_tool_registry::ToolInterruptedEffectRecovery::ReinvokeExactArtifact);
     let fs = Arc::new(MemoryFs::default());
     let root = std::env::current_dir().unwrap();
     fs.files

@@ -62,7 +62,9 @@ export function providerServiceTierAvailable(provider: OctopusProviderInterface,
 }
 
 export function providerSelectedServiceTier(provider: OctopusProviderInterface, model: string, tier = "") {
-  return tier || provider.serviceTier || providerSelectedModel(provider, model)?.defaultServiceTier || "default";
+  const selected = providerSelectedModel(provider, model);
+  const configured = selected?.model === provider.model ? provider.serviceTier : "";
+  return tier || configured || selected?.defaultServiceTier || "default";
 }
 
 export function providerDefaultReasoningEffort(

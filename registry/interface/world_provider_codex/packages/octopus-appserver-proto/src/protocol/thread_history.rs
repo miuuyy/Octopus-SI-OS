@@ -296,7 +296,7 @@ impl ThreadHistoryBuilder {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => {
-                self.handle_agent_message(payload.message.clone(), payload.phase.clone())
+                self.handle_agent_message(payload.message.clone(), payload.phase.clone(), payload.delivery)
             }
             EventMsg::AgentReasoning(payload) => self.handle_agent_reasoning(payload),
             EventMsg::AgentReasoningRawContent(payload) => {
@@ -440,13 +440,13 @@ impl ThreadHistoryBuilder {
         });
     }
 
-    fn handle_agent_message(&mut self, text: String, phase: Option<MessagePhase>) {
+    fn handle_agent_message(&mut self, text: String, phase: Option<MessagePhase>, delivery: Option<octopus_protocol::models::AgentMessageDelivery>) {
         if text.is_empty() {
             return;
         }
 
         let id = self.next_item_id();
-        self.push_item_in_current_turn(ThreadItem::AgentMessage { id, text, phase });
+        self.push_item_in_current_turn(ThreadItem::AgentMessage { id, text, phase, delivery });
     }
 
     fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
@@ -1558,6 +1558,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "Hi there".into(),
                 phase: None,
             }),
@@ -1576,6 +1577,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "Reply two".into(),
                 phase: None,
             }),
@@ -1612,6 +1614,7 @@ mod tests {
         assert_eq!(
             first.items[1],
             ThreadItem::AgentMessage {
+                delivery: None,
                 id: "item-2".into(),
                 text: "Hi there".into(),
                 phase: None,
@@ -1644,6 +1647,7 @@ mod tests {
         assert_eq!(
             second.items[1],
             ThreadItem::AgentMessage {
+                delivery: None,
                 id: "item-5".into(),
                 text: "Reply two".into(),
                 phase: None,
@@ -1862,6 +1866,7 @@ mod tests {
     #[test]
     fn preserves_agent_message_phase_in_history() {
         let events = vec![EventMsg::AgentMessage(AgentMessageEvent {
+            delivery: None,
             message: "Final reply".into(),
             phase: Some(CoreMessagePhase::FinalAnswer),
         })];
@@ -1875,6 +1880,7 @@ mod tests {
         assert_eq!(
             turns[0].items[0],
             ThreadItem::AgentMessage {
+                delivery: None,
                 id: "item-1".into(),
                 text: "Final reply".into(),
                 phase: Some(MessagePhase::FinalAnswer),
@@ -1967,6 +1973,7 @@ mod tests {
                 text: "first content".into(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "interlude".into(),
                 phase: None,
             }),
@@ -2014,6 +2021,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "Working...".into(),
                 phase: None,
             }),
@@ -2032,6 +2040,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "Second attempt complete.".into(),
                 phase: None,
             }),
@@ -2061,6 +2070,7 @@ mod tests {
         assert_eq!(
             first_turn.items[1],
             ThreadItem::AgentMessage {
+                delivery: None,
                 id: "item-2".into(),
                 text: "Working...".into(),
                 phase: None,
@@ -2084,6 +2094,7 @@ mod tests {
         assert_eq!(
             second_turn.items[1],
             ThreadItem::AgentMessage {
+                delivery: None,
                 id: "item-4".into(),
                 text: "Second attempt complete.".into(),
                 phase: None,
@@ -2103,6 +2114,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "A1".into(),
                 phase: None,
             }),
@@ -2115,6 +2127,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "A2".into(),
                 phase: None,
             }),
@@ -2128,6 +2141,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "A3".into(),
                 phase: None,
             }),
@@ -2156,6 +2170,7 @@ mod tests {
                     }],
                 },
                 ThreadItem::AgentMessage {
+                    delivery: None,
                     id: "item-2".into(),
                     text: "A1".into(),
                     phase: None,
@@ -2174,6 +2189,7 @@ mod tests {
                     }],
                 },
                 ThreadItem::AgentMessage {
+                    delivery: None,
                     id: "item-4".into(),
                     text: "A3".into(),
                     phase: None,
@@ -2194,6 +2210,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "A1".into(),
                 phase: None,
             }),
@@ -2206,6 +2223,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "A2".into(),
                 phase: None,
             }),
@@ -3166,6 +3184,7 @@ mod tests {
                 time_to_first_token_ms: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "still in b".into(),
                 phase: None,
             }),
@@ -3236,6 +3255,7 @@ mod tests {
                 duration_ms: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "still in b".into(),
                 phase: None,
             }),
@@ -3484,6 +3504,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                delivery: None,
                 message: "done".into(),
                 phase: None,
             }),

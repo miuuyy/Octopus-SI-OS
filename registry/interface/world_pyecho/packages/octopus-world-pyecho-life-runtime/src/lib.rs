@@ -11,8 +11,9 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
+use octopus_interfaces::ledger_wake::{HostedLedgerWake, LedgerWakeSource};
 #[cfg(not(target_os = "macos"))]
-use notify::{RecursiveMode, Watcher};
+use octopus_interfaces::ledger_wake::LedgerChangeWatch;
 use octopus_descriptors::InterfaceId;
 use octopus_interface_transport::{
     ActivationStart, ActivationStartFn, InterfaceActivationArrival, InterfaceHostIoLimits,
@@ -715,6 +716,7 @@ struct SpawnedEvidenceLine {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum SpawnedLifeOutput {
     Ready,
+    WaitForLedger,
     Arrival {
         request_id: Option<u64>,
         artifact_manifest_path: PathBuf,
@@ -748,6 +750,7 @@ enum SpawnedLifeEmissionArtifact {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum SpawnedLifeInput {
+    LedgerChanged,
     DeliveryVerdict {
         request_id: u64,
         verdict: DeliveryVerdict,
@@ -761,11 +764,14 @@ enum SpawnedLifeInput {
 pub async fn run_spawned_interface_life(life: InterfaceLiftFn) -> Result<(), String> {
     let (arrivals, arrival_rx) = tokio::sync::mpsc::channel(64);
     let (emissions, emission_rx) = tokio::sync::mpsc::channel(64);
-    let ctx = spawned_context_from_env(arrivals, emissions)?;
+    let pending = PendingRequests::default();
+    let mut ctx = spawned_context_from_env(arrivals, emissions)?;
+    if cfg!(target_os = "linux") {
+        ctx.ledger_wake = LedgerWakeSource::Host(pending.ledger.clone());
+    }
     let host_io_limits = ctx.required_host_io_limits()?;
     let (ctx, readiness, publication) = ctx.with_readiness_publication_channel();
 
-    let pending = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
     let output = pump_spawned_life_outputs(
         arrival_rx,
         emission_rx,
@@ -864,7 +870,13 @@ enum SpawnedReply {
     Retained(tokio::sync::oneshot::Sender<Result<octopus_ledger::ArtifactDelivery, String>>),
 }
 
-type PendingVerdicts = Arc<tokio::sync::Mutex<BTreeMap<u64, SpawnedReply>>>;
+#[derive(Default)]
+struct SpawnedRequests {
+    verdicts: tokio::sync::Mutex<BTreeMap<u64, SpawnedReply>>,
+    ledger: HostedLedgerWake,
+}
+
+type PendingRequests = Arc<SpawnedRequests>;
 
 #[cfg(test)]
 #[path = "../tests/support/spawned.rs"]
@@ -875,7 +887,7 @@ async fn pump_spawned_life_outputs(
     emissions: tokio::sync::mpsc::Receiver<SystemInterfaceEmission>,
     readiness: tokio::sync::oneshot::Receiver<Result<(), String>>,
     publication: octopus_interface_transport::InterfaceLifeReadyPublication,
-    pending: PendingVerdicts,
+    pending: PendingRequests,
     maximum_frame_bytes: u64,
 ) -> Result<(), String> {
     pump_spawned_life_outputs_to(arrivals, emissions, readiness, publication, pending, maximum_frame_bytes, &mut std::io::stdout()).await
@@ -886,7 +898,7 @@ async fn pump_spawned_life_outputs_to(
     mut emissions: tokio::sync::mpsc::Receiver<SystemInterfaceEmission>,
     readiness: tokio::sync::oneshot::Receiver<Result<(), String>>,
     publication: octopus_interface_transport::InterfaceLifeReadyPublication,
-    pending: PendingVerdicts,
+    pending: PendingRequests,
     maximum_frame_bytes: u64,
     stdout: &mut impl std::io::Write,
 ) -> Result<(), String> {
@@ -906,6 +918,7 @@ async fn pump_spawned_life_outputs_to(
                     .map_err(|_| "spawned life readiness channel closed".to_string())??;
                 SpawnedLifeOutput::Ready
             }
+            _ = pending.ledger.requested() => SpawnedLifeOutput::WaitForLedger,
             arrival = arrivals.recv() => {
                 let arrival = arrival
                     .ok_or_else(|| "spawned life arrival channel closed".to_string())?;
@@ -952,7 +965,7 @@ async fn pump_spawned_life_outputs_to(
 
 async fn spawned_arrival_output(
     arrival: InterfaceActivationArrival,
-    pending: &PendingVerdicts,
+    pending: &PendingRequests,
     next_request_id: &mut u64,
 ) -> Result<SpawnedLifeOutput, String> {
     let InterfaceActivationArrival { artifact, interface: _, evidence, verdict_tx, retained } = arrival;
@@ -977,7 +990,7 @@ async fn spawned_arrival_output(
 }
 
 async fn register_spawned_verdict(
-    pending: &PendingVerdicts,
+    pending: &PendingRequests,
     next_request_id: &mut u64,
     verdict_tx: Option<tokio::sync::oneshot::Sender<DeliveryVerdict>>,
 ) -> Result<Option<u64>, String> {
@@ -988,7 +1001,7 @@ async fn register_spawned_verdict(
 }
 
 async fn register_required_spawned_verdict(
-    pending: &PendingVerdicts,
+    pending: &PendingRequests,
     next_request_id: &mut u64,
     verdict_tx: tokio::sync::oneshot::Sender<DeliveryVerdict>,
 ) -> Result<u64, String> {
@@ -996,7 +1009,7 @@ async fn register_required_spawned_verdict(
 }
 
 async fn register_spawned_reply(
-    pending: &PendingVerdicts,
+    pending: &PendingRequests,
     next_request_id: &mut u64,
     reply: SpawnedReply,
 ) -> Result<u64, String> {
@@ -1004,7 +1017,7 @@ async fn register_spawned_reply(
     *next_request_id = next_request_id
         .checked_add(1)
         .ok_or_else(|| "spawned life request id overflow".to_string())?;
-    match pending.lock().await.entry(request_id) {
+    match pending.verdicts.lock().await.entry(request_id) {
         std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(reply); }
         std::collections::btree_map::Entry::Occupied(_) => return Err("spawned life request id already has a reply contract".into()),
     }
@@ -1012,7 +1025,7 @@ async fn register_spawned_reply(
 }
 
 async fn pump_spawned_life_inputs(
-    pending: PendingVerdicts,
+    pending: PendingRequests,
     maximum_frame_bytes: u64,
 ) -> Result<(), String> {
     let mut lines = BoundedJsonLineReader::new(tokio::io::stdin(), maximum_frame_bytes)?;
@@ -1024,11 +1037,12 @@ async fn pump_spawned_life_inputs(
     Err("spawned life input closed".to_string())
 }
 
-async fn accept_spawned_life_input(pending: &PendingVerdicts, input: SpawnedLifeInput) -> Result<(), String> {
+async fn accept_spawned_life_input(pending: &PendingRequests, input: SpawnedLifeInput) -> Result<(), String> {
     let request_id = match &input {
+        SpawnedLifeInput::LedgerChanged => return pending.ledger.acknowledge(),
         SpawnedLifeInput::DeliveryVerdict { request_id, .. } | SpawnedLifeInput::RetainedDelivery { request_id, .. } => *request_id,
     };
-    let reply = pending.lock().await.remove(&request_id)
+    let reply = pending.verdicts.lock().await.remove(&request_id)
         .ok_or_else(|| format!("spawned life received unknown request id {request_id}"))?;
     match (reply, input) {
         (SpawnedReply::Ordinary(sender), SpawnedLifeInput::DeliveryVerdict { verdict, .. }) => { let _ = sender.send(verdict); }
@@ -1147,6 +1161,7 @@ pub struct LedgerTailReader {
     resume_without_wait: bool,
     foreign_catch_up_pending: bool,
     returned_own_through: TailCursor,
+    wake_source: LedgerWakeSource,
     change_watch: Option<LedgerChangeWatch>,
 }
 
@@ -1229,12 +1244,6 @@ impl LedgerReplayReader {
             cursor: TailCursor::default(),
         })
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-struct LedgerChangeWatch {
-    _watcher: notify::RecommendedWatcher,
-    events: tokio::sync::mpsc::UnboundedReceiver<notify::Result<notify::Event>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -1383,6 +1392,7 @@ impl LedgerTailReader {
             resume_without_wait: false,
             foreign_catch_up_pending: false,
             returned_own_through: cursor,
+            wake_source: ctx.ledger_wake.clone(),
             change_watch: None,
         })
     }
@@ -1623,7 +1633,7 @@ impl LedgerTailReader {
             return Ok(());
         }
         if self.change_watch.is_none() {
-            self.change_watch = Some(ledger_change_watch(&self.movements_path)?);
+            self.change_watch = Some(ledger_change_watch(&self.movements_path, &self.wake_source)?);
             return Ok(());
         }
         self.change_watch
@@ -1790,27 +1800,6 @@ impl LedgerTailReader {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-impl LedgerChangeWatch {
-    async fn wait(&mut self, cancel: &CancellationToken, path: &Path) -> Result<(), String> {
-        let event = tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
-            event = self.events.recv() => event,
-        };
-        match event {
-            Some(Ok(_)) => Ok(()),
-            Some(Err(error)) => Err(format!(
-                "ledger '{}' filesystem watcher failed: {error}",
-                path.display()
-            )),
-            None => Err(format!(
-                "ledger '{}' filesystem watcher channel closed",
-                path.display()
-            )),
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 impl LedgerChangeWatch {
     async fn wait(&mut self, cancel: &CancellationToken, path: &Path) -> Result<(), String> {
@@ -1829,53 +1818,12 @@ impl LedgerChangeWatch {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn ledger_event_reports_a_change(event: &notify::Event) -> bool {
-    use notify::event::{AccessKind, AccessMode};
-    event.need_rescan()
-        || !matches!(
-            event.kind,
-            notify::EventKind::Access(
-                AccessKind::Read | AccessKind::Open(_) | AccessKind::Close(AccessMode::Read)
-            )
-        )
-}
-
-#[cfg(not(target_os = "macos"))]
-fn ledger_change_watch(path: &Path) -> Result<LedgerChangeWatch, String> {
-    if !path.is_file() {
-        return Err(format!(
-            "ledger '{}' must exist before an interface reader starts",
-            path.display()
-        ));
-    }
-    let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.as_ref().map_or(true, ledger_event_reports_a_change) {
-            let _ = tx.send(event);
-        }
-    })
-    .map_err(|error| {
-        format!(
-            "ledger '{}' filesystem watcher cannot be created: {error}",
-            path.display()
-        )
-    })?;
-    watcher
-        .watch(path, RecursiveMode::NonRecursive)
-        .map_err(|error| {
-            format!(
-                "ledger file '{}' cannot be watched: {error}",
-                path.display()
-            )
-        })?;
-    Ok(LedgerChangeWatch {
-        _watcher: watcher,
-        events,
-    })
+fn ledger_change_watch(path: &Path, source: &LedgerWakeSource) -> Result<LedgerChangeWatch, String> {
+    source.subscribe(path)
 }
 
 #[cfg(target_os = "macos")]
-fn ledger_change_watch(path: &Path) -> Result<LedgerChangeWatch, String> {
+fn ledger_change_watch(path: &Path, _source: &LedgerWakeSource) -> Result<LedgerChangeWatch, String> {
     use std::os::fd::AsRawFd;
 
     let file = std::fs::File::open(path).map_err(|error| {

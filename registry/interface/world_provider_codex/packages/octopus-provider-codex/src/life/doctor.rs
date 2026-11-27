@@ -34,7 +34,8 @@ pub(crate) fn doctor_interface(expectation: ProviderLifeExpectation) -> Result<(
                     octopus_interface_transport::RESOLVED_INTERFACE_DESCRIPTOR_ENV
                 )
             })?;
-    validate_provider_descriptor_contract(&descriptor, expectation).map(|_| ())
+    validate_provider_descriptor_contract(&descriptor, expectation)?;
+    CodexInstanceConfig::from_descriptor(&descriptor).map_err(|error| error.to_string())?.check_working_directory()
 }
 
 pub(crate) fn validate_provider_descriptor_contract(

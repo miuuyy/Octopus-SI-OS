@@ -760,7 +760,13 @@ pub(crate) fn intent_control_continuity(
     let runtime = invocation_runtime_metadata(input)?;
     let value: serde_json::Value = serde_json::from_slice(&intent.payload).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
     let state = parse_codex_continuity(&value[CODEX_CONTINUITY_FIELD], &runtime.interface, runtime.run.as_str())?;
-    let pending = state.pending.as_ref().ok_or_else(|| InterfaceDriverError::FailedClosed("saved pending output has no native wait".into()))?;
+    if state.pending.is_none() || state.interrupted_pending.is_some() {
+        return Err(InterfaceDriverError::FailedClosed("saved pending output has no ordinary native wait".into()));
+    }
+    let correlation = value["correlation_id"].as_str().ok_or_else(||
+        InterfaceDriverError::FailedClosed("saved tool output has no correlation id".into()))?;
+    let pending = state.outstanding_call(&format!("tool:{correlation}")).ok_or_else(||
+        InterfaceDriverError::FailedClosed("saved tool output has no matching native wait".into()))?;
     let CodexPendingContinuity::DynamicTool { tool, call_id, .. } = pending else {
         return Err(InterfaceDriverError::FailedClosed("saved tool output has a different native wait".into()));
     };

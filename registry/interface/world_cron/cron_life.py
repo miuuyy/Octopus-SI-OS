@@ -41,6 +41,7 @@ ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*\Z")
 REGISTRY_ID = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 TIME_LABEL = "cron.current_time"
 HOLD_POLL_SECONDS = 1.0
+RECORD_READ_RETRY_SECONDS = 1.0
 
 _NEXT_REQUEST_ID = 1
 _TEMP_SEQUENCE = 1
@@ -103,6 +104,19 @@ def load_json_object(path, label, maximum_bytes, private=False):
 
 class FileChangedDuringRead(RuntimeError):
     pass
+
+
+def read_observed_record(path, label):
+    deadline = time.monotonic() + RECORD_READ_RETRY_SECONDS
+    while True:
+        try:
+            return load_json_object(path, label, MAX_RUN_RECORD_BYTES)
+        except FileChangedDuringRead:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.01, remaining))
+            if time.monotonic() >= deadline:
+                raise
 
 
 def read_regular_file_bounded(path, maximum_bytes, label, private=False):
@@ -1174,7 +1188,7 @@ def working_pinning_runs():
         if not entry.name.endswith(".json"):
             continue
         try:
-            run = load_json_object(entry.path, "pinning run", MAX_RUN_RECORD_BYTES)
+            run = read_observed_record(entry.path, "pinning run")
             active = run.get("active_checkpoints")
             checkpoints = run.get("checkpoints")
             if run.get("id") != entry.name[:-5] or not isinstance(active, list) or not isinstance(checkpoints, list):
@@ -1487,7 +1501,7 @@ class RunActivity:
         fingerprint = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
         cached = self.documents.get(path)
         if cached is None or cached[0] != fingerprint:
-            cached = (fingerprint, load_json_object(path, "inactivity source", MAX_RUN_RECORD_BYTES))
+            cached = (fingerprint, read_observed_record(path, "inactivity source"))
             self.documents[path] = cached
         return cached[1]
 

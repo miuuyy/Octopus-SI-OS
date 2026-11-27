@@ -504,6 +504,13 @@ impl CodexTurnOutput {
         )
     }
 
+    pub(crate) fn with_message_delivery(mut self, delivery: Option<octopus_protocol::models::AgentMessageDelivery>) -> Self {
+        if let Some(delivery) = delivery {
+            self.value["delivery"] = serde_json::json!(delivery);
+        }
+        self
+    }
+
     pub(crate) fn scoped_message_delta(
         seq: u64,
         text: String,

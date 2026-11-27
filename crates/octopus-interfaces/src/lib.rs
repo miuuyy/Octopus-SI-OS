@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod worker_interface_registry;
+#[cfg(feature = "ledger-wake")]
+pub mod ledger_wake;
 pub use worker_interface_registry::{
     dangling_worker_interface_refs, interface_is_worker_pin, load_worker_interface_policies,
     scan_worker_interface_policies, DanglingWorkerInterfaceRef, WorkerInterfacePolicyScan,
@@ -434,6 +436,8 @@ pub enum InterfaceArtifactFileError {
         path: String,
         detail: &'static str,
     },
+    #[error("interface artifact {surface} '{path}' changed during read")]
+    ChangedDuringRead { surface: &'static str, path: String },
     #[error("interface artifact carrier '{path}' was handed to the runtime before capture")]
     UncapturedCarrier { path: String },
 }
@@ -1111,10 +1115,8 @@ fn read_open_regular_file_stable_bounded(
         .metadata()
         .map_err(|source| surface.read_error(path, source))?;
     if observed != before.len() || !same_open_file_state(&before, &after) {
-        return Err(InterfaceArtifactFileError::UnsafeCarrier {
-            surface: surface.name(),
-            path: path.display().to_string(),
-            detail: "file identity or content metadata changed during read",
+        return Err(InterfaceArtifactFileError::ChangedDuringRead {
+            surface: surface.name(), path: path.display().to_string(),
         });
     }
     Ok(bytes)

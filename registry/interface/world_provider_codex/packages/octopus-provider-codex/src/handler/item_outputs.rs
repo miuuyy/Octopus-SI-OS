@@ -318,6 +318,7 @@ pub(crate) fn completed_agent_message_output(
     item_id: &str,
     text: &str,
     phase: Option<MessagePhase>,
+    delivery: Option<octopus_protocol::models::AgentMessageDelivery>,
     thread_id: &str,
     turn_id: &str,
     completed_at_ms: i64,
@@ -333,7 +334,7 @@ pub(crate) fn completed_agent_message_output(
             "completed_at_ms": completed_at_ms,
             "lifecycle": "completed",
         }),
-    )
+    ).with_message_delivery(delivery)
 }
 
 pub(crate) fn completed_turn_final_message(
@@ -346,25 +347,18 @@ pub(crate) fn completed_turn_final_message(
         )));
     }
     let mut final_message = None;
-    for item in &turn.items {
-        if let ThreadItem::AgentMessage {
-            id,
-            text,
-            phase: Some(MessagePhase::FinalAnswer),
-        } = item
-        {
-            if final_message.replace((id.as_str(), text.as_str())).is_some() {
-                return Err(InterfaceDriverError::FailedClosed(format!(
-                    "Codex completed turn '{}' has multiple explicit final-answer items",
-                    turn.id,
-                )));
-            }
-            if id.trim().is_empty() {
-                return Err(InterfaceDriverError::FailedClosed(format!(
-                    "Codex completed turn '{}' has a final-answer item without identity",
-                    turn.id,
-                )));
-            }
+    for (id, text) in turn.items.iter().filter_map(ThreadItem::final_answer) {
+        if final_message.replace((id, text)).is_some() {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "Codex completed turn '{}' has multiple explicit final-answer items",
+                turn.id,
+            )));
+        }
+        if id.trim().is_empty() {
+            return Err(InterfaceDriverError::FailedClosed(format!(
+                "Codex completed turn '{}' has a final-answer item without identity",
+                turn.id,
+            )));
         }
     }
     final_message.ok_or_else(|| {

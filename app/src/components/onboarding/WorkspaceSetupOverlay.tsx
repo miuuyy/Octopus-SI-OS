@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import "../account/account.css";
 import "../catalog/application-artwork.css";
-import { providerServiceTiers, providerServiceTierAvailable } from "../chat/chatWorkspaceCapabilities";
+import { providerSelectedServiceTier, providerServiceTiers, providerServiceTierAvailable } from "../chat/chatWorkspaceCapabilities";
 import type { OctopusProviderInterface } from "../../electron";
 import {
   compileWorkspaceSetupDraft,
@@ -1261,7 +1261,7 @@ function defaultDraftSelectionForProvider(
     && selected.supportedReasoningEfforts.includes(homeRecipe.default_reasoning_effort)
     ? homeRecipe.default_reasoning_effort
     : selected.defaultReasoningEffort || (selected.model === provider.model ? provider.reasoningEffort ?? "" : "");
-  const serviceTier = provider.serviceTier || selected.defaultServiceTier || "default";
+  const serviceTier = providerSelectedServiceTier(provider, selected.model);
   const voiceProviderModel = requiresSeparateVoiceSelection(provider.id, homeRecipe, voiceProvider)
     ? defaultVoiceModelId(voiceProvider)
     : undefined;

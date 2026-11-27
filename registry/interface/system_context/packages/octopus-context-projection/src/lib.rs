@@ -182,6 +182,12 @@ impl ContextProjectionConfig {
                     origin.sequence_pointer.clone(),
                 ])?;
                 validate_pointers(&origin.pointers)?;
+                for (label, pointers) in &origin.pointers_by_label {
+                    if !exact(label) {
+                        return Err("original input field selection requires an exact artifact label".into());
+                    }
+                    validate_pointers(pointers)?;
+                }
             }
         }
         validate_pointers(&self.terminal_pointers)?;
@@ -246,6 +252,11 @@ fn input_pointers(rule: &ProjectionRule, payload: &Value) -> Result<Vec<String>,
         return Err("a whole-payload input carries no members".into());
     }
     Ok(pointers)
+}
+
+fn original_input_fields(origin: &SnapshotInputOrigin, label: &str, payload: &Value, limit: usize) -> Result<(Value, Vec<Value>), String> {
+    let pointers = origin.pointers_by_label.get(label).unwrap_or(&origin.pointers);
+    fields(payload, pointers, limit, true)
 }
 
 fn fields(
@@ -1020,14 +1031,13 @@ fn project_source(
                     .ok_or("selected source input has no declared original artifact")?,
             )
             .map_err(|e| e.to_string())?;
-            let captured =
-                octopus_run_authoring::snapshot_projection::read_source_artifact(
+            let (original_label, captured) =
+                octopus_run_authoring::snapshot_projection::read_labeled_source_artifact(
                     ctx,
                     &reference,
                     u64::MAX,
                 )?;
-            let (original, trimmed) =
-                fields(&captured, &origin.pointers, config.bounds.max_field_bytes, true)?;
+            let (original, trimmed) = original_input_fields(origin, &original_label, &captured, config.bounds.max_field_bytes)?;
             output["selected_input"]["original_fields"] = original;
             if !trimmed.is_empty() {
                 output["selected_input"]["original_trimmed_fields"] = json!(trimmed);

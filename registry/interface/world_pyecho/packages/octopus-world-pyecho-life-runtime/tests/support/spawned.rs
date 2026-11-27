@@ -14,7 +14,7 @@ async fn provider_bridge_preserves_retained_delivery_and_reply_contract() {
         max_manifest_bytes: 65536, max_payload_bytes: 65536,
     }).unwrap();
     let artifact = InterfaceArtifactFile::write(root.path(), "provider.output", b"payload").unwrap();
-    let pending: PendingVerdicts = Arc::new(tokio::sync::Mutex::new(BTreeMap::new()));
+    let pending: PendingRequests = PendingRequests::default();
     let mut next = 1;
     for expected in [
         Ok(octopus_ledger::ArtifactDelivery::Pending { scope_seq: 5 }),
@@ -33,7 +33,7 @@ async fn provider_bridge_preserves_retained_delivery_and_reply_contract() {
         };
         let (result, ()) = tokio::join!(caller, host);
         assert_eq!(result, expected);
-        assert!(pending.lock().await.is_empty());
+        assert!(pending.verdicts.lock().await.is_empty());
     }
     let caller = ctx.hand_arrival(artifact.clone(), Vec::new());
     let host = async {
@@ -57,7 +57,7 @@ async fn provider_bridge_preserves_retained_delivery_and_reply_contract() {
         retained: Some(octopus_interface_transport::RetainedInterfaceArrival { id: "original".into(), reply }),
     };
     assert!(spawned_arrival_output(invalid, &pending, &mut next).await.is_err());
-    assert!(pending.lock().await.is_empty());
+    assert!(pending.verdicts.lock().await.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -110,7 +110,7 @@ async fn ready_publication_precedes_synchronous_backlog() {
         std::future::pending::<Result<(), String>>().await
     };
     let output = pump_spawned_life_outputs_to(arrival_rx, emission_rx, readiness, publication,
-        Arc::new(tokio::sync::Mutex::new(BTreeMap::new())), 65536, &mut writer);
+        PendingRequests::default(), 65536, &mut writer);
     let receipt = async { (published.await.unwrap(), backlog_rx.await.unwrap()) };
     let (published, published_before_backlog) = tokio::select! {
         biased;
@@ -129,7 +129,7 @@ async fn ready_publication_precedes_synchronous_backlog() {
         let mut writer = Writer { bytes: Vec::new(), flushed: Arc::new(AtomicBool::new(false)), receipt: None, failure: Some(failure) };
         let mut ready = Box::pin(ctx.signal_ready());
         let output = pump_spawned_life_outputs_to(arrival_rx, emission_rx, readiness, publication,
-            Arc::new(tokio::sync::Mutex::new(BTreeMap::new())), if failure == "bound" { 1 } else { 65536 }, &mut writer);
+            PendingRequests::default(), if failure == "bound" { 1 } else { 65536 }, &mut writer);
         let refused = tokio::select! {
             biased;
             result = &mut ready => panic!("readiness escaped a failed publisher: {result:?}"),

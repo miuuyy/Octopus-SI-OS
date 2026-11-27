@@ -6263,6 +6263,7 @@ while IFS= read -r _; do :; done
     fn unmapped_items_are_skipped_not_fabricated() {
         assert!(
             rich_item_output(ThreadItem::AgentMessage {
+                delivery: None,
                 id: "msg-1".into(),
                 text: "hello".into(),
                 phase: None,
@@ -6543,7 +6544,7 @@ while IFS= read -r _; do :; done
             let turn = octopus_appserver_proto::Turn {
                 id: if mode == "wrong_turn" { "other-turn" } else { "turn-a" }.into(),
                 items: vec![ThreadItem::Reasoning { id: "reason-a".into(), summary: vec!["Actual progress".into()], content: vec![] },
-                    ThreadItem::AgentMessage { id: "final-a".into(), text: "Already produced native answer.".into(), phase: Some(MessagePhase::FinalAnswer) }],
+                    ThreadItem::AgentMessage { delivery: None, id: "final-a".into(), text: "Already produced native answer.".into(), phase: Some(MessagePhase::FinalAnswer) }],
                 items_view: TurnItemsView::Full,
                 status: match mode { "live" => TurnStatus::InProgress, "drained" | "drained_conflict" => TurnStatus::Interrupted, _ => TurnStatus::Completed },
                 error: None, started_at: Some(10), completed_at: Some(20), duration_ms: Some(10_000),

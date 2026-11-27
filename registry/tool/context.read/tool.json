@@ -2,6 +2,7 @@
   "interface": "system_context",
   "process": {
     "bin": "target/debug/octopus-artifact-bound-tool",
+    "interrupted_effect_recovery": "reinvoke_exact_artifact",
     "authority": {
       "read_root_slots": [
         "registry_artifact_root"

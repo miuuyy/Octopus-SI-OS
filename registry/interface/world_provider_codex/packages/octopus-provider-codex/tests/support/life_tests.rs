@@ -453,6 +453,43 @@
         artifact_ref
     }
 
+    #[test]
+    fn recovery_uses_the_last_admitted_generation_and_the_exact_parallel_call() {
+        let temp = tempfile::tempdir().unwrap();
+        let descriptor = descriptor();
+        let ctx = context(temp.path(), &descriptor);
+        let source = artifact(temp.path(), "operator.message", json!({"text":"calculate"}));
+        let input = InterfaceInvocationEnvelope {
+            artifact: cache_artifact(&ctx, &source), artifact_file: source,
+            artifact_binding_payloads: vec![], metadata: Some(runtime_metadata()),
+        };
+        let run = RunId::new("run-a");
+        let prior = continuity(294, Some("pending"));
+        let mut current = prior.clone();
+        current.context_generation = 295;
+        let mut second = serde_json::to_value(current.pending.as_ref().unwrap()).unwrap();
+        second["call_id"] = json!("call-b");
+        current.admit_outstanding(serde_json::from_value(second).unwrap()).unwrap();
+        let earlier = json!({"label":"turn.reasoning","codex_continuity":prior});
+        let entry = octopus_run_authoring::SessionContextArtifact {
+            source_artifact: cache_artifact(&ctx, &artifact(temp.path(), "turn.reasoning", earlier.clone())),
+            label: "turn.reasoning".into(), payload: earlier, source_movement_seq: Some(11),
+        };
+        let usage = artifact(temp.path(), "turn.token_usage", json!({"label":"turn.token_usage","codex_continuity":current}));
+        let outcomes = [ProviderHandoffOutcome::Admitted { seq:13,artifact:cache_artifact(&ctx, &usage) }];
+        let recovered = crate::handler::completed_source_pending_continuity(&ctx, &descriptor, &run, &input, 10, &outcomes, 295, std::slice::from_ref(&entry)).unwrap();
+        assert_eq!(recovered.unwrap(), current);
+        assert!(crate::handler::completed_source_pending_continuity(&ctx, &descriptor, &RunId::new("foreign"), &input,
+            10, &outcomes, 295, std::slice::from_ref(&entry)).is_err());
+        assert!(crate::handler::completed_source_pending_continuity(&ctx, &descriptor, &run, &input, 10, &outcomes, 296, &[entry]).is_err());
+        let saved = |id: &str| {
+            let file = artifact(temp.path(), "tool.call", json!({"label":"tool.call","tool":"coder.exec","correlation_id":id,"codex_continuity":current}));
+            octopus_run_authoring::PendingSourceIntent { source_movement_seq:10, artifact:cache_artifact(&ctx, &file), payload:file.read_payload_bytes().unwrap(), context_generation:295 }
+        };
+        assert_eq!(crate::handler::stopped_result::intent_control_continuity(&descriptor, &input, saved("call-b"), &[]).unwrap(), current);
+        assert!(crate::handler::stopped_result::intent_control_continuity(&descriptor, &input, saved("other"), &[]).is_err());
+    }
+
     fn assert_deferred_receipt_round_trip(
         ctx: &InterfaceLiftContext,
         descriptor: &InterfaceDescriptor,

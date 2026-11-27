@@ -238,6 +238,31 @@ impl EvidenceTail {
 mod tests;
 
 const IDLE_BEFORE_SLEEP: std::time::Duration = std::time::Duration::from_secs(120);
+const RECORD_READ_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+async fn read_intake_run(
+    cancel: &tokio_util::sync::CancellationToken,
+    mut read: impl FnMut() -> Result<Vec<u8>, octopus_interfaces::InterfaceArtifactFileError>,
+) -> Result<Option<Vec<u8>>, String> {
+    let deadline = tokio::time::Instant::now() + RECORD_READ_RETRY_WINDOW;
+    loop {
+        if cancel.is_cancelled() {
+            return Ok(None);
+        }
+        match read() {
+            Ok(bytes) => return Ok(Some(bytes)),
+            Err(error @ octopus_interfaces::InterfaceArtifactFileError::ChangedDuringRead { .. }) => {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Ok(None),
+                    _ = tokio::time::sleep_until(deadline) => return Err(error.to_string()),
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
 
 async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
     let descriptor = ctx.resolved_interface_descriptor()?;
@@ -263,6 +288,9 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
         .map_err(|error| format!("intake run-record root is unavailable: {error}"))?
         .join(format!("{}.json", config.run));
     let limits = ctx.required_host_io_limits()?;
+    let read_record = || read_intake_run(&ctx.cancel, || {
+        octopus_interfaces::read_artifact_carrier_file_bounded(&path, limits.max_payload_bytes)
+    });
     let state_limit = limits
         .max_payload_bytes
         .checked_mul(4)
@@ -321,11 +349,8 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
                 if own.movement.from == Endpoint::Interface(config.writer.door.clone())
                     && manifest.label == config.writer.result_label
                 {
-                    let record = RunRecord::from_bytes(
-                        &octopus_interfaces::read_artifact_carrier_file_bounded(
-                            &path, limits.max_payload_bytes,
-                        ).map_err(|error| error.to_string())?,
-                    ).map_err(|error| error.to_string())?;
+                    let Some(record_bytes) = read_record().await? else { return Ok(()); };
+                    let record = RunRecord::from_bytes(&record_bytes).map_err(|error| error.to_string())?;
                     if is_internal_writer_receipt(&config, &record, &own.movement, &manifest.label, &bytes)? {
                         reader.commit_through(&own)?;
                         continue;
@@ -406,9 +431,7 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
             writer_artifact = None;
             continue;
         }
-        let current =
-            octopus_interfaces::read_artifact_carrier_file_bounded(&path, limits.max_payload_bytes)
-                .map_err(|e| e.to_string())?;
+        let Some(current) = read_record().await? else { return Ok(()); };
         if pending.edit.is_none() {
             let edit = prepare_input(
                 &config,
@@ -441,10 +464,8 @@ async fn run(ctx: InterfaceLiftContext) -> Result<(), String> {
             &config.provider_interface,
             &config.provider_profile,
         );
-        if octopus_interfaces::read_artifact_carrier_file_bounded(&path, limits.max_payload_bytes)
-            .map_err(|e| e.to_string())?
-            != current
-        {
+        let Some(latest) = read_record().await? else { return Ok(()); };
+        if latest != current {
             continue;
         }
         if let Ok(chain) = &chain {

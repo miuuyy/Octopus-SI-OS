@@ -549,11 +549,12 @@ function operatorChatEventKind(label, protocol, payload) {
   if (label === protocol.errorOutputLabel || label === protocol.retryOutputLabel) return "error";
   if (label === protocol.toolCallLabel) return "dynamic_tool";
   const phase = stringValue(payload?.phase);
+  const commentary = phase === "commentary" || payload?.delivery === "async";
   if (label === "agent.message.delta") {
-    return phase === "commentary" ? "commentary_delta" : "message_delta";
+    return commentary ? "commentary_delta" : "message_delta";
   }
   if (label === "turn.agent_message") {
-    return phase === "commentary" ? "commentary" : ["partial_answer", "final_answer"].includes(phase) ? "message" : "event";
+    return commentary ? "commentary" : ["partial_answer", "final_answer"].includes(phase) ? "message" : "event";
   }
   return {
     "turn.reasoning": "reasoning",

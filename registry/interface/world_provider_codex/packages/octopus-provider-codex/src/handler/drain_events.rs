@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Default)]
 pub(crate) struct TurnDrain {
-    pub(crate) message_phases: BTreeMap<String, Option<MessagePhase>>,
+    pub(crate) message_items: BTreeMap<String, (Option<MessagePhase>, Option<octopus_protocol::models::AgentMessageDelivery>)>,
     pub(crate) completed_final_answer: Option<(String, String)>,
     pub(crate) latest_context_window_usage: Option<ContextWindowUsage>,
     pub(crate) latest_provider_token_usage: Option<ProviderTokenUsageEvidence>,
@@ -31,7 +31,7 @@ impl CodexAppServerInterfaceDriver {
         let control = context.control;
         let scope = context.scope;
         let TurnDrain {
-            message_phases,
+            message_items,
             completed_final_answer,
             latest_context_window_usage,
             latest_provider_token_usage,
@@ -52,7 +52,7 @@ impl CodexAppServerInterfaceDriver {
                 sink.send_progress(serialized_client_output(TURN_STARTED_LABEL, &turn)?)?;
             }
             ServerNotification::AgentMessageDelta(delta) if delta.thread_id == thread_id => {
-                let phase = message_phases.get(&delta.item_id).cloned().flatten();
+                let (phase, delivery) = message_items.get(&delta.item_id).cloned().unwrap_or_default();
                 if queue_client_delta(
                     sink,
                     pending_delta,
@@ -63,7 +63,7 @@ impl CodexAppServerInterfaceDriver {
                         delta.turn_id,
                         delta.item_id,
                         phase,
-                    ),
+                    ).with_message_delivery(delivery),
                     "text",
                 )? {
                     *flush_deadline = Some(tokio::time::Instant::now() + DELTA_FLUSH_WINDOW);
@@ -78,8 +78,8 @@ impl CodexAppServerInterfaceDriver {
                     self.native_web_search_mode()?,
                     self.native_mcp_resource_discovery()?,
                 )?;
-                if let ThreadItem::AgentMessage { id, phase, .. } = &started.item {
-                    message_phases.insert(id.clone(), phase.clone());
+                if let ThreadItem::AgentMessage { id, phase, delivery, .. } = &started.item {
+                    message_items.insert(id.clone(), (phase.clone(), *delivery));
                 }
                 sink.record_input_item(
                     &started.item,
@@ -224,22 +224,21 @@ impl CodexAppServerInterfaceDriver {
                     InputRecordedSource::ItemCompleted,
                     Some(completed_at_ms),
                 )?;
+                if let Some((id, text)) = item.final_answer()
+                    && completed_final_answer.replace((id.to_owned(), text.to_owned())).is_some()
+                {
+                    return Err(InterfaceDriverError::FailedClosed(format!(
+                        "Codex turn '{turn_id}' completed more than one final-answer item",
+                    )));
+                }
                 let completed_output = match item {
-                    ThreadItem::AgentMessage { id, text, phase } => {
-                        message_phases.remove(&id);
-                        if phase == Some(MessagePhase::FinalAnswer)
-                            && completed_final_answer
-                                .replace((id.clone(), text.clone()))
-                                .is_some()
-                        {
-                            return Err(InterfaceDriverError::FailedClosed(format!(
-                                "Codex turn '{turn_id}' completed more than one final-answer item",
-                            )));
-                        }
+                    ThreadItem::AgentMessage { id, text, phase, delivery } => {
+                        message_items.remove(&id);
                         Some(completed_agent_message_output(
                             &id,
                             &text,
                             phase,
+                            delivery,
                             item_thread.as_str(),
                             turn_id.as_str(),
                             completed_at_ms,

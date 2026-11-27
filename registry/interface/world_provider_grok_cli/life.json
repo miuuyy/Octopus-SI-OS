@@ -48,9 +48,7 @@
         "read_paths": [
           "/etc"
         ],
-        "write_paths": [
-          "/tmp/octopus-provider-cwd"
-        ],
+        "write_paths": [],
         "executable_paths": [],
         "executable_root_subpaths": [
           {
@@ -70,7 +68,7 @@
           "grok"
         ],
         "read_env_paths": [],
-        "write_env_paths": [],
+        "write_env_paths": ["OCTOPUS_NEUTRAL_WORK_ROOT"],
         "executable_env_paths": [],
         "read_env_subpaths": [
           {

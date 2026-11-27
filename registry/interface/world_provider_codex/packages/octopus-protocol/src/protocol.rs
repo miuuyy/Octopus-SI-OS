@@ -1629,6 +1629,9 @@ impl fmt::Display for FinalOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentMessageEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delivery: Option<crate::models::AgentMessageDelivery>,
     pub message: String,
     #[serde(default)]
     pub phase: Option<MessagePhase>,

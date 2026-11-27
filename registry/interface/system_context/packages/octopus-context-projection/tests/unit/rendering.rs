@@ -133,3 +133,20 @@ fn an_external_input_is_selected_whole() {
     let mixed: ContextProjectionConfig = serde_json::from_value(config).unwrap();
     assert!(mixed.validate().is_err());
 }
+
+#[test]
+fn peer_input_keeps_the_declared_fields_of_errors_interrupts_and_messages() {
+    let maintenance: Value = serde_json::from_str(include_str!("../../../../../system_worker_memory_observer/maintenance.json")).unwrap();
+    let peer = maintenance["additional_input_rules"].as_array().unwrap().iter()
+        .find(|rule| rule["labels"] == json!(["provider.peer.input"])).unwrap();
+    let origin: SnapshotInputOrigin = serde_json::from_value(peer["origin"].clone()).unwrap();
+    for (label, payload, expected) in [
+        ("turn.error", json!({"message":"provider disconnected"}), json!({"/message":"provider disconnected"})),
+        ("turn.interrupted.result", json!({"turn_interrupted":true,"result_disposition":"durably_admitted_after_interrupt"}),
+            json!({"/turn_interrupted":true,"/result_disposition":"durably_admitted_after_interrupt"})),
+        ("interface.artifact.output", json!({"text":"answer"}), json!({"/text":"answer"})),
+    ] {
+        assert_eq!(original_input_fields(&origin, label, &payload, 1024).unwrap().0, expected);
+    }
+    assert!(original_input_fields(&origin, "turn.error", &json!({"text":"wrong shape"}), 1024).is_err());
+}

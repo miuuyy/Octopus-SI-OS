@@ -325,8 +325,9 @@ function validateProviderModelSelection(providers, request) {
       : request.reasoningEffort !== "")) {
     throw new Error("The selected reasoning level is not supported by this model.");
   }
+  const configuredTier = model.model === provider.model ? provider.serviceTier : "";
   const requestedTier = request.serviceTier === undefined || request.serviceTier === ""
-    ? provider.serviceTier || model.defaultServiceTier || "default"
+    ? configuredTier || model.defaultServiceTier || "default"
     : request.serviceTier;
   validateModelServiceTier(model, requestedTier);
 }

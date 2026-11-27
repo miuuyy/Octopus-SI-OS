@@ -2491,6 +2491,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+        delivery: None,
         id: "agent-1".to_string(),
         content: vec![
             AgentMessageContent::Text {
@@ -2506,6 +2507,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItem::from(agent_item),
         ThreadItem::AgentMessage {
+            delivery: None,
             id: "agent-1".to_string(),
             text: "Hello world".to_string(),
             phase: None,
@@ -2513,6 +2515,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
+        delivery: None,
         id: "agent-2".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "final".to_string(),
@@ -2523,6 +2526,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItem::from(agent_item_with_phase),
         ThreadItem::AgentMessage {
+            delivery: None,
             id: "agent-2".to_string(),
             text: "final".to_string(),
             phase: Some(MessagePhase::FinalAnswer),

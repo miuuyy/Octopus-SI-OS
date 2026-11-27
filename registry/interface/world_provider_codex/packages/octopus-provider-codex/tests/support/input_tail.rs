@@ -150,40 +150,114 @@ async fn idle_intake_sleeps_at_its_cursor_and_a_woken_life_takes_the_input_from_
     };
     std::fs::create_dir_all(home.join("runs")).unwrap();
     std::fs::create_dir_all(home.join("blobs")).unwrap();
-    let sent = Movement {
-        seq: Seq(0), lamport: Lamport(0), recorded_at_unix_ms: 0, trace: TraceId("source".into()),
-        kind: MovementKind::InterfaceOutbound, from: Endpoint::Interface("sender".into()),
-        to: Endpoint::Interface("elsewhere".into()), artifact: None, invocation_metadata: None,
-    };
     let mut ledger = std::fs::File::create(&path).unwrap();
-
+    let mut append = |seq: u64, sender: &str, label: &str, payload: &[u8]| {
+        let file = InterfaceArtifactFile::write(home.join("sent"), label, payload).unwrap();
+        let manifest = std::fs::read(file.manifest_path()).unwrap();
+        let content = ContentHash::of_bytes(&manifest);
+        let artifact = octopus_ledger::ArtifactRef { id: format!("{label}:{}", content.to_hex()).into(), content };
+        std::fs::write(home.join("blobs").join(ContentHash::of_bytes(payload).to_hex()), payload).unwrap();
+        std::fs::write(home.join("blobs").join(content.to_hex()), manifest).unwrap();
+        let movement = Movement {
+            seq: Seq(seq), lamport: Lamport(seq), recorded_at_unix_ms: seq, trace: TraceId("source".into()),
+            kind: MovementKind::InterfaceOutbound, from: Endpoint::Interface(sender.into()),
+            to: Endpoint::Interface(owner.clone()), artifact: Some(artifact.clone()),
+            invocation_metadata: Some(octopus_ledger::InvocationMetadata::new(Default::default())
+                .with_runtime(octopus_ledger::RuntimeInvocationMetadata {
+                    run: "recipient".into(), ee: "ee".into(), worker: "worker".into(), checkpoint: "input".into(),
+                    interface: owner.clone(), epoch: 0, run_record_hash: None,
+                }).into()),
+        };
+        writeln!(ledger, "{}", serde_json::to_string(&movement).unwrap()).unwrap();
+        artifact
+    };
     let idle = life();
     run(idle.clone()).await.unwrap();
-    assert_eq!(idle.sleep_declaration().and_then(|sleep| sleep.through_seq), Some(0),
-        "an idle intake sleeps at the first movement it has not read");
+    assert_eq!(idle.sleep_declaration().and_then(|sleep| sleep.through_seq), Some(0));
 
+    let config = &descriptor.interface_driver_config.as_ref().unwrap().private_config["input_intake"];
+    let run_path = home.join("runs/recipient.json");
+    let record = serde_json::json!({"id":"recipient","ee":"ee","worker":"worker","trace":"source","status":"idle",
+        "checkpoints":[],"active_checkpoints":[],"interface_state":{"intake":{"input_intake":config}}});
+    std::fs::write(&run_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let receipt = ToolResultArtifact::success("file.write", Some("write:1".into()), serde_json::json!({"result":"files_written"}));
+    append(0, "writer", "file.write.result", &serde_json::to_vec(&receipt).unwrap());
+    let after_receipt = life();
+    run(after_receipt.clone()).await.unwrap();
+    assert_eq!(after_receipt.sleep_declaration().and_then(|sleep| sleep.through_seq), Some(1));
+
+    std::fs::remove_file(run_path).unwrap();
     let message = br#"{"action":"queue","control_id":"passive","text":"context only"}"#;
-    let file = InterfaceArtifactFile::write(home.join("sent"), PEER_MESSAGE_LABEL, message).unwrap();
-    std::fs::write(home.join("blobs").join(ContentHash::of_bytes(message).to_hex()), message).unwrap();
-    let manifest = std::fs::read(file.manifest_path()).unwrap();
-    let artifact = octopus_ledger::ArtifactRef { id: "provider.peer.message:woken".into(), content: ContentHash::of_bytes(&manifest) };
-    std::fs::write(home.join("blobs").join(artifact.content.to_hex()), &manifest).unwrap();
-    let mut input = sent;
-    input.to = Endpoint::Interface(owner.clone());
-    input.artifact = Some(artifact.clone());
-    input.invocation_metadata = Some(octopus_ledger::InvocationMetadata::new(Default::default())
-        .with_runtime(octopus_ledger::RuntimeInvocationMetadata {
-            run: octopus_descriptors::RunId::new("recipient"), ee: octopus_descriptors::EeId::new("ee"),
-            worker: InterfaceId::new("worker"), checkpoint: octopus_descriptors::CheckpointId::new("input"),
-            interface: owner.clone(), epoch: 0, run_record_hash: None,
-        }).into());
-    writeln!(ledger, "{}", serde_json::to_string(&input).unwrap()).unwrap();
+    let artifact = append(1, "sender", PEER_MESSAGE_LABEL, message);
 
     let woken = life();
     let ended = run(woken.clone()).await;
     let state = load_state(&home.join("var").join("input-state.json"), 262144).unwrap();
     let pending = state.pending.unwrap_or_else(|| panic!("the woken life retains the input that arrived at its sleep boundary: {ended:?}"));
-    assert_eq!((pending.source.seq, pending.delivery.source_artifact), (Seq(0), artifact));
+    assert_eq!((pending.source.seq, pending.delivery.source_artifact), (Seq(1), artifact));
     assert!(woken.sleep_declaration().is_none() && ended.is_err(),
         "a life holding an undelivered input never sleeps on it: {ended:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn mutable_run_reads_survive_replacement_and_keep_file_checks() {
+    use octopus_interfaces::read_artifact_carrier_file_bounded;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let path = root.join("run.json");
+    let version_a = serde_json::to_vec(&serde_json::json!({"state":"a".repeat(256 * 1024)})).unwrap();
+    let version_b = serde_json::to_vec(&serde_json::json!({"state":"b".repeat(256 * 1024)})).unwrap();
+    for (name, data) in [("a", &version_a), ("b", &version_b)] {
+        std::fs::write(root.join(name), data).unwrap();
+    }
+    std::fs::hard_link(root.join("a"), &path).unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let writer_root = root.clone();
+    let writer = std::thread::spawn(move || {
+        for index in 0..1024 {
+            let next = writer_root.join("next");
+            std::fs::hard_link(writer_root.join(if index % 2 == 0 { "b" } else { "a" }), &next).unwrap();
+            std::fs::rename(next, writer_root.join("run.json")).unwrap();
+        }
+    });
+    for _ in 0..32 {
+        let bytes = read_intake_run(&cancel, || read_artifact_carrier_file_bounded(&path, 512 * 1024)).await.unwrap().unwrap();
+        assert!(bytes == version_a || bytes == version_b);
+    }
+    writer.join().unwrap();
+    assert!(read_intake_run(&cancel, || read_artifact_carrier_file_bounded(&path, 32)).await.is_err());
+    let link = root.join("linked-run.json");
+    std::os::unix::fs::symlink(&path, &link).unwrap();
+    assert!(read_intake_run(&cancel, || read_artifact_carrier_file_bounded(&link, 512 * 1024)).await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn unstable_run_read_returns_its_error_at_the_deadline_or_stops_on_cancel() {
+    use octopus_interfaces::InterfaceArtifactFileError;
+    use tokio::time::{Duration, Instant, timeout};
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let attempts = std::cell::Cell::new(0);
+    let changed = |n| InterfaceArtifactFileError::ChangedDuringRead {
+        surface: "carrier", path: format!("record-{n}"),
+    };
+    let read = || {
+        attempts.set(attempts.get() + 1);
+        Err(changed(attempts.get()))
+    };
+    let start = Instant::now();
+    let result = timeout(Duration::from_secs(2), read_intake_run(&cancel, read)).await.unwrap();
+    assert_eq!(result.unwrap_err(), changed(attempts.get()).to_string());
+    assert!(attempts.get() > 1);
+    assert_eq!(start.elapsed(), Duration::from_secs(1));
+
+    let before = attempts.get();
+    let (result, ()) = tokio::join!(read_intake_run(&cancel, read), async {
+        tokio::task::yield_now().await;
+        cancel.cancel();
+    });
+    assert_eq!(result.unwrap(), None);
+    assert_eq!(attempts.get(), before + 1);
+    assert_eq!(read_intake_run(&cancel, read).await.unwrap(), None);
+    assert_eq!(attempts.get(), before + 1);
 }

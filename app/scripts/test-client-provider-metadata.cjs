@@ -172,6 +172,12 @@ test("catalogue uses declared data or owner modules independently of provider an
     setup.packs[0].setup_provider = { ...native, id: "unbound" };
     await assert.rejects(setupMetadata.setupCatalog(setup), /no exact provider catalogue owner/);
     await assert.rejects(service.setupOwner.probe({ provider: { interface_id: "custom" } }), /does not support desktop account/);
+    const otherModel = [{id:"tier-test", model:"sol", serviceTier:"ultrafast", models:[
+      { model:"astra", showInPicker:true, supportedReasoningEfforts:[], serviceTiers:[{id:"priority"}] },
+    ]}];
+    const selectAstra = { providerInterfaceId:"tier-test", providerModel:"astra", reasoningEffort:"" };
+    validateProviderModelSelection(otherModel, selectAstra);
+    assert.throws(() => validateProviderModelSelection(otherModel, { ...selectAstra, serviceTier:"ultrafast" }), /service tier/);
     validateProviderModelSelection(providers, { providerInterfaceId: "custom", providerModel: "custom-model", reasoningEffort: "high" });
     for (const selection of [{ providerInterfaceId: "native", providerModel: "custom-model", reasoningEffort: "high" },
       { providerInterfaceId: "native", providerModel: "stale-model", reasoningEffort: "high" },

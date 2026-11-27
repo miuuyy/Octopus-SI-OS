@@ -48,9 +48,7 @@
         "read_paths": [
           "/etc"
         ],
-        "write_paths": [
-          "/tmp/octopus-provider-cwd"
-        ],
+        "write_paths": [],
         "executable_paths": [],
         "executable_root_subpaths": [
           {
@@ -64,7 +62,7 @@
         ],
         "executable_commands": [],
         "read_env_paths": [],
-        "write_env_paths": [],
+        "write_env_paths": ["OCTOPUS_NEUTRAL_WORK_ROOT"],
         "optional_write_env_paths": [
           "OCTOPUS_MACHINE_CODEX_AUTH_FILE",
           "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"

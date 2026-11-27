@@ -83,12 +83,23 @@ resolved executable, such as an interpreter's standard library, declare
   configuration and binding edits are picked up without restarting the app.
 - Stopping a life stops its whole process group. Each start keeps a bounded
   stderr capture in the interface's private directory (the sixteen newest).
+- On Linux, an active reader with the declared ledger read handle can send
+  `{"kind":"wait_for_ledger"}` on stdout. The host shares one file watch for
+  the journal and replies on stdin with `{"kind":"ledger_changed"}`. The
+  first reply lets the reader recheck after subscribing. Further replies
+  coalesce changes since the last reply. A process can have one outstanding
+  wait and wake all its named readers. Each reads from its own cursor.
 - A life with nothing to do prints `{"kind":"asleep","through_seq":N}`, naming
   the first movement it has not read, and exits 0. That is sleep, not failure:
   a movement at or past `N` lifts it again. A life that serves a socket may name
   it in the frame; the runtime holds the socket while it sleeps and the first
   byte of a caller wakes it with the caller still connected. World-listening
   lives never sleep.
+
+A process that needs a working directory outside project ancestry declares
+`OCTOPUS_NEUTRAL_WORK_ROOT` in `authority.write_env_paths`. The host prepares
+a stable directory for that interface and OS account. On Unix, the host checks
+its ownership and mode 0700. Startup and doctor use the same directory.
 
 A life can declare `private_environment_root_slot` to read its declared
 private environment names from an explicitly bound owner in the same Home.

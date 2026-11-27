@@ -5,7 +5,6 @@ use octopus_interfaces::{InterfaceDescriptor, InterfaceDriverConfig};
 use octopus_login::{AuthCredentialsStoreMode, AuthManager};
 use octopus_util_abspath::AbsolutePathBuf;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use octopus_appserver_proto::{ClientInfo, InitializeCapabilities, InitializeParams};
 
@@ -307,6 +306,12 @@ impl CodexInstanceConfig {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(SPAWN_ISOLATED_CWD)
+    }
+
+    pub(crate) fn check_working_directory(&self) -> Result<(), String> {
+        let cwd = isolated_spawn_cwd(self.isolated_cwd()).map_err(|error| error.to_string())?;
+        tempfile::tempfile_in(&cwd).map(|_| ()).map_err(|error|
+            format!("provider working directory '{}' is not writable: {error}", cwd.display()))
     }
 
     pub fn connect_on_ready(&self) -> bool {
@@ -1021,7 +1026,7 @@ impl std::fmt::Display for IsolatedCwdError {
             ),
             Self::PrivateRootUnavailable => write!(
                 f,
-                "OCTOPUS_VAR_DIR is required to resolve a private isolated cwd"
+                "OCTOPUS_NEUTRAL_WORK_ROOT is required to resolve a private isolated cwd"
             ),
             Self::Create { path, source } => write!(
                 f,
@@ -1071,16 +1076,10 @@ fn isolated_spawn_cwd(cwd: &str) -> Result<std::path::PathBuf, IsolatedCwdError>
     {
         return Err(IsolatedCwdError::ParentTraversal(declared));
     }
-    let private_identity = std::env::var_os("OCTOPUS_VAR_DIR")
-        .filter(|value| !value.is_empty())
+    let private_root = std::env::var_os(octopus_interface_transport::NEUTRAL_WORK_ROOT_ENV)
         .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
         .ok_or(IsolatedCwdError::PrivateRootUnavailable)?;
-    let digest = Sha256::digest(private_identity.to_string_lossy().as_bytes());
-    #[cfg(unix)]
-    let scratch_root = std::path::PathBuf::from("/tmp/octopus-provider-cwd");
-    #[cfg(not(unix))]
-    let scratch_root = std::env::temp_dir().join("octopus-provider-cwd");
-    let private_root = scratch_root.join(&format!("{digest:x}")[..24]);
     let resolved = private_root.join(declared);
     std::fs::create_dir_all(&resolved).map_err(|source| IsolatedCwdError::Create {
         path: resolved.clone(),
@@ -1647,7 +1646,7 @@ mod tests {
                 && !declared
                     .components()
                     .any(|component| component == std::path::Component::ParentDir),
-            "the default isolated cwd must be a private path relative to the interface var root"
+            "the default isolated cwd must be a private path relative to the neutral work root"
         );
         let private_root = std::env::temp_dir().join(format!(
             "octopus-codex-private-cwd-test-{}-{}",

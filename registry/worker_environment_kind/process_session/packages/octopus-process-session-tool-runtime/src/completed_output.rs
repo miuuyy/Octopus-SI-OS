@@ -353,7 +353,7 @@ impl CompletedOutputs {
                 match self.recover_admissions(ctx, source)? {
                     RecoveryProgress::Ready => break,
                     RecoveryProgress::AwaitingLedgerTail => match watch.as_mut() {
-                        None => watch = Some(door_life::ledger_change_watch(&ctx.movements_path)?),
+                        None => watch = Some(door_life::ledger_change_watch(&ctx.movements_path, &ctx.ledger_wake)?),
                         Some(watch) => watch.wait(&ctx.cancel, &ctx.movements_path).await?,
                     },
                     RecoveryProgress::LegacyUnsubmitted { indices, ledger_length } => {
@@ -490,7 +490,7 @@ impl CompletedOutputs {
         artifact: InterfaceArtifactFile,
         delivery_id: &str,
     ) -> Result<DeliveryVerdict, String> {
-        let mut watch = door_life::ledger_change_watch(&owner_ctx.movements_path)?;
+        let mut watch = door_life::ledger_change_watch(&owner_ctx.movements_path, &owner_ctx.ledger_wake)?;
         loop {
             let delivery = tokio::select! {
                 biased;

@@ -44,6 +44,11 @@ fn library(root: &Path) -> (std::path::PathBuf, ArtifactBindingPayload) {
 
 #[test]
 fn a_collection_source_and_pin_from_any_context_result_are_accepted_verbatim() {
+    let descriptor: octopus_tool_registry::ToolDescriptor = serde_json::from_str(include_str!(
+        "../../../../../../tool/context.read/tool.json"
+    )).unwrap();
+    assert_eq!(descriptor.process.interrupted_effect_recovery,
+        octopus_tool_registry::ToolInterruptedEffectRecovery::ReinvokeExactArtifact);
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let (artifact_root, source) = library(&root);

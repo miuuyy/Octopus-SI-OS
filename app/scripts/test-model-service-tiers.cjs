@@ -58,7 +58,10 @@ test("frontend speed choices follow the selected model and preserve unavailable 
   assert.equal(api.providerServiceTierAvailable(provider, model.model, "ultrafast"), true);
   assert.equal(api.providerSelectedServiceTier({ ...provider, serviceTier: "priority" }, model.model), "priority");
   assert.equal(api.providerSelectedServiceTier({ ...provider, serviceTier: "priority" }, model.model, "default"), "default");
-  assert.equal(api.providerServiceTierAvailable({ ...provider, serviceTier: "ultrafast" }, "standard-only", ""), false);
+  const fastDefault = { ...provider, serviceTier: "ultrafast" };
+  assert.equal(api.providerSelectedServiceTier(fastDefault, "standard-only"), "default");
+  assert.equal(api.providerServiceTierAvailable(fastDefault, "standard-only", ""), true);
+  assert.equal(api.providerServiceTierAvailable(fastDefault, "standard-only", "ultrafast"), false);
   assert.equal(api.providerDefaultModel({ ...provider, model: "unavailable-configured-model" }), null);
 });
 

@@ -39,10 +39,6 @@ pub(crate) fn resolve_provider(
         Some(serde_json::Value::String(tier)) => Some(tier.clone()),
         Some(_) => return Err(format!("{provider_id} service tier must be a native tier id string")),
     };
-    let service_tier = requested_service_tier.map(str::to_string).or(configured_service_tier);
-    if service_tier.as_ref().is_some_and(|tier| tier.is_empty() || tier.trim() != tier || tier.len() > 80 || tier.chars().any(char::is_control)) {
-        return Err(format!("{provider_id} service tier must be a non-empty native tier id"));
-    }
     let formed_models = formed_provider_models(topology, &interface.id)?;
     let catalog = resolved_provider_model_catalog(
         &resolved_config,
@@ -66,6 +62,18 @@ pub(crate) fn resolve_provider(
         .ok_or_else(|| {
             format!("{provider_id} formed model catalog does not admit selected model '{model}'")
         })?;
+    let configured_tier = if model == configured_model { configured_service_tier } else { None };
+    let service_tier = requested_service_tier.map(str::to_owned)
+        .or(configured_tier)
+        .or_else(|| selected.default_service_tier.clone());
+    if let Some(tier) = &service_tier {
+        if !valid_service_tier(tier) {
+            return Err(format!("{provider_id} service tier must be a non-empty native tier id"));
+        }
+        if tier != "default" && selected.service_tiers.as_ref().is_some_and(|allowed| !allowed.contains(tier)) {
+            return Err(format!("{provider_id} model '{model}' does not support service tier '{tier}'"));
+        }
+    }
     let requested_reasoning_effort = requested_reasoning_effort.trim();
     let reasoning_effort = if !requested_reasoning_effort.is_empty() {
         requested_reasoning_effort.to_string()
@@ -116,6 +124,10 @@ pub(crate) fn resolve_provider(
         reasoning_effort,
         service_tier,
     })
+}
+
+fn valid_service_tier(tier: &str) -> bool {
+    !tier.is_empty() && tier.trim() == tier && tier.len() <= 80 && !tier.chars().any(char::is_control)
 }
 
 pub(crate) fn formed_provider_models(
@@ -232,8 +244,29 @@ pub(crate) fn resolved_provider_model_catalog(
                     default_reasoning_effort
                 ));
             }
+            let service_tiers = value.get("service_tiers").map(|entries| {
+                let entries = entries.as_array().ok_or_else(|| format!("{provider} model '{model}' service tiers must be an array"))?;
+                let mut ids = BTreeSet::new();
+                for entry in entries {
+                    let id = entry.get("id").and_then(serde_json::Value::as_str)
+                        .filter(|id| valid_service_tier(id))
+                        .ok_or_else(|| format!("{provider} model '{model}' has a malformed service tier"))?;
+                    if !ids.insert(id.to_owned()) {
+                        return Err(format!("{provider} model '{model}' repeats service tier '{id}'"));
+                    }
+                }
+                Ok(ids)
+            }).transpose()?;
+            let default_service_tier = match value.get("default_service_tier") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(tier)) if valid_service_tier(tier)
+                    && (tier == "default" || service_tiers.as_ref().is_none_or(|allowed| allowed.contains(tier))) => Some(tier.clone()),
+                _ => return Err(format!("{provider} model '{model}' has an invalid default service tier")),
+            };
             catalog.push(ResolvedProviderModel {
                 model: model.to_string(),
+                service_tiers,
+                default_service_tier,
                 default_reasoning_effort,
                 supported_reasoning_efforts,
             });
@@ -242,6 +275,8 @@ pub(crate) fn resolved_provider_model_catalog(
     if catalog.is_empty() && formed_models.contains(configured_model) {
         catalog.push(ResolvedProviderModel {
             model: configured_model.to_string(),
+            service_tiers: None,
+            default_service_tier: None,
             default_reasoning_effort: configured_reasoning_effort.to_string(),
             supported_reasoning_efforts: config.supported_reasoning_efforts.clone(),
         });

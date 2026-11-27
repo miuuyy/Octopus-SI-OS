@@ -23,7 +23,7 @@ notify.workspace = true
 octopus-descriptors = { path = "../octopus-descriptors" }
 octopus-file-storage = { path = "../octopus-file-storage" }
 octopus-interface-projection = { path = "../octopus-interface-projection" }
-octopus-interfaces = { path = "../octopus-interfaces" }
+octopus-interfaces = { path = "../octopus-interfaces", features = ["ledger-wake"] }
 octopus-ledger = { path = "../octopus-ledger" }
 octopus-run-record = { path = "../octopus-run-record" }
 octopus-verifiers = { path = "../octopus-verifiers" }

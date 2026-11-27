@@ -155,6 +155,7 @@ impl InputRecordedRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TerminalSealEvidence {
+    source_movement_seq: u64,
     label: String,
     artifact_payload_blake3: String,
 }
@@ -669,6 +670,17 @@ impl LiveTurnStream {
         }))
     }
 
+    pub(crate) fn preceding_seal(&mut self, source: u64) -> Result<Option<(u64, String)>, String> {
+        let Some(prior) = self.pending_terminal.clone().filter(|seal| seal.source_movement_seq < source) else {
+            return Ok(None);
+        };
+        if self.sealed_manifest_hash.is_none() {
+            self.seal_terminal(prior.source_movement_seq, &prior.label, &prior.artifact_payload_blake3)?;
+        }
+        let hash = self.sealed_manifest_hash.clone().ok_or("previous terminal stream has no sealed body")?;
+        Ok(Some((prior.source_movement_seq, hash)))
+    }
+
     pub(crate) fn seal_terminal(
         &mut self,
         source_movement_seq: u64,
@@ -679,6 +691,7 @@ impl LiveTurnStream {
             return Err("Codex terminal boundary has an invalid artifact payload hash".to_string());
         }
         let terminal = TerminalSealEvidence {
+            source_movement_seq,
             label: terminal_label.to_string(),
             artifact_payload_blake3: terminal_artifact_payload_blake3.to_string(),
         };
@@ -1171,6 +1184,7 @@ fn validate_complete_rows(
                     return Err("Codex live stream repeats its seal row".to_string());
                 }
                 terminal = Some(TerminalSealEvidence {
+                    source_movement_seq: row_source,
                     label: row
                         .get("terminal_label")
                         .and_then(serde_json::Value::as_str)

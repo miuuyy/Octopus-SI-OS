@@ -56,6 +56,14 @@ fn a_turn_failing_on_the_earlier_parallel_calls_result_hands_its_error() {
     }).unwrap().join().unwrap();
 }
 
+#[test]
+fn a_late_tool_result_is_admitted_after_an_earlier_source_sealed_the_turn() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+            .block_on(native_terminal_handoff_cases(Some(31)));
+    }).unwrap().join().unwrap();
+}
+
 include!("retained_native_delivery.rs");
 include!("late_call_continuation.rs");
 include!("earlier_parallel_result.rs");
@@ -1204,7 +1212,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let authoring_id=InterfaceId::new(authoring);
         let socket=octopus_app_server_interface::interface_control_socket_path_from_root(&root.join("control"),&authoring_id);
         std::fs::create_dir_all(socket.parent().unwrap()).unwrap(); let listener=tokio::net::UnixListener::bind(socket).unwrap();
-        let native=serde_json::to_value(octopus_appserver_proto::Turn { id:"turn-a".into(),items:if with_answer {vec![octopus_appserver_proto::ThreadItem::AgentMessage{id:"answer-a".into(),text:"Retained native answer".into(),phase:Some(octopus_protocol::models::MessagePhase::FinalAnswer)}]} else {vec![]},items_view:octopus_appserver_proto::TurnItemsView::Full,status:if with_answer {octopus_appserver_proto::TurnStatus::Completed} else if native_interrupted {octopus_appserver_proto::TurnStatus::Interrupted} else {octopus_appserver_proto::TurnStatus::Failed},error:None,started_at:Some(10),completed_at:Some(20),duration_ms:Some(10_000) }).unwrap();
+        let native=serde_json::to_value(octopus_appserver_proto::Turn { id:"turn-a".into(),items:if with_answer {vec![octopus_appserver_proto::ThreadItem::AgentMessage{delivery:None,id:"answer-a".into(),text:"Retained native answer".into(),phase:Some(octopus_protocol::models::MessagePhase::FinalAnswer)}]} else {vec![]},items_view:octopus_appserver_proto::TurnItemsView::Full,status:if with_answer {octopus_appserver_proto::TurnStatus::Completed} else if native_interrupted {octopus_appserver_proto::TurnStatus::Interrupted} else {octopus_appserver_proto::TurnStatus::Failed},error:None,started_at:Some(10),completed_at:Some(20),duration_ms:Some(10_000) }).unwrap();
         let before_context=record.interface_state[&descriptor.id]["context_generation"].as_u64().unwrap();
         let mut state=serde_json::to_value(continuity(before_context,Some(if with_stop {"interrupted_pending"}else{"pending"}))).unwrap();
         state["provider_interface"]=json!(descriptor.id); state["run"]=json!(run);
@@ -1374,7 +1382,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             Box::pin(earlier_parallel_result_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&authoring_id,&listener,&mut receiver,phase)).await;
             return;
         }
-        if let Some(phase)=settlement_phase {
+        if let Some(phase)=settlement_phase.filter(|phase| *phase != 31) {
             settlement_case(&ctx,root,&plan.run_write.path,&plan.worker_interface_id,&descriptor,&run,&record,
                 &initial,state,before_context,native,phase,&authoring_id,&listener,&mut receiver,selected_file.as_ref()).await;
             return;
@@ -1412,6 +1420,12 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id)
             && cp.inbound_interface()==Some(&InterfaceId::new(&plan.worker_interface_id))
             && cp.outbound_interfaces().any(|id|id==&descriptor.id)).unwrap();
+        let prior_source = if settlement_phase == Some(31) {
+            let earlier = artifact(&root.join("earlier-result"), "coder.exec.result",
+                json!({"label":"coder.exec.result","tool":"coder.exec","correlation_id":"call-b","ok":true,"body":{"value":2}}));
+            let row = edge(&ctx, &initial, cp, &earlier, MovementKind::InterfaceOutbound, descriptor.id.clone());
+            Some((append(&ctx, row), cache_artifact(&ctx, &earlier)))
+        } else { None };
         let result=artifact(&root.join("result"),"coder.exec.result",json!({"label":"coder.exec.result","tool":"coder.exec","correlation_id":"call-a","ok":false,"error":{"code":"tool_effect_indeterminate","message":"uncertain exact effect"}}));
         let source=edge(&ctx,&initial,cp,&result,MovementKind::InterfaceOutbound,descriptor.id.clone());
         let envelope=source_envelope(&ctx,root,&source,result); let result_ref=envelope.artifact.clone(); let source_seq=append(&ctx,source);
@@ -1433,6 +1447,57 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let count=if legacy {2}else if with_answer {4}else{3};
         let settled_generation=authored_context+u64::from(input_context)+if with_answer {2}else{1};
         let output_root=ctx.interface_var_dir().join("emitted"); let stream_root=ctx.interface_var_dir().join("streams");
+        if let Some((prior_source, earlier_result)) = prior_source {
+            use crate::live_stream::{LiveStreamRules, LiveTurnIdentity, LiveTurnStream};
+            let rules = LiveStreamRules::from_private_config(&descriptor.interface_driver_config.as_ref().unwrap().private_config).unwrap();
+            let identity = LiveTurnIdentity { provider_interface:descriptor.id.to_string(), run:run.to_string(),
+                thread_id:original.thread_id.clone(), turn_id:"turn-a".into() };
+            let mut prior = LiveTurnStream::open(&stream_root, &rules, identity, prior_source).unwrap();
+            let earlier_closure = artifact(&output_root, TURN_INTERRUPTED_RESULT_LABEL, json!({
+                "label":TURN_INTERRUPTED_RESULT_LABEL,"correlation_id":"call-b","thread_id":original.thread_id,
+                "turn_id":"turn-a","source_artifact":earlier_result,"returned_to_model":false,"codex_continuity":original
+            }));
+            let closure_hash = crate::live_stream::artifact_payload_blake3(&earlier_closure).unwrap();
+            let sealed = prior.seal_terminal(prior_source, TURN_INTERRUPTED_RESULT_LABEL, &closure_hash).unwrap();
+            let before = sealed.read_payload_bytes().unwrap();
+            drop(prior);
+            let group = || {
+                let ProviderStreamEmission::InterruptedResult {stream:None, activity:None, mut retained_outputs, closure} =
+                    crate::handler::native_terminal_group_for_test(&descriptor, &output_root, &stream_root, &original,
+                        Some(native.clone()), &result_ref, source_seq, false, input_context, authored_context)
+                    else {panic!("late source must not reseal its predecessor")};
+                let payload: serde_json::Value = serde_json::from_slice(&closure.artifact.read_payload_bytes().unwrap()).unwrap();
+                assert_eq!(payload["source_artifact"], json!(result_ref));
+                assert_eq!(payload["correlation_id"], "call-a");
+                assert_eq!(payload["preceding_stream"]["source_movement_seq"], prior_source);
+                assert_eq!(payload["preceding_stream"]["payload_blake3"], ContentHash::of_bytes(&before).to_hex());
+                retained_outputs.push(closure);
+                retained_outputs
+            };
+            let outgoing = group();
+            let reference = materialized_artifact_ref(&outgoing.last().unwrap().artifact).unwrap();
+            if with_answer {
+                let answers: Vec<_> = outgoing.iter().filter(|output| output.artifact.read_manifest().unwrap().label == "interface.artifact.output").collect();
+                assert_eq!(answers.len(), 1);
+                let answer: serde_json::Value = serde_json::from_slice(&answers[0].artifact.read_payload_bytes().unwrap()).unwrap();
+                assert_eq!(answer["text"], "Retained native answer");
+            }
+            let count = outgoing.len();
+            let control = CodexTurnControlBroker::new(Some(source_seq));
+            let hand = admit_interrupted_result(&ctx,&handoff,&control,None,&run,source_seq,&reference,outgoing);
+            let gate = pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&result_ref,0,count,with_answer,1,false);
+            let (result, delivered) = tokio::time::timeout(std::time::Duration::from_secs(5),async {tokio::join!(hand, gate)}).await.unwrap();
+            result.unwrap();
+            assert_eq!(delivered.len(), count);
+            drop(handoff);
+            let recovered = ProviderHandoffSession::new(&ctx).unwrap()
+                .from_invocation_when_ready(&ctx, &descriptor, &run, &envelope, source_seq, &initial).await.unwrap();
+            let replay = group();
+            admit_interrupted_result(&ctx,&recovered,&control,None,&run,source_seq,&reference,replay).await.unwrap();
+            assert_eq!(sealed.read_payload_bytes().unwrap(), before);
+            assert!(receiver.try_recv().is_err());
+            return;
+        }
         let ProviderStreamEmission::InterruptedResult { stream:Some(stream),retained_outputs,closure,.. }=crate::handler::native_terminal_group_for_test(&descriptor,&output_root,&stream_root,&original,(!legacy).then_some(native),&result_ref,source_seq,with_stop,input_context,authored_context) else {panic!("sealed native group")};
         let source_closure=materialized_artifact_ref(&closure.artifact).unwrap();
         let turn=QueuedTurn{seq:source_seq,envelope:envelope.clone()};
@@ -1584,6 +1649,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     }
     if let Some(phase) = selected_phase {
         case(false,false,false,Some(phase),false).await;
+        if phase == 31 { case(false,true,false,Some(phase),false).await; }
         return;
     }
     for (with_stop, with_answer, native_interrupted, settlement_phase) in [

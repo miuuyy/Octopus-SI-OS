@@ -106,6 +106,9 @@ pub enum AgentMessageContent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct AgentMessageItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delivery: Option<crate::models::AgentMessageDelivery>,
     pub id: String,
     pub content: Vec<AgentMessageContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -451,6 +454,7 @@ impl AgentMessageItem {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
             phase: None,
+            delivery: None,
         }
     }
 
@@ -461,6 +465,7 @@ impl AgentMessageItem {
                 AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
                     message: text.clone(),
                     phase: self.phase.clone(),
+                    delivery: self.delivery,
                 }),
             })
             .collect()

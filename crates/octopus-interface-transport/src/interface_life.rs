@@ -309,6 +309,7 @@ pub struct InterfaceLiftContext {
     pub descriptor_snapshot: Option<octopus_interfaces::InterfaceDescriptor>,
     pub var_dir: PathBuf,
     pub movements_path: PathBuf,
+    pub ledger_wake: octopus_interfaces::ledger_wake::LedgerWakeSource,
     pub blobs_dir: PathBuf,
     pub ledger_index_path: PathBuf,
     pub root_slots: BTreeMap<String, PathBuf>,
@@ -496,6 +497,7 @@ impl InterfaceLiftContext {
             descriptor_snapshot,
             var_dir,
             movements_path,
+            ledger_wake: Default::default(),
             blobs_dir,
             ledger_index_path,
             root_slots,
@@ -2059,7 +2061,7 @@ fn parse_spawn_life_config(path: &Path, bytes: &[u8]) -> Result<SpawnLifeConfig,
             .authority
             .read_env_paths
             .iter()
-            .chain(&process.authority.write_env_paths)
+            .chain(process.authority.write_env_paths.iter().filter(|name| name.as_str() != NEUTRAL_WORK_ROOT_ENV))
             .chain(&process.authority.executable_env_paths)
             .chain(&process.authority.optional_read_env_paths)
             .chain(&process.authority.optional_write_env_paths)
@@ -2360,6 +2362,7 @@ fn is_reserved_life_env(name: &str) -> bool {
             | RESOLVED_INTERFACE_DESCRIPTOR_ENV
             | INTERFACE_HOST_IO_LIMITS_ENV
             | "OCTOPUS_VAR_DIR"
+            | NEUTRAL_WORK_ROOT_ENV
             | "OCTOPUS_ROOT_SLOTS_JSON"
             | "OCTOPUS_MOVEMENTS_JSONL"
             | "OCTOPUS_BLOBS_DIR"
@@ -2726,6 +2729,49 @@ pub fn read_private_environment_document(
     Ok(document.values)
 }
 
+/// A host-created directory outside project ancestry, writable only by this
+/// interface and Unix account. Its path is stable across process restarts.
+pub const NEUTRAL_WORK_ROOT_ENV: &str = "OCTOPUS_NEUTRAL_WORK_ROOT";
+
+impl SpawnLifeCommand {
+    pub fn neutral_work_root(&self, var_dir: &Path) -> Result<Option<PathBuf>, String> {
+        if !self.authority.write_env_paths.contains(NEUTRAL_WORK_ROOT_ENV) {
+            return Ok(None);
+        }
+        let identity = match std::fs::canonicalize(var_dir) {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && var_dir.is_absolute() => var_dir.to_path_buf(),
+            Err(error) => return Err(format!("cannot resolve interface work directory '{}': {error}", var_dir.display())),
+        };
+        let key = ContentHash::of_bytes(identity.as_os_str().as_encoded_bytes()).to_hex();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+            let uid = unsafe { libc::geteuid() };
+            let path = Path::new("/tmp").join(format!("octopus-life-{uid}-{key}"));
+            match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(format!("cannot create neutral working directory '{}': {error}", path.display())),
+            }
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o777 != 0o700 {
+                return Err(format!("neutral working directory '{}' must be a private directory owned by uid {uid}", path.display()));
+            }
+            std::fs::canonicalize(path).map(Some).map_err(|error| error.to_string())
+        }
+        #[cfg(not(unix))]
+        {
+            let path = std::env::temp_dir().join(format!("octopus-life-{key}"));
+            std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+            if !std::fs::symlink_metadata(&path).map_err(|error| error.to_string())?.is_dir() {
+                return Err(format!("neutral working directory '{}' is not a directory", path.display()));
+            }
+            std::fs::canonicalize(path).map(Some).map_err(|error| error.to_string())
+        }
+    }
+}
+
 fn set_life_host_environment(
     environment: &mut BTreeMap<String, std::ffi::OsString>,
     var_dir: &Path,
@@ -2868,6 +2914,7 @@ struct SpawnedEvidenceLine {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum SpawnedLifeOutput {
     Ready,
+    WaitForLedger,
     Arrival {
         request_id: Option<u64>,
         artifact_manifest_path: PathBuf,
@@ -2903,6 +2950,7 @@ enum SpawnedLifeEmissionArtifact {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum SpawnedLifeInput {
+    LedgerChanged,
     DeliveryVerdict {
         request_id: u64,
         verdict: DeliveryVerdict,
@@ -3179,6 +3227,9 @@ fn spawn_process_command_life(
             environment.insert(name.clone(), std::ffi::OsString::from(value));
         }
         set_life_host_environment(&mut environment, &var_dir);
+        if let Some(root) = command_config.neutral_work_root(&var_dir)? {
+            environment.insert(NEUTRAL_WORK_ROOT_ENV.into(), root.into_os_string());
+        }
         let mut readable = vec![ctx.interface_registry_dir()];
         let mut arguments = Vec::with_capacity(command_config.args.len());
         for argument in &command_config.args {
@@ -3396,7 +3447,7 @@ fn spawn_process_command_life(
         if let Some(inherited_sockets_env) = inherited_sockets_env {
             command.env(INHERITED_SOCKETS_ENV, inherited_sockets_env);
         }
-        if let Some(movements_path) = movements_path {
+        if let Some(movements_path) = &movements_path {
             command.env("OCTOPUS_MOVEMENTS_JSONL", movements_path);
         }
         if let Some(blobs_dir) = blobs_dir {
@@ -3464,6 +3515,7 @@ fn spawn_process_command_life(
             .take()
             .ok_or_else(|| "life stdout unavailable".to_string())?;
         let mut lines = BoundedJsonLineReader::new(stdout, host_io_limits.max_control_frame_bytes)?;
+        let mut ledger_wait = octopus_interfaces::ledger_wake::LedgerWakeHost::new(movements_path.as_deref());
         let mut exit = None;
         loop {
             tokio::select! {
@@ -3478,6 +3530,24 @@ fn spawn_process_command_life(
                     match stderr {
                         Ok(error) => break Err(error),
                         Err(_) => stderr_open = false,
+                    }
+                }
+                result = ledger_wait.changed(), if stdin.is_some() && exit.is_none() && ledger_wait.is_waiting() => {
+                    result?;
+                    let written = tokio::select! {
+                        _ = ctx.cancel.cancelled() => break Ok(()),
+                        result = write_spawned_life_message(
+                            stdin.as_mut().expect("open life input"), &SpawnedLifeInput::LedgerChanged,
+                            host_io_limits.max_control_frame_bytes,
+                        ) => result,
+                    };
+                    if let Err(error) = written {
+                        if error.kind() != std::io::ErrorKind::BrokenPipe {
+                            break Err(format!("life ledger wake write failed: {error}"));
+                        }
+                        exit = Some(tokio::time::timeout(crate::life_process::CLEANUP_TIMEOUT, child.wait())
+                            .await.map_err(|_| "life closed its ledger wake input before exiting")?);
+                        let _ = child.terminate().await;
                     }
                 }
                 line = next_protocol_line(&mut lines, exit.is_some()) => {
@@ -3508,6 +3578,7 @@ fn spawn_process_command_life(
                         &ctx,
                         &var_dir,
                         host_io_limits,
+                        &mut ledger_wait,
                         input,
                         output,
                     )
@@ -3638,6 +3709,7 @@ async fn handle_spawned_life_output(
     ctx: &InterfaceLiftContext,
     var_dir: &Path,
     host_io_limits: InterfaceHostIoLimits,
+    ledger_wait: &mut octopus_interfaces::ledger_wake::LedgerWakeHost<'_>,
     stdin: &mut tokio::process::ChildStdin,
     output: SpawnedLifeOutput,
 ) -> Result<(), String> {
@@ -3652,6 +3724,7 @@ async fn handle_spawned_life_output(
             ctx.asleep.declare(InterfaceSleepDeclaration { through_seq, sockets })?;
         }
         SpawnedLifeOutput::Ready => ctx.signal_ready().await?,
+        SpawnedLifeOutput::WaitForLedger => ledger_wait.request()?,
         SpawnedLifeOutput::Arrival {
             request_id,
             artifact_manifest_path,
@@ -3762,7 +3835,7 @@ async fn handle_spawned_life_output(
                 &SpawnedLifeInput::RetainedDelivery { request_id, delivery },
                 host_io_limits.max_control_frame_bytes,
             )
-            .await?;
+            .await.map_err(|error| format!("life verdict write failed: {error}"))?;
         }
         SpawnedLifeOutput::SystemEmission {
             request_id,
@@ -4102,24 +4175,19 @@ async fn write_spawned_life_input(
         maximum_frame_bytes,
     )
     .await
+    .map_err(|error| format!("life verdict write failed: {error}"))
 }
 
 async fn write_spawned_life_message(
     stdin: &mut tokio::process::ChildStdin,
     input: &SpawnedLifeInput,
     maximum_frame_bytes: u64,
-) -> Result<(), String> {
+) -> std::io::Result<()> {
     use tokio::io::AsyncWriteExt;
-    let bytes =
-        serialize_bounded_json_line(input, maximum_frame_bytes, "spawned-life input frame")?;
-    stdin
-        .write_all(&bytes)
-        .await
-        .map_err(|error| format!("life verdict write failed: {error}"))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|error| format!("life verdict flush failed: {error}"))
+    let bytes = serialize_bounded_json_line(input, maximum_frame_bytes, "spawned-life input frame")
+        .map_err(std::io::Error::other)?;
+    stdin.write_all(&bytes).await?;
+    stdin.flush().await
 }
 
 #[cfg(test)]
@@ -4204,6 +4272,7 @@ mod tests {
             descriptor_snapshot: None,
             var_dir: root.join("home").join("interfaces").join(interface),
             movements_path: root.join("durable").join("movements.jsonl"),
+            ledger_wake: Default::default(),
             blobs_dir: root.join("durable").join("blobs"),
             ledger_index_path: root.join("durable").join("ledger-index.sqlite"),
             root_slots: Default::default(),
@@ -4215,6 +4284,30 @@ mod tests {
             asleep: InterfaceLifeSleep::default(),
             inherited_sockets: InheritedSockets::default(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn neutral_work_roots_are_private_stable_and_scoped_to_one_interface() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let owner = tempfile::tempdir().unwrap();
+        let path = Path::new("world_provider_codex/life.json");
+        let declaration = include_bytes!("../../../registry/interface/world_provider_codex/life.json");
+        let mut process = parse_spawn_life_config(path, declaration).unwrap().processes.remove(0);
+        let a = owner.path().join("a");
+        let b = owner.path().join("b");
+        let first = process.neutral_work_root(&a).unwrap().unwrap();
+        let second = process.neutral_work_root(&b).unwrap().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(process.neutral_work_root(&a).unwrap().as_ref(), Some(&first));
+        let metadata = std::fs::symlink_metadata(&first).unwrap();
+        assert_eq!(metadata.mode() & 0o777, 0o700);
+        std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(process.neutral_work_root(&a).is_err());
+        std::fs::remove_dir(&first).unwrap();
+        std::fs::remove_dir(&second).unwrap();
+        process.authority.write_env_paths.clear();
+        assert!(process.neutral_work_root(&a).unwrap().is_none());
     }
 
     #[test]
@@ -5083,6 +5176,42 @@ mod tests {
             assert_eq!(result.is_err(), lose_readiness);
             assert!(crate::InterfaceLifeOwnership::try_acquire(&private_root, &interface).unwrap().is_some());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn pending_ledger_wake_preserves_sleep_when_a_process_closes_stdin() {
+        let root = tempfile::tempdir().unwrap();
+        let mut context = ctx(root.path(), "world_sleeping_reader");
+        std::fs::create_dir_all(&context.interface_dir).unwrap();
+        std::fs::create_dir_all(root.path().join("durable/metadata")).unwrap();
+        std::fs::write(&context.movements_path, b"").unwrap();
+        context.descriptor_snapshot = Some(serde_json::from_value(serde_json::json!({
+            "id": context.interface, "interface_type": "world", "role": "service",
+            "direction": "bidirectional", "source_names": ["test"],
+            "interface_driver_ref": "test_driver"
+        })).unwrap());
+        context.root_slots.insert(crate::INTERFACE_LIFE_INSTALL_ROOT_SLOT.into(), root.path().into());
+        let (context, ready) = context.with_readiness_channel();
+        let asleep = context.asleep.clone();
+        let script = r#"exec 0<&-
+printf '%s\n' '{"kind":"ready"}' '{"kind":"wait_for_ledger"}'
+/bin/sleep 0.1
+printf '%s\n' '{"kind":"asleep","through_seq":0}'"#;
+        let command = serde_json::from_value(serde_json::json!({
+            "bin": "/bin/sh", "args": ["-c", script], "read_handles": ["ledger"],
+            "io_limits": test_host_io_limits(),
+            "authority": {
+                "sandbox_mode": "disabled", "read_root_slots": [], "write_root_slots": [],
+                "executable_root_slots": [], "read_paths": [], "write_paths": [],
+                "executable_paths": ["/bin/sh", "/bin/sleep"], "executable_commands": [],
+                "read_env_paths": [], "write_env_paths": [], "executable_env_paths": [],
+                "allow_network": false, "allow_local_ipc": false
+            }
+        })).unwrap();
+        spawn_process_command_life(context, command, Arc::default(), None).await.unwrap();
+        ready.await.unwrap().unwrap();
+        assert_eq!(asleep.declared().unwrap().through_seq, Some(0));
     }
 
     #[tokio::test]

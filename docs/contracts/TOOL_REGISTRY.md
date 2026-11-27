@@ -169,6 +169,10 @@ tool to recover that exact call safely. An omitted value is `indeterminate`:
 the door reports the uncertain outcome instead of repeating the effect. A
 retained completed output is replayed without executing the tool again.
 
+A `context.read` repeats its pinned publication revision. A
+`workspace.read_file` can repeat the requested range as a fresh observation
+of the workspace. Both operations are read-only.
+
 While the original fan-out of a retained output has pending edges, or its
 current source is still settling, the door hands in the same artifact under the
 same delivery identity again, after each ledger change or a short interval,

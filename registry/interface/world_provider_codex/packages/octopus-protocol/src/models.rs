@@ -118,6 +118,12 @@ pub enum ImageDetail {
 
 pub const DEFAULT_IMAGE_DETAIL: ImageDetail = ImageDetail::High;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMessageDelivery {
+    Async,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MessagePhase {

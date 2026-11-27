@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use octopus_descriptors::InterfaceId;
 use octopus_interface_transport::{
-    RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeExecutable, SpawnLifeCommand, SpawnLifeDoctorCommand,
+    NEUTRAL_WORK_ROOT_ENV, RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeExecutable, SpawnLifeCommand, SpawnLifeDoctorCommand,
     resolve_spawn_life_executable, validate_spawn_life_config,
 };
 use serde::Deserialize;
@@ -23,6 +23,7 @@ struct ProbeJob {
     process_index: usize,
     interface_dir: PathBuf,
     descriptor_json: String,
+    neutral_work_root: Option<PathBuf>,
     executable: ResolvedSpawnLifeExecutable,
     doctor: SpawnLifeDoctorCommand,
 }
@@ -63,6 +64,7 @@ enum ClientDoctorRunner {
 }
 
 pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), String> {
+    let home_root = std::fs::canonicalize(octopus_home).map_err(|error| error.to_string())?;
     let registry_root = octopus_home.join("registry");
     let interface_root = registry_root.join("interface");
     require_plain_directory(&registry_root, "active registry")?;
@@ -144,7 +146,16 @@ pub async fn run(octopus_home: &Path, installation_root: &Path) -> Result<(), St
                 unprobed_processes += 1;
                 continue;
             };
+            let var_dir = home_root.join("interfaces").join(interface.as_str());
+            let neutral_work_root = match process.neutral_work_root(&var_dir) {
+                Ok(root) => root,
+                Err(error) => {
+                    errors.push(format!("interface '{}' process {process_index}: {error}", interface.as_str()));
+                    continue;
+                }
+            };
             probe_jobs.push(ProbeJob {
+                neutral_work_root,
                 interface: interface.clone(),
                 process_index,
                 interface_dir: interface_root.join(interface.as_str()),
@@ -623,6 +634,9 @@ async fn run_probe(job: &ProbeJob) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(root) = &job.neutral_work_root {
+        command.env(NEUTRAL_WORK_ROOT_ENV, root);
+    }
     let mut child = command.spawn().map_err(|error| {
         format!(
             "executable '{}' could not start: {error}",

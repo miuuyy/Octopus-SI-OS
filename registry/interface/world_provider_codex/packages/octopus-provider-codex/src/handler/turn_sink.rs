@@ -561,6 +561,23 @@ impl TurnSink<'_> {
     ) -> Result<(), InterfaceDriverError> {
         let source_continuity = self.continuity_snapshot();
         let native_terminal = source_continuity.as_ref().and_then(|state| state.native_terminal.clone());
+        let preceding_seal = self.live_stream.lock().expect("live stream lock").as_mut()
+            .map(|stream| stream.preceding_seal(self.source_movement_seq))
+            .transpose().map_err(InterfaceDriverError::FailedClosed)?.flatten();
+        if let Some((source, hash)) = &preceding_seal {
+            let correlation = closure.value["correlation_id"].as_str().ok_or_else(||
+                InterfaceDriverError::FailedClosed("late result has no call identity".into()))?;
+            let state = source_continuity.as_ref().ok_or_else(||
+                InterfaceDriverError::FailedClosed("late result has no checked continuity".into()))?;
+            let wait = state.outstanding_call(&format!("tool:{correlation}")).ok_or_else(||
+                InterfaceDriverError::FailedClosed("late result has no exact outstanding call".into()))?;
+            if closure.value["thread_id"] != state.thread_id || closure.value["turn_id"] != pending_turn_id(wait) {
+                return Err(InterfaceDriverError::FailedClosed("late result belongs to another native turn".into()));
+            }
+            // The full result is the closure's source_artifact. Its original
+            // turn already has an immutable stream and cannot receive more events.
+            closure.value["preceding_stream"] = serde_json::json!({"source_movement_seq":source,"payload_blake3":hash});
+        }
         if native_terminal.is_some() {
             if closure.value.get("native_terminal_source_continuity").is_none() {
                 closure.value["native_terminal_source_continuity"] = serde_json::to_value(&source_continuity)
@@ -599,8 +616,14 @@ impl TurnSink<'_> {
                 ));
             }
             (Some(output), false) => {
-                self.send(output)?;
-                None
+                if preceding_seal.is_some() {
+                    None
+                } else if self.has_live_stream() {
+                    self.send(output)?;
+                    None
+                } else {
+                    self.materialize_without_boundary(output)?
+                }
             }
             (None, true) => {
                 None
@@ -649,8 +672,10 @@ impl TurnSink<'_> {
         let closure = self.materialize_normalized(closure, false)?;
         let closure_artifact_payload_blake3 = artifact_payload_blake3(&closure.artifact)
             .map_err(InterfaceDriverError::FailedClosed)?;
-        let stream = self.seal_live_stream(&closure_label, &closure_artifact_payload_blake3)?;
-        if stream.is_none() && activity.is_none() {
+        let stream = if preceding_seal.is_some() { None } else {
+            self.seal_live_stream(&closure_label, &closure_artifact_payload_blake3)?
+        };
+        if stream.is_none() && activity.is_none() && preceding_seal.is_none() && !activity_already_admitted {
             return Err(InterfaceDriverError::FailedClosed(
                 "interrupted-result closure has neither a sealed stream nor legacy activity"
                     .to_string(),

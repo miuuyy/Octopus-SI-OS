@@ -5,6 +5,9 @@ version.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+ledger-wake = ["dep:notify", "dep:tokio", "dep:tokio-util"]
+
 [dependencies]
 octopus-file-storage = { path = "../octopus-file-storage" }
 schemars.workspace = true
@@ -19,3 +22,6 @@ octopus-descriptors = { path = "../octopus-descriptors" }
 octopus-ledger = { path = "../octopus-ledger" }
 octopus-marks = { path = "../octopus-marks" }
 octopus-policy = { path = "../octopus-policy" }
+notify = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }

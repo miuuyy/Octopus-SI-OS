@@ -69,7 +69,7 @@ export function homeTurnAwaitsFinalReply(activities: ChatRenderMessage[]): boole
     return homeEventArray(turn.items).some((item) => {
       const entry = homeEventRecord(item);
       const phase = homeEventText(entry.phase);
-      return entry.type === "agentMessage" && (!phase || phase === "final_answer");
+      return entry.type === "agentMessage" && entry.delivery !== "async" && (!phase || phase === "final_answer");
     });
   }
   return false;

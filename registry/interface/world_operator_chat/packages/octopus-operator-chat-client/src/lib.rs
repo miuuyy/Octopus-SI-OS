@@ -357,6 +357,8 @@ struct ResolvedProvider {
 
 struct ResolvedProviderModel {
     model: String,
+    default_service_tier: Option<String>,
+    service_tiers: Option<BTreeSet<String>>,
     default_reasoning_effort: String,
     supported_reasoning_efforts: Vec<String>,
 }

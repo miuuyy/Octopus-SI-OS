@@ -124,6 +124,8 @@ pub struct SnapshotInputOrigin {
     pub artifact_pointer: String,
     pub sequence_pointer: String,
     pub pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pointers_by_label: BTreeMap<String, Vec<String>>,
 }
 
 fn source_entry_record(
@@ -241,10 +243,18 @@ pub fn read_source_artifact(
     reference: &ArtifactRef,
     max_bytes: u64,
 ) -> Result<serde_json::Value, String> {
+    read_labeled_source_artifact(ctx, reference, max_bytes).map(|(_, payload)| payload)
+}
+
+pub fn read_labeled_source_artifact(
+    ctx: &InterfaceLiftContext,
+    reference: &ArtifactRef,
+    max_bytes: u64,
+) -> Result<(String, serde_json::Value), String> {
     let mut limits = ctx.required_host_io_limits()?;
     limits.max_payload_bytes = limits.max_payload_bytes.min(max_bytes);
-    let (_, bytes) = read_pinned_artifact_from_cache(&ctx.blobs_dir, limits, reference)?;
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    let (manifest, bytes) = read_pinned_artifact_from_cache(&ctx.blobs_dir, limits, reference)?;
+    Ok((manifest.label, serde_json::from_slice(&bytes).map_err(|e| e.to_string())?))
 }
 
 pub fn verify_selected_source_input(

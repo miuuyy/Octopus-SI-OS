@@ -178,6 +178,8 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AgentMessage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delivery: Option<octopus_protocol::models::AgentMessageDelivery>,
         id: String,
         text: String,
         #[serde(default)]
@@ -337,6 +339,13 @@ pub struct HookPromptFragment {
 }
 
 impl ThreadItem {
+    pub fn final_answer(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::AgentMessage { id, text, phase: Some(MessagePhase::FinalAnswer), delivery: None } => Some((id, text)),
+            _ => None,
+        }
+    }
+
     pub fn id(&self) -> &str {
         match self {
             ThreadItem::UserMessage { id, .. }
@@ -763,6 +772,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: agent.id,
                     text,
                     phase: agent.phase,
+                    delivery: agent.delivery,
                 }
             }
             CoreTurnItem::FunctionCallOutput(output) => ThreadItem::FunctionCallOutput {

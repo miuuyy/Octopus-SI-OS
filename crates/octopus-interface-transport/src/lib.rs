@@ -8,7 +8,7 @@ pub use life_ownership::InterfaceLifeOwnership;
 pub use octopus_verifiers::process_authority;
 
 pub use interface_life::{
-    INTERFACE_HOST_IO_LIMITS_ENV, InterfaceHostIoLimits, InterfaceLifeFuture, InterfaceLiftContext,
+    NEUTRAL_WORK_ROOT_ENV, INTERFACE_HOST_IO_LIMITS_ENV, InterfaceHostIoLimits, InterfaceLifeFuture, InterfaceLiftContext,
     InterfaceLiftFn, InterfaceLifeReadyPublication, RESOLVED_INTERFACE_DESCRIPTOR_ENV, ResolvedSpawnLifeConfig,
     ResolvedSpawnLifeExecutable, SpawnLifeArgument, SpawnLifeCommand, SpawnLifeConfig,
     SpawnLifeDoctorCommand, SpawnLifeRepositoryFileArgument, ValidatedSpawnLifeConfig,
@@ -683,6 +683,7 @@ impl InterfaceActivationReconciler {
                     .join("interfaces")
                     .join(interface.as_str()),
                 movements_path: durable_root.join("movements.jsonl"),
+                ledger_wake: Default::default(),
                 blobs_dir: durable_root.join("blobs"),
                 ledger_index_path: durable_root.join("ledger-index.sqlite"),
                 root_slots: interface_root_slots,

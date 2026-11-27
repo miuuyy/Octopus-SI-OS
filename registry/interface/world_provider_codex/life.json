@@ -20,7 +20,7 @@
         "write_root_slots": ["interface_hand_in_root", "app_server_control_root"],
         "executable_root_slots": [],
         "read_paths": ["/etc"],
-        "write_paths": ["/tmp/octopus-provider-cwd"],
+        "write_paths": [],
         "executable_paths": [],
         "executable_root_subpaths": [{
           "root_slot": "registry_interface_root",
@@ -31,7 +31,7 @@
         }],
         "executable_commands": [],
         "read_env_paths": [],
-        "write_env_paths": [],
+        "write_env_paths": ["OCTOPUS_NEUTRAL_WORK_ROOT"],
         "optional_write_env_paths": ["OCTOPUS_MACHINE_CODEX_AUTH_FILE", "OCTOPUS_MACHINE_CODEX_AUTH_LOCK_FILE"],
         "executable_env_paths": [],
         "read_env_subpaths": [],

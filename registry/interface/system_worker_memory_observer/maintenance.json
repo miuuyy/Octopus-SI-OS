@@ -85,7 +85,11 @@
         "sequence_pointer": "/source_movement_seq",
         "pointers": [
           "/text"
-        ]
+        ],
+        "pointers_by_label": {
+          "turn.error": ["/message"],
+          "turn.interrupted.result": ["/turn_interrupted", "/result_disposition"]
+        }
       }
     }
   ],

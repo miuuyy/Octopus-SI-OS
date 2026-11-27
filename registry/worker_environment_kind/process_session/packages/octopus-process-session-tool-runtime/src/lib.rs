@@ -8651,7 +8651,7 @@ async fn execute_tool_invocation(
                 ctx,
                 source_movement_seq,
                 Some(&target),
-                Some((&target.tool, &error)),
+                Some(&error),
                 failure_output,
             )
             .await
@@ -8666,18 +8666,20 @@ async fn hand_tool_effect_indeterminate(
     ctx: &InterfaceLiftContext,
     source_movement_seq: u64,
     target: Option<&ToolResultTarget>,
-    failure: Option<(&str, &str)>,
+    failure: Option<&str>,
     output: Option<(&ToolDoorOutputCallback, ToolDoorOutputSource)>,
 ) -> Result<ToolDoorJournalState, String> {
     let mut details = serde_json::json!({
         "source_movement_seq": source_movement_seq,
         "effect_state": "in_flight_outcome_unknown"
     });
-    if let Some((tool, error)) = failure {
+    if let Some(target) = target {
+        details["tool"] = serde_json::json!(target.tool);
+    }
+    if let Some(error) = failure {
         let object = details
             .as_object_mut()
             .ok_or_else(|| "tool effect failure details are not an object".to_string())?;
-        object.insert("tool".to_string(), serde_json::json!(tool));
         object.insert("error".to_string(), serde_json::json!(error));
         object.insert(
             "error_blake3".to_string(),
@@ -8819,11 +8821,13 @@ fn bounded_tool_failure_error(
             if short.chars().count() < line.chars().count() { format!(": {short}…") } else { format!(": {short}") }
         })
         .unwrap_or_default();
-    Ok(octopus_tool_handlers::ToolResultError::new(
-        failure_class,
-        format!("tool process failed with class '{failure_class}'{reason}"),
-    )
-    .with_details(error_details))
+    let message = if failure_class == TOOL_EFFECT_INDETERMINATE {
+        let tool = details.get("tool").and_then(serde_json::Value::as_str).unwrap_or("the tool");
+        format!("Octopus could not confirm the result of {tool}{reason}. The action may already have taken effect.")
+    } else {
+        format!("tool process failed with class '{failure_class}'{reason}")
+    };
+    Ok(octopus_tool_handlers::ToolResultError::new(failure_class, message).with_details(error_details))
 }
 
 
@@ -8852,6 +8856,9 @@ fn oversized_tool_failures_preserve_recovery_evidence() {
         assert!(diagnostic.ends_with("disk is full"));
         assert_eq!(bounded["failure_details"]["truncated"], true);
     }
+    let uncertain = bounded_tool_failure_error(42, TOOL_EFFECT_INDETERMINATE,
+        &serde_json::json!({"tool":"workspace.apply_patch","effect_state":"in_flight_outcome_unknown"})).unwrap();
+    assert!(uncertain.message.contains("could not confirm the result of workspace.apply_patch"));
     let details = serde_json::json!({"error": "permission denied", "tool": "test.write"});
     let error = bounded_tool_failure_error(43, "tool_process_failure", &details).unwrap();
     assert_eq!(error.message, "tool process failed with class 'tool_process_failure': permission denied");

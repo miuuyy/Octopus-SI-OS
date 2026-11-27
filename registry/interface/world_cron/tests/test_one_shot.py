@@ -127,10 +127,33 @@ class OneShotContract(unittest.TestCase):
             if duration == self.module.HOLD_POLL_SECONDS:
                 held.append(len(self.emissions))
                 run("idle")
-        with patch.object(self.module.time, "time_ns", lambda: self.clock), patch.object(self.module.time, "sleep", sleep), patch.object(self.module, "hand_artifact_with_evidence", self.admit):
+        changed = []
+        stable_read = self.module.read_regular_file_bounded
+        def read(path, *args, **kwargs):
+            if Path(path).name == "pinning.json" and not changed:
+                changed.append(True)
+                raise self.module.FileChangedDuringRead("pinning run replaced during observation")
+            return stable_read(path, *args, **kwargs)
+        with patch.object(self.module, "read_regular_file_bounded", read), patch.object(self.module.time, "time_ns", lambda: self.clock), patch.object(self.module.time, "sleep", sleep), patch.object(self.module, "hand_artifact_with_evidence", self.admit):
             self.assertEqual(self.module.run_one_shot(self.schedule(), "Check result"), 7)
+        self.assertEqual(changed, [True])
         self.assertEqual(held, [0])
         self.assertEqual(len(self.emissions), 1)
+
+    def test_unstable_pinning_record_reports_the_read_error_within_one_second(self):
+        (self.runs / "pinning.json").touch()
+        now = 0.0
+        def sleep(delay):
+            nonlocal now
+            now += delay
+        error = self.module.FileChangedDuringRead("pinning run changed while it was read")
+        with patch.object(self.module, "load_json_object", side_effect=error) as read, \
+             patch.object(self.module.time, "monotonic", lambda: now), patch.object(self.module.time, "sleep", sleep):
+            with self.assertRaises(self.module.FileChangedDuringRead) as caught:
+                self.module.working_pinning_runs()
+        self.assertIs(caught.exception, error)
+        self.assertGreater(read.call_count, 1)
+        self.assertEqual(now, 1.0)
 
     def test_crash_after_admission_reuses_prepared_payload_and_exact_ledger_evidence(self):
         def lost_ack(manifest, evidence):

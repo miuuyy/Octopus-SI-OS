@@ -142,17 +142,51 @@ pub(crate) fn recover_provider_result_continuity(
 
 
 pub(crate) fn completed_source_pending_continuity(
-    descriptor: &InterfaceDescriptor, input: &InterfaceInvocationEnvelope,
-    current: &[u8], session: &[SessionContextArtifact],
+    ctx: &octopus_interface_transport::InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    run: &octopus_descriptors::RunId,
+    input: &InterfaceInvocationEnvelope,
+    source_seq: u64,
+    outcomes: &[octopus_run_authoring::ProviderHandoffOutcome],
+    generation: u64,
+    session: &[SessionContextArtifact],
 ) -> Result<Option<CodexContinuityState>, InterfaceDriverError> {
     let runtime = invocation_runtime_metadata(input)?;
+    if runtime.run != *run || runtime.interface != descriptor.id || ctx.interface != runtime.interface {
+        return Err(InterfaceDriverError::FailedClosed("completed source crossed its checked run or provider coordinates".into()));
+    }
     let labels = codex_context_output_labels(descriptor)?;
-    let state = recover_codex_continuity_from_current_session(session, std::slice::from_ref(&input.artifact), &runtime.interface, runtime.run.as_str(), &labels)?;
-    let Some(state) = state.filter(|state| state.pending.as_ref().is_some_and(interrupted_pending_has_external_result)) else { return Ok(None); };
-    let record: serde_json::Value = serde_json::from_slice(current).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
-    if record.get("id").and_then(serde_json::Value::as_str) != Some(runtime.run.as_str())
-        || state.context_generation != read_codex_context_generation(&record, &runtime.interface)?
-    { return Err(InterfaceDriverError::FailedClosed("completed source retained a pending effect without exact checked context coordinates".into())); }
+    let mut state = recover_codex_continuity_from_current_session(
+        session, std::slice::from_ref(&input.artifact), &runtime.interface, runtime.run.as_str(), &labels,
+    )?;
+    // Token usage can be the final admitted output after the last session
+    // snapshot. It carries the same provider continuity without entering the model context.
+    if state.as_ref().is_none_or(|current| current.context_generation < generation) {
+        for outcome in outcomes.iter().rev() {
+            let octopus_run_authoring::ProviderHandoffOutcome::Admitted { seq, artifact } = outcome else { break };
+            if *seq <= source_seq {
+                return Err(InterfaceDriverError::FailedClosed("completed output precedes its source".into()));
+            }
+            let (label, _) = artifact.id.as_str().rsplit_once(':').ok_or_else(||
+                InterfaceDriverError::FailedClosed("completed provider output has no manifest identity".into()))?;
+            if label != TURN_TOKEN_USAGE_LABEL && !labels.contains(label) { continue; }
+            let (_, bytes) = crate::life::read_pinned_provider_artifact(ctx, artifact, "completed provider output")
+                .map_err(InterfaceDriverError::FailedClosed)?;
+            let payload: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
+            let Some(raw) = payload.get(CODEX_CONTINUITY_FIELD) else { continue; };
+            let saved = parse_codex_continuity(raw, &runtime.interface, runtime.run.as_str())?;
+            if state.as_ref().is_none_or(|current| current.context_generation <= saved.context_generation) {
+                state = reconcile_current_session_continuity(state, Some(saved))?;
+            }
+            break;
+        }
+    }
+    let Some(state) = state.filter(|state| state.pending.as_ref().is_some_and(interrupted_pending_has_external_result))
+        else { return Ok(None); };
+    if state.context_generation != generation {
+        return Err(InterfaceDriverError::FailedClosed("completed source retained a pending effect without exact checked context coordinates".into()));
+    }
     Ok(Some(state))
 }
 

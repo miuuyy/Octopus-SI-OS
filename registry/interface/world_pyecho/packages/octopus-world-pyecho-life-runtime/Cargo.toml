@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 blake3.workspace = true
 libc = "0.2.182"
-notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "io-std", "io-util", "time"] }
@@ -18,7 +17,7 @@ tracing = "0.1.44"
 octopus-descriptors = { path = "../../../../../crates/octopus-descriptors" }
 octopus-interface-projection = { path = "../../../../../crates/octopus-interface-projection" }
 octopus-interface-transport = { path = "../../../../../crates/octopus-interface-transport" }
-octopus-interfaces = { path = "../../../../../crates/octopus-interfaces" }
+octopus-interfaces = { path = "../../../../../crates/octopus-interfaces", features = ["ledger-wake"] }
 octopus-ledger = { path = "../../../../../crates/octopus-ledger" }
 octopus-ledger-index = { path = "../../../../../crates/octopus-ledger-index" }
 octopus-ledger-store = { path = "../../../../../crates/octopus-ledger-store" }

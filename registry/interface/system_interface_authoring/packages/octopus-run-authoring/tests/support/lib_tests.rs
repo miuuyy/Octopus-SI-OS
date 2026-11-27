@@ -367,8 +367,10 @@
             let hash = ContentHash::of_bytes(bytes);
             std::fs::write(metadata.join(hash.to_hex()), bytes).unwrap(); Ok(hash)
         }).unwrap();
-        std::fs::write(&path, format!("{foreign_row}\n{own_row}\n")).unwrap();
+        std::fs::write(&path, format!("{foreign_row}\n{own_row}")).unwrap();
         let mut projection = pending_delivery::Ledger::new(source.clone(), path.clone(), 1_048_576);
+        assert_eq!(projection.watermark().unwrap(), 1);
+        writeln!(std::fs::OpenOptions::new().append(true).open(&path).unwrap()).unwrap();
         assert_eq!(projection.watermark().unwrap(), 2);
         assert_eq!(projection.watermark().unwrap(), 2);
         let mut sparse = octopus_ledger_index::InterfaceArrivalProjection::new(source.clone());
