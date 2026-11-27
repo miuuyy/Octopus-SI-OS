@@ -71,7 +71,7 @@ const EFFORT_DESCRIPTIONS: Record<Effort, string> = {
   max: "Maximum reasoning depth for the hardest problems",
 };
 const THINKING_TOGGLE_DESCRIPTIONS: Partial<Record<Effort, string>> = { none: "Thinking off", high: "Thinking on" };
-const CODEX_ONLY_PRIVATE_CONFIG = ["provider_operations", "web_search", "client_metadata", "retained_tool_output"];
+const CODEX_ONLY_PRIVATE_CONFIG = ["provider_operations", "web_search", "client_metadata", "retained_tool_output", "service_tier"];
 const CODEX_ONLY_OVERRIDES = [/^model_context_window=/, /^model_auto_compact_token_limit=/];
 const DEFAULT_CONTEXT_WINDOW = 400000;
 const LIFE_BIN = "interface://world_provider_codex/packages/octopus-provider-codex/life-bin/octopus-provider-opencodex-life";

@@ -38,6 +38,8 @@
           "gpt-6-astra",
           "gpt-6.1-sol",
           "gpt-6.1-terra",
+          "gpt-6.2-sol",
+          "gpt-6.2-astra",
           "chatgpt-web/gpt-6-sol",
           "chatgpt-web/gpt-5.6-sol",
           "chatgpt-web/gpt-5.6-pro",
@@ -2641,6 +2643,94 @@
           "show_in_picker": true
         },
         {
+          "model": "gpt-6.2-sol",
+          "display_name": "GPT-6.2-Sol",
+          "description": "Fast, go-to model for coding and everyday work.",
+          "default_reasoning_effort": "low",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            },
+            {
+              "effort": "ultra",
+              "description": "Maximum reasoning with automatic task delegation"
+            }
+          ],
+          "service_tiers": [
+            {
+              "id": "priority",
+              "name": "Fast",
+              "description": "2x speed, increased usage"
+            },
+            {
+              "id": "ultrafast",
+              "name": "Ultrafast",
+              "description": "The fastest available responses for latency-sensitive work."
+            }
+          ],
+          "default_service_tier": "ultrafast",
+          "show_in_picker": true,
+          "is_default": true
+        },
+        {
+          "model": "gpt-6.2-astra",
+          "display_name": "GPT-6.2-Astra",
+          "description": "Our most capable model for complex, demanding work.",
+          "default_reasoning_effort": "medium",
+          "supported_reasoning_efforts": [
+            {
+              "effort": "low",
+              "description": "Fast responses with lighter reasoning"
+            },
+            {
+              "effort": "medium",
+              "description": "Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "effort": "high",
+              "description": "Greater reasoning depth for complex problems"
+            },
+            {
+              "effort": "xhigh",
+              "description": "Extra high reasoning depth for complex problems"
+            },
+            {
+              "effort": "max",
+              "description": "Maximum reasoning depth for the hardest problems"
+            },
+            {
+              "effort": "ultra",
+              "description": "Maximum reasoning with automatic task delegation"
+            }
+          ],
+          "service_tiers": [
+            {
+              "id": "priority",
+              "name": "Fast",
+              "description": "2x speed, increased usage"
+            }
+          ],
+          "show_in_picker": true,
+          "is_default": false
+        },
+        {
           "model": "gpt-6.1-sol",
           "display_name": "GPT-6.1-Sol",
           "description": "Latest workhorse model for coding and everyday work.",
@@ -2654,7 +2744,7 @@
             "ultra"
           ],
           "show_in_picker": true,
-          "is_default": true
+          "is_default": false
         },
         {
           "model": "gpt-6.1-terra",
@@ -2853,8 +2943,9 @@
           "output_label": "turn.context.compaction"
         }
       },
-      "model": "gpt-5.6-sol",
-      "reasoning_effort": "high",
+      "model": "gpt-6.2-sol",
+      "reasoning_effort": "low",
+      "service_tier": "ultrafast",
       "reasoning_summary": "auto",
       "private_thread_cold_start": "resume_compatible",
       "model_result_projection": {

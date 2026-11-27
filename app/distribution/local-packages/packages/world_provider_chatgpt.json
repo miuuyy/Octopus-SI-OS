@@ -44,6 +44,14 @@
               }
             },
             {
+              "pointer": "/interface_driver_config/private_config/service_tier",
+              "schema": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            {
               "pointer": "/interface_driver_config/private_config/native_thread_sandbox",
               "schema": {
                 "type": "string",

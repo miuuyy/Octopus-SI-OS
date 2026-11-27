@@ -18,7 +18,7 @@
       "registry_kind": "interface",
       "owner": "world_provider_codex",
       "primary": true,
-      "configuration": [{"path":"interface.json","fields":[{"pointer":"/interface_driver_config/private_config/model","schema":{"type":"string","minLength":1}},{"pointer":"/interface_driver_config/private_config/reasoning_effort","schema":{"type":"string","enum":["low","medium","high","xhigh","max","ultra"]}},{"pointer":"/interface_driver_config/private_config/native_thread_sandbox","schema":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]}}]},{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
+      "configuration": [{"path":"interface.json","fields":[{"pointer":"/interface_driver_config/private_config/model","schema":{"type":"string","minLength":1}},{"pointer":"/interface_driver_config/private_config/reasoning_effort","schema":{"type":"string","enum":["low","medium","high","xhigh","max","ultra"]}},{"pointer":"/interface_driver_config/private_config/service_tier","schema":{"type":"string","minLength":1,"maxLength":80}},{"pointer":"/interface_driver_config/private_config/native_thread_sandbox","schema":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]}}]},{"path":"life.json","fields":[{"pointer":"/processes/0/authority/sandbox_mode","schema":{"type":"string","enum":["enforced","disabled"]}}]}]
     },
     {
       "registry_kind": "interface",
