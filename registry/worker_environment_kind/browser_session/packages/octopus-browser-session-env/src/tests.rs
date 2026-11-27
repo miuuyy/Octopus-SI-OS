@@ -2023,3 +2023,210 @@ fn shipped_system_browser_descriptors_support_headless_cdp_and_optional_native_a
     }
     assert!(checked >= 50, "expected all browser.* tool descriptors, checked {checked}");
 }
+
+fn spawn_test_cdp_http(ws_url: String, browser_ws_url: String) -> (String, std::sync::Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let stop_http = stop.clone();
+    let handle = std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let list = json!([{"id": "TARGET1", "type": "page", "title": "Page", "url": "https://example.com/", "webSocketDebuggerUrl": ws_url}]).to_string();
+        let version = json!({"webSocketDebuggerUrl": browser_ws_url}).to_string();
+        while !stop_http.load(Ordering::Acquire) {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let n = std::io::Read::read(&mut stream, &mut buf).unwrap_or(0);
+                let body = if String::from_utf8_lossy(&buf[..n]).contains("GET /json/version") { &version } else { &list };
+                let _ = std::io::Write::write_all(&mut stream, format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    });
+    (format!("http://{addr}"), stop, handle)
+}
+
+fn test_cdp_env(root: &std::path::Path, discovery_url: &str) -> ToolProcessEnvironment {
+    let interface_dir = root.join("registry/interface").join(DOOR);
+    write_browser_interface(&interface_dir, discovery_url);
+    ToolProcessEnvironment {
+        interface: InterfaceId::new(DOOR),
+        interface_dir,
+        descriptor_snapshot: None,
+        var_dir: root.join("var"),
+        durable_var_dir: Some(root.join("durable")),
+        host_io_limits: InterfaceHostIoLimits {
+            max_control_frame_bytes: 1_048_576, max_stderr_bytes: 262_144,
+            max_manifest_bytes: 1_048_576, max_payload_bytes: 16_777_216,
+        },
+        private_reads: BTreeMap::new(),
+        root_slots: BTreeMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn cdp_snapshot_resolves_oopif_promotion_bounds_frames_and_rejects_sibling_collision() {
+    async fn run_scenario(mode: &'static str) -> Value {
+        let ws_listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = ws_listener.local_addr().unwrap();
+        let (http_url, stop, http_task) = spawn_test_cdp_http(format!("ws://{addr}/devtools/page/TARGET1"), format!("ws://{addr}/devtools/browser/BROWSER1"));
+        let ws_task = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (tcp, _) = ws_listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    let mut attached = false;
+                    while let Some(Ok(Message::Text(text))) = socket.next().await {
+                        let req: Value = serde_json::from_str(&text).unwrap();
+                        let (id, method, route) = (req["id"].clone(), req["method"].as_str().unwrap(), req["sessionId"].as_str());
+                        if method == "Target.setAutoAttach" && route.is_none() && !attached {
+                            attached = true;
+                            for sid in match mode { "promote" => &["PROMOTED_SESSION"][..], "sibling" => &["SIBLING_A", "SIBLING_B"][..], _ => &[][..] } {
+                                socket.send(Message::Text(json!({"method": "Target.attachedToTarget", "params": {"sessionId": sid, "targetInfo": {"targetId": sid, "type": "iframe"}}}).to_string().into())).await.unwrap();
+                            }
+                        }
+                        let result = match (method, route) {
+                            ("Target.createBrowserContext", _) => json!({"browserContextId": "CONTEXT1"}),
+                            ("Target.getBrowserContexts", _) => json!({"browserContextIds": ["CONTEXT1"]}),
+                            ("Target.createTarget", _) => json!({"targetId": "TARGET1"}),
+                            ("Target.getTargets", _) => json!({"targetInfos": [{"targetId": "TARGET1", "type": "page", "title": "Page", "url": "https://example.com/", "browserContextId": "CONTEXT1"}]}),
+                            ("Page.navigate", _) => json!({"frameId": "FRAME1", "loaderId": "LOAD1"}),
+                            ("Runtime.evaluate", _) => match req["params"]["expression"].as_str() {
+                                Some("document.readyState") => json!({"result": {"type": "string", "value": "complete"}}),
+                                Some(e) if e.contains("performance.getEntriesByType") => json!({"result": {"value": {"readyState": "complete", "painted": true}}}),
+                                _ => json!({"result": {"type": "object", "value": {"url": "https://example.com/", "title": "Page"}}}),
+                            },
+                            ("Page.getFrameTree", None) => match mode {
+                                "promote" => json!({"frameTree": {"frame": {"id": "FRAME1", "loaderId": "LOAD1"}, "childFrames": [{"frame": {"id": "PROMOTED", "loaderId": "BLANK1", "parentId": "FRAME1"}}]}}),
+                                "sibling" => json!({"frameTree": {"frame": {"id": "FRAME1", "loaderId": "LOAD1"}, "childFrames": [{"frame": {"id": "COLLIDED", "loaderId": "L1", "parentId": "FRAME1"}}]}}),
+                                _ => json!({"frameTree": {"frame": {"id": "FRAME1", "loaderId": "LOAD1"}, "childFrames": (1..=70).map(|i| json!({"frame": {"id": format!("CHILD{i}"), "loaderId": format!("L{i}"), "parentId": "FRAME1"}})).collect::<Vec<_>>()}}),
+                            },
+                            ("Page.getFrameTree", Some("PROMOTED_SESSION")) => json!({"frameTree": {"frame": {"id": "PROMOTED", "loaderId": "REAL1", "parentId": "FRAME1"}}}),
+                            ("Page.getFrameTree", Some("SIBLING_A" | "SIBLING_B")) => json!({"frameTree": {"frame": {"id": "COLLIDED", "loaderId": "REAL1", "parentId": "FRAME1"}}}),
+                            ("DOMSnapshot.captureSnapshot", None) => match mode {
+                                "promote" => json!({"strings": ["FRAME1", "PROMOTED", "IFRAME", "HTML"], "documents": [{"frameId": 0, "nodes": {"nodeName": [2], "backendNodeId": [10]}}, {"frameId": 1, "nodes": {"nodeName": [3], "backendNodeId": [11]}}]}),
+                                "sibling" => json!({"strings": ["FRAME1", "IFRAME"], "documents": [{"frameId": 0, "nodes": {"nodeName": [1], "backendNodeId": [10]}}]}),
+                                _ => {
+                                    let mut strings = vec![json!("FRAME1"), json!("IFRAME"), json!("HTML")];
+                                    strings.extend((1..=70).map(|i| json!(format!("CHILD{i}"))));
+                                    let mut docs = vec![json!({"frameId": 0, "nodes": {"nodeName": vec![1; 70], "backendNodeId": (101..=170).collect::<Vec<_>>()}})];
+                                    docs.extend((1..=70).map(|i| json!({"frameId": i + 2, "nodes": {"nodeName": [2], "backendNodeId": [1000 + i]}})));
+                                    json!({"strings": strings, "documents": docs})
+                                }
+                            },
+                            ("DOMSnapshot.captureSnapshot", Some("PROMOTED_SESSION")) => json!({"strings": ["PROMOTED", "HTML"], "documents": [{"frameId": 0, "nodes": {"nodeName": [1], "backendNodeId": [20]}}]}),
+                            ("DOMSnapshot.captureSnapshot", Some("SIBLING_A" | "SIBLING_B")) => json!({"strings": ["COLLIDED", "HTML"], "documents": [{"frameId": 0, "nodes": {"nodeName": [1], "backendNodeId": [20]}}]}),
+                            ("DOM.describeNode", None) => json!({"node": {"frameId": match mode { "promote" => "PROMOTED".into(), "sibling" => "COLLIDED".into(), _ => format!("CHILD{}", req["params"]["backendNodeId"].as_i64().unwrap() - 100) }}}),
+                            ("DOM.getFrameOwner", None) => json!({"backendNodeId": req["params"]["frameId"].as_str().unwrap().strip_prefix("CHILD").map(|n| 100 + n.parse::<i64>().unwrap()).unwrap_or(10)}),
+                            ("Accessibility.getFullAXTree", _) => {
+                                let fid = req["params"]["frameId"].as_str().unwrap();
+                                if fid == "PROMOTED" { assert_eq!(route, Some("PROMOTED_SESSION")); }
+                                let mut nodes = vec![json!({"nodeId": "1", "role": {"value": "RootWebArea"}, "name": {"value": fid}, "childIds": []})];
+                                if fid == "FRAME1" && mode == "bounded" {
+                                    nodes.extend((1..=70).map(|i| json!({"nodeId": format!("f{i}"), "backendDOMNodeId": 100 + i, "role": {"value": "Iframe"}, "name": {"value": format!("F{i}")}})));
+                                } else if fid == "FRAME1" {
+                                    nodes.push(json!({"nodeId": "2", "backendDOMNodeId": 10, "role": {"value": "Iframe"}, "name": {"value": "Widget"}}));
+                                } else {
+                                    nodes.push(json!({"nodeId": "2", "backendDOMNodeId": 30, "role": {"value": "button"}, "name": {"value": format!("Btn-{fid}")}}));
+                                }
+                                nodes[0]["childIds"] = json!(nodes.iter().skip(1).map(|n| n["nodeId"].clone()).collect::<Vec<_>>());
+                                json!({"nodes": nodes})
+                            }
+                            _ => json!({}),
+                        };
+                        let mut reply = json!({"id": id, "result": result});
+                        if let Some(sid) = route { reply["sessionId"] = json!(sid); }
+                        socket.send(Message::Text(reply.to_string().into())).await.unwrap();
+                    }
+                });
+            }
+        });
+        let root = tempfile::tempdir().unwrap();
+        let room = BrowserRoom::load(test_cdp_env(root.path(), &http_url)).unwrap();
+        let tools = browser_tools();
+        let (formed, kind) = formation("browser_session", &tools, "browser.navigate");
+        let nav = response(received(room.receive(
+            invocation(root.path(), 1, "browser.navigate", json!({"url": "https://example.com/", "wait_until": "complete", "snapshot": true}), &tools, &formed, &kind),
+            &TestWorkerEnvironmentRecorder::default(),
+        ).await));
+        drop(room);
+        stop.store(true, Ordering::Release);
+        let _ = http_task.join();
+        ws_task.abort();
+        nav
+    }
+
+    let promoted = run_scenario("promote").await;
+    assert_eq!(promoted["ok"], true, "OOPIF promotion should succeed: {promoted}");
+    assert_eq!(promoted["body"]["snapshot"]["frame_capture_complete"], true);
+    assert!(promoted["body"]["snapshot"]["frames"].as_array().unwrap().iter().any(|f| f["frame_id"] == "PROMOTED" && f["loader_id"] == "REAL1"));
+
+    let sibling = run_scenario("sibling").await;
+    assert_eq!(sibling["ok"], false, "unrelated sibling collision must fail closed: {sibling}");
+    assert!(sibling["error"]["message"].as_str().unwrap().contains("DOM snapshot frame ownership is ambiguous"));
+
+    let bounded = run_scenario("bounded").await;
+    assert_eq!(bounded["ok"], true, "iframe-heavy page must bound frames with warnings: {bounded}");
+    assert_eq!(bounded["body"]["snapshot"]["frame_capture_complete"], false);
+    assert_eq!(bounded["body"]["snapshot"]["frames"].as_array().unwrap().len(), 64);
+    assert!(bounded["body"]["snapshot"]["frame_warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap_or("").contains("snapshot frame limit")));
+}
+
+#[tokio::test]
+async fn cdp_cookies_omits_empty_urls_and_loopback_accepts_ipv6() {
+    use super::browser_session::{prepare_browser_door_roots_for_descriptor, url_is_loopback};
+    use octopus_interfaces::InterfaceDescriptor;
+
+    assert!(url_is_loopback(&reqwest::Url::parse("http://[::1]:9222").unwrap()));
+    assert!(url_is_loopback(&reqwest::Url::parse("http://127.0.0.1:9222").unwrap()));
+    assert!(!url_is_loopback(&reqwest::Url::parse("http://192.0.2.10:9222").unwrap()));
+    let mut desc: Value = serde_json::from_slice(&std::fs::read(registry_root().join("interface/system_browser/interface.json")).unwrap()).unwrap();
+    desc["interface_driver_config"]["private_config"]["browser_room"]["transport"] = json!({"wire": "cdp", "discovery_url": "http://[::1]:9222"});
+    let ipv6_desc: InterfaceDescriptor = serde_json::from_value(desc).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    prepare_browser_door_roots_for_descriptor(&InterfaceId::new(DOOR), &ipv6_desc, &BTreeMap::from([("interface_var_dir".to_string(), temp.path().to_path_buf())])).unwrap();
+
+    let ws_listener = TokioTcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = ws_listener.local_addr().unwrap();
+    let (http_url, stop, http_task) = spawn_test_cdp_http(format!("ws://{addr}/devtools/page/TARGET1"), format!("ws://{addr}/devtools/browser/BROWSER1"));
+    let cookie_params = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let seen_params = cookie_params.clone();
+    let ws_task = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (tcp, _) = ws_listener.accept().await.unwrap();
+            let seen_params = seen_params.clone();
+            tokio::spawn(async move {
+                let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = socket.next().await {
+                    let req: Value = serde_json::from_str(&text).unwrap();
+                    let result = match req["method"].as_str().unwrap() {
+                        "Target.createBrowserContext" => json!({"browserContextId": "CONTEXT1"}),
+                        "Target.getBrowserContexts" => json!({"browserContextIds": ["CONTEXT1"]}),
+                        "Target.createTarget" => json!({"targetId": "TARGET1"}),
+                        "Target.getTargets" => json!({"targetInfos": [{"targetId": "TARGET1", "type": "page", "title": "Page", "url": "https://example.com/", "browserContextId": "CONTEXT1"}]}),
+                        "Page.navigate" => json!({"frameId": "FRAME1", "loaderId": "LOAD1"}),
+                        "Page.getFrameTree" => json!({"frameTree": {"frame": {"id": "FRAME1", "loaderId": "LOAD1"}}}),
+                        "Runtime.evaluate" => json!({"result": {"type": "object", "value": {"url": "https://example.com/", "title": "Page"}}}),
+                        "Network.getCookies" => { seen_params.lock().unwrap().push(req["params"].clone()); json!({"cookies": [{"name": "sid", "value": "1"}]}) }
+                        _ => json!({}),
+                    };
+                    socket.send(Message::Text(json!({"id": req["id"], "result": result}).to_string().into())).await.unwrap();
+                }
+            });
+        }
+    });
+    let root = tempfile::tempdir().unwrap();
+    let room = BrowserRoom::load(test_cdp_env(root.path(), &http_url)).unwrap();
+    let tools = browser_tools();
+    let (formed, kind) = formation("browser_session", &tools, "browser.navigate");
+    let recorder = TestWorkerEnvironmentRecorder::default();
+    assert_eq!(response(received(room.receive(invocation(root.path(), 1, "browser.navigate", json!({"url": "https://example.com/", "wait_until": "none", "snapshot": false}), &tools, &formed, &kind), &recorder).await))["ok"], true);
+    assert_eq!(response(received(room.receive(invocation(root.path(), 2, "browser.cookies", json!({}), &tools, &formed, &kind), &recorder).await))["ok"], true);
+    assert_eq!(response(received(room.receive(invocation(root.path(), 3, "browser.cookies", json!({"urls": ["https://example.com/"]}), &tools, &formed, &kind), &recorder).await))["ok"], true);
+    drop(room);
+    stop.store(true, Ordering::Release);
+    let _ = http_task.join();
+    ws_task.abort();
+    assert_eq!(*cookie_params.lock().unwrap(), vec![json!({}), json!({"urls": ["https://example.com/"]})]);
+}

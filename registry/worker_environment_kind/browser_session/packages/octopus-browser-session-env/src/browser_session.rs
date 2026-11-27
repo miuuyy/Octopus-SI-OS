@@ -2035,12 +2035,13 @@ impl BrowserRoom {
         let session = state.session.as_mut().ok_or_else(|| {
             "browser.cookies requires browser.navigate or browser.tab_new first".to_string()
         })?;
+        let params = if urls.is_empty() {
+            json!({})
+        } else {
+            json!({"urls": urls})
+        };
         let result = session
-            .command(
-                "browser.cookies",
-                "Network.getCookies",
-                json!({"urls":urls}),
-            )
+            .command("browser.cookies", "Network.getCookies", params)
             .await?;
         let cookies = result
             .get("cookies")
@@ -4041,9 +4042,13 @@ pub(crate) fn safe_control_body_evidence(bytes: &[u8]) -> String {
 
 pub fn url_is_loopback(url: &reqwest::Url) -> bool {
     url.host_str().is_some_and(|host| {
+        let addr_str = host
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(host);
         host.eq_ignore_ascii_case("localhost")
             || host.to_ascii_lowercase().ends_with(".localhost")
-            || host
+            || addr_str
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     })

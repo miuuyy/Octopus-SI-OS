@@ -510,6 +510,14 @@ function Zr(e, t = !1) {
 }
 "###;
 
+const MAX_TRACKED_SESSIONS: usize = 256;
+const MAX_OVERFLOW_SESSIONS: usize = 4096;
+const MAX_FRAME_TREE_ENTRIES: usize = 2048;
+const MAX_SNAPSHOT_FRAMES: usize = 64;
+const MAX_FRAME_REVISIONS: usize = 2048;
+const MAX_LOADING_FRAMES: usize = 512;
+const CHILD_FRAME_CAPTURE_BUDGET: Duration = Duration::from_secs(10);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FrameRoute {
     pub session_id: Option<String>,
@@ -528,8 +536,10 @@ struct AttachedSession {
 #[derive(Default)]
 pub(super) struct FrameState {
     sessions: BTreeMap<String, AttachedSession>,
+    overflowed_sessions: BTreeSet<String>,
     sequence: u64,
     revisions: BTreeMap<(Option<String>, String), u64>,
+    detached_revisions: BTreeSet<(Option<String>, String)>,
     contexts: BTreeMap<Option<String>, u64>,
     navigation_revision: u64,
     loading: BTreeSet<(Option<String>, String)>,
@@ -540,7 +550,7 @@ impl FrameState {
         let mut current = id;
         let mut seen = BTreeSet::new();
         while let Some(id) = current {
-            if !seen.insert(id) || seen.len() > 128 {
+            if !seen.insert(id) || seen.len() > MAX_TRACKED_SESSIONS {
                 return Err("browser iframe ancestry is cyclic or excessive".into());
             }
             current = self
@@ -554,6 +564,31 @@ impl FrameState {
             session_id: id.map(str::to_string),
             attachment_seq: id.map(|id| self.sessions[id].attachment_seq).unwrap_or(0),
         })
+    }
+
+    fn is_ancestor_route(&self, ancestor: &FrameRoute, descendant: &FrameRoute) -> bool {
+        if ancestor == descendant
+            || self.route(ancestor.session_id.as_deref()).ok().as_ref() != Some(ancestor)
+            || self.route(descendant.session_id.as_deref()).ok().as_ref() != Some(descendant)
+        {
+            return false;
+        }
+        let mut current = descendant.session_id.as_deref();
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            if steps >= MAX_TRACKED_SESSIONS {
+                return false;
+            }
+            steps += 1;
+            let Some(entry) = self.sessions.get(id) else {
+                return false;
+            };
+            if entry.parent_session_id == ancestor.session_id {
+                return true;
+            }
+            current = entry.parent_session_id.as_deref();
+        }
+        false
     }
 
     pub fn inventory(&mut self, target: &str, value: &Value) -> Result<(), String> {
@@ -578,7 +613,7 @@ impl FrameState {
         }
         let inventory: Inventory = serde_json::from_value(value.clone())
             .map_err(|error| format!("invalid native frame inventory: {error}"))?;
-        if inventory.target_id != target || inventory.sessions.len() > 128 {
+        if inventory.target_id != target || inventory.sessions.len() > MAX_TRACKED_SESSIONS {
             return Err("native frame inventory is outside this root target".into());
         }
         let mut next = BTreeMap::new();
@@ -607,6 +642,7 @@ impl FrameState {
             next.insert(entry.session_id.clone(), entry);
         }
         self.sessions = next;
+        self.overflowed_sessions.clear();
         self.sequence = maximum;
         Ok(())
     }
@@ -614,6 +650,26 @@ impl FrameState {
     pub fn record(&mut self, event: &Value, native: bool) -> Result<(), String> {
         let route = event.get("sessionId").and_then(Value::as_str);
         let params = &event["params"];
+        if route.is_some_and(|id| self.overflowed_sessions.contains(id)) {
+            match event["method"].as_str() {
+                Some("Target.attachedToTarget")
+                    if params["targetInfo"]["type"] == "iframe" && !native =>
+                {
+                    if let Some(id) = params["sessionId"].as_str().filter(|id| !id.is_empty()) {
+                        if self.overflowed_sessions.len() < MAX_OVERFLOW_SESSIONS {
+                            self.overflowed_sessions.insert(id.into());
+                        }
+                    }
+                }
+                Some("Target.detachedFromTarget") => {
+                    if let Some(id) = params["sessionId"].as_str() {
+                        self.overflowed_sessions.remove(id);
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         match event["method"].as_str() {
             Some("Target.attachedToTarget")
                 if params["targetInfo"]["type"] == "iframe" && !native =>
@@ -634,8 +690,14 @@ impl FrameState {
                         return Err("iframe attachment identity changed".into());
                     }
                 } else {
-                    if self.sessions.len() >= 128 || route == Some(id) {
+                    if route == Some(id) {
                         return Err("iframe attachment exceeds its ancestry boundary".into());
+                    }
+                    if self.sessions.len() >= MAX_TRACKED_SESSIONS {
+                        if self.overflowed_sessions.len() < MAX_OVERFLOW_SESSIONS {
+                            self.overflowed_sessions.insert(id.into());
+                        }
+                        return Ok(());
                     }
                     self.sequence = self
                         .sequence
@@ -657,7 +719,7 @@ impl FrameState {
                     self.navigation_revision = self.navigation_revision.saturating_add(1);
                     self.loading
                         .insert((route.map(str::to_string), frame.into()));
-                    if self.loading.len() > 512 {
+                    if self.loading.len() > MAX_LOADING_FRAMES {
                         return Err("loading frame inventory exceeds its boundary".into());
                     }
                 }
@@ -673,6 +735,11 @@ impl FrameState {
                 }
             }
             Some("Target.detachedFromTarget") => {
+                if let Some(id) = params["sessionId"].as_str() {
+                    if self.overflowed_sessions.remove(id) {
+                        return Ok(());
+                    }
+                }
                 let mut removed = BTreeSet::new();
                 if let Some(id) = params["sessionId"].as_str() {
                     removed.insert(id.to_string());
@@ -697,6 +764,8 @@ impl FrameState {
                 self.sessions.retain(|id, _| !removed.contains(id));
                 self.revisions
                     .retain(|(id, _), _| !id.as_ref().is_some_and(|id| removed.contains(id)));
+                self.detached_revisions
+                    .retain(|(id, _)| !id.as_ref().is_some_and(|id| removed.contains(id)));
                 self.contexts
                     .retain(|id, _| !id.as_ref().is_some_and(|id| removed.contains(id)));
             }
@@ -707,23 +776,43 @@ impl FrameState {
                     return Ok(());
                 }
                 self.navigation_revision = self.navigation_revision.saturating_add(1);
+                if event["method"] == "Page.frameNavigated"
+                    && route.is_none()
+                    && params["frame"].get("parentId").is_none()
+                {
+                    if let Some(main_id) = params["frame"]["id"].as_str() {
+                        self.loading
+                            .retain(|(r, fid)| r.is_some() || fid == main_id);
+                        self.revisions
+                            .retain(|(r, fid), _| r.is_some() || fid == main_id);
+                        self.detached_revisions
+                            .retain(|(r, fid)| r.is_some() || fid == main_id);
+                    }
+                }
                 if event["method"] == "Page.frameDetached" {
                     if let Some(frame) = params["frameId"].as_str() {
-                        self.loading
-                            .remove(&(route.map(str::to_string), frame.into()));
+                        let key = (route.map(str::to_string), frame.into());
+                        self.loading.remove(&key);
+                        self.detached_revisions.insert(key);
                     }
                 }
                 let id = params["frame"]["id"]
                     .as_str()
                     .or_else(|| params["frameId"].as_str());
                 if let Some(id) = id {
-                    let revision = self
-                        .revisions
-                        .entry((route.map(str::to_string), id.into()))
-                        .or_default();
+                    let key = (route.map(str::to_string), id.into());
+                    if event["method"] != "Page.frameDetached" {
+                        self.detached_revisions.remove(&key);
+                    }
+                    let revision = self.revisions.entry(key).or_default();
                     *revision = revision.saturating_add(1);
                 }
-                if self.revisions.len() > 2048 {
+                if self.revisions.len() > MAX_FRAME_REVISIONS {
+                    for key in std::mem::take(&mut self.detached_revisions) {
+                        self.revisions.remove(&key);
+                    }
+                }
+                if self.revisions.len() > MAX_FRAME_REVISIONS {
                     return Err("browser frame revision inventory exceeds its bound; reconnect for a fresh snapshot".into());
                 }
             }
@@ -764,8 +853,11 @@ fn tree_documents(tree: &Value) -> Result<BTreeMap<String, Value>, String> {
             .as_str()
             .filter(|id| !id.is_empty())
             .ok_or("browser frame tree has no frame identity")?;
-        if documents.len() >= 512 || documents.insert(id.into(), node["frame"].clone()).is_some() {
-            return Err("browser frame tree is cyclic or excessive".into());
+        if documents.insert(id.into(), node["frame"].clone()).is_some() {
+            return Err("browser frame tree is cyclic".into());
+        }
+        if documents.len() > MAX_FRAME_TREE_ENTRIES {
+            return Err("browser frame tree exceeds safety limit".into());
         }
         if let Some(children) = node.get("childFrames") {
             queue.extend(
@@ -778,39 +870,47 @@ fn tree_documents(tree: &Value) -> Result<BTreeMap<String, Value>, String> {
     Ok(documents)
 }
 
+async fn validate_frame_in_trees(
+    session: &mut CdpSession,
+    trees: &mut BTreeMap<Option<String>, BTreeMap<String, Value>>,
+    frame: &FrameDocument,
+) -> Result<(), String> {
+    let id = frame.route.session_id.as_deref();
+    if session.frames.route(id)? != frame.route {
+        return Err("browser ref belongs to a detached iframe; call browser.snapshot".into());
+    }
+    if !trees.contains_key(&frame.route.session_id) {
+        let tree = session
+            .command_in("browser.observe", id, "Page.getFrameTree", json!({}))
+            .await?;
+        trees.insert(
+            frame.route.session_id.clone(),
+            tree_documents(&tree["frameTree"])?,
+        );
+    }
+    let current = trees[&frame.route.session_id]
+        .get(&frame.document.frame_id)
+        .ok_or("browser ref frame is no longer in its owning target")?;
+    if document_identity(current)? != frame.document
+        || session
+            .frames
+            .revision(&frame.route, &frame.document.frame_id)
+            != (frame.revision, frame.context_revision)
+    {
+        return Err(
+            "browser ref belongs to a stale document in its frame; call browser.snapshot".into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) async fn validate_frames(
     session: &mut CdpSession,
     path: &[FrameDocument],
 ) -> Result<(), String> {
     let mut trees = BTreeMap::new();
     for frame in path {
-        let id = frame.route.session_id.as_deref();
-        if session.frames.route(id)? != frame.route {
-            return Err("browser ref belongs to a detached iframe; call browser.snapshot".into());
-        }
-        if !trees.contains_key(&frame.route.session_id) {
-            let tree = session
-                .command_in("browser.observe", id, "Page.getFrameTree", json!({}))
-                .await?;
-            trees.insert(
-                frame.route.session_id.clone(),
-                tree_documents(&tree["frameTree"])?,
-            );
-        }
-        let current = trees[&frame.route.session_id]
-            .get(&frame.document.frame_id)
-            .ok_or("browser ref frame is no longer in its owning target")?;
-        if document_identity(current)? != frame.document
-            || session
-                .frames
-                .revision(&frame.route, &frame.document.frame_id)
-                != (frame.revision, frame.context_revision)
-        {
-            return Err(
-                "browser ref belongs to a stale document in its frame; call browser.snapshot"
-                    .into(),
-            );
-        }
+        validate_frame_in_trees(session, &mut trees, frame).await?;
     }
     for frame in path {
         if session.frames.route(frame.route.session_id.as_deref())? != frame.route
@@ -843,14 +943,32 @@ fn snapshot_string<'a>(snapshot: &'a Value, index: &Value) -> Result<&'a str, St
 pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapture, String> {
     let mut queue = VecDeque::from([session.frames.route(None)?]);
     let mut captures = BTreeMap::new();
+    let mut capture_order = Vec::new();
     let mut capture_bytes = 0usize;
     let mut attempted = BTreeSet::new();
     let mut warnings = Vec::new();
+    let mut omitted_sessions = 0usize;
+    let mut child_budget_exceeded = false;
+    let child_capture_start = Instant::now();
     while let Some(route) = queue.pop_front() {
         if !attempted.insert(route.session_id.clone()) {
             continue;
         }
         let id = route.session_id.as_deref();
+        if id.is_some() {
+            if session.frames.route(id).ok().as_ref() != Some(&route) {
+                continue;
+            }
+            if captures.len() >= MAX_SNAPSHOT_FRAMES {
+                omitted_sessions += 1;
+                continue;
+            }
+            if child_capture_start.elapsed() >= CHILD_FRAME_CAPTURE_BUDGET {
+                child_budget_exceeded = true;
+                omitted_sessions += 1;
+                continue;
+            }
+        }
         let capture = async {
             for method in ["Page.enable", "Runtime.enable", "Accessibility.enable"] {
                 session.command_in("browser.snapshot", id, method, json!({})).await?;
@@ -871,6 +989,7 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
                 if capture_bytes > 96 * 1024 * 1024 {
                     return Err("frame DOM capture exceeds its aggregate byte limit".into());
                 }
+                capture_order.push(route.session_id.clone());
                 captures.insert(route.session_id.clone(), (route.clone(), capture));
             }
             Err(error) if id.is_some() && session.usable => {
@@ -884,98 +1003,201 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
             }
         }
     }
-    let mut documents = BTreeMap::new();
-    let mut edges = BTreeMap::new();
-    for (route, (tree, snapshot)) in captures.values() {
+    if !session.frames.overflowed_sessions.is_empty() {
+        warnings.push(format!(
+            "Skipped {} additional iframe attachment(s) after reaching session tracking limit ({MAX_TRACKED_SESSIONS})",
+            session.frames.overflowed_sessions.len()
+        ));
+    }
+    if omitted_sessions > 0 {
+        if child_budget_exceeded {
+            warnings.push(format!(
+                "Skipped {omitted_sessions} additional iframe session(s) after reaching child frame capture time budget"
+            ));
+        } else {
+            warnings.push(format!(
+                "Skipped {omitted_sessions} additional iframe session(s) after reaching snapshot frame limit ({MAX_SNAPSHOT_FRAMES})"
+            ));
+        }
+    }
+    let root = current_document(session).await?.frame_id;
+    let mut live_capture_order = Vec::new();
+    for key in capture_order {
+        let route = &captures[&key].0;
+        if route.session_id.is_some()
+            && session.frames.route(route.session_id.as_deref()).ok().as_ref() != Some(route)
+        {
+            warnings.push("Iframe session detached during capture".into());
+            continue;
+        }
+        live_capture_order.push(key);
+    }
+    let mut owners: BTreeMap<String, (Option<String>, usize)> = BTreeMap::new();
+    for key in &live_capture_order {
+        let (route, (tree, snapshot)) = &captures[key];
         let rows = snapshot["documents"]
             .as_array()
             .ok_or("DOM snapshot has no documents")?;
-        for row in rows {
+        let mut seen_in_capture = BTreeSet::new();
+        for (row_index, row) in rows.iter().enumerate() {
             let frame_id = snapshot_string(snapshot, &row["frameId"])?;
-            let frame = tree
-                .get(frame_id)
-                .ok_or("DOM snapshot frame is absent from its owning frame tree")?;
-            let document = document_identity(frame)?;
-            let (revision, context_revision) = session.frames.revision(route, frame_id);
-            if documents.len() >= 512
-                || documents
-                    .insert(
-                        frame_id.to_string(),
-                        FrameDocument {
-                            document,
-                            route: route.clone(),
-                            revision,
-                            context_revision,
-                            parent_id: None,
-                            owner_backend_node_id: None,
-                        },
-                    )
-                    .is_some()
-            {
-                return Err("DOM snapshot frame ownership is ambiguous or excessive".into());
+            if !seen_in_capture.insert(frame_id) {
+                return Err("DOM snapshot frame ownership is ambiguous".into());
             }
-            let names = row["nodes"]["nodeName"]
-                .as_array()
-                .ok_or("DOM snapshot has no node names")?;
-            let backend_ids = row["nodes"]["backendNodeId"]
-                .as_array()
-                .ok_or("DOM snapshot has no node identities")?;
-            if names.len() != backend_ids.len() {
-                return Err("DOM snapshot node columns differ".into());
-            }
-            for (index, name) in names.iter().enumerate() {
-                if !matches!(snapshot_string(snapshot, name)?, "IFRAME" | "FRAME") {
-                    continue;
+            if !tree.contains_key(frame_id) {
+                if frame_id == root || (route.session_id.is_none() && row_index == 0) {
+                    return Err("DOM snapshot frame is absent from its owning frame tree".into());
                 }
-                let owner = backend_ids[index]
-                    .as_i64()
-                    .filter(|id| *id > 0)
-                    .ok_or("iframe owner has no backend node id")?;
-                let child = match session
-                    .command_in(
-                        "browser.snapshot",
-                        route.session_id.as_deref(),
-                        "DOM.describeNode",
-                        json!({"backendNodeId":owner}),
-                    )
-                    .await
-                {
-                    Ok(child) => child,
-                    Err(error) if session.usable => {
-                        warnings.push(format!(
-                            "Iframe in {frame_id} accessibility unavailable: {error}"
-                        ));
-                        continue;
+                warnings.push(format!(
+                    "Iframe {frame_id} accessibility unavailable: frame absent from owning frame tree"
+                ));
+                continue;
+            }
+            match owners.get(frame_id) {
+                None => {
+                    owners.insert(frame_id.to_string(), (key.clone(), row_index));
+                }
+                Some((prev_key, _)) => {
+                    let prev_route = &captures[prev_key].0;
+                    if session.frames.is_ancestor_route(prev_route, route) {
+                        owners.insert(frame_id.to_string(), (key.clone(), row_index));
+                    } else if !session.frames.is_ancestor_route(route, prev_route) {
+                        return Err("DOM snapshot frame ownership is ambiguous".into());
                     }
-                    Err(error) => return Err(error),
-                };
-                let Some(child) = child["node"]["frameId"].as_str() else {
-                    warnings.push(format!(
-                        "Iframe in {frame_id} accessibility unavailable: no child frame identity"
-                    ));
-                    continue;
-                };
-                if edges
-                    .insert(
-                        child.to_string(),
-                        (frame_id.to_string(), owner, route.clone()),
-                    )
-                    .is_some()
-                {
-                    return Err("iframe has multiple DOM owners".into());
                 }
             }
         }
     }
-    let root = current_document(session).await?.frame_id;
-    for (id, (parent, owner, parent_route)) in &edges {
-        let Some(child) = documents.get_mut(id) else {
-            warnings.push(format!(
-                "Iframe {id} accessibility unavailable: no attached document"
-            ));
+    let mut selected_order = Vec::new();
+    let mut selected_set = BTreeSet::new();
+    let mut omitted_frame_ids = BTreeSet::new();
+    if owners.contains_key(&root) {
+        selected_order.push(root.clone());
+        selected_set.insert(root.clone());
+    }
+    for key in &live_capture_order {
+        let (_, (_, snapshot)) = &captures[key];
+        let Some(rows) = snapshot["documents"].as_array() else {
             continue;
         };
-        if let Some(declared_parent) = captures[&child.route.session_id].1 .0[id]
+        for (row_index, row) in rows.iter().enumerate() {
+            let frame_id = snapshot_string(snapshot, &row["frameId"])?;
+            if owners.get(frame_id) != Some(&(key.clone(), row_index))
+                || selected_set.contains(frame_id)
+            {
+                continue;
+            }
+            if selected_order.len() < MAX_SNAPSHOT_FRAMES {
+                selected_order.push(frame_id.to_string());
+                selected_set.insert(frame_id.to_string());
+            } else {
+                omitted_frame_ids.insert(frame_id.to_string());
+            }
+        }
+    }
+    if !omitted_frame_ids.is_empty() {
+        warnings.push(format!(
+            "Omitted {} additional iframe document(s) after reaching snapshot frame limit ({MAX_SNAPSHOT_FRAMES})",
+            omitted_frame_ids.len()
+        ));
+    }
+    let mut documents = BTreeMap::new();
+    let mut edges = BTreeMap::new();
+    let mut described_iframes = 0usize;
+    let mut omitted_iframe_elements = 0usize;
+    for frame_id in &selected_order {
+        let (key, row_index) = &owners[frame_id];
+        let (route, (tree, snapshot)) = &captures[key];
+        let row = &snapshot["documents"][*row_index];
+        let frame = &tree[frame_id];
+        let document = document_identity(frame)?;
+        let (revision, context_revision) = session.frames.revision(route, frame_id);
+        documents.insert(
+            frame_id.clone(),
+            FrameDocument {
+                document,
+                route: route.clone(),
+                revision,
+                context_revision,
+                parent_id: None,
+                owner_backend_node_id: None,
+            },
+        );
+        let names = row["nodes"]["nodeName"]
+            .as_array()
+            .ok_or("DOM snapshot has no node names")?;
+        let backend_ids = row["nodes"]["backendNodeId"]
+            .as_array()
+            .ok_or("DOM snapshot has no node identities")?;
+        if names.len() != backend_ids.len() {
+            return Err("DOM snapshot node columns differ".into());
+        }
+        for (index, name) in names.iter().enumerate() {
+            if !matches!(snapshot_string(snapshot, name)?, "IFRAME" | "FRAME") {
+                continue;
+            }
+            let owner = backend_ids[index]
+                .as_i64()
+                .filter(|id| *id > 0)
+                .ok_or("iframe owner has no backend node id")?;
+            if edges.len() >= MAX_SNAPSHOT_FRAMES || described_iframes >= MAX_SNAPSHOT_FRAMES * 2 {
+                omitted_iframe_elements += 1;
+                continue;
+            }
+            described_iframes += 1;
+            let child = match session
+                .command_in(
+                    "browser.snapshot",
+                    route.session_id.as_deref(),
+                    "DOM.describeNode",
+                    json!({"backendNodeId":owner}),
+                )
+                .await
+            {
+                Ok(child) => child,
+                Err(error) if session.usable => {
+                    warnings.push(format!(
+                        "Iframe in {frame_id} accessibility unavailable: {error}"
+                    ));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(child) = child["node"]["frameId"].as_str() else {
+                warnings.push(format!(
+                    "Iframe in {frame_id} accessibility unavailable: no child frame identity"
+                ));
+                continue;
+            };
+            if edges
+                .insert(
+                    child.to_string(),
+                    (frame_id.to_string(), owner, route.clone()),
+                )
+                .is_some()
+            {
+                return Err("iframe has multiple DOM owners".into());
+            }
+        }
+    }
+    if omitted_iframe_elements > 0 {
+        warnings.push(format!(
+            "Omitted {omitted_iframe_elements} additional iframe element(s) after reaching snapshot frame limit ({MAX_SNAPSHOT_FRAMES})"
+        ));
+    }
+    for (id, (parent, owner, parent_route)) in &edges {
+        let Some(child_route) = documents.get(id).map(|child| child.route.clone()) else {
+            if !omitted_frame_ids.contains(id)
+                && omitted_sessions == 0
+                && session.frames.overflowed_sessions.is_empty()
+            {
+                warnings.push(format!(
+                    "Iframe {id} accessibility unavailable: no attached document"
+                ));
+            }
+            continue;
+        };
+        if let Some(declared_parent) = captures[&child_route.session_id].1 .0[id]
             .get("parentId")
             .and_then(Value::as_str)
         {
@@ -983,35 +1205,58 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
                 return Err("iframe frame tree does not match its DOM parent".into());
             }
         }
-        if child.route != *parent_route {
-            let entry = session
-                .frames
-                .sessions
-                .get(
-                    child
-                        .route
-                        .session_id
-                        .as_deref()
-                        .ok_or("child frame lost its owning session")?,
-                )
-                .ok_or("child frame was detached")?;
+        if child_route != *parent_route {
+            let session_id = child_route
+                .session_id
+                .as_deref()
+                .ok_or("child frame lost its owning session")?;
+            let Some(entry) = session.frames.sessions.get(session_id) else {
+                if !session.usable {
+                    return Err("child frame was detached".into());
+                }
+                documents.remove(id);
+                warnings.push(format!(
+                    "Iframe {id} accessibility unavailable: child frame was detached"
+                ));
+                continue;
+            };
             if entry.parent_session_id != parent_route.session_id {
                 return Err("iframe debugger ancestry differs from its DOM owner".into());
             }
         }
-        let actual = session
+        let actual = match session
             .command_in(
                 "browser.snapshot",
                 parent_route.session_id.as_deref(),
                 "DOM.getFrameOwner",
                 json!({"frameId":id}),
             )
-            .await?;
+            .await
+        {
+            Ok(actual) => actual,
+            Err(error) if session.usable => {
+                documents.remove(id);
+                warnings.push(format!(
+                    "Iframe {id} accessibility unavailable: {error}"
+                ));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if actual["backendNodeId"].as_i64() != Some(*owner) {
-            return Err("iframe DOM owner changed during capture".into());
+            if !session.usable {
+                return Err("iframe DOM owner changed during capture".into());
+            }
+            documents.remove(id);
+            warnings.push(format!(
+                "Iframe {id} accessibility unavailable: DOM owner changed during capture"
+            ));
+            continue;
         }
-        child.parent_id = Some(parent.clone());
-        child.owner_backend_node_id = Some(*owner);
+        if let Some(child) = documents.get_mut(id) {
+            child.parent_id = Some(parent.clone());
+            child.owner_backend_node_id = Some(*owner);
+        }
     }
     let path_for = |frame: &FrameDocument| -> Result<Vec<FrameDocument>, String> {
         let mut path = vec![];
@@ -1047,10 +1292,8 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
         }
     }
     ordered.sort_by_key(|(_, path)| path.len());
-    let mut nodes = Vec::<Value>::new();
+    let mut captured_ax = Vec::new();
     let mut ax_bytes = 0usize;
-    let mut provenance = BTreeMap::new();
-    let mut included = Vec::new();
     for (frame, path) in ordered {
         let capture = session
             .command_in(
@@ -1071,7 +1314,7 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
             }
             Err(error) => return Err(error),
         };
-        let mut child_nodes = result["nodes"]
+        let child_nodes = result["nodes"]
             .as_array()
             .ok_or("frame accessibility result has no nodes")?
             .clone();
@@ -1092,6 +1335,33 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
         );
         if ax_bytes > 96 * 1024 * 1024 {
             return Err("frame AX capture exceeds its aggregate byte limit".into());
+        }
+        captured_ax.push((frame, path, child_nodes));
+    }
+    let mut trees = BTreeMap::new();
+    let mut nodes = Vec::<Value>::new();
+    let mut provenance = BTreeMap::new();
+    let mut included = Vec::new();
+    let mut included_ids = BTreeSet::new();
+    for (frame, path, mut child_nodes) in captured_ax {
+        if let Some(parent) = &frame.parent_id {
+            if !included_ids.contains(parent) {
+                warnings.push(format!(
+                    "Iframe {} accessibility unavailable: parent iframe was excluded",
+                    frame.document.frame_id
+                ));
+                continue;
+            }
+            if let Err(error) = validate_frame_in_trees(session, &mut trees, &frame).await {
+                if !session.usable {
+                    return Err(error);
+                }
+                warnings.push(format!(
+                    "Iframe {} accessibility unavailable: {error}",
+                    frame.document.frame_id
+                ));
+                continue;
+            }
         }
         let namespace = |id: &str| json!([frame.document.frame_id, id]).to_string();
         for node in &mut child_nodes {
@@ -1148,13 +1418,13 @@ pub(super) async fn capture_frames(session: &mut CdpSession) -> Result<FrameCapt
                 .ok_or("iframe AX child list is malformed")?
                 .extend(roots);
         }
+        included_ids.insert(frame.document.frame_id.clone());
         included.push(frame);
         nodes.extend(child_nodes);
     }
     if !included.iter().any(|frame| frame.document.frame_id == root) {
         return Err("root frame accessibility is unavailable".into());
     }
-    validate_frames(session, &included).await?;
     Ok(FrameCapture {
         nodes,
         provenance,

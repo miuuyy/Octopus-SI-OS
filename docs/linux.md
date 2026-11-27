@@ -319,6 +319,7 @@ Group=operator
 SupplementaryGroups=octopus-process
 WorkingDirectory=/home/operator
 Environment=OCTOPUS_HOME=/home/operator/.octopus
+Environment=PATH=/home/operator/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Uncomment if Node.js 24+ is not on systemd's default PATH:
 # Environment=OCTOPUS_NODE=/usr/local/bin/node
 ExecStart=/opt/octopus-os/octopus --home /home/operator/.octopus up --foreground
@@ -341,12 +342,15 @@ authority service. To supervise a standalone bundle outside the checkout, pass
 `octopus up --foreground` runs stopped-transaction recovery, starts the release
 runtime attached in the foreground with stdout and stderr inherited (so
 `journald` captures runtime logs), preserves `OCTOPUS_NODE` on `PATH` for child
-processes, and forwards `SIGTERM`, `SIGINT`, and `SIGHUP` to the runtime. It
+processes, appends `$HOME/.local/bin` to `PATH` when that directory exists, and
+forwards `SIGTERM`, `SIGINT`, and `SIGHUP` to the runtime. It
 fails closed if a runtime is already running for that Home (stop any manually
 started instance with `./octopus down` before starting the unit) and cannot be
 combined with `--json` or `--timeout`. Variables in `<OCTOPUS_HOME>/.env` are
 loaded automatically, with unit `Environment=` or `EnvironmentFile=` values
-taking precedence. With `Restart=on-failure`, an explicit `./octopus down` exits
+taking precedence (note that `systemd` always supplies a default `PATH`, so set
+`Environment=PATH=...` in the unit when exposing additional user toolchain
+directories). With `Restart=on-failure`, an explicit `./octopus down` exits
 `0` and leaves the service stopped until started again, while an unexpected
 runtime exit restarts it.
 
@@ -426,6 +430,54 @@ member ownership transfers between their manifests. Both the old and new owner
 packages must be selected (including with `--only`); sync refuses duplicate
 ownership, transferred-file drift, and removals without a receiving package.
 If one selected repair is refused, the batch does not proceed independently.
+
+## Browser rooms on Linux (CDP)
+
+`driver.browser_session` is an optional bundled package and can be installed on
+headless Linux with the package manager above (`driver.browser_session`). Its
+default `system_browser/interface.json` declares `"wire": "browser.native.v1"`
+for the desktop app's native browser host and fails closed when
+`browser_native_host_root` is absent.
+
+To run `system_browser` on headless Linux without the desktop app, start a local
+Chromium or Chrome process bound to loopback with a dedicated profile directory:
+
+```sh
+chromium --headless=new --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=9222 --user-data-dir=/home/operator/.cache/octopus-chromium
+```
+
+Then replace `interface_driver_config.private_config.browser_room.transport` in
+`<OCTOPUS_HOME>/registry/interface/system_browser/interface.json` with a `cdp`
+transport:
+
+```json
+{
+  "wire": "cdp",
+  "discovery_url": "http://127.0.0.1:9222"
+}
+```
+
+`driver.browser_session` declares this transport choice as allowed local
+configuration, so `octopus packages check` treats it as valid configuration
+rather than drift. Plaintext `http://` discovery URLs are restricted to loopback
+(`127.0.0.1`, `[::1]`, `localhost`); non-loopback endpoints require `https://`
+and `wss://` and support `auth_required` / `auth_env_key` and
+`discovery_url_env`. To expose multiple CDP endpoints side by side, author a
+separate door interface with `copy_of: "system_browser"`.
+
+Each browser room creates and disposes its own isolated Chromium
+`BrowserContext` via `Target.createBrowserContext`. Under AppArmor,
+`system_browser/life.json` keeps `browser_native_host_root` optional and
+`allow_network: false` (validating CDP config statically before delegating),
+while CDP-capable `browser.*` tools declare `allow_network: true` and mark
+`secrets/browser-native-host.auth` optional. Navigation, accessibility
+snapshots, click/type/key/scroll/hover/select/drag, evaluation, screenshots,
+PDF, cookies, tabs, console, dialogs, and polling waits work over CDP;
+native-host-only tools (`browser.download_*`, `browser.filechooser_*`,
+`browser.history*`, `browser.locator_*`, `browser.dom_*`, `browser.clipboard_*`,
+`browser.tab_mark`, `browser.visibility_*`, and retained `browser.wait` phases)
+fail closed.
 
 ## Staged self-update for systemd installations
 
