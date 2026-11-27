@@ -5929,8 +5929,10 @@ printf '%s\n' '{"kind":"asleep","through_seq":0}'"#;
         ]);
         let absent_auth = temp_root.join(".codex/auth.json");
         let absent_lock = temp_root.join(".codex/auth.lock");
+        let work_root = tempfile::tempdir_in(&temp_root).unwrap();
         assert!(!absent_auth.exists());
         let environment = BTreeMap::from([
+            (NEUTRAL_WORK_ROOT_ENV.to_string(), work_root.path().as_os_str().to_owned()),
             (
                 "OCTOPUS_MACHINE_CODEX_AUTH_FILE".to_string(),
                 absent_auth.as_os_str().to_os_string(),
