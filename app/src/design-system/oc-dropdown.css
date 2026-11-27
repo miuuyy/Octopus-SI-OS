@@ -13,26 +13,136 @@
   position: fixed;
   pointer-events: auto;
   outline: none;
+  -webkit-app-region: no-drag;
   min-width: min(220px, calc(100vw - 16px));
+  max-width: min(var(--radix-dropdown-menu-content-available-width, calc(100vw - 16px)), calc(100vw - 16px));
+  max-height: min(var(--radix-dropdown-menu-content-available-height, calc(100dvh - 16px)), calc(100dvh - 16px), var(--menu-max-height, 1200px));
   width: max-content;
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin, center top);
+  will-change: transform;
+}
+
+.oc-dropdown[data-entering] {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+.oc-dropdown[data-entering-active] {
+  opacity: 1;
+  transform: scale(1);
+  transition-property: opacity, transform;
+  transition-duration: 0.15s;
+  transition-timing-function: var(--cubic-enter);
+}
+
+.oc-dropdown[data-exiting] {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: none;
+}
+
+.oc-dropdown[data-exiting-active] {
+  opacity: 0;
+  transform: scale(0.95);
+  pointer-events: none;
+  transition-property: opacity, transform;
+  transition-duration: 0.1s;
+  transition-timing-function: var(--cubic-exit);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.full-motion) .oc-dropdown[data-entering],
+  :root:not(.full-motion) .oc-dropdown[data-entering-active],
+  :root:not(.full-motion) .oc-dropdown[data-exiting],
+  :root:not(.full-motion) .oc-dropdown[data-exiting-active] {
+    transition: none;
+    transform: none;
+  }
+}
+
+:root.reduce-motion .oc-dropdown[data-entering],
+:root.reduce-motion .oc-dropdown[data-entering-active],
+:root.reduce-motion .oc-dropdown[data-exiting],
+:root.reduce-motion .oc-dropdown[data-exiting-active],
+:root[data-reduced-motion="true"] .oc-dropdown[data-entering],
+:root[data-reduced-motion="true"] .oc-dropdown[data-entering-active],
+:root[data-reduced-motion="true"] .oc-dropdown[data-exiting],
+:root[data-reduced-motion="true"] .oc-dropdown[data-exiting-active] {
+  transition: none;
+  transform: none;
+}
+
+.oc-dropdown[data-scroll-peek="true"] {
+  --menu-max-height: calc(
+    round(nearest, 250px, var(--app-menu-item-height, var(--menu-item-height, 28px))) +
+    var(--app-menu-item-height, var(--menu-item-height, 28px)) / 2 +
+    var(--menu-gutter, var(--spacing))
+  );
+}
+
+.oc-dropdown[data-content-width="menuNarrow"] {
+  min-width: min(208px, calc(100vw - 16px));
+  width: 208px;
+  max-width: min(208px, calc(100vw - 16px));
+}
+
+.oc-dropdown[data-content-width="menuFixed"] {
+  min-width: min(220px, calc(100vw - 16px));
+  width: 220px;
+  max-width: min(220px, calc(100vw - 16px));
 }
 
 .oc-dropdown[data-content-width="sidebar"] {
   min-width: min(172px, calc(100vw - 16px));
   width: max-content;
-  max-width: 240px;
+  max-width: min(240px, calc(100vw - 16px));
+}
+
+.oc-dropdown[data-content-width="railMenu"] {
+  min-width: min(228px, calc(100vw - 16px));
+  width: 228px;
+  max-width: min(228px, calc(100vw - 16px));
 }
 
 .oc-dropdown[data-content-width="menuBounded"] {
   min-width: min(200px, calc(100vw - 16px));
   width: max-content;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
 }
 
 .oc-dropdown[data-content-width="menuWide"] {
   min-width: min(240px, calc(100vw - 16px));
   width: 240px;
-  max-width: 240px;
+  max-width: min(240px, calc(100vw - 16px));
+}
+
+.oc-dropdown[data-content-width="menuReadout"] {
+  min-width: min(260px, calc(100vw - 16px));
+  width: 260px;
+  max-width: min(260px, calc(100vw - 16px));
+}
+
+.oc-dropdown[data-content-width="workspace"] {
+  min-width: min(260px, calc(100vw - 16px));
+  width: max-content;
+}
+
+.oc-dropdown[data-content-width="panel"] {
+  min-width: min(var(--dropdown-overlay-panel-width, 280px), calc(100vw - 16px));
+  width: var(--dropdown-overlay-panel-width, 280px);
+  max-width: min(var(--dropdown-overlay-panel-width, 280px), calc(100vw - 16px));
+}
+
+.oc-dropdown[data-content-width="panelWide"] {
+  min-width: min(360px, calc(100vw - 16px));
+  width: 360px;
+  max-width: min(360px, calc(100vw - 16px));
+}
+
+.oc-dropdown[data-content-width="panelExtraWide"] {
+  min-width: min(408px, calc(100vw - 16px));
+  width: 408px;
+  max-width: min(408px, calc(100vw - 16px));
 }
 
 .oc-dropdown [role="menuitem"]:not([data-menu-unstyled]),
@@ -44,5 +154,6 @@
 .oc-dropdown[data-content-width="modelPicker"] {
   min-width: min(254px, calc(100vw - 16px));
   width: 254px;
+  max-width: min(254px, calc(100vw - 16px));
   overflow: hidden;
 }

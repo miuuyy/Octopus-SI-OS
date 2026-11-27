@@ -159,7 +159,7 @@ test("switching tasks keeps the thread mounted and restores each task's reading 
   assert.equal(list.scrollTop, -400);
 });
 
-test("a pane-hosted task carries its own header, a window-hosted one hands its actions to the window header", async () => {
+test("a pane-hosted task drags from its title, and a window-hosted task keeps its title and controls inside the chat area", async () => {
   const { WorkspacePaneHeaderActionsProvider, WorkspaceCompactTabProvider } = await compiled;
   const drags = [];
   await show(workspace(), { headerMode: "pane" }, (element) => React.createElement(WorkspaceCompactTabProvider, { value: { onPointerDown: (event) => drags.push(event.type) } }, element));
@@ -171,9 +171,11 @@ test("a pane-hosted task carries its own header, a window-hosted one hands its a
   assert.equal(actions.length, 2);
   assert.ok(actions.every((button) => button.closest(".no-drag")), "header actions stay clickable inside a draggable header");
   await show(workspace(), { headerMode: "window" }, (element) => React.createElement(WorkspacePaneHeaderActionsProvider, { host }, element));
-  assert.ok(!query("[data-thread-title]"));
-  assert.ok(host.querySelector("[data-task-summary-trigger]"), "the summary toggle moves into the window header");
-  assert.ok(!query("[data-task-summary-trigger]"));
+  assert.match(query("[data-thread-title]").textContent, /Quarterly report/);
+  assert.ok(query("[data-task-summary-trigger]"), "the summary toggle stays inside the chat header");
+  assert.ok(query('button[aria-label="Task actions"]'), "task actions stay inside the chat header");
+  assert.ok(query('button[aria-label="Toggle secondary pane"][aria-pressed="false"]'), "split toggle stays inside the chat header");
+  assert.ok(!host.querySelector("[data-task-summary-trigger]"), "window-hosted chat actions are not portaled out of the chat");
   root.render(null);
   await settle();
 });
@@ -186,11 +188,11 @@ test("opening the summary in a mid-width thread shifts the conversation aside; a
     root.render(null);
     await settle();
     await show(workspace({ activeRun: run(`summary-${width}`) }), { headerMode: "window" }, (element) => React.createElement(WorkspacePaneHeaderActionsProvider, { host }, element));
-    await press(host.querySelector("[data-task-summary-trigger]"), "click");
+    await press(query("[data-task-summary-trigger]"), "click");
     await settle(450);
     assert.equal(transform(), shifted ? "translateX(-158px)" : "none", `${width}px`);
     assert.equal(query(".task-summary-surface") !== null, shifted);
-    await press(host.querySelector("[data-task-summary-trigger]"), "click");
+    await press(query("[data-task-summary-trigger]"), "click");
     await settle(450);
     assert.match(transform(), /^(none|translateX\(0px\))$/);
   }
@@ -218,15 +220,19 @@ test("a long message body clamps to its lines and expands to its full height wit
   const tall = Object.getOwnPropertyDescriptor(w.HTMLElement.prototype, "scrollHeight");
   Object.defineProperty(w.HTMLElement.prototype, "scrollHeight", { configurable: true, get() { return 2000; } });
   try {
-    root.render(React.createElement(CollapsibleMessageBody, { maxLines: 20, text: "Long body" }, React.createElement("p", null, "Long body")));
+    root.render(React.createElement(CollapsibleMessageBody, { maxLines: 20, text: "Long body" },
+      React.createElement("p", null, "Long body ", React.createElement("a", { href: "https://example.invalid" }, "Clipped link"))));
     await settle();
     const content = query(".collapsible-message-content");
     const toggle = query(".collapsible-message-toggle");
+    const link = query('a[href="https://example.invalid"]');
     assert.equal(content.style.maxHeight, "19lh");
     assert.equal(query(".collapsible-message-ellipsis").textContent, "…");
     assert.deepEqual([toggle.textContent, toggle.getAttribute("aria-expanded")], ["Show more", "false"]);
+    assert.deepEqual([link.hasAttribute("inert"), link.getAttribute("aria-hidden")], [true, "true"]);
     await press(toggle, "click");
     assert.deepEqual([content.style.maxHeight, toggle.textContent, toggle.getAttribute("aria-expanded")], ["", "Show less", "true"]);
+    assert.deepEqual([link.hasAttribute("inert"), link.getAttribute("aria-hidden")], [false, null]);
     assert.ok(!query(".collapsible-message-fade"));
     await show(workspace({ renderedMessages: [user("long-user", "Long user message")], activeMessageCount: 1 }));
     const bubble = query('[data-user-message-bubble="true"]');
@@ -241,7 +247,7 @@ test("a long message body clamps to its lines and expands to its full height wit
 test("shell glyphs render on their declared grids", async () => {
   const { Glyph } = await compiled;
   const { renderToStaticMarkup } = require("react-dom/server");
-  for (const [name, viewBox] of [["taskSummary", "0 0 20 20"], ["taskPlan", "0 0 16 16"], ["activity", "0 0 16 16"], ["activityUnread", "0 0 16 16"], ["users", "0 0 24 24"]]) {
+  for (const [name, viewBox] of [["taskSummary", "0 0 16 16"], ["taskPlan", "0 0 16 16"], ["activity", "0 0 16 16"], ["activityUnread", "0 0 16 16"], ["users", "0 0 24 24"]]) {
     const svg = new w.DOMParser().parseFromString(renderToStaticMarkup(React.createElement(Glyph, { name })), "image/svg+xml").documentElement;
     assert.equal(svg.getAttribute("viewBox"), viewBox, name);
     assert.ok(svg.querySelector("path, circle"), `${name} draws a shape`);

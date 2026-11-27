@@ -8,8 +8,8 @@
   padding: 0;
   gap: 4px;
   border: 1px solid transparent;
-  border-radius: calc(var(--radius-lg-base) * var(--corner-radius-scale));
-  corner-shape: var(--octopus-corner-shape);
+  border-radius: var(--radius-lg);
+  corner-shape: round;
   color: var(--color-text-tertiary);
   background: transparent;
   font: inherit;

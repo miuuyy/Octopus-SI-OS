@@ -434,10 +434,10 @@ for (const [hadAttachments, attachments, recoverPreparedMessage] of [
   const shellTooltip = load("src/components/shell/ShellTooltip.tsx", {
     "../chat/MessageTooltip": load("src/components/chat/MessageTooltip.tsx"),
   });
-  const menuComponents = load("src/design-system/components.tsx", { "./OcDropdown": {}, "./modalFocus": modalFocus,
+  const menuComponents = load("src/design-system/components.tsx", { "./OcDropdown": {}, "./modalFocus": modalFocus, "../appearance": { useShouldReduceMotion: () => true },
     "../components/IconGlyphs": { Glyph: empty }, "../components/navigation/OctopusSpinner": { OctopusSpinner: empty },
     "../components/shell/ShellTooltip": shellTooltip });
-  const dropdown = load("src/design-system/OcDropdown.tsx", { "./components": menuComponents, "./modalFocus": modalFocus });
+  const dropdown = load("src/design-system/OcDropdown.tsx", { "./components": menuComponents, "./modalFocus": modalFocus, "../appearance": { useShouldReduceMotion: () => true } });
   const keydown = async (target, key, modifiers = {}) => {
     const event = new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...modifiers });
     await act(async () => target.dispatchEvent(event)); return event;
@@ -601,6 +601,12 @@ for (const [hadAttachments, attachments, recoverPreparedMessage] of [
   const commands = load("src/clientActions.ts");
   let sendShortcut = "enter";
   const composer = load("src/components/chat/ChatComposer.tsx", {
+    "../../appearance": { useShouldReduceMotion: () => true },
+    "../navigation/OctopusSpinner": { OctopusSpinner: empty },
+    "./ComposerPrimaryActionIcon": { ComposerPrimaryActionIcon: empty },
+    "./ComposerSuggestionMenu": load("src/components/chat/ComposerSuggestionMenu.tsx", {
+      "../IconGlyphs": { Glyph: empty },
+    }),
     "./taskAccess": taskAccess,
     "./DictationIcon": load("src/components/chat/DictationIcon.tsx"),
     "../IconGlyphs": { Glyph: empty }, "./ProviderModelPicker": { ProviderModelPicker: empty },

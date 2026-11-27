@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { useShouldReduceMotion } from "../appearance";
 import { isolateModalLayer, isTopmostModal, restoreModalFocus } from "../design-system/modalFocus";
 import { searchChatTaskMessages, type ChatRun, type ChatRunMessage } from "../chatRuns";
 import { requestChatMessageReveal } from "../chatMessageReveal";
@@ -24,6 +26,7 @@ type CommandMenuEntry = {
   detail: string;
   group: string;
   glyph: GlyphName;
+  badge?: string;
   shortcut?: string;
   closeOnRun?: boolean;
   run: () => void;
@@ -120,6 +123,7 @@ export function CommandMenu({
   surfaces,
   voiceActive,
 }: Props) {
+  const reducedMotion = useShouldReduceMotion();
   const keyboardShortcuts = useKeyboardShortcuts(accessProfile);
   const organization = useClientTaskOrganization(accessProfile);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -254,7 +258,7 @@ export function CommandMenu({
         detail: navigationSectionLabel(surface),
         group: "Surfaces",
         glyph: surface.glyph,
-        shortcut: surface.id === activeSurfaceId ? "Current" : undefined,
+        badge: surface.id === activeSurfaceId ? "Current" : undefined,
         run: () => {
           onSelectSurface(surface);
           recordClientDestination(accessProfile, { workspaceKey, surfaceId: surface.id, runId: "" });
@@ -411,8 +415,6 @@ export function CommandMenu({
     document.getElementById(commandDomId(selected.id))?.scrollIntoView({ block: "nearest" });
   }, [open, orderedEntries, selectedIndex]);
 
-  if (!open) return null;
-
   function activate(entry: CommandMenuEntry | undefined) {
     if (!entry) return;
     if (entry.closeOnRun !== false) onClose();
@@ -425,10 +427,12 @@ export function CommandMenu({
       onClose();
       return;
     }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const isNext = event.key === "ArrowDown" || (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "n");
+    const isPrevious = event.key === "ArrowUp" || (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "p");
+    if (isNext || isPrevious) {
       event.preventDefault();
       if (!orderedEntries.length) return;
-      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const delta = isNext ? 1 : -1;
       setSelectedIndex((current) => (current + delta + orderedEntries.length) % orderedEntries.length);
       return;
     }
@@ -438,81 +442,198 @@ export function CommandMenu({
     }
   }
 
+  const transitionDuration = reducedMotion ? 0 : 0.15;
   let flatIndex = -1;
   return (
-    <div
-      aria-label="Command menu"
-      aria-modal="true"
-      className="command-menu-overlay fixed inset-0"
-      ref={layerRef}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      role="dialog"
-    >
-      <div className="octopus-command-menu fixed left-1/2 z-50 flex -translate-x-1/2 flex-col overflow-hidden rounded-2xl border border-token-border text-token-foreground" ref={dialogRef}>
-        <input
-          aria-activedescendant={orderedEntries[selectedIndex]?.id ? commandDomId(orderedEntries[selectedIndex].id) : undefined}
-          aria-autocomplete="list"
-          aria-controls="octopus-command-menu-list"
-          aria-expanded={open}
-          className="command-menu-input w-full min-w-0 shrink-0 bg-transparent text-token-foreground outline-none placeholder:text-token-input-placeholder-foreground"
-          onChange={(event) => {
-            setQuery(event.currentTarget.value);
-            setSelectedIndex(0);
+    <AnimatePresence initial={false}>
+      {open ? (
+        <motion.div
+          animate={{ opacity: 1 }}
+          aria-label="Command menu"
+          aria-modal="true"
+          className="command-menu-overlay fixed inset-0"
+          exit={{ opacity: 0 }}
+          initial={{ opacity: 0 }}
+          key="command-menu"
+          ref={layerRef}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) onClose();
           }}
-          onKeyDown={onKeyDown}
-          placeholder="Search tasks or run a command"
-          ref={inputRef}
-          role="combobox"
-          value={query}
-        />
-        <div className="command-menu-list min-h-0 overflow-y-auto" id="octopus-command-menu-list" role="listbox">
-          {grouped.map(({ group, items }) => (
-            <section aria-label={group} className="flex flex-col gap-1" key={group}>
-              <div className="pe-2 ps-[calc(var(--spacing)*.75)] pt-2 text-sm text-token-description-foreground">{group}</div>
-              {items.map((entry) => {
-                flatIndex += 1;
-                const index = flatIndex;
-                const selected = selectedIndex === index;
-                const rotate = entry.id === "command:navigate_forward"
-                  || entry.id === "command:next_surface"
-                  || entry.id === "command:previous_operator_message";
-                return (
-                  <button
-                    aria-selected={selected}
-                    className="command-menu-item flex w-full items-center gap-2 text-left text-token-foreground outline-none"
-                    id={commandDomId(entry.id)}
-                    key={entry.id}
-                    onClick={() => activate(entry)}
-                    onMouseMove={() => setSelectedIndex(index)}
-                    role="option"
-                    type="button"
-                  >
-                    <Glyph className={`shrink-0 opacity-75${rotate ? " rotate-180" : ""}`} name={entry.glyph} size={15} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate">{entry.label}</span>
-                      {query ? <span className="block truncate text-sm text-token-description-foreground">{entry.detail}</span> : null}
-                    </span>
-                    {entry.shortcut ? <span className="shrink-0 text-sm text-token-description-foreground">{entry.shortcut}</span> : null}
-                  </button>
-                );
-              })}
-            </section>
-          ))}
-          {!filtered.length ? <div className="command-menu-empty-state text-lg text-token-description-foreground">{searchingMessages ? "Searching indexed task transcripts…" : "No matches"}</div> : null}
-        </div>
-        {messageSearch.error ? <div className="command-menu-status text-sm text-token-error-foreground" role="status" tabIndex={0}>Task transcript search unavailable · {messageSearch.error}</div> : null}
-        {normalize(query).length >= 2 && !messageSearch.error ? (
-          <div className="command-menu-status text-sm text-token-description-foreground" role="status" tabIndex={0}>
-            {searchingMessages
-              ? "Searching indexed task transcripts…"
-              : `Finalized operator and agent messages · ${messageSearch.taskCount} visible tasks · ${messageSearch.runCount} runs`}
-          </div>
-        ) : null}
-      </div>
-    </div>
+          role="dialog"
+          transition={{ duration: reducedMotion ? 0 : 0.12, ease: [0.23, 1, 0.32, 1] }}
+        >
+          <motion.div
+            animate={{ opacity: 1, scale: 1 }}
+            className="octopus-command-menu fixed left-1/2 z-50 flex -translate-x-1/2 flex-col overflow-hidden rounded-2xl border border-transparent text-default"
+            exit={{ opacity: 0, scale: reducedMotion ? 1 : 0.985 }}
+            initial={{ opacity: 0, scale: reducedMotion ? 1 : 0.985 }}
+            ref={dialogRef}
+            transition={{ duration: transitionDuration, ease: [0.23, 1, 0.32, 1] }}
+          >
+            <input
+              aria-activedescendant={orderedEntries[selectedIndex]?.id ? commandDomId(orderedEntries[selectedIndex].id) : undefined}
+              aria-autocomplete="list"
+              aria-controls="octopus-command-menu-list"
+              aria-expanded={open}
+              className="command-menu-input w-full min-w-0 shrink-0 bg-transparent text-default outline-none placeholder:text-token-input-placeholder-foreground"
+              onChange={(event) => {
+                setQuery(event.currentTarget.value);
+                setSelectedIndex(0);
+              }}
+              onKeyDown={onKeyDown}
+              placeholder="Search tasks or run a command"
+              ref={inputRef}
+              role="combobox"
+              value={query}
+            />
+            <div className="command-menu-list min-h-0 overflow-y-auto" id="octopus-command-menu-list" role="listbox">
+              {grouped.map(({ group, items }) => (
+                <section aria-label={group} className="flex flex-col" key={group}>
+                  <div className="pe-2 ps-[calc(var(--spacing)*.75)] pt-2 text-sm text-[var(--color-codex-description,var(--color-text-description))]">{group}</div>
+                  {items.map((entry) => {
+                    flatIndex += 1;
+                    const index = flatIndex;
+                    const selected = selectedIndex === index;
+                    const rotate = entry.id === "command:navigate_forward"
+                      || entry.id === "command:next_surface"
+                      || entry.id === "command:previous_operator_message";
+                    const showDetail = Boolean(query && entry.detail);
+                    return (
+                      <button
+                        aria-selected={selected}
+                        className="command-menu-item flex w-full items-center gap-2 text-left text-default outline-none"
+                        data-selected={selected ? "true" : undefined}
+                        id={commandDomId(entry.id)}
+                        key={entry.id}
+                        onClick={() => activate(entry)}
+                        onMouseMove={() => setSelectedIndex(index)}
+                        role="option"
+                        type="button"
+                      >
+                        <span className="inline-flex size-4 flex-none items-center justify-center" data-leading-icon-slot="menu">
+                          <Glyph className={`shrink-0 opacity-75${rotate ? " rotate-180" : ""}`} name={entry.glyph} size={16} />
+                        </span>
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className={showDetail ? "max-w-[60%] shrink-0 truncate" : "min-w-0 truncate"}>
+                            <CommandFuzzyHighlight query={query} text={entry.label} />
+                          </span>
+                          {showDetail ? (
+                            <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-codex-description,var(--color-text-description))]">
+                              <CommandFuzzyHighlight dimmedBase query={query} text={entry.detail} />
+                            </span>
+                          ) : null}
+                        </span>
+                        {entry.badge ? (
+                          <span className="shrink-0 text-xs text-[var(--color-codex-description,var(--color-text-description))]">
+                            {entry.badge}
+                          </span>
+                        ) : null}
+                        {entry.shortcut ? (
+                          <kbd className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-md border-0 bg-current/10 px-1.5 py-0 font-sans text-xs leading-4 text-current shadow-none">
+                            {entry.shortcut}
+                          </kbd>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </section>
+              ))}
+              {!filtered.length ? <div className="command-menu-empty-state text-lg text-[var(--color-codex-description,var(--color-text-description))]">{searchingMessages ? "Searching indexed task transcripts…" : "No matches"}</div> : null}
+            </div>
+            {messageSearch.error ? <div className="command-menu-status text-sm text-token-error-foreground" role="status" tabIndex={0}>Task transcript search unavailable · {messageSearch.error}</div> : null}
+            {normalize(query).length >= 2 && !messageSearch.error ? (
+              <div className="command-menu-status text-sm text-[var(--color-codex-description,var(--color-text-description))]" role="status" tabIndex={0}>
+                {searchingMessages
+                  ? "Searching indexed task transcripts…"
+                  : `Finalized operator and agent messages · ${messageSearch.taskCount} visible tasks · ${messageSearch.runCount} runs`}
+              </div>
+            ) : null}
+          </motion.div>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   );
+}
+
+function CommandFuzzyHighlight({ query, text, dimmedBase = false }: {
+  query: string;
+  text: string;
+  dimmedBase?: boolean;
+}) {
+  const trimmed = query.trim();
+  if (!trimmed) return <>{text}</>;
+  const segments = fuzzyHighlightSegments(text, trimmed);
+  if (!segments) return <>{text}</>;
+  return (
+    <>
+      {segments.map((segment, index) => {
+        if (segment.isMatch) {
+          return <span className="text-default" key={index}>{segment.text}</span>;
+        }
+        if (dimmedBase || /^\s+$/.test(segment.text)) {
+          return <span key={index}>{segment.text}</span>;
+        }
+        return (
+          <span className="text-[var(--color-codex-description,var(--color-text-description))]" key={index}>
+            {segment.text}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function fuzzyHighlightSegments(text: string, query: string): Array<{ text: string; isMatch: boolean }> | null {
+  const chars = Array.from(text);
+  const lowerChars = chars.map((ch) => ch.toLocaleLowerCase());
+  const lowerText = lowerChars.join("");
+  const lowerQuery = query.toLocaleLowerCase();
+  const matched = new Array<boolean>(chars.length).fill(false);
+  let hasMatch = false;
+
+  const substringIndex = lowerText.indexOf(lowerQuery);
+  if (substringIndex >= 0) {
+    const startChar = Array.from(lowerText.slice(0, substringIndex)).length;
+    const matchLength = Array.from(lowerQuery).length;
+    for (let i = startChar; i < Math.min(chars.length, startChar + matchLength); i += 1) {
+      matched[i] = true;
+      hasMatch = true;
+    }
+  } else {
+    const queryChars = Array.from(lowerQuery.replace(/\s+/g, ""));
+    let cursor = 0;
+    const positions: number[] = [];
+    for (const target of queryChars) {
+      let found = -1;
+      for (let i = cursor; i < lowerChars.length; i += 1) {
+        if (lowerChars[i] === target) {
+          found = i;
+          break;
+        }
+      }
+      if (found < 0) {
+        positions.length = 0;
+        break;
+      }
+      positions.push(found);
+      cursor = found + 1;
+    }
+    for (const pos of positions) {
+      matched[pos] = true;
+      hasMatch = true;
+    }
+  }
+
+  if (!hasMatch) return null;
+  const segments: Array<{ text: string; isMatch: boolean }> = [];
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i];
+    const isMatch = matched[i];
+    const last = segments.at(-1);
+    if (last && last.isMatch === isMatch) last.text += ch;
+    else segments.push({ text: ch, isMatch });
+  }
+  return segments;
 }
 
 function matchScore(entry: CommandMenuEntry, needle: string): number {

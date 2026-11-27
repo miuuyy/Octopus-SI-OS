@@ -1,35 +1,161 @@
+.oc-switch__track[data-state=unchecked] {
+  background: var(--switch-track-color);
+}
+.oc-switch__track[data-state=checked] {
+  background: var(--switch-track-color-checked);
+}
+.oc-switch__track[data-tone=neutral][data-state=checked] {
+  background: var(--color-text);
+}
+button:disabled .oc-switch__track[data-state=unchecked] {
+  background: var(--switch-track-color-disabled);
+}
+button:disabled .oc-switch__track[data-state=checked] {
+  background: var(--switch-track-color-checked-disabled);
+}
 .oc-switch__thumb[data-state=unchecked] { translate: 2px; }
 .oc-switch__thumb[data-state=checked] { translate: 14px; }
 .oc-switch__thumb:dir(rtl)[data-state=unchecked] { translate: -2px; }
 .oc-switch__thumb:dir(rtl)[data-state=checked] { translate: -14px; }
-.oc-switch__thumb { box-shadow: 0 1px 2px -1px #00000014; }
+.oc-switch__thumb {
+  background: var(--switch-thumb-color, var(--white));
+  border-color: transparent;
+  box-shadow: var(--switch-thumb-shadow);
+}
+.oc-switch__thumb[data-state=checked] {
+  background: var(--switch-thumb-color-checked, var(--white));
+  border-color: transparent;
+}
+.oc-switch__track[data-tone=neutral] .oc-switch__thumb[data-state=checked],
+.oc-switch__thumb[data-tone=neutral][data-state=checked] {
+  background: var(--color-surface);
+}
+button:disabled .oc-switch__thumb {
+  background: var(--switch-thumb-color-disabled, var(--white));
+}
 
 .oc-checkbox__control {
-  display: flex;
-  width: var(--icon-secondary-size, 14px);
-  height: var(--icon-secondary-size, 14px);
+  position: relative;
+  display: inline-flex;
+  width: 18px;
+  max-width: 18px;
+  height: 18px;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--color-border-strong);
+  padding: 0;
+  border: 1px solid light-dark(var(--gray-200), var(--gray-500));
   border-radius: var(--radius-xs);
-  background: transparent;
+  background-color: transparent;
   color: var(--color-text);
   outline: none;
-  box-shadow: 0 1px 2px -1px #00000014;
-  transition: background-color .15s cubic-bezier(.4, 0, .2, 1), border-color .15s cubic-bezier(.4, 0, .2, 1), box-shadow .15s cubic-bezier(.4, 0, .2, 1);
+  transition: border-color 0.15s, background-color 0.15s;
 }
 .oc-checkbox[data-state=checked] .oc-checkbox__control,
-.oc-checkbox[data-state=mixed] .oc-checkbox__control { background: var(--color-background-primary-soft); }
+.oc-checkbox[data-state=mixed] .oc-checkbox__control,
+.oc-checkbox[data-state=indeterminate] .oc-checkbox__control {
+  border-color: var(--checkbox-checked-background-color);
+  background-color: var(--checkbox-checked-background-color);
+  color: var(--checkbox-checked-mark-color);
+}
 @media (hover: hover) {
-  .oc-checkbox__input:not(:disabled) + .oc-checkbox__control:hover { background: var(--color-surface-tertiary); }
+  .oc-checkbox:not([data-state=checked]):not([data-state=mixed]):not([data-state=indeterminate]):hover .oc-checkbox__input:not(:disabled) + .oc-checkbox__control,
+  .oc-checkbox__input:not(:disabled):not(:checked):not(:indeterminate) + .oc-checkbox__control:hover {
+    border-color: light-dark(var(--gray-300), var(--gray-600));
+  }
 }
 .oc-checkbox__input:focus-visible + .oc-checkbox__control {
-  border-color: var(--color-ring);
-  box-shadow: 0 0 0 2px var(--color-ring), 0 1px 2px -1px #00000014;
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
 }
 .oc-checkbox__input[aria-invalid=true] + .oc-checkbox__control {
-  border-color: var(--color-text-danger);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-text-danger) 20%, transparent), 0 1px 2px -1px #00000014;
+  border-color: var(--input-border-color-invalid, var(--color-text-danger));
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-text-danger) 20%, transparent);
+}
+.oc-checkbox__input:disabled + .oc-checkbox__control,
+.oc-checkbox[data-disabled] .oc-checkbox__control {
+  border-color: light-dark(var(--gray-150), var(--gray-300));
+  background: light-dark(var(--gray-25), var(--gray-200));
+  cursor: not-allowed;
+}
+.oc-checkbox[data-state=checked] .oc-checkbox__input:disabled + .oc-checkbox__control,
+.oc-checkbox[data-state=mixed] .oc-checkbox__input:disabled + .oc-checkbox__control,
+.oc-checkbox[data-state=indeterminate] .oc-checkbox__input:disabled + .oc-checkbox__control,
+.oc-checkbox[data-disabled][data-state=checked] .oc-checkbox__control,
+.oc-checkbox[data-disabled][data-state=mixed] .oc-checkbox__control,
+.oc-checkbox[data-disabled][data-state=indeterminate] .oc-checkbox__control {
+  border-color: light-dark(var(--gray-300), var(--gray-200));
+  background-color: light-dark(var(--gray-300), var(--gray-200));
+  --checkbox-checked-mark-color: light-dark(var(--gray-0), var(--gray-100));
+}
+.oc-checkbox__mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 64%;
+  height: 32%;
+  transform-origin: 50%;
+  transform: rotate(-45deg) translate(-10%, 100%);
+  transition: opacity 0.15s, transform 0.15s;
+}
+@starting-style {
+  .oc-checkbox__mark {
+    opacity: 0;
+  }
+}
+.oc-checkbox[data-state=mixed] .oc-checkbox__mark,
+.oc-checkbox[data-state=indeterminate] .oc-checkbox__mark {
+  transform: translate(30%, 80%);
+}
+.oc-checkbox[data-state=mixed] .oc-checkbox__mark::before,
+.oc-checkbox[data-state=indeterminate] .oc-checkbox__mark::before {
+  opacity: 0;
+}
+.oc-checkbox__mark::before,
+.oc-checkbox__mark::after {
+  content: "";
+  position: absolute;
+  display: block;
+  background: var(--checkbox-checked-mark-color);
+  will-change: transform;
+}
+@starting-style {
+  .oc-checkbox__mark::before,
+  .oc-checkbox__mark::after {
+    transform: scale(0);
+  }
+}
+.oc-checkbox__mark::before {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  transform-origin: 0 0;
+  transition: transform 0.1s 80ms, opacity 0.2s;
+}
+.oc-checkbox__mark::after {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  transform-origin: 0 100%;
+  transition: transform 0.1s 160ms;
 }
 .oc-checkbox__control > svg { flex-shrink: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.full-motion) .oc-checkbox__control,
+  :root:not(.full-motion) .oc-checkbox__mark,
+  :root:not(.full-motion) .oc-checkbox__mark::before,
+  :root:not(.full-motion) .oc-checkbox__mark::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+}
+:root.reduce-motion .oc-checkbox__control,
+:root.reduce-motion .oc-checkbox__mark,
+:root.reduce-motion .oc-checkbox__mark::before,
+:root.reduce-motion .oc-checkbox__mark::after {
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+}

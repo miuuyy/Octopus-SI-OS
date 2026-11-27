@@ -17,21 +17,23 @@
 
 .chat-tooltip {
   --font-ui-weight: 430;
+  --tooltip-gap: var(--native-popover-gap, var(--spacing));
   position: fixed;
-  width: fit-content;
+  block-size: fit-content;
+  inline-size: max-content;
   max-height: calc(100vh - 16px);
-  max-width: min(320px, calc(100vw - 16px));
-  transform: translate(-50%, calc(-100% - 2px));
-  border: 1px solid color-mix(in oklab, currentColor 5%, transparent);
-  border-radius: var(--radius-3xl);
-  background: var(--color-surface-elevated-secondary);
+  max-inline-size: min(20rem, calc(100vw - 16px));
+  transform: translate(-50%, calc(-100% - var(--tooltip-gap)));
+  border: 1px solid var(--tooltip-border-color, color-mix(in oklab, currentColor 5%, transparent));
+  border-radius: var(--radius-2xl);
+  background: var(--tooltip-background-color, var(--color-background-tooltip));
   padding: 5px 12px;
-  color: var(--color-text);
-  corner-shape: var(--octopus-corner-shape, round);
-  box-shadow: 0 8px 18px #0f172a33;
-  font-size: var(--text-sm);
-  font-weight: var(--font-ui-weight);
-  line-height: 18px;
+  color: var(--tooltip-text-color, var(--color-text-tooltip));
+  corner-shape: round;
+  box-shadow: var(--tooltip-box-shadow, 0 8px 18px #0f172a33);
+  font-size: var(--tooltip-font-size, var(--text-sm));
+  font-weight: var(--tooltip-font-weight, var(--font-ui-weight));
+  line-height: var(--tooltip-line-height, 18px);
   letter-spacing: -.15px;
   text-align: center;
   white-space: normal;
@@ -41,21 +43,16 @@
   pointer-events: none;
 }
 
-:root[data-theme="light"] .chat-tooltip {
-  background: var(--color-background-primary-solid);
-  color: var(--color-text-primary-solid);
-}
-
 .chat-tooltip[data-side="bottom"] {
-  transform: translate(-50%, 2px);
+  transform: translate(-50%, var(--tooltip-gap));
 }
 
 .chat-tooltip[data-side="right"] {
-  transform: translate(2px, -50%);
+  transform: translate(var(--tooltip-gap), -50%);
 }
 
 .chat-tooltip[data-side="left"] {
-  transform: translate(calc(-100% - 2px), -50%);
+  transform: translate(calc(-100% - var(--tooltip-gap)), -50%);
 }
 
 .chat-tooltip.is-activity-target code {

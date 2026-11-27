@@ -1,8 +1,8 @@
-import { cubicCirclePath, orthogonalBranchPath } from "../icon-glyphs/geometric-primitives";
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type SVGProps } from "react";
-import { createPortal } from "react-dom";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { ClientAgentDefinition } from "../../agentPresets";
 import type { ChatApplicationChoice, ChatExecutionContext, ChatWorkerEnvironmentRoom } from "../../chatRuns";
+import { OcDropdown } from "../../design-system/OcDropdown";
+import { OcMenuItem, OcMenuSectionLabel } from "../../design-system/components";
 import { AgentPresetLogo } from "../agent/AgentPresetLogo";
 import { ProjectLogo } from "../project/ProjectLogo";
 import { Glyph } from "../IconGlyphs";
@@ -21,19 +21,12 @@ const CHIP_COLLAPSIBLE_CHEVRON_CLASS = "composer-utility-secondary-chevron compo
 const CLEAR_GROUP_CLASS = "group/project-selector relative inline-flex shrink-0 rounded-full";
 const CLEAR_BUTTON_CLASS = "composer-utility-project-clear-button no-drag pointer-events-none absolute inset-y-0 left-0 z-10 flex aspect-square cursor-interaction items-center justify-center rounded-full text-token-text-tertiary opacity-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-token-focus-border hover:text-token-foreground";
 const CLEAR_BUTTON_AVAILABLE_CLASS = "group-hover/project-selector:pointer-events-auto group-hover/project-selector:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100";
-const MENU_CONTENT_MAX_HEIGHT = "min(350px, calc(100vh - 16px))";
-const MENU_CONTENT_CLASS = "no-drag bg-token-dropdown-background/90 text-token-foreground ring-token-border z-50 m-px flex select-none flex-col overflow-y-auto rounded-xl ring-[0.5px] px-1 py-1 shadow-xl-spread backdrop-blur-sm";
-const MENU_ITEM_BASE = "outline-hidden rounded-lg px-[var(--padding-row-x)] py-[var(--padding-row-y)] text-sm";
-const MENU_ITEM_INTERACTIVE = "group hover:bg-token-list-hover-background focus:bg-token-list-hover-background cursor-interaction";
-const MENU_ITEM_CONTENT = "flex w-full items-center gap-1.5";
-const MENU_ITEM_CONTENT_SUBTEXT = "flex w-full items-center gap-3";
-const MENU_ITEM_ICON = "shrink-0 opacity-75 group-focus:opacity-100 group-hover:opacity-100";
-const MENU_BODY_CLASS = "flex w-72 flex-col gap-1.5 overflow-hidden";
-const MENU_LIST_CLASS = "vertical-scroll-fade-mask flex h-[200px] flex-col gap-1.5 overflow-y-auto";
-const MENU_SECTION_LABEL_CLASS = "px-[var(--padding-row-x)] py-1 text-sm text-token-description-foreground";
+const MENU_BODY_CLASS = "flex w-72 max-w-full flex-col gap-1 overflow-hidden";
+const MENU_LIST_CLASS = "vertical-scroll-fade-mask flex max-h-[200px] flex-col gap-0.5 overflow-y-auto";
 const MENU_SECTION_CLASS = "flex flex-col";
 const MENU_SEARCH_ROW_CLASS = "flex min-w-0 items-center gap-1 px-[var(--padding-row-x)] py-[var(--padding-row-y)]";
-const MENU_SEARCH_INPUT_CLASS = "!w-auto flex-1 appearance-none !rounded-none !border-none bg-transparent !px-0 !py-0 text-sm text-token-foreground placeholder:text-token-input-placeholder-foreground focus:outline-none";
+const MENU_SEARCH_INPUT_CLASS = "!w-auto flex-1 appearance-none !rounded-none !border-none bg-transparent !px-0 !py-0 text-sm text-token-foreground placeholder:text-token-input-placeholder-foreground !outline-none focus:outline-none";
+
 type Props = {
   contexts: ChatExecutionContext[];
   agentPresets: readonly ClientAgentDefinition[];
@@ -122,8 +115,8 @@ export function ComposerUtilityBar({
 
   return (
     <div
-      className="composer-utility-bar composer-utility-home -mx-px -mb-4.5 flex flex-nowrap items-center gap-2 overflow-hidden rounded-t-2xl select-none"
-      style={{ backgroundColor: "var(--color-token-composer-utility-background, var(--color-token-side-bar-background))" }}
+      className="composer-utility-bar composer-utility-home flex flex-nowrap items-center gap-2 overflow-hidden rounded-t-2xl select-none"
+      style={{ backgroundColor: "var(--color-background-composer-action-bar, var(--color-token-composer-utility-background))" }}
     >
       <UtilityBarContent>
         <ProjectClearSlot
@@ -135,7 +128,7 @@ export function ComposerUtilityBar({
             disabled={locked || Boolean(selectedAgent) || !contexts.length}
             icon={projectSelected && selectedContext
               ? <ProjectLogo color={selectedContext.presentationColor} icon={selectedContext.presentationIcon || ""} size={16} />
-              : <ProjectIcon />}
+              : <Glyph name="folder" size={16} />}
             iconMarked={projectSelected && rootContext != null}
             indicator="none"
             navigationTarget="workspace-project"
@@ -153,11 +146,11 @@ export function ComposerUtilityBar({
               <div className={MENU_BODY_CLASS}>
                 <MenuSearch placeholder="Search projects" />
                 <div className={MENU_LIST_CLASS}>
-                  <div className={MENU_SECTION_LABEL_CLASS}>Projects</div>
+                  <OcMenuSectionLabel className="text-token-description-foreground">Projects</OcMenuSectionLabel>
                   <div className={MENU_SECTION_CLASS}>
                     {rootContext && matches("No project", query) ? (
                       <UtilityBarItem
-                        icon={<ProjectIcon />}
+                        icon={<Glyph name="folder" size={16} />}
                         label="No project"
                         selected={rootContext.eeId === eeId}
                         onSelect={() => {
@@ -214,7 +207,7 @@ export function ComposerUtilityBar({
                 <div className={MENU_LIST_CLASS}>
                   {agentOptions.some((option) => matches(option.searchValue, query)) ? (
                     <div className={MENU_SECTION_CLASS}>
-                      <div className={MENU_SECTION_LABEL_CLASS}>Agents</div>
+                      <OcMenuSectionLabel className="text-token-description-foreground">Agents</OcMenuSectionLabel>
                       {agentOptions
                         .filter((option) => matches(option.searchValue, query))
                         .map(({ agent, defaultAccessMode, projectColor, subText }) => (
@@ -309,10 +302,11 @@ export function ComposerUtilityBar({
                   if (!rows.length) return null;
                   return (
                     <div className={MENU_SECTION_CLASS} key={category}>
-                      <div className={MENU_SECTION_LABEL_CLASS}>{applicationCategoryLabel(category)}</div>
+                      <OcMenuSectionLabel className="text-token-description-foreground">{applicationCategoryLabel(category)}</OcMenuSectionLabel>
                       {rows.map((application) => (
                         <UtilityBarItem
                           icon={<ApplicationChoiceLogo application={application} />}
+                          keepOpen
                           key={application.id}
                           label={application.name}
                           selected={applicationIds.includes(application.id)}
@@ -363,11 +357,12 @@ export function ComposerUtilityBar({
             <div className={MENU_BODY_CLASS}>
               <MenuSearch placeholder="Search Worker Environments" />
               <div className={MENU_LIST_CLASS}>
-                <div className={MENU_SECTION_LABEL_CLASS}>Worker Environments</div>
+                <OcMenuSectionLabel className="text-token-description-foreground">Worker Environments</OcMenuSectionLabel>
                 <div className={MENU_SECTION_CLASS}>
                   {drivers.filter((driver) => matches(`${driver.name} ${driver.capabilities.join(" ")}`, query)).map((driver) => (
                     <UtilityBarItem
                       icon={<Glyph name="plugins" size={16} />}
+                      keepOpen
                       key={driver.name}
                       label={displayDriverName(driver.name)}
                       selected={effectiveDriverNames.includes(driver.name)}
@@ -470,50 +465,27 @@ function UtilityBarDropdown({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [anchor, setAnchor] = useState<{ bottom: number; left: number } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const openedByKeyboardRef = useRef(false);
+
+  const handleOpenChange = useCallback((next: boolean) => {
+    setQuery("");
+    setOpen(next);
+  }, []);
 
   useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setAnchor(null);
-      return;
-    }
-    const update = () => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setAnchor({
-        bottom: window.innerHeight - rect.top + 4,
-        left: Math.max(8, Math.min(rect.left, window.innerWidth - 296)),
-      });
-    };
-    update();
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
-    };
-  }, [open]);
-
   useEffect(() => {
     if (!open) return;
-    const close = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    const onWindowEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented && event.target === window) {
+        setOpen(false);
+      }
     };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
+    window.addEventListener("keydown", onWindowEscape);
+    return () => window.removeEventListener("keydown", onWindowEscape);
   }, [open]);
 
   return (
@@ -530,14 +502,14 @@ function UtilityBarDropdown({
           disabled={disabled}
           onClick={(event) => {
             if (event.detail !== 0) return;
-            setQuery("");
-            setOpen((current) => !current);
+            openedByKeyboardRef.current = true;
+            handleOpenChange(!open);
           }}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             event.preventDefault();
-            setQuery("");
-            setOpen((current) => !current);
+            openedByKeyboardRef.current = false;
+            handleOpenChange(!open);
           }}
           ref={triggerRef}
           type="button"
@@ -553,19 +525,26 @@ function UtilityBarDropdown({
           />
         </button>
       </ShellTooltip>
-      {open && anchor ? createPortal(
-        <div
-          className={`composer-utility-menu fixed ${MENU_CONTENT_CLASS}`}
-          ref={menuRef}
-          role="menu"
-          style={{ bottom: anchor.bottom, left: anchor.left, maxHeight: MENU_CONTENT_MAX_HEIGHT } as CSSProperties}
-        >
-          <MenuQueryContext.Provider value={{ query, setQuery }}>
-            {children(() => setOpen(false), query)}
-          </MenuQueryContext.Provider>
-        </div>,
-        document.body,
-      ) : null}
+      <OcDropdown
+        align="start"
+        anchorRef={triggerRef}
+        className="composer-utility-menu"
+        contentWidth="menuBounded"
+        onOpenAutoFocus={(event) => {
+          if (!openedByKeyboardRef.current && searchInputRef.current) {
+            event.preventDefault();
+            searchInputRef.current.focus({ preventScroll: true });
+          }
+        }}
+        onOpenChange={handleOpenChange}
+        open={open}
+        side="top"
+        sideOffset={4}
+      >
+        <MenuQueryContext.Provider value={{ query, searchInputRef, setQuery }}>
+          {children(() => handleOpenChange(false), query)}
+        </MenuQueryContext.Provider>
+      </OcDropdown>
     </>
   );
 }
@@ -625,24 +604,28 @@ function ChipLabel({
   );
 }
 
-const MenuQueryContext = createContext<{ query: string; setQuery: (value: string) => void }>({
+const MenuQueryContext = createContext<{
+  query: string;
+  searchInputRef: React.RefObject<HTMLInputElement | null>;
+  setQuery: (value: string) => void;
+}>({
   query: "",
+  searchInputRef: { current: null },
   setQuery: () => undefined,
 });
 
 function MenuSearch({ placeholder }: { placeholder: string }) {
-  const { query, setQuery } = useContext(MenuQueryContext);
+  const { query, searchInputRef, setQuery } = useContext(MenuQueryContext);
   return (
-    <div className="my-1">
-      <div className={MENU_SEARCH_ROW_CLASS}>
-        <input
-          autoFocus={false}
-          className={MENU_SEARCH_INPUT_CLASS}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-          placeholder={placeholder}
-          value={query}
-        />
-      </div>
+    <div className={MENU_SEARCH_ROW_CLASS}>
+      <input
+        className={MENU_SEARCH_INPUT_CLASS}
+        onChange={(event) => setQuery(event.currentTarget.value)}
+        placeholder={placeholder}
+        ref={searchInputRef}
+        type="text"
+        value={query}
+      />
     </div>
   );
 }
@@ -693,6 +676,7 @@ function collapseClass(collapse: "none" | "sm" | "xs"): string {
 
 function UtilityBarItem({
   icon,
+  keepOpen = false,
   label,
   selected,
   subText,
@@ -700,6 +684,7 @@ function UtilityBarItem({
   onSelect,
 }: {
   icon: ReactNode;
+  keepOpen?: boolean;
   label: ReactNode;
   selected: boolean;
   subText?: string;
@@ -709,20 +694,28 @@ function UtilityBarItem({
   const tooltip = title ?? (typeof label === "string" ? label : "");
   return (
     <ShellTooltip className="w-full min-w-0" disabled={!tooltip} label={tooltip}>
-      <button className={`${MENU_ITEM_BASE} ${MENU_ITEM_INTERACTIVE} w-full [&>span]:gap-1.5`} onClick={onSelect} role="menuitem" type="button">
-        <span className={subText ? MENU_ITEM_CONTENT_SUBTEXT : MENU_ITEM_CONTENT}>
-          <span className={`inline-flex size-4 items-center justify-center leading-none [&_svg]:size-4 ${MENU_ITEM_ICON}`}>{icon}</span>
-          {subText ? (
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="min-w-0 truncate text-left">{label}</span>
-              <span className="min-w-0 truncate text-left text-token-text-secondary">{subText}</span>
-            </span>
-          ) : (
-            <span className="flex-1 min-w-0 truncate text-left">{label}</span>
-          )}
-          {selected ? <span className="inline-flex items-center justify-center leading-none"><Glyph className={`icon-2xs ${MENU_ITEM_ICON}`} name="check" size={12} /></span> : null}
-        </span>
-      </button>
+      <OcMenuItem
+        data-text-value={tooltip || undefined}
+        label={(
+          <span className="flex w-full items-center gap-1.5">
+            <span className="oc-menu-item-icon shrink-0 opacity-75 group-focus:opacity-100 group-hover:opacity-100 [&_svg]:size-4">{icon}</span>
+            {subText ? (
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="min-w-0 truncate text-left">{label}</span>
+                <span className="oc-menu-item-description min-w-0 truncate text-left">{subText}</span>
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+            )}
+          </span>
+        )}
+        onClick={(event) => {
+          if (keepOpen) event.preventDefault();
+          onSelect();
+        }}
+        role="menuitem"
+        selected={selected}
+      />
     </ShellTooltip>
   );
 }
@@ -736,9 +729,9 @@ function TaskAccessIcon({ accessMode, className }: { accessMode: TaskAccessMode;
 
 function UtilityBarDisabledItem({ label }: { label: string }) {
   return (
-    <div className={`${MENU_ITEM_BASE} cursor-default opacity-50`}>
-      <span className={MENU_ITEM_CONTENT}>
-        <span className="flex-1 min-w-0 truncate text-left">{label}</span>
+    <div className="cursor-default rounded-xl px-[var(--padding-row-x)] py-[var(--padding-row-y)] text-sm opacity-50">
+      <span className="flex w-full items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       </span>
     </div>
   );
@@ -792,24 +785,12 @@ function ProjectAccessIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function ProjectIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
-      <path
-        d="M5.36914 2.1416C5.92368 2.14164 6.3602 2.23705 6.73242 2.38965C7.09745 2.53934 7.38155 2.73818 7.61816 2.9043C8.07599 3.22573 8.42077 3.47464 9.16602 3.47461H11.9473C13.3336 3.47484 14.4453 4.61217 14.4453 6V7.06543C14.4453 7.07196 14.4435 7.07845 14.4434 7.08496V11.3311C14.4432 12.7187 13.3316 13.8562 11.9453 13.8564H4.05371C2.66747 13.8562 1.55583 12.7187 1.55566 11.3311V7.35059C1.55545 7.34451 1.55377 7.33815 1.55371 7.33203C1.55371 7.32563 1.55539 7.31884 1.55566 7.3125V4.66699C1.55566 3.27918 2.66737 2.14185 4.05371 2.1416H5.36914ZM2.60547 7.85645V11.3311C2.60563 12.1519 3.26037 12.8054 4.05371 12.8057H11.9453C12.7387 12.8054 13.3934 12.1519 13.3936 11.3311V7.85645H2.60547ZM4.05371 3.19238C3.26027 3.19264 2.60547 3.84598 2.60547 4.66699V6.80664H13.3955V6C13.3955 5.17898 12.7407 4.52562 11.9473 4.52539H9.16699C8.07975 4.52558 7.50694 4.10863 7.01562 3.76367C6.77766 3.5966 6.57849 3.46159 6.33398 3.36133C6.09656 3.264 5.79646 3.19242 5.36914 3.19238H4.05371Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
 function ClearProjectIcon(props: SVGProps<SVGSVGElement>) {
-  const disk = cubicCirclePath(8, 8, 6.52539, 3.60366);
   return (
     <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
       <path
         clipRule="evenodd"
-        d={disk + "M10.0918 5.9082C9.88683 5.70329 9.55463 5.7024 9.34961 5.90723L8 7.25684L6.65039 5.90723C6.44535 5.70239 6.11219 5.70227 5.90723 5.90723C5.70232 6.11219 5.70241 6.44537 5.90723 6.65039L7.25684 8L5.90723 9.34961C5.70241 9.55463 5.70232 9.88781 5.90723 10.0928C6.11219 10.2977 6.44535 10.2976 6.65039 10.0928L8 8.74316L9.34961 10.0928C9.55463 10.2976 9.88683 10.2967 10.0918 10.0918C10.2968 9.88683 10.2976 9.55465 10.0928 9.34961L8.74316 8L10.0928 6.65039C10.2976 6.44535 10.2968 6.11317 10.0918 5.9082Z"}
+        d="M8 1.47461C11.6037 1.47461 14.5254 4.39634 14.5254 8C14.5254 11.6037 11.6037 14.5254 8 14.5254C4.39634 14.5254 1.47461 11.6037 1.47461 8C1.47461 4.39634 4.39634 1.47461 8 1.47461ZM10.375 5.625C10.17 5.42002 9.83687 5.4201 9.63184 5.625L8 7.25586L6.36816 5.625C6.16313 5.4201 5.82998 5.42002 5.625 5.625C5.42014 5.82999 5.42014 6.16317 5.625 6.36816L7.25586 7.99902L5.62402 9.63184C5.41926 9.83688 5.42006 10.1701 5.625 10.375C5.82995 10.5798 6.16218 10.5797 6.36719 10.375L8 8.74219L9.63281 10.375C9.83782 10.5797 10.1701 10.5798 10.375 10.375C10.5799 10.1701 10.5807 9.83688 10.376 9.63184L8.74316 7.99902L10.375 6.36816C10.5799 6.16317 10.5799 5.82999 10.375 5.625Z"
         fill="currentColor"
         fillRule="evenodd"
       />
@@ -819,16 +800,14 @@ function ClearProjectIcon(props: SVGProps<SVGSVGElement>) {
 
 function AgentIcon(props: SVGProps<SVGSVGElement>) {
   return (
-    <svg width={20} height={20} viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
-      <circle cx={5.4165} cy={5} r={1.875} stroke="currentColor" strokeWidth={1.33} />
-      <circle cx={5.4165} cy={15} r={1.875} stroke="currentColor" strokeWidth={1.33} />
-      <circle cx={14.5833} cy={5} r={1.875} stroke="currentColor" strokeWidth={1.33} />
-      <path d={`M${5.4165} ${6.66664}V${13.3333}`} stroke="currentColor" strokeWidth={1.33} strokeLinejoin="round" />
+    <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
       <path
-        d={orthogonalBranchPath(5.41658, 12.5, 7.08325, 11.6667, 10, 12.9166, 14.5833, 8.33333, 7.5, 0.92047, 0.9205, 0.9205, 0.92048)}
-        stroke="currentColor"
-        strokeWidth={1.33}
-        strokeLinejoin="round"
+        d="M12.6633 9.4751C12.9533 9.4751 13.1887 9.71054 13.1887 10.0005V13.3179C13.1887 13.6078 12.9533 13.8433 12.6633 13.8433H9.33325C9.04336 13.8432 8.80786 13.6078 8.80786 13.3179C8.80786 13.028 9.04336 12.7925 9.33325 12.7925H11.3215L8.66333 10.3892C8.4486 10.1948 8.43216 9.86295 8.62622 9.64795C8.82071 9.43315 9.15343 9.41552 9.36841 9.60986L12.1389 12.1147V10.0005C12.1389 9.71067 12.3736 9.4753 12.6633 9.4751Z"
+        fill="currentColor"
+      />
+      <path
+        d="M12.6663 2.14111C12.9562 2.14111 13.1917 2.37655 13.1917 2.6665V5.99951C13.1917 6.28946 12.9562 6.5249 12.6663 6.5249C12.3765 6.52466 12.1418 6.28931 12.1418 5.99951V3.93311L8.64185 7.43311C8.31369 7.76125 8.09151 7.98914 7.82446 8.15283C7.59858 8.29125 7.35159 8.39274 7.09399 8.45459C6.78949 8.52764 6.47197 8.5249 6.00806 8.5249H1.99731C1.70739 8.5249 1.47196 8.28943 1.47192 7.99951C1.47215 7.70976 1.70751 7.47412 1.99731 7.47412H6.00806C6.5216 7.47412 6.69331 7.47136 6.84888 7.43408C6.99932 7.39795 7.14371 7.33816 7.27563 7.25732C7.41209 7.17367 7.53625 7.05432 7.89966 6.69092L11.3987 3.19189H9.33325C9.04336 3.19183 8.80786 2.95641 8.80786 2.6665C8.80786 2.3766 9.04336 2.14118 9.33325 2.14111H12.6663Z"
+        fill="currentColor"
       />
     </svg>
   );

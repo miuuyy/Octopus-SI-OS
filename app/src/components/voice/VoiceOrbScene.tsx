@@ -1127,7 +1127,7 @@ export function VoiceOrbScene({ activity, ambient = false, animated = true, scen
     document.addEventListener("visibilitychange", handleVisibilityChange);
     themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["class", "data-theme"],
+      attributeFilter: ["class", "data-theme", "style"],
     });
     canvas.addEventListener("webglcontextlost", loseContext);
     resize();

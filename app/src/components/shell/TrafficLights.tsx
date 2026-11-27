@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export function TrafficLights() {
   const isElectron = Boolean(window.octopusTransport);
   const [customControls, setCustomControls] = useState(false);
+  const [chromeHidden, setChromeHidden] = useState(() => document.documentElement.dataset.chromeRevealed === "false");
   useEffect(() => {
     const transport = window.octopusTransport;
     if (!transport) return;
@@ -11,9 +12,18 @@ export function TrafficLights() {
     const unsubscribe = transport.onWindowStateChanged((state) => setCustomControls(state.customWindowControls));
     return () => { cancelled = true; unsubscribe(); };
   }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => setChromeHidden(root.dataset.chromeRevealed === "false");
+    sync();
+    if (typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-chrome-revealed"] });
+    return () => observer.disconnect();
+  }, []);
   if (!isElectron || !customControls) return null;
   return (
-    <div className="app-traffic-lights no-drag">
+    <div className={`app-traffic-lights no-drag${chromeHidden ? " is-chrome-hidden" : ""}`} inert={chromeHidden || undefined}>
       <button
         aria-label="Close window"
         className="app-traffic-light"

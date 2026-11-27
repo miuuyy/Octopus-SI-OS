@@ -97,17 +97,18 @@ test("message edits stay in the source pane while branches navigate to the task 
   assert.equal(calls.length, 1, "a refused branch never leaves the source pane");
 });
 
-test("one history crosses destinations and keeps the selected duplicate after invalid entries disappear", () => {
+test("one history crosses destinations, drops legacy inbox primary entries, and keeps the selected duplicate after invalid entries disappear", () => {
   const current = {
-    entries: [state.clientDestination("voice"), state.clientDestination("chat", "task-a"), state.clientDestination("missing"), state.clientDestination("voice"), state.clientDestination("chat", "deleted"), state.clientDestination("inbox")],
+    entries: [state.clientDestination("voice"), state.clientDestination("chat", "task-a"), state.clientDestination("missing"), state.clientDestination("voice"), state.clientDestination("chat", "deleted"), state.clientDestination("inbox"), state.clientDestination("drivers")],
     index: 3,
   };
   const normalized = state.normalizeSurfaceNavigation(current, surfaces, new Set(["task-a"]));
   assert.deepEqual(normalized, {
-    entries: [{ surfaceId: "voice" }, { surfaceId: "chat", runId: "task-a" }, { surfaceId: "voice" }, { surfaceId: "inbox" }], index: 2,
+    entries: [{ surfaceId: "voice" }, { surfaceId: "chat", runId: "task-a" }, { surfaceId: "voice" }, { surfaceId: "drivers" }], index: 2,
   });
   assert.equal(state.normalizeSurfaceNavigation(normalized, surfaces, new Set(["task-a"])), normalized);
   assert.deepEqual(state.normalizeSurfaceNavigation({ entries: [{ surfaceId: "missing" }], index: 0 }, surfaces), { entries: [{ surfaceId: "voice" }], index: 0 });
+  assert.deepEqual(state.normalizeSurfaceNavigation({ entries: [{ surfaceId: "inbox" }], index: 0 }, surfaces), { entries: [{ surfaceId: "voice" }], index: 0 });
 });
 
 test("choosing a destination truncates forward history and preserves exact task identity", () => {
@@ -131,13 +132,14 @@ test("choosing a destination truncates forward history and preserves exact task 
 
 const previousWindow = global.window;
 after(() => { global.window = previousWindow; });
-test("launch destination is scoped to the profile and window without the old workspace split", () => {
+test("launch destination is scoped to the profile and window, sanitizing legacy inbox storage to Home", () => {
   const local = new Map(), session = new Map();
   global.window = { localStorage: { getItem: (key) => local.get(key) ?? null }, sessionStorage: { getItem: (key) => session.get(key) ?? null } };
   local.set(navigation.activeDestinationStorageKey("live"), "inbox");
   local.set(navigation.activeDestinationStorageKey("lab"), "applications");
   session.set(windows.clientWindowStateKey("peer-a", navigation.activeDestinationStorageKey("live")), "registry");
-  assert.equal(state.initializeSurfaceNavigation("voice", "live").entries[0].surfaceId, "inbox");
+  assert.equal(state.initializeSurfaceNavigation("voice", "live").entries[0].surfaceId, "voice");
+  assert.equal(state.initializeSurfaceNavigation("inbox", "live", "", "peer-b").entries[0].surfaceId, "voice");
   assert.equal(state.initializeSurfaceNavigation("voice", "lab").entries[0].surfaceId, "applications");
   assert.equal(state.initializeSurfaceNavigation("voice", "live", "", "peer-a").entries[0].surfaceId, "registry");
   assert.equal(state.initializeSurfaceNavigation("voice", "live", "", "peer-b").entries[0].surfaceId, "voice");
@@ -174,8 +176,14 @@ test("Home reopens its existing run and preserves a draft while its run is not a
 function railFixture({ remembered = { surfaceId: "chat", runId: "task-b" }, runsLoaded = true } = {}) {
   const calls = [];
   let draft = "Unsent task draft";
+  let inboxOpen = false;
   const open = callback("openNavigationSection", {
     setHomeWidgetsOpen: () => {},
+    setSettingsOpen: (value) => calls.push(["settings", value]),
+    setInboxOpen: (value) => {
+      inboxOpen = typeof value === "function" ? value(inboxOpen) : value;
+      calls.push(["inbox", inboxOpen]);
+    },
     setSecondaryPaneFocused: (value) => calls.push(["focused", value]),
     openVoice: () => calls.push(["home"]),
     setHomeViewMode: (value) => calls.push(["home-mode", value]),
@@ -262,32 +270,39 @@ test("opening a task outside the selected project reveals it in All tasks", () =
   open("triggered"); assert.deepEqual(filters, [""]); assert.deepEqual(selected, ["nested", "triggered"]);
 });
 
-test("Home opens its surface, Dashboard restores its view, and Inbox, Applications and Drivers open directly", () => {
+test("Home opens its surface, Dashboard restores its view, Inbox toggles its overlay, and Applications and Drivers open directly", () => {
   const home = railFixture(); home.open("home");
-  assert.deepEqual(home.calls, [["home"], ["home-mode", "voice"]]);
-  for (const [section, surfaceId] of [["dashboard", "registry"], ["inbox", "inbox"], ["applications", "applications"], ["drivers", "drivers"]]) {
+  assert.deepEqual(home.calls, [["settings", false], ["inbox", false], ["home"], ["home-mode", "voice"]]);
+  const inbox = railFixture(); inbox.open("inbox"); inbox.open("inbox");
+  assert.deepEqual(inbox.calls, [["settings", false], ["inbox", true], ["settings", false], ["inbox", false]]);
+  for (const [section, surfaceId] of [["dashboard", "registry"], ["applications", "applications"], ["drivers", "drivers"]]) {
     const fixture = railFixture(); fixture.open(section);
-    assert.deepEqual(fixture.calls, [["surface", surfaceId]]);
+    assert.deepEqual(fixture.calls, [["settings", false], ["inbox", false], ["surface", surfaceId]]);
   }
   assert.equal(navigation.navigationSectionForSurface(surfaces.find(({ id }) => id === "custom-home")), "tasks");
   assert.equal(navigation.navigationSectionForSurface(surfaces.find(({ id }) => id === "custom-dashboard")), "dashboard");
 });
 
-test("global surface selection follows the rail and exposes additional Dashboard views", () => {
+test("global surface selection follows the rail, keeps Inbox in its overlay, and closes overlays before exact navigation", () => {
   const calls = [];
   const open = callback("openPrimarySurface", {
     clientNavigationDestinations: navigation.clientNavigationDestinations,
+    closeSystemOverlays: () => calls.push(["close-overlays"]),
     openNavigationSection: (section) => calls.push(["rail", section]),
+    setInboxOpen: (value) => calls.push(["inbox", value]),
+    setSettingsOpen: (value) => calls.push(["settings", value]),
     setSecondaryPaneFocused: (value) => calls.push(["focused", value]),
     setSecondaryPaneOpen: (value) => calls.push(["side-pane", value]),
     selectSurface: (id) => calls.push(["surface", id]),
   });
   open(surfaces.find(({ id }) => id === "inbox"));
   assert.deepEqual(calls.splice(0), [["rail", "inbox"]]);
+  open(surfaces.find(({ id }) => id === "inbox"), true);
+  assert.deepEqual(calls.splice(0), [["settings", false], ["inbox", true]]);
   open(surfaces.find(({ id }) => id === "voice"));
   assert.deepEqual(calls.splice(0), [["rail", "home"]]);
   open(surfaces.find(({ id }) => id === "registry"));
-  assert.deepEqual(calls, [["surface", "registry"]]);
+  assert.deepEqual(calls, [["close-overlays"], ["surface", "registry"]]);
 });
 
 test("Back and Forward restore the exact task and retain destination-owned pane state", () => {
@@ -313,32 +328,35 @@ test("Back and Forward restore the exact task and retain destination-owned pane 
   assert.deepEqual(calls, []);
 });
 
-test("Settings is one history entry: sections replace it and closing returns to the calling destination", () => {
-  let current = { entries: [{ surfaceId: "chat", runId: "task-a" }], index: 0 };
-  const calls = [], preferences = { settingsSection: "general" };
+test("Settings toggles as a system overlay without mutating surface history or repeating closed preference writes", () => {
+  const calls = [], preferences = { settingsSection: "general", settingsSearch: "theme" };
+  let openState = false;
+  let inboxState = true;
+  let preferenceWrites = 0;
+  const settingsOpenRef = { current: false };
   const environment = {
-    setSettingsRecordingId: () => {},
-    clientPreferences: preferences, normalizeSettingsSection: (section) => section,
-    sameClientDestination: state.sameClientDestination, clientDestination: state.clientDestination,
-    setClientPreferences: (update) => Object.assign(preferences, update),
-    setSurfaceNavigation: (update) => { current = update(current); },
-    setSecondaryPaneOpen: () => calls.push("closed-pane"), setSecondaryPaneFocused: () => {}, setActivePane: () => {},
-    chatWorkspace: { selectRun: () => calls.push("changed-task") }, setQuery: () => {}, setSearchFocusTick: () => {},
+    settingsOpenRef,
+    setInboxOpen: (value) => { inboxState = value; calls.push(["inbox", value]); },
+    setSettingsRecordingId: (value) => calls.push(["recording", value]),
+    setSettingsOpenState: (value) => { openState = value; calls.push(["settings", value]); },
+    normalizeSettingsSection: (section) => section,
+    setClientPreferences: (update) => { preferenceWrites += 1; Object.assign(preferences, update); },
   };
   const open = callback("setSettingsOpen", environment), select = callback("selectSettingsSection", environment);
-  open(true); select("appearance");
-  assert.deepEqual(current.entries.map((entry) => entry.settingsSection), [undefined, "appearance"]);
-  assert.equal(current.index, 1);
-  const move = (delta) => callback("navigateSurfaceHistory", { ...environment, surfaceNavigation: current })(delta);
-  move(-1); assert.deepEqual(current.entries[current.index], { surfaceId: "chat", runId: "task-a" });
-  move(1); assert.equal(current.entries[current.index].settingsSection, "appearance");
   open(false);
-  assert.deepEqual({ length: current.entries.length, index: current.index }, { length: 2, index: 0 });
-  assert.deepEqual(current.entries[current.index], { surfaceId: "chat", runId: "task-a" });
-  current = { entries: [{ surfaceId: "voice", settingsSection: "general" }], index: 0 };
+  assert.equal(preferenceWrites, 0, "closing an already-closed Settings overlay writes no preferences");
+  open(true);
+  assert.equal(openState, true);
+  assert.equal(inboxState, false);
+  assert.equal(preferences.settingsSearch, "");
+  select("appearance");
+  assert.equal(preferences.settingsSection, "appearance");
   open(false);
-  assert.deepEqual(current, { entries: [{ surfaceId: "voice" }], index: 0 });
-  assert.deepEqual(calls, []);
+  const writesAfterClose = preferenceWrites;
+  open(false);
+  assert.equal(preferenceWrites, writesAfterClose);
+  assert.equal(openState, false);
+  assert.deepEqual(calls, [["inbox", false], ["settings", true], ["recording", ""], ["settings", false]]);
 });
 
 test("Files opens in its calling workspace without changing the primary destination", () => {
@@ -411,7 +429,11 @@ test("leaving Tasks retains its sidebar through closing and releases it after mo
   const dom = new JSDOM("<div id='root'></div>");
   const before = { window: global.window, document: global.document, act: global.IS_REACT_ACT_ENVIRONMENT };
   global.window = dom.window; global.document = dom.window.document; global.IS_REACT_ACT_ENVIRONMENT = true;
-  const { PanelContent } = load("src/components/shell/PanelResizeHandle.tsx", { "motion/react": {}, "./panelResizeHandle.css": {} });
+  const { PanelContent } = load("src/components/shell/PanelResizeHandle.tsx", {
+    "motion/react": {},
+    "../../appearance": { useShouldReduceMotion: () => false },
+    "./panelResizeHandle.css": {},
+  });
   let unmounted = 0;
   function Sidebar() { React.useEffect(() => () => { unmounted++; }, []); return React.createElement("nav", null, "Tasks"); }
   const node = document.querySelector("#root"), root = createRoot(node);
@@ -436,7 +458,7 @@ test("task labels preserve operator names and do not expose raw run ids as title
 
 test("native window controls stay centered and reserve physical space across zoom levels", () => {
   const chrome = require("../electron/windowChrome.cjs");
-  for (const [zoom, y, inset] of [[0.8, 11, 95], [1, 15, 76], [1.4, 24, 76 / 1.4]]) {
+  for (const [zoom, y, inset] of [[0.8, 12, 95], [1, 17, 76], [1.4, 27, 76 / 1.4]]) {
     assert.deepEqual(chrome.nativeTrafficLightPosition(zoom), { x: 16, y });
     assert.equal(chrome.nativeControlInset(zoom), inset);
   }

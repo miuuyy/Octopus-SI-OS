@@ -388,10 +388,13 @@ test("opening Home activity retains the Home component and unsent draft", async 
   try {
     const draft = view.container.querySelector("textarea");
     draft.value = "Draft kept during call";
-    assert.deepEqual([...toolbar.querySelectorAll("button")].map(node => node.getAttribute("aria-label")), ["Activity", "Home widgets"]);
+    assert.deepEqual([...toolbar.querySelectorAll("button")].map(node => node.getAttribute("aria-label")), []);
+    const homeActions = view.container.querySelector(".home-surface-actions");
+    assert.ok(homeActions, "Home surface renders Activity and Home widgets inside the Home tab");
+    assert.deepEqual([...homeActions.querySelectorAll("button")].map(node => node.getAttribute("aria-label")), ["Activity", "Home widgets"]);
     assert.ok(view.container.querySelector("[data-home-activity]") === null, "the Home chat mounts only in activity mode");
-    await click(button(toolbar, "Activity"));
-    assert.equal(button(toolbar, "Activity").getAttribute("aria-expanded"), "true");
+    await click(button(homeActions, "Activity"));
+    assert.equal(button(homeActions, "Activity").getAttribute("aria-expanded"), "true");
     assert.equal(view.container.querySelector("textarea"), draft);
     assert.equal(draft.value, "Draft kept during call");
     const homeLayer = draft.closest(".home-view-transition__surface");
@@ -402,12 +405,12 @@ test("opening Home activity retains the Home component and unsent draft", async 
     assert.equal(homeProps.session, props.voiceSession);
     assert.equal(view.container.querySelector("[data-home-activity]").closest(".home-view-transition__surface").hidden, false);
     assert.equal(view.container.querySelector("aside, .home-view-transition__activity, .home-view-transition__layout"), null);
-    assert.equal(button(toolbar, "Home widgets"), undefined);
-    await click(button(toolbar, "Activity"));
+    assert.equal(button(homeActions, "Home widgets"), undefined);
+    await click(button(homeActions, "Activity"));
     assert.ok(view.container.querySelector("[data-home-activity]") === null);
-    await click(button(toolbar, "Home widgets"));
+    await click(button(homeActions, "Home widgets"));
     assert.equal(homeProps.widgetsOpen, true);
-    assert.equal(button(toolbar, "Activity").getAttribute("aria-expanded"), "false");
+    assert.equal(button(homeActions, "Activity").getAttribute("aria-expanded"), "false");
     assert.equal(mounts, 1);
     assert.equal(draft.closest(".home-view-transition__surface").hidden, false);
     assert.equal(homeLayer.hasAttribute("inert"), false);

@@ -1,8 +1,19 @@
+.oc-octopus-icon-control {
+  --button-icon-offset: 0px;
+  -webkit-app-region: no-drag;
+  cursor: var(--cursor-interaction, pointer);
+  corner-shape: round;
+}
+.oc-octopus-icon-control::before,
+.oc-octopus-icon-control::after {
+  corner-shape: inherit;
+}
+
 .oc-octopus-icon-control[data-appearance=sidebar] {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   width: calc(var(--spacing) * 6); height: calc(var(--spacing) * 6); padding: var(--spacing); border: 1px solid transparent;
-  border-radius: var(--radius-md); corner-shape: var(--octopus-corner-shape); background: transparent; color: color-mix(in oklab, var(--color-token-foreground) 50%, transparent);
-  cursor: var(--cursor-interaction);
+  border-radius: var(--radius-md); corner-shape: round; background: transparent; color: color-mix(in oklab, var(--color-token-foreground) 50%, transparent);
+  cursor: var(--cursor-interaction, pointer);
 }
 .oc-octopus-icon-control[data-appearance=sidebar]:enabled:hover, .oc-octopus-icon-control[data-appearance=sidebar]:focus-visible { color: var(--color-text); }
 .oc-octopus-icon-control[data-appearance=sidebar]:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
@@ -10,21 +21,21 @@
 .oc-octopus-icon-control[data-appearance=compact] {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   height: 24px; aspect-ratio: 1; padding: 0; gap: var(--spacing);
-  border: 1px solid transparent; border-radius: var(--radius-lg);
-  color: var(--color-text-tertiary); background: transparent; cursor: var(--cursor-interaction); user-select: none;
+  border: 1px solid transparent; border-radius: var(--radius-lg); corner-shape: round;
+  color: var(--color-text-tertiary); background: transparent; cursor: var(--cursor-interaction, pointer); user-select: none;
 }
 .oc-octopus-icon-control[data-appearance=compact]:enabled:hover,
-.oc-octopus-icon-control[data-appearance=compact]:enabled[data-state=open] { background: var(--color-background-primary-ghost-hover); }
-.oc-octopus-icon-control[data-appearance=compact][data-selected=true] { color: var(--color-text-info); background: color-mix(in oklab, var(--color-text-info) 10%, transparent); }
+.oc-octopus-icon-control[data-appearance=compact]:enabled[data-state=open] { background: var(--color-background-secondary-ghost-hover); }
+.oc-octopus-icon-control[data-appearance=compact][data-selected=true] { color: var(--color-text-accent); background: color-mix(in oklab, var(--color-text-accent) 10%, transparent); }
 .oc-octopus-icon-control[data-appearance=compact][data-selected=true]:enabled:hover,
-.oc-octopus-icon-control[data-appearance=compact][data-selected=true]:enabled[data-state=open] { background: color-mix(in oklab, var(--color-text-info) 15%, transparent); }
+.oc-octopus-icon-control[data-appearance=compact][data-selected=true]:enabled[data-state=open] { background: color-mix(in oklab, var(--color-text-accent) 15%, transparent); }
 .oc-octopus-icon-control[data-appearance=compact]:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-ring); }
 
 .oc-octopus-icon-control[data-appearance=dialog-close] {
   display: flex; width: 24px; height: 24px; flex: none; align-items: center; justify-content: center;
-  padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); cursor: var(--cursor-interaction);
+  padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); cursor: var(--cursor-interaction, pointer);
 }
-.oc-octopus-icon-control[data-appearance=dialog-close]:enabled:hover { background: var(--color-background-primary-ghost-hover); color: var(--color-text); }
+.oc-octopus-icon-control[data-appearance=dialog-close]:enabled:hover { background: var(--color-background-secondary-ghost-hover); color: var(--color-text); }
 .oc-octopus-icon-control[data-appearance=dialog-close]:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; }
 
 .oc-octopus-icon-control:disabled { cursor: default; opacity: .4; }
@@ -40,9 +51,10 @@
   padding: 0;
   border: 0;
   border-radius: var(--radius-md);
+  corner-shape: round;
   background: transparent;
   color: var(--color-text-tertiary);
-  cursor: var(--cursor-interaction);
+  cursor: var(--cursor-interaction, pointer);
   transition: color .15s ease, background-color .15s ease;
 }
 
@@ -55,6 +67,7 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
+  corner-shape: inherit;
   background: var(--color-background-secondary-ghost-hover);
   opacity: 0;
   transition: opacity .15s ease, background-color .15s ease;
@@ -65,13 +78,18 @@
 
 .oc-octopus-icon-control[data-appearance=rail]:enabled:hover,
 .oc-octopus-icon-control[data-appearance=rail][data-selected=true],
-.oc-octopus-icon-control[data-appearance=rail][data-state=open] {
+.oc-octopus-icon-control[data-appearance=rail][data-state=open],
+.oc-octopus-icon-control[data-appearance=rail][aria-expanded=true] {
   color: var(--color-text);
 }
 
+.oc-octopus-icon-control[data-appearance=rail][data-state=open]::before,
+.oc-octopus-icon-control[data-appearance=rail][aria-expanded=true]::before {
+  opacity: .6;
+}
+
 .oc-octopus-icon-control[data-appearance=rail]:enabled:hover::before,
-.oc-octopus-icon-control[data-appearance=rail][data-selected=true]::before,
-.oc-octopus-icon-control[data-appearance=rail][data-state=open]::before {
+.oc-octopus-icon-control[data-appearance=rail][data-selected=true]::before {
   opacity: 1;
 }
 

@@ -1,13 +1,17 @@
 .chat-tooltip.is-shell {
-  --radius-lg: calc(var(--radius-lg-base) * var(--corner-radius-scale));
-  border-radius: calc(var(--radius-3xl-base) * var(--corner-radius-scale));
+  block-size: fit-content;
+  inline-size: max-content;
+  max-inline-size: min(20rem, calc(100vw - 16px));
+  border-radius: var(--radius-2xl);
   padding: 5px 12px;
-  border-color: color-mix(in oklab, currentColor 5%, transparent);
-  corner-shape: var(--octopus-corner-shape);
-  box-shadow: 0 8px 18px #0f172a33;
-  font-weight: var(--font-ui-weight, 400);
-  line-height: 18px;
+  border-color: var(--tooltip-border-color, color-mix(in oklab, currentColor 5%, transparent));
+  corner-shape: round;
+  box-shadow: var(--tooltip-box-shadow, 0 8px 18px #0f172a33);
+  font-size: var(--tooltip-font-size, var(--text-sm));
+  font-weight: var(--tooltip-font-weight, var(--font-ui-weight, 430));
+  line-height: var(--tooltip-line-height, 18px);
   letter-spacing: -.15px;
+  overflow-wrap: break-word;
 }
 
 .shell-tooltip-label {
@@ -26,11 +30,14 @@
   margin-inline-end: -7px;
   border: 0;
   border-radius: var(--radius-lg);
-  corner-shape: var(--octopus-corner-shape);
-  background: color-mix(in oklab, currentColor 25%, transparent);
+  corner-shape: round;
+  background: var(--tooltip-shortcut-background-color, var(--color-background-tooltip-shortcut, color-mix(in oklab, currentColor 25%, transparent)));
   color: inherit;
   box-shadow: none;
-  font: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--tooltip-font-size, var(--text-sm));
+  font-weight: inherit;
+  letter-spacing: normal;
   line-height: 18px;
   white-space: nowrap;
 }

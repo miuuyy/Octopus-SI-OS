@@ -1,25 +1,19 @@
-.settings-page {
-  position: absolute;
-  z-index: 200;
-  inset: 0;
-  min-width: 0;
-  min-height: 0;
-  background: var(--color-surface);
-  color: var(--color-token-foreground);
+.settings-rail {
+  width: var(--settings-sidebar-width, var(--sidebar-w));
 }
-
-.settings-rail { width: clamp(160px, 30cqw, var(--settings-sidebar-width)); padding-top: 12px; background: color-mix(in oklab, var(--color-surface) 65%, transparent); border-right: .5px solid var(--color-border); }
 .settings-compact-navigation { display: none; }
 
-@container settings-frame (max-width: 640px) {
+@container shell-overlay (max-width: 640px) {
   .settings-page { flex-direction: column; }
-  .settings-rail { width: 100%; padding: 12px 12px 0; border: 0; }
+  .settings-rail { width: 100%; padding: 6px 6px 0; border: 0; }
+  .settings-rail > .app-shell-sidebar-resizer { display: none; }
   .settings-rail > nav { padding: 0; }
   .settings-rail > nav, .settings-rail > nav > div { flex: none; }
   .settings-rail .settings-rail-nav { display: none; flex: none; }
   .settings-rail.is-searching .settings-rail-nav { display: block; max-height: 200px; }
-  .settings-compact-navigation { display: flex; flex: none; padding: 0 12px 12px; border-bottom: .5px solid var(--color-border); }
+  .settings-compact-navigation { display: flex; flex: none; padding: 0 6px 10px; border-bottom: 0; }
   .settings-compact-navigation > * { width: 100%; }
+  .settings-main { margin: 0; }
   .settings-page .settings-theme-editors,
   .settings-page .settings-provider-grid,
   .settings-page .settings-access-fields,
@@ -54,16 +48,22 @@
   color: var(--color-token-list-active-selection-icon-foreground);
 }
 
+.settings-main-column {
+  background: transparent;
+}
+
 .settings-main {
-  min-width: 0;
-  min-height: 0;
-  background: var(--color-token-main-surface-primary);
   overscroll-behavior: contain;
 }
 
 .settings-page .oc-settings-row,
 .settings-preference-row {
   container: settings-row / inline-size;
+}
+
+.settings-page .oc-settings-row:has(.oc-field-row__description),
+.settings-preference-row {
+  min-height: var(--height-token-settings-row, 4rem);
 }
 
 .settings-page .oc-settings-row > .oc-field-row__control,
@@ -88,6 +88,7 @@
 
 .settings-page :is(.oc-card__content, .account-row-list) > :not(:last-child)::after {
   height: 1px;
+  background: var(--color-border-subtle);
 }
 
 .settings-theme-row > :last-child {
@@ -276,7 +277,7 @@
 }
 
 .settings-provider-summary.is-compact {
-  border-top: .5px solid var(--color-token-border);
+  border-top: .5px solid var(--color-border-subtle);
 }
 
 .settings-provider-title {
@@ -321,7 +322,7 @@
   grid-template-columns: 118px minmax(0, 1fr);
   gap: 12px;
   padding: 7px 0;
-  border-top: .5px solid var(--color-token-border);
+  border-top: .5px solid var(--color-border-subtle);
 }
 
 .settings-provider-facts dt,
@@ -349,7 +350,7 @@
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  min-height: 62px;
+  min-height: var(--height-token-settings-row, 4rem);
   align-items: center;
   gap: 18px;
   padding: 12px 16px;
@@ -527,7 +528,7 @@
   align-self: stretch;
   margin: 12px 0;
   border-radius: 2px;
-  background: var(--color-token-border-light);
+  background: var(--color-border-subtle);
 }
 
 .settings-profile-chart-block {
@@ -781,7 +782,7 @@
 
   .settings-profile-stat {
     min-height: 60px;
-    border-bottom: 1px solid var(--color-token-border-light);
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 }
 

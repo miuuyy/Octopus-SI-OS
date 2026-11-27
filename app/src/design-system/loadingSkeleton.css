@@ -39,9 +39,6 @@
   @media (prefers-reduced-motion: reduce) {
     :root:not([data-reduced-motion]) .oc-skeleton::before { animation: none; will-change: auto; }
   }
-  @supports (corner-shape: superellipse(1.5)) {
-    .oc-skeleton { corner-shape: var(--octopus-corner-shape); }
-  }
   @media (forced-colors: active) {
     .oc-skeleton { background: GrayText; }
     .oc-skeleton::before { display: none; }

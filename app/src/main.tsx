@@ -36,6 +36,8 @@ if (windowTransport) {
   };
   void windowTransport.windowState().then(applyWindowState);
   windowTransport.onWindowStateChanged(applyWindowState);
+} else {
+  document.documentElement.classList.add("electron-opaque");
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

@@ -3,6 +3,7 @@
 .dictation-recording-text { display: block; overflow: hidden; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .dictation-recording-text.is-selected { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .dictation-recording-actions { display: flex; width: 28px; height: 28px; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 8px; color: var(--color-token-text-tertiary); background: transparent; cursor: pointer; }
+.dictation-recording-playback { width: 28px; min-width: 28px; height: 28px; padding: 0; }
 .dictation-recording-actions:hover, .dictation-recording-actions[aria-expanded="true"] { color: var(--color-token-text-primary); background: var(--color-token-list-hover-background); }
 .dictation-recording-actions:disabled { cursor: default; opacity: .4; }
 .dictation-recording-actions:focus-visible { outline: 2px solid var(--color-token-foreground); outline-offset: 2px; }

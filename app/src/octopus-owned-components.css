@@ -13,29 +13,29 @@
 @layer components {
   @supports (animation-timeline: --scroll-fade) {
     .vertical-scroll-fade-mask,
+    .vertical-scroll-fade-mask-top,
+    .vertical-scroll-fade-mask-bottom {
+      --edge-fade-fixed-top: initial;
+      animation-name: edge-fade;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: scroll(self y);
+    }
+
+    .vertical-scroll-fade-mask,
     .vertical-scroll-fade-mask-top {
       -webkit-mask: linear-gradient(to bottom in oklch, oklch(60% 0 0 / 0), oklch(85% 0 0) var(--top-fade) calc(100% - var(--bottom-fade)), oklch(60% 0 0 / 0));
       mask: linear-gradient(to bottom in oklch, oklch(60% 0 0 / 0), oklch(85% 0 0) var(--top-fade) calc(100% - var(--bottom-fade)), oklch(60% 0 0 / 0));
-      animation-timing-function: linear;
-      animation-fill-mode: both;
-      animation-timeline: scroll(self y);
-    }
-
-    .vertical-scroll-fade-mask {
-      animation-name: edge-fade;
     }
 
     .vertical-scroll-fade-mask-top {
-      animation-name: edge-fade-top;
+      --edge-fade-fixed-top: var(--edge-fade-distance, 1rem);
     }
 
     .vertical-scroll-fade-mask-bottom {
+      --edge-fade-fixed-top: 0px;
       -webkit-mask: linear-gradient(to bottom in oklch, oklch(85% 0 0), oklch(85% 0 0) calc(100% - var(--bottom-fade)), oklch(60% 0 0 / 0));
       mask: linear-gradient(to bottom in oklch, oklch(85% 0 0), oklch(85% 0 0) calc(100% - var(--bottom-fade)), oklch(60% 0 0 / 0));
-      animation-name: edge-fade-bottom;
-      animation-timing-function: linear;
-      animation-fill-mode: both;
-      animation-timeline: scroll(self y);
     }
   }
 }
@@ -158,14 +158,8 @@
 }
 
 [data-octopus-window-type="electron"]:not([data-octopus-window-chrome="application-menu"]) .app-shell-left-panel:not([data-app-shell-left-panel-appearance="content-surface"]) {
-  background: var(--color-surface-tertiary);
+  background: transparent;
   overflow: visible;
-}
-
-@supports (color: color-mix(in lab, red, red)) {
-  [data-octopus-window-type="electron"]:not([data-octopus-window-chrome="application-menu"]) .app-shell-left-panel:not([data-app-shell-left-panel-appearance="content-surface"]) {
-    background: color-mix(in srgb, var(--color-surface-tertiary) 70%, transparent);
-  }
 }
 
 [data-octopus-window-type="electron"]:not([data-octopus-window-chrome="application-menu"]) .app-shell-left-panel:not([data-app-shell-left-panel-appearance="content-surface"])::after {
@@ -219,55 +213,18 @@
   }
 }
 
-@supports (corner-shape: superellipse(1.5)) {
-  :root {
-    --octopus-corner-radius-scale: 1.25;
-    --octopus-corner-shape: superellipse(1.5);
-    --corner-radius-scale: var(--octopus-corner-radius-scale);
-  }
-
-  .rounded-md,
-  .rounded-lg,
-  .rounded-xl,
-  .rounded-2xl,
-  .rounded-3xl,
-  .rounded-4xl {
-    corner-shape: var(--octopus-corner-shape);
-  }
+:root {
+  --octopus-corner-shape: round;
 }
 
 @keyframes edge-fade {
   0%, 1% {
-    --top-fade: 0;
+    --top-fade: var(--edge-fade-fixed-top, 0px);
     --bottom-fade: var(--edge-fade-distance, 1rem);
   }
 
   99%, 100% {
-    --top-fade: var(--edge-fade-distance, 1rem);
-    --bottom-fade: 0;
-  }
-}
-
-@keyframes edge-fade-top {
-  0%, 1% {
-    --top-fade: var(--edge-fade-distance, 1rem);
-    --bottom-fade: var(--edge-fade-distance, 1rem);
-  }
-
-  99%, 100% {
-    --top-fade: var(--edge-fade-distance, 1rem);
-    --bottom-fade: 0;
-  }
-}
-
-@keyframes edge-fade-bottom {
-  0%, 1% {
-    --top-fade: 0;
-    --bottom-fade: var(--edge-fade-distance, 1rem);
-  }
-
-  99%, 100% {
-    --top-fade: 0;
+    --top-fade: var(--edge-fade-fixed-top, var(--edge-fade-distance, 1rem));
     --bottom-fade: 0;
   }
 }
@@ -368,13 +325,16 @@
 }
 
 .octopus-markdown-content {
-  --markdown-font-size: var(--octopus-chat-font-size);
-  --markdown-line-height: calc(var(--markdown-font-size) + 8px);
+  --markdown-host-font-size: var(--octopus-chat-font-size);
+  --markdown-host-small-font-size: var(--octopus-chat-code-font-size, 12px);
+  --markdown-font-size: var(--markdown-host-font-size);
+  --markdown-small-font-size: max(var(--markdown-host-small-font-size, 12px), calc(var(--markdown-font-size) * 0.875));
+  --markdown-line-height: calc(var(--markdown-font-size) * var(--leading-relaxed, 1.625));
+  --markdown-space: calc(var(--markdown-font-size) / 4);
   --text-primary: var(--color-token-text-primary);
-  --border-medium: var(--color-token-border-heavy);
-  --border-light: var(--color-token-border-light);
+  --border-medium: var(--color-border-strong, var(--color-token-border-heavy));
+  --border-light: var(--color-border-subtle, var(--color-token-border-light));
   --main-surface-secondary: var(--color-token-bg-secondary);
-  --thread-content-max-width: 40rem;
   color: var(--text-primary);
   font-size: var(--markdown-font-size);
   line-height: var(--markdown-line-height);
@@ -390,7 +350,24 @@
 }
 
 .octopus-markdown-paragraph {
-  margin: 0 0 .6875rem;
+  margin: 0 0 var(--markdown-space);
+}
+
+.octopus-markdown-content > .octopus-markdown-paragraph:not(:first-child) {
+  margin-top: calc(var(--markdown-space) * 2);
+}
+
+.octopus-markdown-content > .octopus-markdown-paragraph + .octopus-markdown-paragraph {
+  margin-block: calc(var(--markdown-space) * 4);
+}
+
+.octopus-markdown-content > .octopus-markdown-heading:where(h1, h2, h3, h4) + .octopus-markdown-paragraph,
+.octopus-markdown-content > .octopus-markdown-paragraph + .octopus-markdown-list {
+  margin-top: 0;
+}
+
+.octopus-markdown-content > .octopus-markdown-list + .octopus-markdown-heading {
+  margin-top: calc(var(--markdown-space) * 4);
 }
 
 .octopus-markdown-text {
@@ -399,41 +376,44 @@
 }
 
 .octopus-markdown-heading {
-  margin: 20px 0 10px;
-  font-weight: 600;
-  line-height: 1.25;
+  font-weight: var(--font-weight-semibold, 600);
 }
 
 .octopus-markdown-heading1 {
-  font-size: 24px;
+  margin: calc(var(--markdown-space) * 4) 0 calc(var(--markdown-space) * 2);
+  font-size: calc(var(--markdown-font-size) * 1.5);
+  line-height: calc(var(--markdown-space) * 8);
 }
 
 .octopus-markdown-heading2 {
-  font-size: 20px;
+  margin: calc(var(--markdown-space) * 4) 0 var(--markdown-space);
+  font-size: calc(var(--markdown-font-size) * 1.25);
+  line-height: calc(var(--markdown-space) * 7);
 }
 
-.octopus-markdown-heading3, .octopus-markdown-heading4 {
-  font-size: 17px;
-  line-height: 22px;
+.octopus-markdown-heading3 {
+  margin: calc(var(--markdown-space) * 4) 0 var(--markdown-space);
+  font-size: calc(var(--markdown-font-size) * 1.125);
+  line-height: calc(var(--markdown-space) * 7);
 }
 
-.octopus-markdown-heading5, .octopus-markdown-heading6 {
-  font-size: 15px;
-  line-height: 20px;
+.octopus-markdown-heading4 {
+  margin: calc(var(--markdown-space) * 4) 0 0;
+  font-size: var(--markdown-font-size);
+  line-height: calc(var(--markdown-space) * 6);
+}
+
+.octopus-markdown-heading5,
+.octopus-markdown-heading6 {
+  margin: 0;
+  font-size: var(--markdown-font-size);
+  line-height: var(--markdown-line-height);
 }
 
 .octopus-markdown-list {
   margin: 0;
-  padding-inline-start: 1.3125rem;
+  padding-inline-start: var(--markdown-line-height);
   list-style-position: outside;
-}
-
-.octopus-markdown-content > p:has( + .octopus-markdown-list) {
-  margin-bottom: .625rem;
-}
-
-.octopus-markdown-content > .octopus-markdown-list + p {
-  margin-top: 1rem;
 }
 
 .octopus-markdown-unordered-list {
@@ -458,20 +438,20 @@
 }
 
 .octopus-markdown-list-item {
-  padding-inline-start: .125rem;
+  padding-inline-start: calc(var(--markdown-space) * 1.5);
   display: list-item;
 }
 
 .octopus-markdown-list-item + .octopus-markdown-list-item {
-  margin-top: .5rem;
+  margin-top: 0;
 }
 
-.octopus-markdown-list-item > :first-child {
+.octopus-markdown-list-item > :first-child:not(h1, h2, h3) {
   margin-top: 0;
   margin-bottom: 0;
 }
 
-.octopus-markdown-list-item > :last-child {
+.octopus-markdown-list-item > :last-child:not(h1, h2, h3) {
   margin-bottom: 0;
 }
 
@@ -480,45 +460,49 @@
 }
 
 .octopus-markdown-list-item > p + p {
-  margin-top: .6875rem;
+  margin-top: calc(var(--markdown-space) * 4);
 }
 
 .octopus-markdown-list-item > .octopus-markdown-list {
-  margin-top: .5rem;
+  margin-top: 0;
   margin-bottom: 0;
 }
 
 .octopus-markdown-task-list-item {
+  --markdown-task-checkbox-margin: 0;
   padding-inline-start: 0;
   list-style-type: none;
 }
 
 .octopus-markdown-task-list-item:has( > p) {
+  --markdown-task-checkbox-margin: var(--markdown-space);
   grid-template-columns: auto minmax(0, 1fr);
   display: grid;
 }
 
 .octopus-markdown-task-list-item:has( > p) > :first-child {
-  margin-top: .25rem;
+  margin-top: var(--markdown-task-checkbox-margin);
 }
 
 .octopus-markdown-task-list-item:has( > p) > :not(:first-child) {
   grid-column: 2;
 }
 
-.octopus-markdown-unordered-list > .octopus-markdown-list-item::marker, .octopus-markdown-ordered-list > .octopus-markdown-list-item::marker {
+.octopus-markdown-unordered-list > .octopus-markdown-list-item::marker,
+.octopus-markdown-ordered-list > .octopus-markdown-list-item::marker {
   color: var(--text-primary);
+  font-weight: var(--font-weight-semibold, 600);
 }
 
 .octopus-markdown-blockquote {
   color: var(--text-primary);
   background-color: #0000;
   border: 0;
-  margin: 0 0 8px;
-  padding-block: 8px;
-  padding-inline-start: 24px;
+  margin: 0 0 calc(var(--markdown-space) * 2);
+  padding-block: calc(var(--markdown-space) * 2);
+  padding-inline-start: calc(var(--markdown-space) * 6);
   font-style: normal;
-  line-height: 24px;
+  line-height: calc(var(--markdown-space) * 6);
   position: relative;
 }
 
@@ -543,11 +527,11 @@
   content: "";
   background-color: var(--border-medium);
   inset-inline-start: 0;
-  border-radius: 2px;
-  width: 4px;
+  border-radius: calc(var(--markdown-space) / 2);
+  width: var(--markdown-space);
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: calc(var(--markdown-space) * 2);
+  bottom: calc(var(--markdown-space) * 2);
 }
 
 .octopus-markdown-horizontal-rule {
@@ -555,7 +539,7 @@
   border: 0;
   border-top: 1px solid var(--border-medium);
   height: 0;
-  margin: 28px 0;
+  margin: calc(var(--markdown-space) * 7) 0;
 }
 
 .octopus-markdown-horizontal-rule + * {
@@ -564,6 +548,7 @@
 
 .octopus-markdown-table-container {
   width: calc(100% + (var(--thread-content-margin, 24px) * 2));
+  margin-top: calc(var(--markdown-space) * 4);
   margin-inline: calc(var(--thread-content-margin, 24px) * -1);
   scrollbar-width: thin;
   overflow-x: auto;
@@ -577,33 +562,38 @@
 
 .octopus-markdown-table {
   width: fit-content;
-  min-width: min(calc(100cqw - (var(--thread-content-margin, 24px) * 2)), var(--thread-content-max-width, 40rem));
+  min-width: min(calc(100cqw - (var(--thread-content-margin, 24px) * 2)), var(--thread-content-max-width, 48rem));
   border-collapse: separate;
   border-spacing: 0;
   table-layout: auto;
-  text-align: left;
+  text-align: start;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--markdown-small-font-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.octopus-markdown-content .octopus-markdown-table {
+  font-size: var(--markdown-small-font-size);
 }
 
 .octopus-markdown-table [data-col-size="sm"] {
-  min-width: calc(var(--thread-content-max-width, 40rem) * 4 / 24);
-  max-width: calc(var(--thread-content-max-width, 40rem) * 6 / 24);
+  min-width: calc(var(--thread-content-max-width, 48rem) * 4 / 24);
+  max-width: calc(var(--thread-content-max-width, 48rem) * 6 / 24);
 }
 
 .octopus-markdown-table [data-col-size="md"] {
-  min-width: calc(var(--thread-content-max-width, 40rem) * 6 / 24);
-  max-width: calc(var(--thread-content-max-width, 40rem) * 8 / 24);
+  min-width: calc(var(--thread-content-max-width, 48rem) * 6 / 24);
+  max-width: calc(var(--thread-content-max-width, 48rem) * 8 / 24);
 }
 
 .octopus-markdown-table [data-col-size="lg"] {
-  min-width: calc(var(--thread-content-max-width, 40rem) * 8 / 24);
-  max-width: calc(var(--thread-content-max-width, 40rem) * 12 / 24);
+  min-width: calc(var(--thread-content-max-width, 48rem) * 8 / 24);
+  max-width: calc(var(--thread-content-max-width, 48rem) * 12 / 24);
 }
 
 .octopus-markdown-table [data-col-size="xl"] {
-  min-width: calc(var(--thread-content-max-width, 40rem) * 14 / 24);
-  max-width: calc(var(--thread-content-max-width, 40rem) * 18 / 24);
+  min-width: calc(var(--thread-content-max-width, 48rem) * 14 / 24);
+  max-width: calc(var(--thread-content-max-width, 48rem) * 18 / 24);
 }
 
 .octopus-markdown-table-row:not(:last-child) .octopus-markdown-table-cell {
@@ -613,30 +603,30 @@
 .octopus-markdown-table-header-cell, .octopus-markdown-table-cell {
   vertical-align: top;
   white-space: normal;
-  padding-inline-end: 24px;
+  padding-inline-end: calc(var(--markdown-space) * 6);
 }
 
 .octopus-markdown-table-header-cell {
   border-bottom: 1px solid var(--border-medium);
   color: var(--text-primary);
-  padding-top: 8px;
-  padding-bottom: 8px;
-  font-weight: 600;
-  line-height: 16px;
+  padding-top: calc(var(--markdown-space) * 2);
+  padding-bottom: calc(var(--markdown-space) * 2);
+  font-weight: var(--font-weight-semibold, 600);
+  line-height: calc(var(--markdown-space) * 4);
 }
 
 .octopus-markdown-table-cell {
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: calc(var(--markdown-space) * 2.5);
+  padding-bottom: calc(var(--markdown-space) * 2.5);
 }
 
 .octopus-markdown-numeric-table-cell {
   white-space: nowrap;
-  min-width: calc(3ch + 24px);
+  min-width: calc(3ch + (var(--markdown-space) * 6));
 }
 
 .octopus-markdown-table-header-cell:last-child {
-  padding-inline-end: 40px;
+  padding-inline-end: calc(var(--markdown-space) * 10);
 }
 
 .octopus-markdown-table-cell:last-child {
@@ -644,17 +634,36 @@
 }
 
 .octopus-markdown-table-body .octopus-markdown-table-row:last-child .octopus-markdown-table-cell {
-  padding-bottom: 24px;
+  padding-bottom: calc(var(--markdown-space) * 6);
 }
 
 .octopus-markdown-code-block {
-  margin-block: 14px;
+  margin-block: calc(var(--markdown-space) * 5);
+}
+
+.octopus-code-surface,
+.octopus-code-sticky-action-bar {
+  background-color: var(--color-surface);
+  background-image: linear-gradient(var(--color-background-secondary-soft-alpha), var(--color-background-secondary-soft-alpha));
+}
+
+.octopus-code-sticky-action-bar {
+  position: sticky;
+  top: calc(-1px - var(--thread-sticky-header-top, 0px));
+  z-index: 10;
+}
+
+.octopus-code-block-source,
+.octopus-code-block-source > code {
+  font-family: var(--font-mono);
+  font-size: var(--octopus-chat-code-font-size, var(--vscode-editor-font-size, 12px));
+  line-height: max(1.5em, calc(var(--spacing) * 5));
 }
 
 .octopus-markdown-content .octopus-markdown-inline-markdown {
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
-  background: color-mix(in srgb, var(--color-token-list-hover-background) 60%, var(--color-token-foreground) 6%);
+  background: var(--color-background-secondary-ghost-hover);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -664,8 +673,14 @@
   display: inline;
 }
 
+@supports (color: color-mix(in lab, red, red)) {
+  .octopus-markdown-content .octopus-markdown-inline-markdown {
+    background: color-mix(in srgb, var(--color-background-secondary-ghost-hover) 60%, var(--color-text) 6%);
+  }
+}
+
 .octopus-markdown-content th, .octopus-markdown-content td {
-  max-width: calc(var(--thread-content-max-width, 40rem) * 18 / 24);
+  max-width: calc(var(--thread-content-max-width, 48rem) * 18 / 24);
   overflow-wrap: break-word;
   word-break: normal;
 }
@@ -747,12 +762,6 @@
 
 :root[data-octopus-window-type="browser"] {
   --composer-radius: calc(var(--spacing) * 7);
-}
-
-@supports (corner-shape: superellipse(1.5)) {
-  .composer-multiline-surface, .composer-attachments-default .composer-attachment-surface {
-    corner-shape: var(--octopus-corner-shape);
-  }
 }
 
 .composer-footer {

@@ -128,7 +128,7 @@ export const builtinSurfaceDescriptors: ClientSurfaceDescriptor[] = [
   {
     id: "inbox",
     label: "Inbox",
-    glyph: "inbox",
+    glyph: "bell",
     rendererKind: "builtin.inbox",
     order: 58,
     source: "builtin",
@@ -136,7 +136,7 @@ export const builtinSurfaceDescriptors: ClientSurfaceDescriptor[] = [
     chrome: {
       topbar: "none",
       workspace: "immersive",
-      titlebarGlyph: "inbox",
+      titlebarGlyph: "bell",
     },
   },
   {

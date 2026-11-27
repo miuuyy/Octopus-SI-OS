@@ -3,7 +3,18 @@ import { createPortal } from "react-dom";
 import "./messageTooltip.css";
 
 const TooltipTriggerContext = createContext(false);
-let currentTooltip: { id: string; close: () => void } | null = null;
+const TOOLTIP_WARMUP_MS = 300;
+const TOOLTIP_ANCHOR_GAP_PX = 4;
+let currentTooltip: { id: string; open: boolean; close: () => void } | null = null;
+let lastClosedTooltipId: string | null = null;
+let warmupUntilMs = 0;
+
+function nowMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
 type TooltipTriggerProps = HTMLAttributes<HTMLElement> & { disabled?: boolean; ref?: Ref<HTMLElement> };
 
 type Anchor = {
@@ -79,29 +90,49 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
     };
   }, [side]);
 
-  const close = useCallback(() => {
+  const closeWithReason = useCallback((recordWarmup: boolean) => {
     openEpochRef.current += 1;
     clearTimer();
-    if (currentTooltip?.id === tooltipId) currentTooltip = null;
+    if (currentTooltip?.id === tooltipId) {
+      if (currentTooltip.open && recordWarmup) {
+        lastClosedTooltipId = tooltipId;
+        warmupUntilMs = nowMs() + TOOLTIP_WARMUP_MS;
+      } else if (!recordWarmup) {
+        lastClosedTooltipId = null;
+        warmupUntilMs = 0;
+      }
+      currentTooltip = null;
+    }
     setAnchor(null);
   }, [clearTimer, tooltipId]);
 
-  const claim = useCallback(() => {
+  const close = useCallback(() => {
+    closeWithReason(false);
+  }, [closeWithReason]);
+
+  const claim = useCallback((open = false) => {
     if (currentTooltip?.id !== tooltipId) currentTooltip?.close();
-    currentTooltip = { id: tooltipId, close };
+    currentTooltip = { id: tooltipId, open, close };
   }, [close, tooltipId]);
 
   const openImmediately = useCallback(() => {
     clearTimer();
     openEpochRef.current += 1;
     if (inactive || !tooltipInteractionActive(interactionRef.current) || document.visibilityState === "hidden") return;
-    claim();
-    setAnchor(measureAnchor());
+    const measured = measureAnchor();
+    claim(measured !== null);
+    setAnchor(measured);
   }, [claim, clearTimer, inactive, measureAnchor]);
 
   const scheduleOpen = useCallback(() => {
     if (inactive || anchor || timerRef.current !== null) return;
-    claim();
+    const warm = (currentTooltip !== null && currentTooltip.open && currentTooltip.id !== tooltipId)
+      || (lastClosedTooltipId !== null && lastClosedTooltipId !== tooltipId && nowMs() < warmupUntilMs);
+    if (warm) {
+      openImmediately();
+      return;
+    }
+    claim(false);
     const openEpoch = ++openEpochRef.current;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
@@ -110,9 +141,11 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
         || !tooltipInteractionActive(interactionRef.current)
         || document.visibilityState === "hidden"
       ) return;
-      setAnchor(measureAnchor());
+      const measured = measureAnchor();
+      if (currentTooltip?.id === tooltipId) currentTooltip.open = measured !== null;
+      setAnchor(measured);
     }, resolvedDelayMs);
-  }, [anchor, claim, inactive, measureAnchor, resolvedDelayMs]);
+  }, [anchor, claim, inactive, measureAnchor, openImmediately, resolvedDelayMs, tooltipId]);
 
   useEffect(() => () => {
     openEpochRef.current += 1;
@@ -132,8 +165,8 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
     if (!anchor || !tooltip) return;
     const rect = tooltip.getBoundingClientRect();
     const viewportPadding = 8;
-    const topSpace = anchor.triggerTop - viewportPadding - 2;
-    const bottomSpace = anchor.viewportHeight - anchor.triggerBottom - viewportPadding - 2;
+    const topSpace = anchor.triggerTop - viewportPadding - TOOLTIP_ANCHOR_GAP_PX;
+    const bottomSpace = anchor.viewportHeight - anchor.triggerBottom - viewportPadding - TOOLTIP_ANCHOR_GAP_PX;
     const naturalHeight = tooltip.scrollHeight;
     if (anchor.side === "right" || anchor.side === "left") {
       const rightSpace = anchor.viewportWidth - anchor.triggerRight - 16;
@@ -144,18 +177,15 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
       return;
     }
     let nextSide = anchor.side;
-    let nextX = anchor.x;
-
     if (anchor.side === "top" && naturalHeight > topSpace && bottomSpace > topSpace) {
       nextSide = "bottom";
     } else if (anchor.side === "bottom" && naturalHeight > bottomSpace && topSpace >= bottomSpace) {
       nextSide = "top";
     }
-    if (rect.left < viewportPadding) {
-      nextX += viewportPadding - rect.left;
-    } else if (rect.right > anchor.viewportWidth - viewportPadding) {
-      nextX -= rect.right - (anchor.viewportWidth - viewportPadding);
-    }
+    const halfWidth = rect.width / 2;
+    const minX = viewportPadding + halfWidth;
+    const maxX = Math.max(minX, anchor.viewportWidth - viewportPadding - halfWidth);
+    const nextX = Math.max(minX, Math.min(anchor.triggerX, maxX));
 
     if (nextSide !== anchor.side || Math.abs(nextX - anchor.x) >= 0.5) {
       setAnchor((current) => current ? { ...current, side: nextSide, x: nextX } : current);
@@ -172,16 +202,17 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
           || Math.abs(measured.triggerTop - current.triggerTop) >= 0.5
           || Math.abs(measured.triggerX - current.triggerX) >= 0.5
           || Math.abs(measured.triggerY - current.triggerY) >= 0.5
+          || Math.abs(measured.triggerLeft - current.triggerLeft) >= 0.5
           || Math.abs(measured.triggerRight - current.triggerRight) >= 0.5
           || measured.viewportHeight !== current.viewportHeight
           || measured.viewportWidth !== current.viewportWidth;
-        const next = {
+        if (!geometryChanged) return current;
+        return {
           ...measured,
           side: current.side,
-          x: geometryChanged ? measured.triggerX : current.x,
-          y: geometryChanged ? measured.triggerY : current.y,
+          x: measured.triggerX,
+          y: measured.triggerY,
         };
-        return next;
       });
     };
     const dismissOnVisibilityChange = () => {
@@ -214,8 +245,8 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
 
   const availableHeight = anchor
     ? Math.max(0, anchor.side === "right" || anchor.side === "left" ? anchor.viewportHeight - 16 : anchor.side === "top"
-      ? anchor.triggerTop - 10
-      : anchor.viewportHeight - anchor.triggerBottom - 10)
+      ? anchor.triggerTop - 8 - TOOLTIP_ANCHOR_GAP_PX
+      : anchor.viewportHeight - anchor.triggerBottom - 8 - TOOLTIP_ANCHOR_GAP_PX)
     : 0;
 
   const triggerProps: HTMLAttributes<HTMLElement> = {
@@ -244,7 +275,7 @@ export function MessageTooltip({ children, asChild = false, className, delayMs, 
     } : undefined,
     onPointerLeave: () => {
       interactionRef.current.hoverLatched = false;
-      close();
+      closeWithReason(true);
     },
     onPointerMove: (event) => {
       if (inactive || event.buttons !== 0 || event.pointerType === "touch" || interactionRef.current.hoverLatched) return;

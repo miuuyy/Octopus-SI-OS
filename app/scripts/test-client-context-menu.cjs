@@ -51,24 +51,19 @@ function fixture() {
 }
 const request = (id = "request-1") => ({ requestId: id, position: { x: 50, y: 70 }, items: [{ id: "action", label: "Pin & keep", accelerator: "CmdOrCtrl+P" }] });
 
-test("window titlebar follows the selected task and its alias while Home and Scheduled retain their own titles", () => {
+test("window titlebar displays the active surface glyph and label across Tasks, Home, and Scheduled", () => {
   const source = ts.createSourceFile('OperatorShell.tsx', readFileSync(path.join(app, 'src/components/shell/OperatorShell.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let task, context;
+  let context;
   const visit = (node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'titlebarTask') task = node.initializer.getText(source);
     if (ts.isJsxAttribute(node) && node.name.text === 'titlebarSurfaceContext') context = node.initializer.expression.getText(source);
     ts.forEachChild(node, visit);
   };
-  visit(source); assert.ok(task && context);
-  const titlebar = Function('activeSurface', 'primarySurfaceTarget', 'homeRunId', 'taskChatRuns', 'taskOrganization', 'clientTaskTitle', `const titlebarTask = ${task}; return ${context};`);
-  const { clientTaskTitle } = load('src/shell/clientWorkspaces.ts');
-  const runs = [{ runId: 'a', title: 'Previous task' }, { runId: 'b', title: 'Projected title' }];
-  const render = (rendererKind, label, runId) => titlebar({ rendererKind, label, glyph: 'home', chrome: {} }, { runId }, 'home', runs, { aliases: { b: 'Selected task' } }, clientTaskTitle);
-  assert.deepEqual(render('builtin.chat', 'Tasks', 'b'), { glyph: 'folder', title: 'Selected task' });
-  assert.equal(render('builtin.chat', 'Tasks', 'a').title, 'Previous task');
-  assert.equal(render('builtin.voice', 'Home', 'b').title, 'Home');
-  assert.equal(render('builtin.scheduled', 'Scheduled', 'b').title, 'Scheduled');
-  assert.equal(render('builtin.chat', 'Tasks', '').title, 'Tasks');
+  visit(source); assert.ok(context);
+  const titlebar = Function('activeSurface', `return ${context};`);
+  assert.deepEqual(titlebar({ rendererKind: 'builtin.chat', label: 'Tasks', glyph: 'tasks', chrome: {} }), { glyph: 'tasks', title: 'Tasks' });
+  assert.deepEqual(titlebar({ rendererKind: 'builtin.voice', label: 'Home', glyph: 'home', chrome: {} }), { glyph: 'home', title: 'Home' });
+  assert.deepEqual(titlebar({ rendererKind: 'builtin.scheduled', label: 'Scheduled', glyph: 'clock', chrome: {} }), { glyph: 'clock', title: 'Scheduled' });
+  assert.deepEqual(titlebar({ rendererKind: 'builtin.dashboard', label: 'Dashboard', glyph: 'dashboardRail', chrome: { titlebarGlyph: 'topology' } }), { glyph: 'topology', title: 'Dashboard' });
 });
 
 test("actual main and preload native menu route bounds data and owns selection, cancellation and lifetime per sender", async () => {

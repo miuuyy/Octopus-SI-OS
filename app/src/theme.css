@@ -1,5 +1,4 @@
-:root.translucent-sidebar .sidebar,
-:root.translucent-sidebar .settings-rail {
+:root.translucent-sidebar .sidebar {
   background: var(--sidebar);
   backdrop-filter: blur(28px) saturate(1.08);
   -webkit-backdrop-filter: blur(28px) saturate(1.08);
@@ -20,11 +19,6 @@
 [data-theme="light"] .brand-mark,
 [data-theme="light"] .welcome-brand-mark {
   filter: invert(1);
-}
-
-[data-theme="light"] .composer-send {
-  background: var(--oc-color-text);
-  color: var(--oc-color-canvas);
 }
 
 [data-theme="light"] .endpoint-dot.offline {

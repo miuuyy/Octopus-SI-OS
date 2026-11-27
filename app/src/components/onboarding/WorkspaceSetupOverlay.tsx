@@ -79,6 +79,7 @@ type Props = {
   catalogLoading: boolean;
   applyState: WorkspaceSetupApplyState;
   onApply: (draft: WorkspaceSetupDraft) => Promise<void>;
+  onReviewChoices?: () => Promise<void>;
   onSignIn: () => Promise<void>;
   onChange: (draft: WorkspaceSetupDraft) => void;
   onRetryCatalog: () => void;
@@ -129,6 +130,7 @@ export function WorkspaceSetupOverlay({
   catalogLoading,
   applyState,
   onApply,
+  onReviewChoices,
   onSignIn,
   onChange,
   onRetryCatalog,
@@ -236,21 +238,26 @@ export function WorkspaceSetupOverlay({
 
   function goBack() {
     if (applying) {
-      if (applyState.state === "failed") move("review");
+      if (applyState.state === "running") return;
+      if (onReviewChoices) {
+        void onReviewChoices();
+        return;
+      }
+      move("review");
       return;
     }
     const previous = STEPS[activeIndex - 1]?.id;
     if (previous) move(previous);
   }
 
-  const backVisible = applying ? applyState.state === "failed" : activeIndex > 0;
+  const backVisible = applying ? applyState.state === "failed" && Boolean(onReviewChoices) : activeIndex > 0;
 
   if (applying && isProviderSignInView(applyState)) {
     return (
       <ProviderSignInScreen
         applyState={applyState}
         fallbackProvider={activeProvider}
-        onBack={applyState.state === "failed" ? goBack : undefined}
+        onBack={applyState.state !== "running" && onReviewChoices ? goBack : undefined}
         onSignIn={onSignIn}
       />
     );
@@ -888,7 +895,7 @@ function ProviderSignInScreen({
               >
                 {failed ? "Try again" : applyState.signInButtonLabel || "Sign in with ChatGPT"}
               </button>
-              {failed && onBack ? (
+              {onBack ? (
                 <button className="chatgpt-signin-button is-secondary" type="button" onClick={onBack}>
                   Review choices
                 </button>

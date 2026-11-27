@@ -318,12 +318,12 @@ test("the primary task owns the sidebar highlight and titlebar while commands fo
   assert.ok(!pane("secondary") || pane("secondary").getAttribute("aria-hidden") === "true", "the task restores its own closed side pane");
   await command("toggle_split");
   await until(() => stubIn("secondary", "chat")?.dataset.run === "run-2", "the restored side task never opened");
-  assert.ok(document.querySelector(".app-titlebar-secondary-pane .workspace-surface-pane-header"), "the side pane's tabs live in the window header");
-  assert.ok(document.querySelector(".workspace-pane-secondary .workspace-surface-pane-header") === null);
+  assert.ok(document.querySelector(".workspace-pane-secondary .workspace-surface-pane-header"), "the side pane's tabs live in its pane header");
+  assert.equal(document.querySelector(".app-titlebar-secondary-pane"), null);
   assert.deepEqual([stubIn("primary", "chat").dataset.headerMode, stubIn("secondary", "chat").dataset.headerMode], ["window", "none"]);
   assert.equal(sidebarRow("Task run-1").getAttribute("aria-current"), "page");
   assert.equal(sidebarRow("Task run-2").getAttribute("aria-current"), null);
-  assert.equal(titlebarContext(), "Task run-1");
+  assert.equal(titlebarContext(), "Tasks");
   assert.deepEqual([commandsActive("primary"), commandsActive("secondary")], ["false", "true"]);
   assert.ok(document.querySelector('.app-titlebar-pane-actions button[aria-label="Share run-1"]'), "the primary surface's header actions live in the window titlebar");
   assert.ok(document.querySelector('.workspace-surface-pane-header button[aria-label="Share run-2"]'), "the side surface's header actions live in its pane header");
@@ -331,7 +331,7 @@ test("the primary task owns the sidebar highlight and titlebar while commands fo
   assert.deepEqual([commandsActive("primary"), commandsActive("secondary")], ["true", "false"]);
   pointer(stubIn("secondary", "chat"), "pointerdown"); await settle();
   assert.deepEqual([commandsActive("primary"), commandsActive("secondary")], ["false", "true"]);
-  assert.equal(titlebarContext(), "Task run-1", "the titlebar keeps naming the primary surface while the side pane is active");
+  assert.equal(titlebarContext(), "Tasks", "the titlebar keeps naming the primary surface while the side pane is active");
   button("Focus this workspace").click(); await settle();
   assert.ok(document.querySelector(".workspace-pane-manager.is-secondary-focused"));
   assert.ok(document.querySelector(".app-titlebar-surface-context") === null, "a blocked primary pane gives up the titlebar context");
@@ -339,7 +339,7 @@ test("the primary task owns the sidebar highlight and titlebar while commands fo
   pointer(pane("primary"), "pointerdown"); await settle();
   assert.deepEqual([commandsActive("primary"), commandsActive("secondary")], ["false", "true"], "commands stay with the focused side pane while the primary pane is blocked");
   button("Restore split workspace").click(); await settle();
-  assert.equal(titlebarContext(), "Task run-1");
+  assert.equal(titlebarContext(), "Tasks");
   pointer(stubIn("primary", "chat"), "pointerdown"); await settle();
   assert.deepEqual([commandsActive("primary"), commandsActive("secondary")], ["true", "false"]);
   pointer(stubIn("secondary", "chat"), "pointerdown"); await settle();
@@ -368,7 +368,7 @@ test("a pane shows a task only while its workspace holds that exact run", { time
   assert.ok(secondaryTabs()[0].querySelector(".glyph-chat"), "a lone task tab still shows its strip with the task glyph");
   stubIn("secondary", "chat").props.workspace.selectRun("run-2");
   await until(() => !stubIn("secondary", "chat"), "the side pane kept rendering a task its tab does not name");
-  assert.equal(pane("secondary").querySelector('[role="status"]').getAttribute("aria-label"), "Opening task…");
+  assert.equal(pane("secondary").querySelector('.surface-loading-state[role="status"]').getAttribute("aria-label"), "Opening task…");
   assert.deepEqual(secondaryTabs().map((tab) => tab.textContent), ["Opening task"]);
   secondaryTabs()[0].dispatchEvent(new w.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })); await settle();
   assert.deepEqual([...document.querySelectorAll('[aria-label="Tab actions"] [role="menuitem"]')].map((item) => item.textContent), ["Close", "Close other tabs", "Close tabs to the right"], "a tab whose run is not ready cannot move");
@@ -632,11 +632,13 @@ test("dropping a pane dragged from another window accepts exactly that transfer"
 });
 
 test("a window opened on a target starts focused on it with the sidebar collapsed and never reopens the consumed target", { timeout: 20_000 }, async () => {
+  const revealTopChrome = async () => { pointer(window, "pointermove", 400, 4); await settle(); };
   const peer = { primary: false, scope: "window-a", windowId: "window-a", initialTarget: chatTab("run-1").target };
   await mount(fakeHost(), { clientWindow: peer });
   await until(() => stubIn("secondary", "chat")?.dataset.run === "run-1", "the initial target never opened");
   assert.equal(commandsActive("secondary"), "true");
   assert.ok(document.querySelector(".workspace-pane-manager.is-secondary-focused"));
+  await revealTopChrome();
   assert.ok(document.querySelector(".app-shell.is-sidebar-closed"));
   button("Restore split workspace").click(); await settle();
   assert.equal(commandsActive("secondary"), "true", "the target's pane stays active once the split is restored");
@@ -649,14 +651,17 @@ test("a window opened on a target starts focused on it with the sidebar collapse
   assert.equal(secondaryTabs().length, 0, "a reloaded window does not reopen its consumed initial target");
   await openTask("run-1");
   assert.equal(secondaryTabs().length, 0, "returning to the exact task does not recreate the consumed target");
+  await revealTopChrome();
   assert.ok(document.querySelector(".app-shell.is-sidebar-open"), "a stored sidebar choice outlives the window default");
 
   await mount(fakeHost());
   await openTask("run-1");
+  await revealTopChrome();
   assert.ok(document.querySelector(".app-shell.is-sidebar-open"));
   button("Hide sidebar").click(); await settle();
   await mount(fakeHost(), { keepStorage: true });
   await openTask("run-1");
+  await revealTopChrome();
   assert.ok(document.querySelector(".app-shell.is-sidebar-closed"));
 });
 
@@ -715,22 +720,23 @@ test("pins and preferences written by another window reach this window's sidebar
   await until(() => titles().includes("Internal run"), () => `another window's preference never reached the sidebar: ${titles()}`);
 });
 
-test("the Inbox lists projected activity in the sidebar, selects it in place and opens a task mark beside the inbox", { timeout: 20_000 }, async () => {
+test("the Inbox lists projected activity in its overlay, selects it in place and opens a task mark in Tasks", { timeout: 20_000 }, async () => {
   const host = fakeHost();
   host.activity = [{ id: "attention:7", kind: "message", title: "Message — Task run-2", name: "message", run_id: "run-2", client_surface_role: "task", worker: "worker.test",
     agent_id: null, agent_name: null, agent_icon: null, agent_color: null, artifact_id: "artifact:7", movement_id: "movements:7", request_id: null, seq: 7, created_at_ms: Date.now(), excerpt: "Task run-2 finished." }];
   await mount(host);
   await until(() => button("Inbox, 1 unread"), "the rail never counted the unread mark");
   button("Inbox, 1 unread").click();
-  await until(() => stubIn("primary", "inbox"), "the Inbox surface never opened");
-  const row = () => document.querySelector('.app-shell-sidebar-slot [aria-label="Inbox"] [role="button"]');
-  await until(() => row(), "the sidebar never listed the mark");
+  const inboxStub = () => document.querySelector('.inbox-overlay-main [data-stub="inbox"]');
+  await until(() => inboxStub(), "the Inbox overlay never opened");
+  const row = () => document.querySelector('.inbox-overlay-rail [aria-label="Inbox"] [role="button"]');
+  await until(() => row(), "the Inbox rail never listed the mark");
   row().click(); await settle();
-  assert.equal(stubIn("primary", "inbox").props.selected?.id, "attention:7");
-  await until(() => button("Inbox"), "selecting the mark never marked it read");
-  stubIn("primary", "inbox").props.onOpen(stubIn("primary", "inbox").props.selected);
-  await until(() => stubIn("secondary", "chat")?.dataset.run === "run-2", "opening the mark never showed its task beside the inbox");
-  assert.ok(stubIn("primary", "inbox"));
+  assert.equal(inboxStub().props.selected?.id, "attention:7");
+  assert.equal(document.querySelector(".top-tray-unread"), null, "selecting the mark never marked it read");
+  inboxStub().props.onOpen(inboxStub().props.selected);
+  await until(() => !inboxStub() && stubIn("primary", "chat")?.dataset.run === "run-2", "opening the mark never closed Inbox and opened its task");
+  await until(() => button("Inbox"), "the rail badge never cleared after reading the mark");
 });
 
 test("a worker environment tab shows the code comments the loaded task's assistant wrote for that room's run", { timeout: 20_000 }, async () => {

@@ -129,3 +129,52 @@ test("the startup loader drags the window, shows the shipped logo, and shimmers 
   assert.equal(reduced.value(overlay, "animation"), "none");
   assert.equal(reduced.value(loader.querySelector(".startup-loader__logo"), "opacity"), "1");
 });
+
+test("fullscreen disables all titlebar and pane drag regions while keeping every topbar control above the dock slot", () => {
+  const $ = fixture(`<div class="app-shell is-fullscreen is-chrome-revealed"><header class="app-titlebar is-electron is-fullscreen is-chrome-revealed"><div class="app-titlebar-drag-region"></div><div class="app-titlebar-controls no-drag"><button class="app-titlebar-action no-drag"></button></div><div class="app-titlebar-dock-slot"><nav class="navigation-rail"></nav></div><div class="app-titlebar-pane-actions no-drag"><button class="app-titlebar-action no-drag"></button></div><div class="app-titlebar-system-tray no-drag"><button class="app-titlebar-action no-drag"></button></div></header><div class="workspace-surface-pane-header"></div></div>`);
+  for (const selector of [".app-titlebar", ".app-titlebar-drag-region", ".app-titlebar-controls", ".app-titlebar-action", ".app-titlebar-pane-actions", ".app-titlebar-system-tray", ".workspace-surface-pane-header"]) {
+    assert.equal(application.appRegion($(selector)), "no-drag", selector);
+  }
+  for (const selector of [".app-titlebar-controls", ".app-titlebar-action", ".app-titlebar-pane-actions", ".app-titlebar-system-tray"]) {
+    assert.equal(application.value($(selector), "pointer-events"), "auto", selector);
+  }
+  assert.equal(application.value($(".app-titlebar-dock-slot"), "pointer-events"), "none");
+  const dockZ = Number(application.value($(".app-titlebar-dock-slot"), "z-index"));
+  const dragZ = Number(application.value($(".app-titlebar-drag-region"), "z-index"));
+  for (const selector of [".app-titlebar-controls", ".app-titlebar-pane-actions", ".app-titlebar-system-tray"]) {
+    const z = Number(application.value($(selector), "z-index"));
+    assert.ok(z > dockZ && z > dragZ, `${selector} z-index (${z}) must exceed dock (${dockZ}) and drag (${dragZ})`);
+  }
+});
+
+test("hidden chrome keeps active dark-theme pane tab contrast over the pane header surface", () => {
+  document.documentElement.dataset.theme = "dark";
+  try {
+    const $ = fixture(`<div class="app-shell is-chrome-hidden"><div class="pane-tab is-active"><div class="pane-tab-background"></div></div></div>`);
+    const resolved = application.value($(".pane-tab-background"), "background");
+    assert.equal(resolved, application.value(document.documentElement, "--color-background-primary-ghost-hover"));
+    assert.notEqual(resolved, application.value(document.documentElement, "--color-surface"));
+  } finally {
+    delete document.documentElement.dataset.theme;
+  }
+});
+
+test("electron shell layers docked sidebar tint over window fill while dark composer and slash surfaces match Codex elevation", () => {
+  const sheets = stylesheetCascade([...applicationSheets, "src/components/shell/shellTooltip.css"]);
+  document.documentElement.dataset.theme = "dark";
+  document.documentElement.dataset.octopusWindowType = "electron";
+  document.documentElement.dataset.octopusOs = "darwin";
+  try {
+    const $ = fixture(`<div class="app-shell"><aside class="app-shell-left-panel"></aside><div class="composer-suggestion-surface"></div><div class="composer-surface-chrome composer-multiline-surface"></div><div class="chat-tooltip is-shell"></div></div>`);
+    assert.equal(sheets.value($(".app-shell"), "background-color"), sheets.value(document.documentElement, "--app-shell-page-window-fill"));
+    assert.match(sheets.value($(".app-shell"), "background-image") ?? "", /linear-gradient/);
+    assert.equal(sheets.value($(".app-shell-left-panel"), "background"), "transparent");
+    assert.equal(sheets.value($(".composer-suggestion-surface"), "background-color"), sheets.value(document.documentElement, "--color-background-composer-surface"));
+    assert.equal(sheets.value($(".composer-surface-chrome"), "box-shadow"), sheets.value(document.documentElement, "--elevation-composer-dark"));
+    assert.equal(sheets.value($(".chat-tooltip.is-shell"), "inline-size"), "max-content");
+  } finally {
+    delete document.documentElement.dataset.theme;
+    delete document.documentElement.dataset.octopusWindowType;
+    delete document.documentElement.dataset.octopusOs;
+  }
+});

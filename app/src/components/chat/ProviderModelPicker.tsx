@@ -98,7 +98,7 @@ export function ProviderModelPicker({
     tooltipTimer.current = setTimeout(() => {
       tooltipTimer.current = null;
       if (!openRef.current) setTooltip(true);
-    }, 650);
+    }, 200);
   };
   const closeMenu = useCallback((restoreFocus = true) => {
     openRef.current = false;
@@ -322,7 +322,7 @@ export function ProviderModelPicker({
       }}>
       <span ref={placeholderRef} className="provider-model-placeholder" aria-hidden="true" data-provider-picker-placeholder>Select model</span>
       <span ref={anchorRef} className="provider-model-trigger-label" data-provider-picker-anchor style={{ minWidth: triggerSizing?.minimum }}>
-        {catalogPending ? <OcLoadingText label="Loading models…">{providerModel || "Select a model"}</OcLoadingText> : <span>{open && view === "simple" ? "Select model" : triggerModelLabel}</span>}{!(open && view === "simple") && effortAvailable ? <span className="provider-model-trigger-effort" data-maximum={selectedEffort === "ultra" || undefined}>{effortLabel(selectedEffort)}</span> : null}
+        {catalogPending ? <OcLoadingText label="Loading models…">{providerModel || "Select a model"}</OcLoadingText> : <span>{open && view === "simple" ? "Select model" : triggerModelLabel}</span>}{!(open && view === "simple") && effortAvailable ? <TriggerEffortLabel efforts={efforts} effort={selectedEffort} reducedMotion={reducedMotion} /> : null}
       </span>
       <span className="provider-model-trigger-chevron" aria-hidden="true" />
     </button>
@@ -349,7 +349,7 @@ export function ProviderModelPicker({
         onClick={() => { if (tiers.length > 2) setSpeedOpen((value) => !value); else onServiceTierChange(selectedTier === "default" ? tiers[1].id : "default"); }}
         onKeyDown={(event) => { if (tiers.length > 2 && event.key === "ArrowRight") { event.preventDefault(); setSpeedOpen(true); } }}>
         <span className="provider-model-fast-toggle-content">{selectedTier === "ultrafast"
-          ? <svg aria-hidden="true" focusable="false" width="20" height="20" viewBox="-1 -1 22 22" fill="none"><path fill="currentColor" d="M12.496 1.55042C13.3266 0.810781 14.6664 1.57948 14.3945 2.70277L13.3867 6.86097H18.0634C19.0535 6.86124 19.5922 8.01841 18.955 8.77601L11.248 17.9284C11.0114 18.2091 10.5914 18.2449 10.3105 18.0084C10.0297 17.7718 9.99389 17.3518 10.2304 17.0709L17.7089 8.19105H15.206C15.199 8.46403 15.1069 8.74127 14.9043 8.98206L7.24312 18.0797C6.45061 19.0208 4.92981 18.25 5.21968 17.0543L6.1689 13.1383H1.7607C0.663874 13.1383 0.0668853 11.8562 0.773392 11.0172L8.43453 1.91956C9.22701 0.978906 10.7474 1.74955 10.458 2.94495L9.50874 6.86097H12.0175L12.956 2.98987L12.7773 3.17933C12.5246 3.44588 12.1034 3.45737 11.8369 3.20472C11.5706 2.95204 11.5599 2.53172 11.8125 2.26527L12.4169 1.62659L12.496 1.55042Z" /></svg>
+          ? <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none"><path fill="currentColor" fillRule="evenodd" clipRule="evenodd" d="M10.5415 1.13387C11.1849 0.651125 12.1497 1.23398 11.9468 2.0743L11.1177 5.49617H14.9214C15.6862 5.49649 16.1021 6.39043 15.6099 6.97567L9.40971 14.338C9.22296 14.5597 8.89223 14.5882 8.67045 14.4014C8.44868 14.2147 8.42026 13.884 8.60697 13.6622L14.5992 6.54598H11.8423C11.8691 6.83165 11.7923 7.13198 11.5777 7.3868L5.55326 14.5411C4.94102 15.2677 3.76616 14.6726 3.98978 13.7491L4.77689 10.504H1.51029C0.532532 10.5039 0.000588983 9.36127 0.630409 8.61336L6.65482 1.45906L6.77592 1.33797C7.40859 0.808244 8.4279 1.38539 8.2183 2.25106L7.43119 5.49617H10.0367L10.7925 2.37606L10.7349 2.43856C10.5359 2.64926 10.2035 2.65883 9.99271 2.46004C9.78193 2.26096 9.77216 1.92865 9.97123 1.71785L10.4175 1.2452L10.5415 1.13387ZM1.43314 9.29012C1.37881 9.35515 1.42544 9.45414 1.51029 9.45418H6.11185L5.15971 13.377L10.7749 6.71004C10.8293 6.645 10.7827 6.54598 10.6978 6.54598H6.09623L7.0474 2.62215L1.43314 9.29012Z" /></svg>
           : selectedTier !== "default"
             ? <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="none"><path fill="currentColor" d="M8.34278 1.71324C9.03756 1.01907 10.2544 1.67038 10.0137 2.66441L9.32715 5.49644H12.5938C13.5715 5.49644 14.1035 6.63914 13.4736 7.38707L7.72266 14.2162C7.04234 15.0231 5.73791 14.3622 5.98633 13.3363L6.67285 10.5043H3.40625C2.42855 10.5042 1.89667 9.36153 2.52637 8.61363L8.27735 1.78453L8.34278 1.71324Z" /></svg>
             : <svg aria-hidden="true" focusable="false" width="20" height="20" viewBox="0 0 20 20" fill="none"><path fill="currentColor" d="M10.539 1.99613C11.3831 1.15224 12.8619 1.94353 12.5693 3.1514L11.6699 6.86136H16.0781C17.1749 6.86136 17.7719 8.14348 17.0654 8.98245L9.54097 17.917C8.71451 18.8984 7.12861 18.0955 7.43062 16.8487L8.33003 13.1387H3.92183C2.82501 13.1387 2.22802 11.8566 2.93452 11.0176L10.4589 2.08304L10.539 1.99613ZM4.00777 11.8086H8.85738C9.4499 11.8086 9.88652 12.3636 9.74703 12.9395L8.83882 16.6856L15.9921 8.19144H11.1425C10.55 8.19144 10.1134 7.63642 10.2529 7.06058L11.1601 3.31351L4.00777 11.8086Z" /></svg>}</span>
@@ -373,7 +373,7 @@ export function ProviderModelPicker({
         {efforts.length > 1 && effortAvailable ? <PowerSlider efforts={efforts} value={selectedEffort} onChange={onReasoningEffortChange} reducedMotion={reducedMotion} onComplete={() => { tooltipSuppressed.current = true; closeMenu(); }} onUltraDrag={() => setWarning(true)} active={view === "simple"} />
           : null}
       </div></div><div ref={advancedPanel} className="provider-model-view-panel" data-active={view === "advanced"} aria-hidden={view !== "advanced"} inert={view !== "advanced"} data-provider-picker-panel="advanced">
-      <div className="provider-model-list">
+      <div className="provider-model-list vertical-scroll-fade-mask">
         {!options.length && loading ? <OcLoadingRows label="Loading models…" /> : <div className="provider-model-section-label">{options.length ? "Select model" : "No models available"}</div>}
         {interfaceLocked ? <div className="provider-model-empty">Start a new task to choose another provider.</div> : null}
         {!options.length && onRefreshModels ? <OcMenuItem role="menuitem" tabIndex={-1}
@@ -408,6 +408,121 @@ export function ProviderModelPicker({
       </div>, document.body) : null}
     </motion.div>, document.body) : null}
   </div>;
+}
+
+const THUMB_ACTIVE_SPRING = { type: "spring", stiffness: 420, damping: 38, mass: 1 } as const;
+const THUMB_REST_SPRING = { type: "spring", stiffness: 220, damping: 26, mass: 1 } as const;
+
+function commitAndCancelAnimation(animation: Animation) {
+  animation.onfinish = null;
+  const target = typeof KeyframeEffect !== "undefined" && animation.effect instanceof KeyframeEffect ? animation.effect.target : null;
+  if (animation.playState !== "idle" && target?.isConnected && target.getClientRects().length > 0) {
+    try { animation.commitStyles(); } catch { /* ignore */ }
+  }
+  animation.cancel();
+}
+
+function readComputedStyle(element: HTMLElement): CSSStyleDeclaration | null {
+  const view = element.ownerDocument?.defaultView;
+  if (typeof view?.getComputedStyle === "function") return view.getComputedStyle(element);
+  if (typeof globalThis.getComputedStyle === "function") return globalThis.getComputedStyle(element);
+  return null;
+}
+
+function TriggerEffortLabel({ efforts, effort, reducedMotion }: {
+  efforts: readonly string[];
+  effort: string;
+  reducedMotion: boolean;
+}) {
+  const outerRef = useRef<HTMLSpanElement>(null);
+  const layersRef = useRef<HTMLSpanElement>(null);
+  const animationsRef = useRef<Animation[]>([]);
+  const signatureRef = useRef<string | null>(null);
+  const items = useMemo(
+    () => (efforts.includes(effort) ? efforts : [...efforts, effort]),
+    [efforts, effort],
+  );
+
+  const sync = useCallback(() => {
+    const outer = outerRef.current;
+    const layers = layersRef.current;
+    if (!outer || !layers) return;
+    const nodes = Array.from(layers.querySelectorAll<HTMLElement>("[data-reasoning-effort]"));
+    const active = nodes.find((node) => node.dataset.reasoningEffort === effort);
+    if (!active) return;
+    const activeStyle = readComputedStyle(active);
+    const measuredWidth = activeStyle ? Number.parseFloat(activeStyle.width) : Number.NaN;
+    const widthValue = Number.isFinite(measuredWidth) && measuredWidth > 0 ? `${measuredWidth}px` : "auto";
+    const signature = `${effort}:${widthValue}:${reducedMotion}`;
+    if (signatureRef.current === signature) return;
+    const shouldAnimate = signatureRef.current !== null && !reducedMotion && typeof outer.animate === "function";
+    signatureRef.current = signature;
+    animationsRef.current.forEach(commitAndCancelAnimation);
+    const blur = readComputedStyle(layers)?.getPropertyValue("--blur-xs").trim() || "4px";
+    const targets: Array<[HTMLElement, Record<string, string>]> = [
+      [outer, { width: widthValue }],
+      ...nodes.map((node): [HTMLElement, Record<string, string>] => [
+        node,
+        {
+          opacity: node === active ? "1" : "0",
+          filter: node === active ? "blur(0px)" : `blur(${blur})`,
+        },
+      ]),
+    ];
+    if (!shouldAnimate) {
+      for (const [element, styles] of targets) Object.assign(element.style, styles);
+      animationsRef.current = [];
+      return;
+    }
+    const timing: KeyframeAnimationOptions = { duration: 300, easing: "ease-out", fill: "both" };
+    animationsRef.current = targets.flatMap(([element, styles]) => {
+      const computed = readComputedStyle(element);
+      if (typeof element.animate !== "function" || !computed) {
+        Object.assign(element.style, styles);
+        return [];
+      }
+      const from = Object.fromEntries(Object.keys(styles).map((prop) => [prop, computed.getPropertyValue(prop)]));
+      const animation = element.animate([from, styles], timing);
+      animation.onfinish = () => commitAndCancelAnimation(animation);
+      return [animation];
+    });
+  }, [effort, reducedMotion]);
+
+  useLayoutEffect(() => {
+    sync();
+    const layers = layersRef.current;
+    if (!layers || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(sync);
+    observer.observe(layers);
+    return () => observer.disconnect();
+  }, [sync]);
+
+  useLayoutEffect(() => () => {
+    animationsRef.current.forEach((animation) => animation.cancel());
+    animationsRef.current = [];
+    signatureRef.current = null;
+  }, []);
+
+  return (
+    <span className="provider-model-trigger-effort" data-maximum={effort === "ultra" || undefined} ref={outerRef}>
+      <span className="sr-only">{effortLabel(effort)}</span>
+      <span className="provider-model-trigger-effort-viewport">
+        <span className="provider-model-trigger-effort-layers" ref={layersRef}>
+          {items.map((item) => (
+            <span
+              key={item}
+              aria-hidden="true"
+              className="provider-model-trigger-effort-text"
+              data-maximum={item === "ultra" || undefined}
+              data-reasoning-effort={item}
+            >
+              {effortLabel(item)}
+            </span>
+          ))}
+        </span>
+      </span>
+    </span>
+  );
 }
 
 function PowerSlider({ efforts, value, onChange, reducedMotion, onComplete, onUltraDrag, active }: {
@@ -485,6 +600,7 @@ function PowerSlider({ efforts, value, onChange, reducedMotion, onComplete, onUl
   return <div ref={sliderRef} className="provider-model-power" role="slider" tabIndex={0} dir="ltr" aria-label="Power" aria-valuemin={0}
     aria-valuemax={intervals} aria-valuenow={index} aria-valuetext={({ medium: "Standard", high: "Extended" } as Record<string,string>)[value] || effortLabel(value)} aria-disabled={disabled || undefined}
     data-reasoning-slider data-selected-effort={value} data-maximum={maximum || undefined} data-dragging={moved || undefined}
+    data-pointer-down={pressed ? "true" : "false"}
     data-disabled={disabled || undefined} data-reduced-motion={reducedMotion || undefined} onKeyDown={keyboard}
     onPointerDown={(event) => {
       if (event.button !== 0 || disabled) return;
@@ -519,7 +635,7 @@ function PowerSlider({ efforts, value, onChange, reducedMotion, onComplete, onUl
         onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}>
         {maximum && burst > 0 && !reducedMotion ? <PowerBurst key={burst} /> : null}
         <motion.span className="provider-model-power-thumb" initial={false} animate={{ scale: !disabled && !reducedMotion && (pressed || hovered) ? 32 / 28 : 1 }}
-          transition={reducedMotion ? { duration: 0 } : pressed || hovered ? { type: "spring", stiffness: 420, damping: 38, mass: 1 } : { type: "spring", stiffness: 220, damping: 26, mass: 1 }} />
+          transition={reducedMotion ? { duration: 0 } : pressed || hovered ? THUMB_ACTIVE_SPRING : THUMB_REST_SPRING} />
       </motion.span>
     </span>
   </div>;

@@ -72,21 +72,8 @@
 }
 
 @utility sidebar-item {
-  --corner-radius-scale: 1;
-  --octopus-corner-shape: round;
-  --radius-lg: calc(var(--radius-lg-base) * var(--corner-radius-scale));
   border-radius: var(--radius-lg);
-  corner-shape: var(--octopus-corner-shape);
-
-  @supports (corner-shape: superellipse(1.5)) {
-    --corner-radius-scale: 1.25;
-    --octopus-corner-shape: superellipse(1.5);
-
-    &:where([data-octopus-window-type="browser"] *) {
-      --corner-radius-scale: 1;
-      --octopus-corner-shape: round;
-    }
-  }
+  corner-shape: round;
 }
 
 @theme inline {
@@ -110,15 +97,15 @@
   --text-form-body--line-height: 1.25rem;
   --text-form-body--letter-spacing: -0.15px;
 
-  --radius-2xs: calc(0.125rem * var(--corner-scale, 1));
-  --radius-xs: calc(0.25rem * var(--corner-scale, 1));
-  --radius-sm: calc(0.375rem * var(--corner-scale, 1));
-  --radius-md: calc(0.5rem * var(--corner-scale, 1));
-  --radius-lg: calc(0.625rem * var(--corner-scale, 1));
-  --radius-xl: calc(0.75rem * var(--corner-scale, 1));
-  --radius-2xl: calc(1rem * var(--corner-scale, 1));
-  --radius-3xl: calc(1.25rem * var(--corner-scale, 1));
-  --radius-4xl: calc(1.5rem * var(--corner-scale, 1));
+  --radius-2xs: var(--radius-2xs-base);
+  --radius-xs: var(--radius-xs-base);
+  --radius-sm: var(--radius-sm-base);
+  --radius-md: var(--radius-md-base);
+  --radius-lg: var(--radius-lg-base);
+  --radius-xl: var(--radius-xl-base);
+  --radius-2xl: var(--radius-2xl-base);
+  --radius-3xl: var(--radius-3xl-base);
+  --radius-4xl: var(--radius-4xl-base);
   --radius-token-composer-single-line: calc(var(--spacing) * 5.5);
   --radius-token-row: var(--row-radius);
 
@@ -143,7 +130,7 @@
   --transition-duration-basic: 150ms;
   --transition-duration-relaxed: 300ms;
 
-  --color-token-bg-fog: var(--color-background-elevated-secondary);
+  --color-token-bg-fog: color-mix(in oklab, var(--color-token-foreground) 2.5%, transparent);
   --color-token-bg-primary: var(--color-token-side-bar-background);
   --color-token-bg-secondary: color-mix(in srgb, var(--color-token-bg-primary) 92%, transparent);
   --color-token-border: var(--color-border);

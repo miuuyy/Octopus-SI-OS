@@ -79,6 +79,7 @@ export async function readCurrentClientSetup() { gate().reads += 1; if (gate().f
 export async function readWorkspaceSetupState() { return gate().workspace; }
 export async function readProjection() { return gate().scope; }
 export async function beginClientSetup() { throw new Error("setup is outside this fixture"); }
+export async function cancelClientSetup() { throw new Error("setup is outside this fixture"); }
 export async function readClientSetup() { return null; }
 export async function resumeClientSetup() { throw new Error("setup is outside this fixture"); }
 export function onClientSetupProgress() { return () => {}; }

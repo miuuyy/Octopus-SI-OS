@@ -95,10 +95,13 @@ export function RegistryView({ accessProfile, onOpenFiles, query }: {
   ]);
   const [descriptorTarget, setDescriptorTarget] = useState<RegistryDescriptorTarget | null>(null);
   const [fileMenu, setFileMenu] = useState<RegistryFileMenu | null>(null);
+  const lastFileMenuRef = useRef<RegistryFileMenu | null>(null);
+  if (fileMenu) lastFileMenuRef.current = fileMenu;
   const fileMenuRef = useRef<HTMLDivElement>(null);
   const renderedColumns = Math.max(1, frames.length - 1 + (descriptorTarget ? 1 : 0));
 
-  useFloatingMenu(Boolean(fileMenu), fileMenuRef, () => setFileMenu(null), fileMenu ? { left: fileMenu.x, top: fileMenu.y } : null);
+  const fileMenuMotion = useFloatingMenu(Boolean(fileMenu), fileMenuRef, () => setFileMenu(null), fileMenu ? { left: fileMenu.x, top: fileMenu.y } : null);
+  const activeFileMenu = fileMenu ?? (fileMenuMotion.mounted ? lastFileMenuRef.current : null);
 
   if (!window.octopusTransport?.listOsFiles) {
     return <RuntimeEmpty title="Files bridge unavailable" detail="Registry is the admitted registry/ directory tree." />;
@@ -170,24 +173,26 @@ export function RegistryView({ accessProfile, onOpenFiles, query }: {
         />
       ))}
       {descriptorTarget ? <RegistryJsonColumn onOpenFiles={onOpenFiles} target={descriptorTarget} /> : null}
-      {fileMenu ? createPortal(
+      {activeFileMenu && fileMenuMotion.mounted ? createPortal(
         <OcMenuSurface
-          aria-label={`Registry file actions for ${fileMenu.path}`}
+          aria-hidden={fileMenuMotion.exiting || undefined}
+          aria-label={`Registry file actions for ${activeFileMenu.path}`}
           className="registry-file-context-menu"
           data-settings-layer="true"
-          role="menu"
+          inert={fileMenuMotion.exiting ? true : undefined}
+          role={fileMenuMotion.exiting ? undefined : "menu"}
           surfaceRef={fileMenuRef}
           style={{
-            left: Math.max(4, Math.min(fileMenu.x, window.innerWidth - 196)),
-            top: Math.max(4, Math.min(fileMenu.y, window.innerHeight - 56)),
+            left: activeFileMenu.x,
+            top: activeFileMenu.y,
           }}
         >
           <OcMenuItem
             label="Open in Files"
             leadingIcon="file"
             onClick={() => {
-              const path = fileMenu.path;
-              const rootId = fileMenu.rootId;
+              const path = activeFileMenu.path;
+              const rootId = activeFileMenu.rootId;
               setFileMenu(null);
               onOpenFiles({ kind: "file", path, rootId });
             }}

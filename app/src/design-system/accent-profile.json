@@ -1,15 +1,15 @@
 {
-  "theme": "black",
+  "theme": "default",
   "light": {
     "accent": "#3a83f7",
     "text": "#2c67c5",
     "soft": "#e8f3fe",
     "submitBackground": "#000000",
     "submitText": "#ffffff",
-    "userMessageBackground": "#000000",
-    "userMessageText": "#ffffff",
-    "selection": "#afafaf66",
-    "attributionHighlight": "#afafaf66"
+    "userMessageBackground": "rgb(233 233 233 / 50%)",
+    "userMessageText": "#0d0d0d",
+    "selection": "#539af859",
+    "attributionHighlight": "#fcefbe"
   },
   "dark": {
     "accent": "#3a83f7",
@@ -19,7 +19,7 @@
     "submitText": "#000000",
     "userMessageBackground": "rgb(50 50 50 / 85%)",
     "userMessageText": "#ffffff",
-    "selection": "color-mix(in srgb, var(--color-text) 32%, transparent)",
-    "attributionHighlight": "color-mix(in srgb, var(--color-text) 32%, transparent)"
+    "selection": "#63a8f866",
+    "attributionHighlight": "#734615"
   }
 }

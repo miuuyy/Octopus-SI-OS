@@ -812,7 +812,7 @@ export function ChatMessageList({
           transition={reducedMotion ? { duration: 0 } : { bounce: 0.01, duration: 0.3, type: "spring" }}
         >
           <div className="relative mx-auto flex w-full max-w-(--thread-content-max-width) flex-1 shrink-0 flex-col px-toolbar pb-8">
-            <div className="relative flex flex-1 flex-col gap-3 electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]">
+            <div className="relative flex flex-1 flex-col gap-(--conversation-item-gap) electron:[--color-token-description-foreground:color-mix(in_srgb,var(--color-token-foreground)_70%,transparent)]">
               {emptyState !== "loading-task" ? <VirtualizedTurns
                 initialDistanceFromBottomPx={initialThreadRestoreState.distanceFromBottomPx}
                 initialRestoreState={initialVirtualizerRestoreState}
@@ -895,16 +895,15 @@ export function ChatMessageList({
           {footer ? (
             <div
               aria-hidden
-              className="sticky bottom-0 z-10 mt-auto h-[calc(var(--thread-scroll-padding-bottom)-var(--spacing)*4)] w-full shrink-0"
-            >
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-full bg-gradient-to-t from-token-main-surface-primary via-token-main-surface-primary" />
-            </div>
+              className="pointer-events-none mt-auto h-[calc(var(--thread-scroll-padding-bottom)-var(--spacing)*4)] w-full shrink-0"
+            />
           ) : null}
         </motion.div>
         {footer ? (
           <motion.div
             animate={{ x: contentX }}
             className="pointer-events-none absolute inset-x-0 bottom-0 z-10 pb-4"
+            data-thread-composer-backdrop={presentationMessageCount > 0 ? "" : undefined}
             data-thread-scroll-footer="true"
             initial={false}
             ref={footerRef}
@@ -916,7 +915,7 @@ export function ChatMessageList({
                 <button
                   aria-hidden={!showScrollToLatest}
                   aria-label={unseenMessageCount ? `Scroll to bottom · ${unseenMessageCount} new ${unseenMessageCount === 1 ? "message" : "messages"}` : "Scroll to bottom"}
-                  className={`cursor-interaction absolute z-30 flex h-8 w-8 translate-x-1/2 items-center justify-center rounded-full border border-token-border-default bg-token-main-surface-primary bg-clip-padding text-token-text-secondary transition-opacity duration-basic ease-in-out end-1/2 print:hidden bottom-[calc(100%+6*var(--spacing))] ${showScrollToLatest ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                  className={`cursor-interaction absolute z-30 flex h-8 w-8 translate-x-1/2 items-center justify-center rounded-full border border-token-border-default bg-token-main-surface-primary bg-clip-padding text-token-text-secondary shadow-md transition-[width,opacity] duration-120 ease-out end-1/2 print:hidden bottom-[calc(100%+6*var(--spacing))] ${showScrollToLatest ? "opacity-100" : "pointer-events-none opacity-0"}`}
                   onClick={showScrollToLatest ? scrollToLatest : undefined}
                   tabIndex={showScrollToLatest ? undefined : -1}
                   type="button"
@@ -940,7 +939,7 @@ export function ChatMessageList({
 
 const THREAD_VIRTUALIZATION_MIN_TURNS = 40;
 const THREAD_VIRTUALIZATION_OVERSCAN_TURNS = 4;
-const THREAD_TURN_GAP_PX = 12;
+const THREAD_TURN_GAP_PX = 16;
 const threadTurnEstimateCache = new WeakMap<ChatRenderMessage[], number>();
 const threadTurnResetKeyCache = new WeakMap<ChatRenderMessage[], string>();
 
@@ -1348,6 +1347,7 @@ function UserMessageNavigationRail({ activeId, items, onReveal }: {
     <nav aria-label="User message navigation" className="thread-user-navigation absolute top-1/2 left-4 z-20 -translate-y-1/2">
       <div
         className="thread-user-navigation-list vertical-scroll-fade-mask hide-scrollbar flex max-h-[min(70vh,40rem)] flex-col overflow-y-auto overscroll-contain"
+        data-floating-navigation-rail-list=""
         data-scrubbing={scrubbing || undefined}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -1368,15 +1368,18 @@ function UserMessageNavigationRail({ activeId, items, onReveal }: {
           setScrubbing(false);
         }}
         ref={railRef}
+        style={{ "--edge-fade-distance": "2.5rem" } as CSSProperties}
       >
         {items.map((item, index) => {
           const distance = hoveredIndex === null ? Number.POSITIVE_INFINITY : Math.abs(hoveredIndex - index);
           const progress = distance === 0 ? 1 : distance === 1 ? 0.7 : distance === 2 ? 0.4 : distance === 3 ? 0.2 : 0;
+          const neighborDistance = distance >= 1 && distance <= 3 ? String(distance) : undefined;
           return (
             <button
               aria-current={item.id === activeId ? "true" : undefined}
               aria-label={`Jump to user message ${index + 1}`}
               className="thread-user-navigation-row group flex h-2.5 w-9 shrink-0 cursor-interaction items-center outline-none"
+              data-scrub-target={hoveredIndex === index ? "" : undefined}
               data-user-navigation-index={index}
               key={item.id}
               onClick={() => onReveal(item.id, true)}
@@ -1388,6 +1391,7 @@ function UserMessageNavigationRail({ activeId, items, onReveal }: {
                 <span
                   className="thread-user-navigation-marker h-0.5 bg-token-description-foreground opacity-40 group-focus-visible:bg-token-foreground group-focus-visible:opacity-100"
                   data-active={item.id === activeId || undefined}
+                  data-neighbor-distance={neighborDistance}
                   style={{ "--marker-progress": progress } as React.CSSProperties}
                 />
               </span>
@@ -1396,7 +1400,7 @@ function UserMessageNavigationRail({ activeId, items, onReveal }: {
         })}
       </div>
       {hoveredIndex !== null && preview ? (
-        <div className="thread-user-navigation-preview pointer-events-none absolute top-1/2 left-full ml-1 w-80 max-w-[calc(100vw-1rem)] -translate-y-1/2 overflow-hidden rounded-xl bg-token-dropdown-background/95 p-2 text-sm leading-5 text-token-foreground shadow-xl-spread ring-[0.5px] ring-token-border backdrop-blur-sm">
+        <div className="thread-user-navigation-preview pointer-events-none absolute top-1/2 left-full ml-1 w-80 max-w-[calc(100vw-1rem)] -translate-y-1/2 overflow-hidden rounded-xl bg-surface-elevated-secondary p-2 text-sm leading-5 text-token-foreground shadow-xl-spread ring-[0.5px] ring-token-border">
           <div className="truncate font-medium">{preview.label}</div>
           {preview.preview ? <div className="mt-1 line-clamp-3 text-token-description-foreground">{preview.preview}</div> : null}
         </div>
@@ -1875,7 +1879,7 @@ function UserMessage({ find, message, onEditUserMessage, onSteerUserMessage, ste
       data-steering-status={steering ? steeringStatus : undefined}
     >
       {steering ? (
-        <div className={steeringStatus === "failed" ? "flex max-w-[77%] items-center gap-1.5 px-1 text-xs text-danger" : "sr-only"} role="status">
+        <div className={steeringStatus === "failed" ? "flex max-w-[70%] items-center gap-1.5 px-1 text-xs text-danger" : "sr-only"} role="status">
           {steeringStatus === "failed" ? <Glyph className="icon-2xs" name="warning" size={12} /> : null}
           <span>{steeringLabel}</span>
         </div>
@@ -1883,7 +1887,7 @@ function UserMessage({ find, message, onEditUserMessage, onSteerUserMessage, ste
       <MessageAttachments message={message} />
       {message.text || !message.attachments?.length ? (
         <div
-          className="bg-token-foreground/5 max-w-[77%] min-w-0 overflow-hidden break-words rounded-2xl px-3 py-2 [&_.contain-inline-size]:[contain:initial] text-left focus-visible:ring-2 focus-visible:ring-token-focus-border focus-visible:outline-none"
+          className="min-w-0 overflow-hidden break-words [&_.contain-inline-size]:[contain:initial] text-left focus-visible:ring-2 focus-visible:ring-token-focus-border focus-visible:outline-none"
           data-user-message-bubble="true"
           tabIndex={0}
         >
@@ -2014,7 +2018,7 @@ function SelectableMessageText({ children, message, onPinMessageExcerpt, taskAct
     return () => document.removeEventListener("selectionchange", collapseIfEmpty);
   }, [menu]);
 
-  const items: Array<{ label: string; glyph: "copy" | "pinOff"; onClick: () => void }> = [
+  const items: Array<{ label: string; glyph: "copy" | "pinOutline"; onClick: () => void }> = [
     {
       label: "Copy",
       glyph: "copy",
@@ -2029,7 +2033,7 @@ function SelectableMessageText({ children, message, onPinMessageExcerpt, taskAct
     const selection = menu;
     items.push({
       label: "Pin selection",
-      glyph: "pinOff",
+      glyph: "pinOutline",
       onClick: () => {
         window.getSelection()?.removeAllRanges();
         setMenu(null);
@@ -3532,7 +3536,7 @@ function MessageActions({
         <MessageActionButton
           active={pinned}
           disabled={pinning}
-          glyph={pinned ? "pin" : "pinOff"}
+          glyph={pinned ? "pin" : "pinOutline"}
           label={pinned ? "Unpin message" : "Pin message for future turns"}
           onClick={() => void onTogglePinnedMessage(message)}
         />
@@ -3626,7 +3630,7 @@ function ContinueTaskAction({ isLatestTurn, message, onContinue }: {
 function MessageActionButton({ active = false, disabled = false, glyph, label, onClick }: {
   active?: boolean;
   disabled?: boolean;
-  glyph: "edit" | "worktree" | "pin" | "pinOff" | "volume" | "stop";
+  glyph: "edit" | "worktree" | "pin" | "pinOutline" | "pinOff" | "volume" | "stop";
   label: string;
   onClick: () => void;
 }) {

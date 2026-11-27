@@ -6,37 +6,59 @@
       "semanticColors": {
         "diffAdded": "#00c853",
         "diffRemoved": "#ff5f38",
-        "skill": "#cc7d5e"
+        "skill": "#924ff7"
       },
       "surface": "#f9f9f7"
     },
     "catppuccin": {
       "accent": "#8839ef",
       "ink": "#4c4f69",
+      "palette": {
+        "blue": "#1e66f5",
+        "green": "#40a02b",
+        "orange": "#fe640b",
+        "purple": "#8839ef",
+        "red": "#d20f39",
+        "yellow": "#df8e1d"
+      },
       "semanticColors": {
         "diffAdded": "#40a02b",
         "diffRemoved": "#d20f39",
-        "skill": "#8839ef"
+        "skill": "#924ff7"
       },
       "surface": "#eff1f5"
     },
     "codex": {
-      "accent": "#0169cc",
-      "ink": "#0d0d0d",
+      "accent": "#339cff",
+      "contrast": 45,
+      "fonts": {
+        "code": null,
+        "ui": null
+      },
+      "ink": "#1a1c1f",
+      "opaqueWindows": false,
       "semanticColors": {
         "diffAdded": "#00a240",
-        "diffRemoved": "#e02e2a",
-        "skill": "#751ed9"
+        "diffRemoved": "#ba2623",
+        "skill": "#924ff7"
       },
       "surface": "#ffffff"
     },
     "everforest": {
       "accent": "#93b259",
       "ink": "#5c6a72",
+      "palette": {
+        "blue": "#3a94c5",
+        "green": "#8da101",
+        "orange": "#f57d26",
+        "purple": "#df69ba",
+        "red": "#f85552",
+        "yellow": "#dfa000"
+      },
       "semanticColors": {
         "diffAdded": "#8da101",
         "diffRemoved": "#f85552",
-        "skill": "#df69ba"
+        "skill": "#924ff7"
       },
       "surface": "#fdf6e3"
     },
@@ -46,7 +68,7 @@
       "semanticColors": {
         "diffAdded": "#1a7f37",
         "diffRemoved": "#cf222e",
-        "skill": "#8250df"
+        "skill": "#924ff7"
       },
       "surface": "#ffffff"
     },
@@ -56,7 +78,7 @@
       "semanticColors": {
         "diffAdded": "#3c3836",
         "diffRemoved": "#cc241d",
-        "skill": "#b16286"
+        "skill": "#924ff7"
       },
       "surface": "#fbf1c7"
     },
@@ -66,7 +88,7 @@
       "semanticColors": {
         "diffAdded": "#52a450",
         "diffRemoved": "#c94446",
-        "skill": "#8160d8"
+        "skill": "#924ff7"
       },
       "surface": "#fcfcfd",
       "fonts": {
@@ -80,7 +102,7 @@
       "semanticColors": {
         "diffAdded": "#008000",
         "diffRemoved": "#a31515",
-        "skill": "#0000ff"
+        "skill": "#924ff7"
       },
       "surface": "#ffffff",
       "fonts": {
@@ -95,7 +117,7 @@
       "semanticColors": {
         "diffAdded": "#3bba54",
         "diffRemoved": "#e45649",
-        "skill": "#526fff"
+        "skill": "#924ff7"
       },
       "surface": "#fafafa"
     },
@@ -105,7 +127,7 @@
       "semanticColors": {
         "diffAdded": "#3d755d",
         "diffRemoved": "#ba2623",
-        "skill": "#5f6ac2"
+        "skill": "#924ff7"
       },
       "surface": "#f5f3ed",
       "fonts": {
@@ -120,7 +142,7 @@
       "semanticColors": {
         "diffAdded": "#006b4f",
         "diffRemoved": "#b12424",
-        "skill": "#9a1b6e"
+        "skill": "#924ff7"
       },
       "surface": "#ffffff",
       "fonts": {
@@ -132,10 +154,18 @@
     "rose-pine": {
       "accent": "#d7827e",
       "ink": "#575279",
+      "palette": {
+        "blue": "#56949f",
+        "green": "#286983",
+        "orange": "#d7827e",
+        "purple": "#907aa9",
+        "red": "#b4637a",
+        "yellow": "#ea9d34"
+      },
       "semanticColors": {
         "diffAdded": "#56949f",
         "diffRemoved": "#797593",
-        "skill": "#907aa9"
+        "skill": "#924ff7"
       },
       "surface": "#faf4ed"
     },
@@ -145,7 +175,7 @@
       "semanticColors": {
         "diffAdded": "#859900",
         "diffRemoved": "#dc322f",
-        "skill": "#d33682"
+        "skill": "#924ff7"
       },
       "surface": "#fdf6e3"
     },
@@ -155,7 +185,7 @@
       "semanticColors": {
         "diffAdded": "#28A948",
         "diffRemoved": "#EB001D",
-        "skill": "#A100F8"
+        "skill": "#924ff7"
       },
       "surface": "#ffffff",
       "contrast": 40,
@@ -171,17 +201,17 @@
       "semanticColors": {
         "diffAdded": "#008000",
         "diffRemoved": "#ee0000",
-        "skill": "#0000ff"
+        "skill": "#924ff7"
       },
       "surface": "#ffffff"
     },
     "xcode": {
       "accent": "#0e0eff",
-      "ink": "#000000d9",
+      "ink": "#000000",
       "semanticColors": {
         "diffAdded": "#00a240",
         "diffRemoved": "#c41a16",
-        "skill": "#0e0eff"
+        "skill": "#924ff7"
       },
       "surface": "#ffffff",
       "fonts": {
@@ -196,7 +226,7 @@
       "semanticColors": {
         "diffAdded": "#00c853",
         "diffRemoved": "#ff5f38",
-        "skill": "#cc7d5e"
+        "skill": "#ad7bf9"
       },
       "surface": "#2d2d2b"
     },
@@ -206,29 +236,43 @@
       "semanticColors": {
         "diffAdded": "#70bf56",
         "diffRemoved": "#f26d78",
-        "skill": "#d0a1ff"
+        "skill": "#ad7bf9"
       },
       "surface": "#10141c"
     },
     "catppuccin": {
       "accent": "#cba6f7",
       "ink": "#cdd6f4",
+      "palette": {
+        "blue": "#89b4fa",
+        "green": "#a6e3a1",
+        "orange": "#fab387",
+        "purple": "#cba6f7",
+        "red": "#f38ba8",
+        "yellow": "#f9e2af"
+      },
       "semanticColors": {
         "diffAdded": "#a6e3a1",
         "diffRemoved": "#f38ba8",
-        "skill": "#cba6f7"
+        "skill": "#ad7bf9"
       },
       "surface": "#1e1e2e"
     },
     "codex": {
-      "accent": "#0169cc",
-      "ink": "#fcfcfc",
-      "semanticColors": {
-        "diffAdded": "#00a240",
-        "diffRemoved": "#e02e2a",
-        "skill": "#b06dff"
+      "accent": "#339cff",
+      "contrast": 60,
+      "fonts": {
+        "code": null,
+        "ui": null
       },
-      "surface": "#111111"
+      "ink": "#ffffff",
+      "opaqueWindows": false,
+      "semanticColors": {
+        "diffAdded": "#40c977",
+        "diffRemoved": "#fa423e",
+        "skill": "#ad7bf9"
+      },
+      "surface": "#181818"
     },
     "dracula": {
       "accent": "#ff79c6",
@@ -236,17 +280,25 @@
       "semanticColors": {
         "diffAdded": "#50fa7b",
         "diffRemoved": "#ff5555",
-        "skill": "#ff79c6"
+        "skill": "#ad7bf9"
       },
       "surface": "#282a36"
     },
     "everforest": {
       "accent": "#a7c080",
       "ink": "#d3c6aa",
+      "palette": {
+        "blue": "#7fbbb3",
+        "green": "#a7c080",
+        "orange": "#e69875",
+        "purple": "#d699b6",
+        "red": "#e67e80",
+        "yellow": "#dbbc7f"
+      },
       "semanticColors": {
         "diffAdded": "#a7c080",
         "diffRemoved": "#e67e80",
-        "skill": "#d699b6"
+        "skill": "#ad7bf9"
       },
       "surface": "#2d353b"
     },
@@ -256,7 +308,7 @@
       "semanticColors": {
         "diffAdded": "#3fb950",
         "diffRemoved": "#f85149",
-        "skill": "#bc8cff"
+        "skill": "#ad7bf9"
       },
       "surface": "#0d1117"
     },
@@ -266,7 +318,7 @@
       "semanticColors": {
         "diffAdded": "#ebdbb2",
         "diffRemoved": "#cc241d",
-        "skill": "#b16286"
+        "skill": "#ad7bf9"
       },
       "surface": "#282828"
     },
@@ -276,7 +328,7 @@
       "semanticColors": {
         "diffAdded": "#69c967",
         "diffRemoved": "#ff7e78",
-        "skill": "#c2a1ff"
+        "skill": "#ad7bf9"
       },
       "surface": "#0f0f11",
       "fonts": {
@@ -290,7 +342,7 @@
       "semanticColors": {
         "diffAdded": "#22c55e",
         "diffRemoved": "#ff5c5c",
-        "skill": "#3b82f6"
+        "skill": "#ad7bf9"
       },
       "surface": "#111827",
       "fonts": {
@@ -303,7 +355,7 @@
       "semanticColors": {
         "diffAdded": "#c3e88d",
         "diffRemoved": "#f07178",
-        "skill": "#c792ea"
+        "skill": "#ad7bf9"
       },
       "surface": "#212121"
     },
@@ -313,7 +365,7 @@
       "semanticColors": {
         "diffAdded": "#1eff5a",
         "diffRemoved": "#fa423e",
-        "skill": "#1eff5a"
+        "skill": "#ad7bf9"
       },
       "surface": "#040805",
       "fonts": {
@@ -328,7 +380,7 @@
       "semanticColors": {
         "diffAdded": "#86b42b",
         "diffRemoved": "#c4265e",
-        "skill": "#8c6bc8"
+        "skill": "#ad7bf9"
       },
       "surface": "#272822"
     },
@@ -338,17 +390,25 @@
       "semanticColors": {
         "diffAdded": "#c5e478",
         "diffRemoved": "#ef5350",
-        "skill": "#c792ea"
+        "skill": "#ad7bf9"
       },
       "surface": "#011627"
     },
     "nord": {
       "accent": "#88c0d0",
       "ink": "#d8dee9",
+      "palette": {
+        "blue": "#81a1c1",
+        "green": "#a3be8c",
+        "orange": "#d08770",
+        "purple": "#b48ead",
+        "red": "#bf616a",
+        "yellow": "#ebcb8b"
+      },
       "semanticColors": {
         "diffAdded": "#a3be8c",
         "diffRemoved": "#bf616a",
-        "skill": "#b48ead"
+        "skill": "#ad7bf9"
       },
       "surface": "#2e3440"
     },
@@ -358,12 +418,28 @@
       "semanticColors": {
         "diffAdded": "#4ec9b0",
         "diffRemoved": "#fa423e",
-        "skill": "#3183d8"
+        "skill": "#ad7bf9"
       },
       "surface": "#191919",
       "fonts": {
         "code": null,
         "ui": null
+      },
+      "opaqueWindows": true
+    },
+    "og": {
+      "accent": "#10a37f",
+      "ink": "#d1d5db",
+      "semanticColors": {
+        "diffAdded": "#65c99a",
+        "diffRemoved": "#f28b82",
+        "skill": "#ad7bf9"
+      },
+      "surface": "#343541",
+      "fonts": {
+        "code": null,
+        "content": "Arial, sans-serif",
+        "ui": "Arial, sans-serif"
       },
       "opaqueWindows": true
     },
@@ -373,7 +449,7 @@
       "semanticColors": {
         "diffAdded": "#8cc265",
         "diffRemoved": "#e05561",
-        "skill": "#c162de"
+        "skill": "#ad7bf9"
       },
       "surface": "#282c34"
     },
@@ -383,7 +459,7 @@
       "semanticColors": {
         "diffAdded": "#40c977",
         "diffRemoved": "#fa423e",
-        "skill": "#479ffa"
+        "skill": "#ad7bf9"
       },
       "surface": "#0b0b0f"
     },
@@ -393,7 +469,7 @@
       "semanticColors": {
         "diffAdded": "#59d499",
         "diffRemoved": "#ff6363",
-        "skill": "#cf2f98"
+        "skill": "#ad7bf9"
       },
       "surface": "#101010",
       "fonts": {
@@ -405,10 +481,18 @@
     "rose-pine": {
       "accent": "#ea9a97",
       "ink": "#e0def4",
+      "palette": {
+        "blue": "#9ccfd8",
+        "green": "#3e8fb0",
+        "orange": "#ea9a97",
+        "purple": "#c4a7e7",
+        "red": "#eb6f92",
+        "yellow": "#f6c177"
+      },
       "semanticColors": {
         "diffAdded": "#9ccfd8",
         "diffRemoved": "#908caa",
-        "skill": "#c4a7e7"
+        "skill": "#ad7bf9"
       },
       "surface": "#232136"
     },
@@ -418,7 +502,7 @@
       "semanticColors": {
         "diffAdded": "#8ee6d7",
         "diffRemoved": "#fa423e",
-        "skill": "#7055f6"
+        "skill": "#ad7bf9"
       },
       "surface": "#2d2935",
       "fonts": {
@@ -432,7 +516,7 @@
       "semanticColors": {
         "diffAdded": "#859900",
         "diffRemoved": "#dc322f",
-        "skill": "#d33682"
+        "skill": "#ad7bf9"
       },
       "surface": "#002b36"
     },
@@ -442,17 +526,25 @@
       "semanticColors": {
         "diffAdded": "#40c977",
         "diffRemoved": "#fa423e",
-        "skill": "#e4f222"
+        "skill": "#ad7bf9"
       },
       "surface": "#02120c"
     },
     "tokyo-night": {
       "accent": "#3d59a1",
       "ink": "#a9b1d6",
+      "palette": {
+        "blue": "#7aa2f7",
+        "green": "#41a6b5",
+        "orange": "#ff9e64",
+        "purple": "#9d7cd8",
+        "red": "#f7768e",
+        "yellow": "#e0af68"
+      },
       "semanticColors": {
         "diffAdded": "#449dab",
         "diffRemoved": "#914c54",
-        "skill": "#9d7cd8"
+        "skill": "#ad7bf9"
       },
       "surface": "#1a1b26"
     },
@@ -462,7 +554,7 @@
       "semanticColors": {
         "diffAdded": "#00AD3A",
         "diffRemoved": "#F13342",
-        "skill": "#9540D5"
+        "skill": "#ad7bf9"
       },
       "surface": "#000000",
       "contrast": 50,
@@ -478,17 +570,17 @@
       "semanticColors": {
         "diffAdded": "#369432",
         "diffRemoved": "#f44747",
-        "skill": "#000080"
+        "skill": "#ad7bf9"
       },
       "surface": "#1e1e1e"
     },
     "xcode": {
       "accent": "#5482ff",
-      "ink": "#ffffffd9",
+      "ink": "#ffffff",
       "semanticColors": {
         "diffAdded": "#67b7a4",
         "diffRemoved": "#fc6a5d",
-        "skill": "#5482ff"
+        "skill": "#ad7bf9"
       },
       "surface": "#1f1f24",
       "fonts": {

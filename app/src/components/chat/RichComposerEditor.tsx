@@ -11,6 +11,7 @@ import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import { createPortal } from "react-dom";
 import { composerSuggestionKey, composerSuggestionPlugin, visibleComposerSuggestion, type ComposerSuggestion } from "./composerSuggestion";
 import { cancelComposerDictation, composerDictationKey, composerDictationPlugin, finishComposerDictation, startComposerDictation, updateComposerDictation } from "./composerDictation";
+import { useShouldReduceMotion } from "../../appearance";
 
 export type RichComposerEditorHandle = {
   dom: () => HTMLElement | null;
@@ -23,6 +24,8 @@ export type RichComposerEditorHandle = {
 };
 
 type Props = {
+  ariaActiveDescendant?: string;
+  ariaControls?: string;
   className: string;
   onFilesPicked: (files: readonly File[]) => void;
   onKeyDown: (event: globalThis.KeyboardEvent, editor: HTMLElement) => void;
@@ -45,6 +48,8 @@ type ActiveLink = {
 const PASTED_TEXT_ATTACHMENT_THRESHOLD = 5_000;
 
 export const RichComposerEditor = forwardRef<RichComposerEditorHandle, Props>(function RichComposerEditor({
+  ariaActiveDescendant,
+  ariaControls,
   className,
   onFilesPicked,
   onKeyDown,
@@ -57,6 +62,7 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, Props>(fu
   const mountRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLFormElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const reducedMotion = useShouldReduceMotion();
   const [activeLink, setActiveLink] = useState<ActiveLink | null>(null);
   const onFilesPickedRef = useRef(onFilesPicked);
   const onKeyDownRef = useRef(onKeyDown);
@@ -128,7 +134,6 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, Props>(fu
     view.dom.translate = false;
     view.dom.style.fontSize = "var(--octopus-chat-font-size)";
     view.dom.style.height = "auto";
-    view.dom.style.minHeight = "2.5rem";
     view.dom.style.resize = "none";
     viewRef.current = view;
     return () => {
@@ -150,6 +155,15 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, Props>(fu
     if (!view) return;
     view.dom.spellcheck = spellCheck;
   }, [spellCheck]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (ariaControls) view.dom.setAttribute("aria-controls", ariaControls);
+    else view.dom.removeAttribute("aria-controls");
+    if (ariaActiveDescendant) view.dom.setAttribute("aria-activedescendant", ariaActiveDescendant);
+    else view.dom.removeAttribute("aria-activedescendant");
+  }, [ariaActiveDescendant, ariaControls]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -177,6 +191,7 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, Props>(fu
   return (
     <div
       className={`${className} relative`}
+      data-dictation-reduced-motion={reducedMotion ? "true" : undefined}
       onMouseDown={(event) => {
         const editor = viewRef.current?.dom;
         if (!editor || event.target instanceof Node && (editor.contains(event.target) || popoverRef.current?.contains(event.target))) return;

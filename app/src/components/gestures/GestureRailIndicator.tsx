@@ -22,11 +22,11 @@ export function GestureRailIndicator({ accessProfile, onOpenSettings }: {
   const label = gestureRecognitionLabel(phase);
   return (
     <div className="navigation-rail-item" data-gesture-phase={phase}>
-      <MessageTooltip label={`Gesture control · ${label}`} side="right" delayMs={300} disabled={open}>
+      <MessageTooltip label={`Gesture control · ${label}`} side="bottom" delayMs={300} disabled={open}>
         <OcIconButton appearance="rail" buttonRef={trigger} glyph="hand" label={`Gesture control, ${label}`} onClick={() => setOpen(!open)} selected={open} title="" />
       </MessageTooltip>
       <span aria-hidden="true" className="navigation-rail-gesture-state" />
-      <OcDropdown align="end" alignOffset={-4} anchorRef={trigger} aria-label="Gesture control" className="gesture-rail-menu" contentWidth="sidebar" onOpenChange={setOpen} open={open} side="right">
+      <OcDropdown align="end" anchorRef={trigger} aria-label="Gesture control" className="gesture-rail-menu" contentWidth="sidebar" onOpenChange={setOpen} open={open} side="bottom" sideOffset={6}>
         <div className="gesture-rail-menu__head">
           <span>Gesture control</span>
           <OcStatus label={label} tone={gesturePhaseTone(phase)} />

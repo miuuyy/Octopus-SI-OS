@@ -865,7 +865,11 @@ function HomeResponseStage({ operatorRequests, onOperatorRequestResponse, replyH
           </div>
         </div>
       </motion.div>
-      <div className="home-response-stage__composer-footer" ref={composerFooterRef}>
+      <div
+        className="home-response-stage__composer-footer"
+        data-thread-composer-backdrop={!compact && hasResponse && !replyHidden ? "" : undefined}
+        ref={composerFooterRef}
+      >
         <div className="home-response-stage__composer" data-ocean-obstacle="" data-voice-placement-obstacle="">{composer}</div>
       </div>
     </motion.section>

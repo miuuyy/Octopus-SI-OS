@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/
 import { useHomeRunActivity } from "../voice/useHomeActivityWorkspace";
 import type { SurfaceHostProps } from "./SurfaceHost";
 import { SurfaceLoadingState } from "./SurfaceBoundary";
-import { WorkspacePaneHeaderActions, WorkspacePaneHeaderActionsProvider } from "./WorkspacePaneHeaderActions";
+import { WorkspacePaneHeaderActionsProvider } from "./WorkspacePaneHeaderActions";
 import { ShellTooltip } from "./ShellTooltip";
 import { Glyph } from "../IconGlyphs";
 
@@ -65,26 +65,6 @@ export function HomeSurface({
   }, []);
   return (
     <div className="home-view-transition">
-      <WorkspacePaneHeaderActions>
-        <ShellTooltip label="Activity" side="right">
-          <button aria-label="Activity" aria-expanded={activityOpen} className="app-titlebar-action no-drag"
-            data-state={activityOpen ? "open" : "closed"} type="button" onClick={() => {
-              setWidgetsOpen(false);
-              onHomeViewModeChange?.(activityOpen ? "voice" : "activity");
-            }}><Glyph name="transcript" size={16} /></button>
-        </ShellTooltip>
-        <span className="home-pane-swap-action" ref={setSwapActionHost}>
-          {!activityOpen ? (
-            <ShellTooltip label="Home widgets">
-              <button aria-label="Home widgets" aria-expanded={widgetsOpen} className="app-titlebar-action no-drag"
-                data-state={widgetsOpen ? "open" : "closed"} data-titlebar-surface-action="home-widgets" type="button" onClick={() => {
-                  onHomeViewModeChange?.("voice");
-                  setWidgetsOpen((open) => !open);
-                }}><Glyph name="widgets" size={16} /></button>
-            </ShellTooltip>
-          ) : null}
-        </span>
-      </WorkspacePaneHeaderActions>
       <motion.div
         animate={{ opacity: activityOpen ? 0 : 1 }}
         aria-hidden={activityOpen}
@@ -122,6 +102,26 @@ export function HomeSurface({
             ) : null}
           </AnimatePresence>
         </WorkspacePaneHeaderActionsProvider>
+      </div>
+      <div className="home-surface-actions no-drag" data-home-surface-actions="true" data-ocean-obstacle="" data-voice-placement-obstacle="">
+        <ShellTooltip label="Activity" side="bottom">
+          <button aria-label="Activity" aria-expanded={activityOpen} className="app-titlebar-action no-drag"
+            data-state={activityOpen ? "open" : "closed"} type="button" onClick={() => {
+              setWidgetsOpen(false);
+              onHomeViewModeChange?.(activityOpen ? "voice" : "activity");
+            }}><Glyph name="transcript" size={16} /></button>
+        </ShellTooltip>
+        <span className="home-pane-swap-action" ref={setSwapActionHost}>
+          {!activityOpen ? (
+            <ShellTooltip label="Home widgets" side="bottom">
+              <button aria-label="Home widgets" aria-expanded={widgetsOpen} className="app-titlebar-action no-drag"
+                data-state={widgetsOpen ? "open" : "closed"} data-titlebar-surface-action="home-widgets" type="button" onClick={() => {
+                  onHomeViewModeChange?.("voice");
+                  setWidgetsOpen((open) => !open);
+                }}><Glyph name="widgets" size={16} /></button>
+            </ShellTooltip>
+          ) : null}
+        </span>
       </div>
     </div>
   );

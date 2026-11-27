@@ -351,6 +351,25 @@ contextBridge.exposeInMainWorld("octopusTransport", {
   setWindowAppearance(appearance) {
     ipcRenderer.send("octopus:window-appearance", appearance);
   },
+  setWindowChromeVisible(visible) {
+    ipcRenderer.send("octopus:window-chrome-visibility", Boolean(visible));
+  },
+  onWindowPointerUpdate(listener) {
+    let active = true;
+    const wrapped = (_event, state) => listener(state);
+    ipcRenderer.on("octopus:window-pointer-update", wrapped);
+    if (ipcRenderer.listenerCount("octopus:window-pointer-update") === 1) {
+      ipcRenderer.send("octopus:window-pointer-watch", true);
+    }
+    return () => {
+      if (!active) return;
+      active = false;
+      ipcRenderer.removeListener("octopus:window-pointer-update", wrapped);
+      if (ipcRenderer.listenerCount("octopus:window-pointer-update") === 0) {
+        ipcRenderer.send("octopus:window-pointer-watch", false);
+      }
+    };
+  },
   setPowerSaveBlocker(enabled) {
     return invokeAccess("octopus:power-save-blocker", enabled);
   },
@@ -478,6 +497,9 @@ contextBridge.exposeInMainWorld("octopusTransport", {
   },
   clientSetupBegin(request) {
     return invokeAccess("octopus:client-setup-begin", request);
+  },
+  clientSetupCancel(request) {
+    return invokeAccess("octopus:client-setup-cancel", request);
   },
   clientSetupResume(request) {
     return invokeAccess("octopus:client-setup-resume", request);

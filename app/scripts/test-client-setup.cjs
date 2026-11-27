@@ -33,6 +33,7 @@ async function main() {
     await recordProbeFailure(path.join(temporary, "probe-failure"));
     for (const step of STEPS) await resumeAfterCommittedFailure(path.join(temporary, `failure-${step}`), step);
     await refuseSealAfterProofDrift(path.join(temporary, "proof-drift"));
+    await cancelBeforeWorkspace(path.join(temporary, "cancel-before-workspace"));
     await refuseCorruptOperation(path.join(temporary, "corrupt"));
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -509,6 +510,23 @@ async function refuseCorruptOperation(root) {
   await store.begin({ operationId, plan: setupPlan(operationId) });
   await fs.writeFile(path.join(root, "setup-state", "operations", `${operationId}.json`), "{not-json\n", "utf8");
   await assert.rejects(store.read(operationId), /malformed JSON/);
+}
+
+async function cancelBeforeWorkspace(root) {
+  const ownerState = path.join(root, "owner-state.json");
+  const store = createClientSetupStore({ root: path.join(root, "setup-state"), owners: owners(ownerState) });
+  const firstId = "workspace_setup_cancel_001";
+  await store.begin({ operationId: firstId, plan: setupPlan(firstId) });
+  await store.resume({ operationId: firstId, stopBefore: "provider" });
+  assert.deepEqual(await store.cancel(firstId), { cancelled: true, operationId: firstId });
+  assert.equal(await store.readCurrent(), null);
+  assert.equal(await store.read(firstId), null);
+  const secondId = "workspace_setup_cancel_002";
+  const nextPlan = { ...setupPlan(secondId), provider: { interface_id: "world_provider_other", required_state: "account_readable" } };
+  const begun = await store.begin({ operationId: secondId, plan: nextPlan });
+  assert.equal(begun.operationId, secondId);
+  await store.resume(secondId);
+  await assert.rejects(store.cancel(secondId), /already complete/);
 }
 
 function owners(statePath, afterCommit = {}) {

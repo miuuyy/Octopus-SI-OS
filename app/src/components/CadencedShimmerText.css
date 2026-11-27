@@ -6,7 +6,7 @@
 
 .loading-shimmer-pure-text {
   --shimmer-text-secondary: var(--loading-shimmer-base, color-mix(in srgb, var(--loading-shimmer-foreground, var(--color-token-description-foreground)) 55%, transparent));
-  --shimmer-contrast: var(--loading-shimmer-highlight, #ffffffbf);
+  --shimmer-contrast: var(--loading-shimmer-highlight, var(--color-text));
   display: inline-block;
   vertical-align: top;
   text-fill-color: currentColor;
@@ -14,12 +14,18 @@
 }
 
 .octopus-cadenced-shimmer {
+  --shimmer-sweep-duration: 1s;
   position: relative;
 }
 :where(.octopus-cadenced-shimmer) {
   --loading-shimmer-foreground: initial;
   --loading-shimmer-base: initial;
   --loading-shimmer-highlight: initial;
+}
+.truncate > .octopus-cadenced-shimmer {
+  max-width: 100%;
+  text-overflow: inherit;
+  overflow: hidden;
 }
 .octopus-cadenced-shimmer, .octopus-cadenced-shimmer * {
   color: var(--shimmer-text-secondary) !important;
@@ -53,7 +59,7 @@
 
 .octopus-cadenced-shimmer.is-shimmering .octopus-cadenced-shimmer-sweep {
   visibility: visible;
-  animation: octopus-text-highlight 1s steps(48, end) both;
+  animation: octopus-text-highlight var(--shimmer-sweep-duration, 1s) steps(48, end) both;
 }
 @keyframes octopus-text-highlight {
   to { --octopus-shimmer-center: 150%; }

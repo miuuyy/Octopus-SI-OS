@@ -71,6 +71,8 @@ export function CollapsibleMessageBody({ children, text, maxLines = 20, collapse
   useEffect(() => {
     const clip = clipRef.current;
     if (!collapsed || !clip) return;
+    const partialMatchSelector = "a[href], area[href]";
+    const focusableSelector = 'a[href], area[href], button, input, select, textarea, summary, audio[controls], video[controls], iframe, [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
     const elements = new Map<Element, string | null>();
     const setVisible = (element: Element, visible: boolean, previousHidden: string | null) => {
       element.toggleAttribute("inert", !visible);
@@ -78,32 +80,42 @@ export function CollapsibleMessageBody({ children, text, maxLines = 20, collapse
       else if (previousHidden === null) element.removeAttribute("aria-hidden");
       else element.setAttribute("aria-hidden", previousHidden);
     };
-    const intersection = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (!elements.has(entry.target)) continue;
-        const visible = entry.isIntersecting && (entry.target.matches("a[href], area[href]") ? entry.intersectionRatio > 0 : entry.intersectionRatio >= 1);
-        setVisible(entry.target, visible, elements.get(entry.target) ?? null);
-      }
-    }, { root: clip, rootMargin: "0px", threshold: [Number.EPSILON, 1] });
+    const isRectVisibleInClip = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      const clipBox = clip.getBoundingClientRect();
+      return element.matches(partialMatchSelector)
+        ? Math.min(box.right, clipBox.right) > Math.max(box.left, clipBox.left)
+          && Math.min(box.bottom, clipBox.bottom) > Math.max(box.top, clipBox.top)
+        : box.top >= clipBox.top && box.right <= clipBox.right && box.bottom <= clipBox.bottom && box.left >= clipBox.left;
+    };
+    const intersection = typeof IntersectionObserver === "undefined"
+      ? null
+      : new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!elements.has(entry.target)) continue;
+            const visible = entry.isIntersecting && (entry.target.matches(partialMatchSelector) ? entry.intersectionRatio > 0 : entry.intersectionRatio >= 1);
+            setVisible(entry.target, visible, elements.get(entry.target) ?? null);
+          }
+        }, { root: clip, rootMargin: "0px", threshold: [Number.EPSILON, 1] });
     const sync = () => {
       for (const element of elements.keys()) {
         if (clip.contains(element)) continue;
-        intersection.unobserve(element);
+        intersection?.unobserve(element);
         elements.delete(element);
       }
-      for (const element of clip.querySelectorAll('a[href], area[href], button, input, select, textarea, summary, audio[controls], video[controls], iframe, [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])')) {
+      for (const element of clip.querySelectorAll(focusableSelector)) {
         if (elements.has(element) || element.hasAttribute("inert")) continue;
         const previousHidden = element.getAttribute("aria-hidden");
         elements.set(element, previousHidden);
-        setVisible(element, false, previousHidden);
-        intersection.observe(element);
+        setVisible(element, intersection === null && isRectVisibleInClip(element), previousHidden);
+        intersection?.observe(element);
       }
     };
     sync();
     const mutation = new MutationObserver(sync);
     mutation.observe(clip, { childList: true, subtree: true });
     return () => {
-      intersection.disconnect();
+      intersection?.disconnect();
       mutation.disconnect();
       for (const [element, previousHidden] of elements) setVisible(element, true, previousHidden);
     };

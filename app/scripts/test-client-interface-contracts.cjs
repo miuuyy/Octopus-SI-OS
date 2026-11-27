@@ -240,6 +240,8 @@ test("Settings keeps window history without a sidebar toggle, and native history
     "../chat/MessageTooltip": load("src/components/chat/MessageTooltip.tsx"),
   });
   const { DesktopTitleBar } = load("src/components/shell/DesktopTitleBar.tsx", {
+    "../../appearance": { useShouldReduceMotion: () => false },
+    "../../shell/shellMetrics": load("src/shell/shellMetrics.ts"),
     "../IconGlyphs": { Glyph: () => null },
     "./ShellTooltip": tooltip,
     "../../keyboardShortcuts": {
@@ -247,14 +249,15 @@ test("Settings keeps window history without a sidebar toggle, and native history
       useKeyboardShortcuts: () => ({ navigate_back: ["⌘⌥←"] }),
       formatKeyboardShortcuts: (shortcuts) => shortcuts.join("  "),
     },
-    "motion/react": { AnimatePresence: ({ children }) => children, motion: { div: React.forwardRef(({ children, animate, initial, exit, transition, inert, ...props }, ref) => React.createElement("div", { ...props, ref }, children)) }, useMotionValueEvent() {}, useTransform: () => 8 },
+    "motion/react": { AnimatePresence: ({ children }) => children, motion: { div: React.forwardRef(({ children, animate, initial, exit, transition, inert, ...props }, ref) => React.createElement("div", { ...props, ref }, children)) } },
   });
   let back = 0, forward = 0, toggled = 0;
-  const { host } = await mount(React.createElement(DesktopTitleBar, {
-    accessProfile: "lab", settingsOpen: true, canNavigateBack: true, canNavigateForward: false,
+  const baseProps = {
+    accessProfile: "lab", settingsOpen: false, inboxOpen: false, sidebarAvailable: false, canNavigateBack: true, canNavigateForward: false,
     sidebarOpen: true, secondaryPaneOpen: false, secondaryPaneWidth: { get: () => 0 },
     onNavigateBack: () => back++, onNavigateForward: () => forward++, onToggleSidebar: () => toggled++, onSlotWidthsChange() {},
-  }));
+  };
+  const { host, root } = await mount(React.createElement(DesktopTitleBar, baseProps));
   assert.deepEqual([...host.querySelector(".app-titlebar-controls").querySelectorAll("button")].map((button) => button.getAttribute("aria-label")), ["Back", "Forward"]);
   assert.deepEqual(calls.at(-1), { canNavigateBack: true, canNavigateForward: false });
   assert.equal(host.querySelector("header").style.getPropertyValue("--app-titlebar-safe-left"), "82px");
@@ -278,6 +281,75 @@ test("Settings keeps window history without a sidebar toggle, and native history
   assert.equal(host.querySelector("header").style.getPropertyValue("--app-titlebar-safe-left"), "6px");
   await act(async () => handlers.state({ fullScreen: false, nativeControlInset: 76 / 1.4 }));
   assert.equal(parseFloat(host.querySelector("header").style.getPropertyValue("--app-titlebar-safe-left")), 76 / 1.4 + 6);
+  await act(async () => root.render(React.createElement(DesktopTitleBar, { ...baseProps, settingsOpen: true })));
+  assert.deepEqual([...host.querySelector(".app-titlebar-controls").querySelectorAll("button")], []);
+  assert.deepEqual(calls.at(-1), { canNavigateBack: false, canNavigateForward: false });
+  await act(async () => root.render(React.createElement(DesktopTitleBar, { ...baseProps, inboxOpen: true })));
+  assert.deepEqual([...host.querySelector(".app-titlebar-controls").querySelectorAll("button")], []);
+  assert.deepEqual(calls.at(-1), { canNavigateBack: false, canNavigateForward: false });
+});
+
+test("DesktopTitleBar omits drag regions in fullscreen, avoids aria-hidden trap, and dispatches every topbar click", async () => {
+  const { DesktopTitleBar } = load("src/components/shell/DesktopTitleBar.tsx", {
+    "../../appearance": { useShouldReduceMotion: () => false },
+    "../../shell/shellMetrics": load("src/shell/shellMetrics.ts"),
+    "../IconGlyphs": { Glyph: () => null },
+    "./ShellTooltip": { ShellTooltip: ({ children }) => children },
+    "../../keyboardShortcuts": {
+      clientDialogOwnsCommands: () => false,
+      useKeyboardShortcuts: () => ({}),
+      formatKeyboardShortcuts: () => "",
+    },
+    "motion/react": { AnimatePresence: ({ children }) => children, motion: { div: React.forwardRef(({ children, animate, initial, exit, transition, inert, ...props }, ref) => React.createElement("div", { ...props, ref }, children)) } },
+  });
+  const fired = [];
+  const { host, root } = await mount(React.createElement(DesktopTitleBar, {
+    accessProfile: "lab",
+    chromeRevealed: true,
+    fullScreen: true,
+    nativeInset: 76,
+    canNavigateBack: true,
+    canNavigateForward: true,
+    sidebarAvailable: true,
+    sidebarOpen: true,
+    secondaryPaneFocused: false,
+    secondaryPaneOpen: false,
+    dock: React.createElement("button", { "aria-label": "Dock Home", onClick: () => fired.push("dock"), type: "button" }),
+    systemTray: React.createElement("button", { "aria-label": "Tray Inbox", onClick: () => fired.push("tray"), type: "button" }),
+    onNavigateBack: () => fired.push("back"),
+    onNavigateForward: () => fired.push("forward"),
+    onToggleSidebar: () => fired.push("sidebar"),
+    onToggleSecondaryPane: () => fired.push("split"),
+    onSlotWidthsChange() {},
+  }));
+  const header = host.querySelector("header");
+  assert.equal(header.classList.contains("is-fullscreen"), true);
+  assert.equal(header.classList.contains("draggable"), false);
+  assert.equal(header.hasAttribute("aria-hidden"), false);
+  assert.equal(host.querySelector(".app-titlebar-drag-region"), null);
+  for (const label of ["Back", "Forward", "Hide sidebar", "Open secondary pane", "Dock Home", "Tray Inbox"]) {
+    await act(async () => host.querySelector(`button[aria-label="${label}"]`).click());
+  }
+  assert.deepEqual(fired, ["back", "forward", "sidebar", "split", "dock", "tray"]);
+  await act(async () => root.render(React.createElement(DesktopTitleBar, {
+    accessProfile: "lab",
+    chromeRevealed: false,
+    fullScreen: false,
+    nativeInset: 76,
+    canNavigateBack: true,
+    canNavigateForward: true,
+    sidebarAvailable: true,
+    sidebarOpen: false,
+    secondaryPaneFocused: false,
+    secondaryPaneOpen: false,
+    onNavigateBack() {},
+    onNavigateForward() {},
+    onToggleSidebar() {},
+    onToggleSecondaryPane() {},
+    onSlotWidthsChange() {},
+  })));
+  assert.equal(host.querySelector("header").hasAttribute("aria-hidden"), false, "hidden titlebar stays keyboard-discoverable without ARIA hidden trap");
+  assert.ok(host.querySelector(".app-titlebar-drag-region"), "windowed mode renders dedicated drag region");
 });
 
 test("Dashboard title menu selects views, keeps extensions and pins, and restores focus on Escape", async () => {
@@ -286,6 +358,7 @@ test("Dashboard title menu selects views, keeps extensions and pins, and restore
   releases.push(() => { document.hasFocus = hasFocus; });
   const { OcDropdown } = load("src/design-system/OcDropdown.tsx", {
     "./modalFocus": modal,
+    "../appearance": { useShouldReduceMotion: () => true },
     "./components": { OcMenuSurface: ({ surfaceRef, surface, ...props }) => React.createElement("div", { ...props, ref: surfaceRef }) },
   });
   const workspaces = load("src/shell/clientWorkspaces.ts");
@@ -293,7 +366,7 @@ test("Dashboard title menu selects views, keeps extensions and pins, and restore
     "../../shell/clientWorkspaces": workspaces,
     "../../shell/navigation": load("src/shell/navigation.ts", { "./clientWorkspaces": workspaces }),
     "../../design-system/OcDropdown": { OcDropdown },
-    "../../design-system/components": { OcMenuItem: ({ label, leadingIcon, selected, ...props }) => React.createElement("button", props, label) },
+    "../../design-system/components": { OcMenuItem: ({ label, leadingIcon, selected, ...props }) => React.createElement("button", props, label), OcMenuSeparator: () => React.createElement("div", { role: "separator" }) },
     "../IconGlyphs": { Glyph: () => null },
     "./ShellTooltip": { ShellTooltip: ({ children }) => children },
   });
@@ -346,8 +419,10 @@ test("provider validation waits for a successful registry read and leaves repair
     "../../onboarding/setupFile": { serializeSetupFile: () => "", setupFileFromHome: () => null, setupFileName: () => "" },
     "../../extensions/useClientExtensions": { useClientExtensions: () => ({ loading: false, extensions: [] }) },
   });
-  const props = { accessProfile: "lab", surfaces: [] };
+  const props = { accessProfile: "lab", surfaces: [{ id: "voice", label: "Home", glyph: "home" }, { id: "inbox", label: "Inbox", glyph: "bell" }] };
   const { host, root } = await mount(React.createElement(GeneralSection, props));
+  const startupOptions = [...host.querySelector('[aria-label="Open on launch"]').querySelectorAll("option")].map((option) => option.value);
+  assert.equal(startupOptions.includes("inbox"), false, "Inbox overlay is excluded from primary startup surfaces");
   const select = () => host.querySelector('[aria-label="Default provider interface"]');
   assert.equal(select().hasAttribute("data-error"), false); assert.equal(select().disabled, true);
   providerState = { loading: false, error: "", providers: [{ id: "provider-a", label: "Provider A" }] };
@@ -365,40 +440,42 @@ test("provider validation waits for a successful registry read and leaves repair
   assert.equal(writes[0].providerInterfaceId, ""); assert.equal(select().hasAttribute("data-error"), false);
 });
 
-test("opening Settings from Account preserves the destination's initial focus", async () => {
-  let live = false;
+test("opening Account usage from Account preserves the Settings destination's initial focus", async () => {
+  let live = true;
   const { OcDropdown } = load("src/design-system/OcDropdown.tsx", {
     "./modalFocus": modal,
+    "../appearance": { useShouldReduceMotion: () => true },
     "./components": { OcMenuSurface: ({ surfaceRef, surface, ...props }) => React.createElement("div", { ...props, ref: surfaceRef }) },
   });
   const { AccountRailButton } = load("src/components/shell/AccountRailButton.tsx", {
-    "../../account/useChatgptAccount": { useChatgptAccount: (enabled) => { assert.equal(enabled, live); return { account: null, action: "idle", loading: false }; } },
-    "../../account/useChatgptUsage": { useChatgptUsage: (_account, enabled) => { assert.equal(enabled, false); return { value: null, loading: false, error: "" }; } },
+    "../../account/useChatgptAccount": { useChatgptAccount: (enabled) => { assert.equal(enabled, live); return { account: live ? { signedIn: true, planType: "pro" } : null, action: "idle", loading: false }; } },
+    "../../account/useChatgptUsage": { useChatgptUsage: (_account, enabled) => ({ value: null, loading: false, error: "" }) },
     "../../account/chatgptUsageModel": load("src/account/chatgptUsageModel.ts"),
     "../../account/chatgptWorkspaces": load("src/account/chatgptWorkspaces.ts"),
     "../account/AccountLogoutDialog": { AccountLogoutDialog: ({ open }) => { assert.equal(open, false); return null; } },
     "../account/AccountUsage": { AccountUsageCompact: () => { throw new Error("Lab focus navigation must not render native usage"); } },
     "../../design-system/OcDropdown": { OcDropdown },
     "../../design-system/components": { OcMenuItem: ({ label, leadingIcon, trailing, ...props }) => React.createElement("button", props, label) },
-    "../../keyboardShortcuts": { formatKeyboardShortcuts: () => "", useKeyboardShortcuts: () => ({}) },
     "../chat/MessageTooltip": load("src/components/chat/MessageTooltip.tsx"),
   });
   function Shell() {
     const [settings, setSettings] = React.useState(false);
     return React.createElement(React.Fragment, null,
-      React.createElement(AccountRailButton, { accessProfile: "lab", runtimeHost: {}, onOpenSettings: () => setSettings(true), onLogOut() {} }),
+      React.createElement(AccountRailButton, { accessProfile: "live", runtimeHost: {}, onOpenSettings: () => setSettings(true), onLogOut() {} }),
       settings && React.createElement("input", { autoFocus: true, id: "settings-search" }),
     );
   }
   const { host, root } = await mount(React.createElement(Shell));
   await act(async () => host.querySelector("button").click());
-  await act(async () => document.querySelector('[role="menuitem"]').click());
+  const usageItem = () => [...document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent === "Usage");
+  assert.ok(usageItem(), "Account menu exposes Usage");
+  assert.equal([...document.querySelectorAll('[role="menuitem"]')].some((node) => node.textContent === "Settings"), false, "Account menu does not duplicate top-bar Settings");
+  await act(async () => usageItem().click());
   assert.equal(document.activeElement, host.querySelector("input"));
   assert.ok(document.querySelector('[role="menu"]') === null);
   await act(async () => host.querySelector("button").click());
-  await act(async () => document.querySelector('[role="menuitem"]').click());
+  await act(async () => usageItem().click());
   assert.equal(document.activeElement, host.querySelector("input"));
-  live = true;
   await act(async () => root.render(React.createElement(AccountRailButton, { accessProfile: "live", runtimeHost: { available: true, ready: true, phase: "ready" }, onOpenSettings() {}, onLogOut() {} })));
   const dot = host.querySelector(".navigation-rail-account-status");
   assert.equal(dot.parentElement.className, "navigation-rail-account"); assert.equal(dot.hasAttribute("title"), false);

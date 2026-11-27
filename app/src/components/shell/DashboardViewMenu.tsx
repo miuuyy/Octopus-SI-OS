@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { ClientSurfaceDescriptor } from "../../shell/surfaceTypes";
 import { isFixedDashboardSurfaceId } from "../../shell/clientWorkspaces";
 import { navigationSectionForSurface } from "../../shell/navigation";
-import { OcMenuItem } from "../../design-system/components";
+import { OcMenuItem, OcMenuSeparator } from "../../design-system/components";
 import { OcDropdown } from "../../design-system/OcDropdown";
 import { Glyph } from "../IconGlyphs";
 import { ShellTooltip } from "./ShellTooltip";
@@ -33,6 +33,14 @@ export function DashboardViewMenu({ activeSurfaceId, pinnedSurfaceIds, surfaces,
   }, [pinnedSurfaceIds, surfaces]);
   const activeView = views.find((view) => view.id === activeSurfaceId);
   const pinned = pinnedSurfaceIds.includes(activeSurfaceId);
+  const MenuSeparator = OcMenuSeparator ?? (() => (
+    <div
+      className="oc-menu-separator w-full px-[var(--app-menu-separator-inset,var(--padding-row-x))] py-[var(--app-menu-separator-gutter,var(--spacing))]"
+      role="separator"
+    >
+      <div className="h-px w-full bg-border" />
+    </div>
+  ));
 
   return <span className="dashboard-view-menu no-drag" onPointerDown={(event) => event.stopPropagation()}>
     <ShellTooltip label="Switch Dashboard view" disabled={open}>
@@ -55,7 +63,7 @@ export function DashboardViewMenu({ activeSurfaceId, pinnedSurfaceIds, surfaces,
         selected={view.id === activeSurfaceId}
       />)}
       {activeView && !isFixedDashboardSurfaceId(activeSurfaceId) ? <>
-        <div className="navigation-account-separator" role="separator" />
+        <MenuSeparator />
         <OcMenuItem
           label={`${pinned ? "Unpin" : "Pin"} ${activeView.label}`}
           leadingIcon="pin"

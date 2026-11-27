@@ -26,6 +26,7 @@ export type CodeThemeId =
   | "night-owl"
   | "nord"
   | "notion"
+  | "og"
   | "one"
   | "oscurange"
   | "proof"
@@ -48,13 +49,22 @@ export type CodeThemeDefinition = Readonly<{
 }>;
 
 export type CodeThemeKind = "light" | "dark";
+export type SemanticPalette = Readonly<{
+  blue: string;
+  green: string;
+  orange: string;
+  purple: string;
+  red: string;
+  yellow: string;
+}>;
 export type CodeThemeSeed = Readonly<{
   accent: string;
   ink: string;
   surface: string;
   contrast?: number;
-  fonts?: Readonly<{ code?: string | null; ui?: string | null }>;
+  fonts?: Readonly<{ code?: string | null; content?: string | null; ui?: string | null }>;
   opaqueWindows?: boolean;
+  palette?: SemanticPalette;
   semanticColors: Readonly<{
     diffAdded: string;
     diffRemoved: string;
@@ -81,7 +91,7 @@ export const darkCodeThemes = codeThemeDefinitions("dark", [
   ["github", "GitHub"], ["gruvbox", "Gruvbox"], ["linear", "Linear"],
   ["lobster", "Lobster"], ["material", "Material"], ["matrix", "Matrix"],
   ["monokai", "Monokai"], ["night-owl", "Night Owl"], ["nord", "Nord"],
-  ["notion", "Notion"], ["one", "One"], ["oscurange", "Oscurange"],
+  ["notion", "Notion"], ["og", "OG Dark"], ["one", "One"], ["oscurange", "Oscurange"],
   ["raycast", "Raycast"], ["rose-pine", "Rose Pine"], ["sentry", "Sentry"],
   ["solarized", "Solarized"], ["temple", "Temple"], ["tokyo-night", "Tokyo Night"],
   ["vercel", "Vercel"], ["vscode-plus", "VS Code Plus"], ["xcode", "Xcode"],
@@ -233,6 +243,7 @@ const inlineVscodeTypographyVariables = new Set([
   "--vscode-font-size",
 ]);
 const listeners = new Set<() => void>();
+const appliedThemeVariables = new WeakMap<HTMLElement, Set<string>>();
 let observersInstalled = false;
 let current = load();
 
@@ -329,16 +340,18 @@ export function applyAppearance(settings: AppearanceSettings = current): void {
   const reduced = shouldReduceMotion(settings);
   const uiScale = settings.uiFontSize / defaultAppearance.uiFontSize;
   const foregroundRgb = hexRgb(palette.foreground);
-  const octopusTheme = resolveOctopusTheme(theme, palette, settings[`${theme}AccentSource`] === "codex");
   const selectedCodeThemeId = theme === "dark" ? settings.darkCodeTheme : settings.lightCodeTheme;
   const codeThemes = theme === "dark" ? darkCodeThemes : lightCodeThemes;
   const selectedCodeTheme = codeThemes.find((candidate) => candidate.id === selectedCodeThemeId)
     ?? codeThemes.find((candidate) => candidate.id === "codex")
     ?? codeThemes[0];
+  const selectedSeed = codeThemeSeeds[theme][selectedCodeTheme.id];
+  const octopusTheme = resolveOctopusTheme(theme, palette, settings[`${theme}AccentSource`] === "codex", selectedSeed);
 
   root.dataset.theme = theme;
   root.dataset.themePreference = settings.themeMode;
   root.dataset.codeTheme = selectedCodeTheme.id;
+  root.dataset.appearancePreset = selectedCodeTheme.id;
   root.dataset.diffMarkerStyle = settings.diffMarkerStyle;
   root.dataset.density = settings.density;
   root.dataset.octopusOs = "darwin";
@@ -370,8 +383,9 @@ export function applyAppearance(settings: AppearanceSettings = current): void {
     "--text-xl": 28,
     "--text-lg": 16,
     "--text-base": defaultAppearance.uiFontSize,
-    "--text-sm": defaultAppearance.uiFontSize - 1,
-    "--text-xs": defaultAppearance.uiFontSize - 2,
+    "--text-sm": defaultAppearance.uiFontSize - 2,
+    "--text-xs": defaultAppearance.uiFontSize - 3,
+    "--text-heading-app": 28,
     "--text-heading-lg": 24,
     "--text-heading-md": 20,
     "--text-heading-sm": 18,
@@ -404,16 +418,25 @@ export function applyAppearance(settings: AppearanceSettings = current): void {
     else element.style.removeProperty("--vscode-editor-font-family");
   }
   clearDerivedOctopusVariables(root);
+  const previousApplied = appliedThemeVariables.get(root);
+  if (previousApplied) {
+    for (const name of previousApplied) {
+      if (!(name in octopusTheme.variables)) root.style.removeProperty(name);
+    }
+  }
+  const nextApplied = new Set<string>();
   for (const [name, value] of Object.entries(octopusTheme.variables)) {
     root.style.setProperty(name, value);
+    nextApplied.add(name);
   }
+  appliedThemeVariables.set(root, nextApplied);
   root.style.setProperty("--code-theme-background", selectedCodeTheme.background);
   root.style.setProperty("--code-theme-accent", selectedCodeTheme.accent);
   root.style.setProperty("--code-theme-foreground", selectedCodeTheme.foreground);
   root.style.setProperty("--oc-color-canvas", palette.background);
-  root.style.setProperty("--oc-color-sidebar", palette.background);
-  root.style.setProperty("--oc-color-surface", octopusTheme.elevatedSecondaryOpaque);
-  root.style.setProperty("--oc-color-card", octopusTheme.elevatedPrimaryOpaque);
+  root.style.setProperty("--oc-color-sidebar", colorHex(octopusTheme.sidebarSurface));
+  root.style.setProperty("--oc-color-surface", octopusTheme.panel);
+  root.style.setProperty("--oc-color-card", octopusTheme.elevatedSecondaryOpaque);
   root.style.setProperty("--oc-color-raised", octopusTheme.controlBackgroundOpaque);
   root.style.setProperty("--oc-color-control", octopusTheme.buttonSecondaryBackground);
   root.style.setProperty("--oc-color-control-hover", octopusTheme.buttonSecondaryBackgroundHover);
@@ -426,7 +449,7 @@ export function applyAppearance(settings: AppearanceSettings = current): void {
   root.style.setProperty("--oc-color-accent", palette.accent);
   root.style.setProperty("--oc-color-accent-hover", mixHex(palette.accent, palette.foreground, 0.12));
   root.style.setProperty("--oc-color-danger", theme === "dark" ? "#FF6764" : "#E02E2A");
-  root.style.setProperty("--oc-focus-color", rgba(hexRgb(palette.accent), 0.9));
+  root.style.setProperty("--oc-focus-color", "var(--color-ring)");
   root.style.setProperty("--bg", palette.background);
   root.style.setProperty("--bg-deep", palette.background);
   root.style.setProperty("--stage", palette.background);
@@ -437,11 +460,11 @@ export function applyAppearance(settings: AppearanceSettings = current): void {
     ? colorAlpha(rgbColor(palette.background), 0.88)
     : palette.background);
   root.style.setProperty("--sidebar", palette.translucentSidebar
-    ? colorAlpha(octopusTheme.editorBackground, 0.78)
-    : rgbString(octopusTheme.editorBackground));
-  root.style.setProperty("--sidebar-soft", colorAlpha(octopusTheme.editorBackground, 0.78));
-  root.style.setProperty("--panel", octopusTheme.elevatedSecondaryOpaque);
-  root.style.setProperty("--panel-soft", octopusTheme.elevatedPrimaryOpaque);
+    ? colorAlpha(octopusTheme.sidebarSurface, 0.78)
+    : colorHex(octopusTheme.sidebarSurface));
+  root.style.setProperty("--sidebar-soft", colorAlpha(octopusTheme.sidebarSurface, 0.78));
+  root.style.setProperty("--panel", octopusTheme.panel);
+  root.style.setProperty("--panel-soft", octopusTheme.elevatedSecondaryOpaque);
   root.style.setProperty("--panel-raised", octopusTheme.controlBackgroundOpaque);
   root.style.setProperty("--field", rgba(foregroundRgb, 0.035));
   root.style.setProperty("--line", rgba(foregroundRgb, 0.084));
@@ -468,7 +491,7 @@ export function applyAppearance(settings: AppearanceSettings = current): void {
   root.style.setProperty("--surface-0", octopusTheme.surfaceUnder);
   root.style.setProperty("--surface-1", palette.background);
   root.style.setProperty("--surface-2", octopusTheme.elevatedSecondaryOpaque);
-  root.style.setProperty("--surface-3", octopusTheme.elevatedPrimaryOpaque);
+  root.style.setProperty("--surface-3", octopusTheme.controlBackgroundOpaque);
   root.style.setProperty("--blue", palette.accent);
 }
 
@@ -487,7 +510,12 @@ type OctopusPalette = {
 
 type RgbColor = { red: number; green: number; blue: number };
 
-function resolveOctopusTheme(theme: "light" | "dark", palette: OctopusPalette, linkedAccent = false) {
+function resolveOctopusTheme(
+  theme: "light" | "dark",
+  palette: OctopusPalette,
+  linkedAccent = false,
+  presetSeed?: CodeThemeSeed,
+) {
   const contrast = octopusContrast(palette.contrast, theme);
   const surface = rgbColor(palette.background);
   const ink = rgbColor(palette.foreground);
@@ -497,10 +525,10 @@ function resolveOctopusTheme(theme: "light" | "dark", palette: OctopusPalette, l
   const editorBackground = theme === "light"
     ? mixRgb(surface, white, 0.12)
     : mixRgb(surface, ink, 0.07);
+  const sidebarSurface = theme === "light"
+    ? mixRgb(surface, rgbColor(colorHex(mixRgb(surface, ink, 0.04 + (palette.contrast - 45) * 0.0012))), 0.5)
+    : mixRgb(surface, editorBackground, 0.5);
   const applicationMenu = mixRgb(surface, ink, 0.02 + contrast * 0.02);
-  const composerUtilityBackground = theme === "light"
-    ? mixRgb(surface, ink, 0.055 + contrast * 0.025)
-    : mixRgb(surface, ink, 0.02 + contrast * 0.02);
   const surfaceUnderRatio = theme === "light"
     ? 0.04 + (palette.contrast - 45) * 0.0012
     : 0.16 + (palette.contrast - 60) * 0.0015;
@@ -510,31 +538,49 @@ function resolveOctopusTheme(theme: "light" | "dark", palette: OctopusPalette, l
     theme === "light" ? white : ink,
     (theme === "light" ? 0.18 : 0.03) + contrast * (theme === "light" ? 0.008 : 0.03),
   ));
-  const skill = color(palette.skill, theme === "light" ? "#924FF7" : "#AD7BF9").toLowerCase();
   const diffAdded = color(palette.diffAdded, theme === "light" ? "#00A240" : "#40C977").toLowerCase();
   const diffRemoved = color(palette.diffRemoved, theme === "light" ? "#BA2623" : "#FA423E").toLowerCase();
   const values = theme === "light"
     ? octopusLightColors(surface, ink, accent, contrast)
     : octopusDarkColors(surface, ink, accent, contrast);
-  if (theme === "dark" && isDefaultDarkPalette(palette)) {
-    values.textForeground = "var(--gray-150)";
-  }
   const accentHex = colorHex(accent);
   const foregroundHex = colorHex(ink);
   const surfaceHex = colorHex(surface);
+  const defaultSurface = (theme === "dark" ? defaultAppearance.darkBackground : defaultAppearance.lightBackground).toLowerCase();
+  const defaultInk = (theme === "dark" ? defaultAppearance.darkForeground : defaultAppearance.lightForeground).toLowerCase();
+  const defaultContrast = theme === "dark" ? defaultAppearance.darkContrast : defaultAppearance.lightContrast;
+  const editedSurface = surfaceHex !== defaultSurface || foregroundHex !== defaultInk || palette.contrast !== defaultContrast;
+  const monochromeAccent = !linkedAccent && (
+    (theme === "dark" && accentHex === WHITE_HEX)
+    || (theme === "light" && accentHex === BLACK_HEX)
+  );
+  const useDefaultDarkForeground = theme === "dark"
+    && !editedSurface
+    && !palette.uiFont
+    && !palette.codeFont
+    && palette.translucentSidebar === defaultAppearance.darkTranslucentSidebar
+    && diffAdded === defaultAppearance.darkDiffAdded.toLowerCase()
+    && diffRemoved === defaultAppearance.darkDiffRemoved.toLowerCase()
+    && (linkedAccent || monochromeAccent);
+  const resolvedValues = useDefaultDarkForeground
+    ? { ...values, textForeground: "var(--gray-fixed-150)" }
+    : values;
+
   const variables: Record<string, string> = {
     "--color-background-composer-primary": "var(--color-background-primary-solid)",
     "--color-text-composer-primary": "var(--color-text-primary-solid)",
     "--color-background-user-message": "color-mix(in oklab, var(--color-text) 5%, transparent)",
     "--color-text-user-message": "var(--color-text)",
-    "--color-background-text-selection": "var(--color-background-info-soft)",
-    "--color-background-attribution-highlight": "var(--color-background-info-soft)",
+    "--color-background-text-selection": "var(--color-background-accent-active)",
+    "--color-background-attribution-highlight": "var(--color-background-accent-active)",
+    "--codex-base-accent": accentHex,
+    "--codex-base-contrast": String(palette.contrast),
+    "--codex-base-ink": foregroundHex,
+    "--codex-base-surface": surfaceHex,
     "--octopus-base-accent": accentHex,
     "--octopus-base-contrast": String(palette.contrast),
     "--octopus-base-ink": foregroundHex,
     "--octopus-base-surface": surfaceHex,
-    "--color-accent-blue": accentHex,
-    "--color-accent-purple": skill,
     "--color-background-accent": values.accentBackground,
     "--color-background-accent-active": values.accentBackgroundActive,
     "--color-background-accent-hover": values.accentBackgroundHover,
@@ -554,12 +600,15 @@ function resolveOctopusTheme(theme: "light" | "dark", palette: OctopusPalette, l
     "--color-background-control-opaque": values.controlBackgroundOpaque,
     "--color-background-callout-surface": values.elevatedPrimary,
     "--color-background-composer-action-bar": theme === "light" ? surfaceUnder : values.elevatedSecondaryOpaque,
-    "--color-token-composer-utility-background": rgbString(composerUtilityBackground),
+    "--color-token-composer-utility-background": "var(--color-background-composer-action-bar)",
     "--color-background-editor-opaque": rgbString(editorBackground),
     "--color-background-elevated-primary": values.elevatedPrimary,
     "--color-background-elevated-primary-opaque": values.elevatedPrimaryOpaque,
     "--color-background-elevated-secondary": values.elevatedSecondary,
     "--color-background-elevated-secondary-opaque": values.elevatedSecondaryOpaque,
+    "--color-background-elevated-tertiary-opaque": theme === "light"
+      ? colorHex(mixRgb(mixRgb(surface, white, 0.08 + contrast * 0.08), ink, 0.04 + contrast * 0.02))
+      : rgbString(editorBackground),
     "--color-background-mode-toggle-track": theme === "light" ? surfaceUnder : values.buttonTertiaryBackgroundHover,
     "--color-background-mode-toggle-selected": theme === "dark" ? values.controlBackgroundOpaque : `color-mix(in oklab, ${values.controlBackground} 90%, transparent)`,
     "--color-background-panel": panel,
@@ -575,23 +624,21 @@ function resolveOctopusTheme(theme: "light" | "dark", palette: OctopusPalette, l
     "--color-decoration-deleted": diffRemoved,
     "--color-editor-added": colorAlpha(rgbColor(diffAdded), theme === "light" ? 0.15 : 0.23),
     "--color-editor-deleted": colorAlpha(rgbColor(diffRemoved), theme === "light" ? 0.15 : 0.23),
-    "--color-icon-accent": values.iconAccent,
     "--color-icon-primary": values.iconPrimary,
     "--color-icon-secondary": values.iconSecondary,
     "--color-icon-tertiary": values.iconTertiary,
     "--color-simple-scrim": values.simpleScrim,
-    "--color-text-accent": values.textAccent,
-    "--color-text-on-accent": textOnAccent(accent),
     "--color-text-button-primary": values.textButtonPrimary,
     "--color-text-button-secondary": values.textButtonSecondary,
     "--color-text-button-tertiary": values.textButtonTertiary,
-    "--color-foreground-application-menu": theme === "dark" ? colorHex(mixRgb(applicationMenu, ink, 0.875)) : values.textForeground,
-    "--color-text-foreground": values.textForeground,
-    "--color-text-foreground-secondary": values.textForegroundSecondary,
-    "--color-text-foreground-tertiary": values.textForegroundTertiary,
-    "--color-text-mode-toggle-inactive": `color-mix(in oklab, ${values.textForeground} 80%, transparent)`,
+    "--color-foreground-application-menu": theme === "dark" ? colorHex(mixRgb(applicationMenu, ink, 0.875)) : resolvedValues.textForeground,
+    "--color-text-foreground": resolvedValues.textForeground,
+    "--color-text-foreground-secondary": resolvedValues.textForegroundSecondary,
+    "--color-text-foreground-tertiary": resolvedValues.textForegroundTertiary,
+    "--color-text-mode-toggle-inactive": `color-mix(in oklab, ${resolvedValues.textForeground} 80%, transparent)`,
     "--shadow-mode-toggle-selected": "var(--shadow-md)",
   };
+
   if (linkedAccent) {
     const profile = octopusAccentProfile[theme];
     Object.assign(variables, {
@@ -605,24 +652,75 @@ function resolveOctopusTheme(theme: "light" | "dark", palette: OctopusPalette, l
       "--color-background-accent-active": profile.soft,
       "--color-background-accent-hover": profile.soft,
       "--color-border-focus": profile.accent,
-      "--color-icon-accent": profile.text,
-      "--color-text-accent": profile.text,
+      "--user-message-background-luminance": String(userMessageBackgroundLuminance(profile.userMessageBackground, surfaceHex, 1)),
     });
+    if (editedSurface) {
+      Object.assign(variables, solveAccentTextAndRing({
+        accent: defaultAppearance[`${theme}Accent`].toLowerCase(),
+        surface: surfaceHex,
+        foreground: foregroundHex,
+      }, [surfaceHex]));
+    }
+  } else {
+    if (monochromeAccent) {
+      const solid = theme === "dark" ? WHITE_HEX : BLACK_HEX;
+      const hover = theme === "dark" ? "#e0e0e0" : "#1f1f1f";
+      const active = theme === "dark" ? "#c2c2c2" : "#3d3d3d";
+      const onSolid = theme === "dark" ? BLACK_HEX : WHITE_HEX;
+      const selection = theme === "dark"
+        ? "color-mix(in srgb, var(--color-text) 32%, transparent)"
+        : "#afafaf66";
+      const profile = octopusAccentProfile[theme];
+      Object.assign(variables, {
+        "--color-accent": solid,
+        "--color-text-on-accent": onSolid,
+        "--color-background-accent-solid": solid,
+        "--color-background-accent-solid-hover": hover,
+        "--color-background-accent-solid-active": active,
+        "--color-text-accent-solid": onSolid,
+        ...PERSONALIZED_ACCENT_CONTROL_BINDINGS,
+        "--color-text-accent": solid,
+        "--color-text-accent-hover": hover,
+        "--color-text-accent-soft": solid,
+        "--color-ring-accent": solid,
+        "--color-border-focus": solid,
+        "--color-border-accent-outline": solid,
+        "--color-background-accent-soft-alpha": `color-mix(in srgb, ${solid} 10%, transparent)`,
+        "--color-background-accent-soft-alpha-hover": `color-mix(in srgb, ${solid} 17%, transparent)`,
+        "--color-background-accent-soft-alpha-active": `color-mix(in srgb, ${solid} 25%, transparent)`,
+        "--color-background-composer-primary": solid,
+        "--color-text-composer-primary": onSolid,
+        "--color-background-user-message": theme === "dark" ? profile.userMessageBackground : BLACK_HEX,
+        "--color-text-user-message": WHITE_HEX,
+        "--color-background-text-selection": selection,
+        "--color-background-attribution-highlight": selection,
+        "--user-message-background-luminance": String(userMessageBackgroundLuminance(
+          theme === "dark" ? profile.userMessageBackground : BLACK_HEX,
+          surfaceHex,
+          1,
+        )),
+      });
+    } else {
+      Object.assign(
+        variables,
+        solvePersonalizedAccentTokens({
+          accent: accentHex,
+          surface: surfaceHex,
+          foreground: foregroundHex,
+        }),
+        {
+          "--user-message-background-luminance": String(userMessageBackgroundLuminance(foregroundHex, surfaceHex, 0.05)),
+        },
+      );
+    }
+    if (presetSeed?.palette) {
+      Object.assign(
+        variables,
+        solveCustomSurfaceSemanticText(theme, surfaceHex, foregroundHex, presetSeed.palette),
+      );
+    }
   }
-  return { ...values, surfaceUnder, editorBackground, variables };
-}
-
-function isDefaultDarkPalette(palette: OctopusPalette): boolean {
-  return palette.accent.toLowerCase() === defaultAppearance.darkAccent.toLowerCase()
-    && palette.background.toLowerCase() === defaultAppearance.darkBackground.toLowerCase()
-    && palette.foreground.toLowerCase() === defaultAppearance.darkForeground.toLowerCase()
-    && palette.contrast === defaultAppearance.darkContrast
-    && palette.uiFont === defaultAppearance.darkUiFont
-    && palette.codeFont === defaultAppearance.darkCodeFont
-    && palette.translucentSidebar === defaultAppearance.darkTranslucentSidebar
-    && palette.diffAdded.toLowerCase() === defaultAppearance.darkDiffAdded.toLowerCase()
-    && palette.diffRemoved.toLowerCase() === defaultAppearance.darkDiffRemoved.toLowerCase()
-    && palette.skill.toLowerCase() === defaultAppearance.darkSkill.toLowerCase();
+  return { ...resolvedValues, panel, sidebarSurface, surfaceUnder, editorBackground, variables };
 }
 
 function clearDerivedOctopusVariables(root: HTMLElement): void {
@@ -761,21 +859,6 @@ function colorAlpha(value: RgbColor, alpha: number): string {
   return `rgba(${value.red}, ${value.green}, ${value.blue}, ${formatted})`;
 }
 
-function textOnAccent(accent: RgbColor): string {
-  const white = { red: 255, green: 255, blue: 255 };
-  const black = { red: 0, green: 0, blue: 0 };
-  if (accent.blue > accent.red && accent.blue > accent.green) {
-    const chroma = accent.blue - Math.min(accent.red, accent.green);
-    const hue = ((accent.red - accent.green) / chroma + 4) * 60;
-    const saturation = chroma / accent.blue;
-    if ((saturation >= 0.8 && hue >= 205 && hue <= 212)
-      || (saturation >= 0.6 && hue >= 218 && hue <= 233 && relativeLuminance(accent) <= 0.21)) {
-      return rgbString(white);
-    }
-  }
-  return rgbString(relativeLuminance(accent) > 0.179 ? black : white);
-}
-
 function relativeLuminance(color: RgbColor): number {
   return linearChannel(color.red) * 0.2126
     + linearChannel(color.green) * 0.7152
@@ -787,6 +870,266 @@ function linearChannel(channel: number): number {
   return normalized <= 0.04045
     ? normalized / 12.92
     : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+const BLACK_HEX = "#000000";
+const WHITE_HEX = "#ffffff";
+const BLACK_RGB: RgbColor = { red: 0, green: 0, blue: 0 };
+const WHITE_RGB: RgbColor = { red: 255, green: 255, blue: 255 };
+const DARK_ACCENT_MIX_STEPS = [0.25, 0.4, 0.55, 0.75, 1];
+const LIGHT_ACCENT_MIX_STEPS = [0.5, 0.65, 0.75, 0.9, 1];
+const PALETTE_SCALE_STEPS = [25, 50, 75, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950, 1000] as const;
+const SEMANTIC_TEXT_BASE_STEPS: Record<"info" | "danger" | "success" | "warning" | "caution" | "discovery", readonly [number, number]> = {
+  info: [500, 200],
+  danger: [700, 500],
+  success: [700, 400],
+  warning: [700, 500],
+  caution: [700, 500],
+  discovery: [700, 500],
+};
+const SEMANTIC_PALETTE_ENTRIES: ReadonlyArray<readonly [keyof typeof SEMANTIC_TEXT_BASE_STEPS, keyof SemanticPalette]> = [
+  ["info", "blue"],
+  ["danger", "red"],
+  ["success", "green"],
+  ["warning", "orange"],
+  ["caution", "yellow"],
+  ["discovery", "purple"],
+];
+const CUSTOM_SURFACE_THRESHOLD: Record<"light" | "dark", RgbColor> = {
+  light: { red: 239, green: 241, blue: 199 },
+  dark: { red: 52, green: 53, blue: 65 },
+};
+
+const PERSONALIZED_ACCENT_CONTROL_BINDINGS: Record<string, string> = {
+  "--color-border-accent-outline-hover": "var(--color-text-accent)",
+  "--color-text-accent-ghost": "var(--color-text-accent)",
+  "--color-text-accent-ghost-hover": "var(--color-text-accent-hover)",
+  "--color-text-accent-outline": "var(--color-text-accent)",
+  "--color-text-accent-outline-hover": "var(--color-text-accent-hover)",
+  "--color-background-accent-ghost-hover": "var(--color-background-accent-soft-alpha-hover)",
+  "--color-background-accent-ghost-active": "var(--color-background-accent-soft-alpha-active)",
+  "--color-background-accent-outline-hover": "var(--color-background-accent-soft-alpha-hover)",
+  "--color-background-accent-outline-active": "var(--color-background-accent-soft-alpha-active)",
+  "--color-background-accent-soft-alt": "var(--color-background-accent-soft-alpha)",
+  "--color-border-accent-soft-alt": "var(--color-border-accent-outline)",
+  "--color-text-accent-soft-alt": "var(--color-text-accent-soft)",
+  "--checkbox-checked-background-color": "var(--color-background-accent-solid)",
+  "--checkbox-checked-mark-color": "var(--color-text-accent-solid)",
+  "--switch-track-color-checked": "var(--color-background-accent-solid)",
+  "--switch-thumb-color-checked": "var(--color-text-accent-solid)",
+  "--switch-track-color-checked-disabled": "var(--switch-track-color-checked)",
+  "--color-button-accent": "var(--color-background-accent-solid)",
+  "--color-button-accent-hover": "var(--color-background-accent-solid-hover)",
+  "--color-button-accent-active": "var(--color-background-accent-solid-active)",
+  "--color-token-on-accent": "var(--color-text-accent-solid)",
+};
+
+function apcaLuminance(value: RgbColor): number {
+  const y = (value.red / 255) ** 2.4 * 0.2126729
+    + (value.green / 255) ** 2.4 * 0.7151522
+    + (value.blue / 255) ** 2.4 * 0.072175;
+  return y >= 0.022 ? y : y + (0.022 - y) ** 1.414;
+}
+
+function apcaContrast(text: RgbColor, background: RgbColor): number {
+  const txtY = apcaLuminance(text);
+  const bgY = apcaLuminance(background);
+  if (Math.abs(bgY - txtY) < 5e-4) return 0;
+  const sapc = bgY > txtY
+    ? (bgY ** 0.56 - txtY ** 0.57) * 1.14
+    : (bgY ** 0.65 - txtY ** 0.62) * 1.14;
+  if (Math.abs(sapc) < 0.1) return 0;
+  return (sapc > 0 ? sapc - 0.027 : sapc + 0.027) * 100;
+}
+
+function mixRgbLinear(from: RgbColor, to: RgbColor, ratio: number): RgbColor {
+  return {
+    red: from.red + (to.red - from.red) * ratio,
+    green: from.green + (to.green - from.green) * ratio,
+    blue: from.blue + (to.blue - from.blue) * ratio,
+  };
+}
+
+function roundHex(value: RgbColor): string {
+  return `#${[value.red, value.green, value.blue].map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function mixHexLinear(from: string, to: string, ratio: number): string {
+  return roundHex(mixRgbLinear(rgbColor(from), rgbColor(to), ratio));
+}
+
+function wcagContrast(foreground: string, background: string | RgbColor): number {
+  const lumA = relativeLuminance(rgbColor(foreground)) + 0.05;
+  const lumB = relativeLuminance(typeof background === "string" ? rgbColor(background) : background) + 0.05;
+  return Math.max(lumA, lumB) / Math.min(lumA, lumB);
+}
+
+function apcaAbs(foreground: string, background: string | RgbColor): number {
+  return Math.abs(apcaContrast(rgbColor(foreground), typeof background === "string" ? rgbColor(background) : background));
+}
+
+function pickSolidText(background: string): string {
+  return apcaAbs(BLACK_HEX, background) > apcaAbs(WHITE_HEX, background) ? BLACK_HEX : WHITE_HEX;
+}
+
+function ensureOnAccentText(background: string): string {
+  const preferred = pickSolidText(background);
+  return wcagContrast(preferred, background) >= 4.5 ? preferred : preferred === BLACK_HEX ? WHITE_HEX : BLACK_HEX;
+}
+
+function solveSolidAccent(accentHex: string): Record<string, string> {
+  let onSolid = pickSolidText(accentHex);
+  const shiftToward = relativeLuminance(rgbColor(onSolid)) <= relativeLuminance(rgbColor(accentHex)) ? WHITE_HEX : BLACK_HEX;
+  let solid = accentHex;
+  for (let step = 1; wcagContrast(onSolid, solid) < 4.5 && step <= 100; step++) {
+    solid = mixHexLinear(accentHex, shiftToward, step / 100);
+  }
+  const nearTarget = apcaAbs(solid, shiftToward) < 3;
+  if (nearTarget && wcagContrast(onSolid, mixHexLinear(solid, onSolid, 0.24)) < 4.5) {
+    onSolid = ensureOnAccentText(solid);
+  }
+  const stateTarget = nearTarget ? onSolid : shiftToward;
+  const previewHover = mixHexLinear(accentHex, stateTarget, 0.12);
+  const baseForStates = previewHover !== solid && wcagContrast(onSolid, previewHover) >= 4.5 ? accentHex : solid;
+  return {
+    "--color-background-accent-solid": solid,
+    "--color-background-accent-solid-hover": mixHexLinear(baseForStates, stateTarget, 0.12),
+    "--color-background-accent-solid-active": mixHexLinear(baseForStates, stateTarget, 0.24),
+    "--color-text-accent-solid": onSolid,
+  };
+}
+
+function solveAccentTextAndRing(
+  { accent, surface, foreground }: { accent: string; surface: string; foreground: string },
+  backgrounds: ReadonlyArray<string | RgbColor>,
+): Record<string, string> {
+  const minWcag = (candidate: string) => Math.min(...backgrounds.map((bg) => wcagContrast(candidate, bg)));
+  const minApca = (candidate: string) => Math.min(...backgrounds.map((bg) => apcaAbs(candidate, bg)));
+  const darkSteps = DARK_ACCENT_MIX_STEPS.map((ratio) => mixHexLinear(accent, BLACK_HEX, ratio));
+  const lightSteps = LIGHT_ACCENT_MIX_STEPS.map((ratio) => mixHexLinear(accent, WHITE_HEX, ratio));
+  const ordered = [
+    accent,
+    ...(minApca(BLACK_HEX) > minApca(WHITE_HEX) ? [...darkSteps, ...lightSteps] : [...lightSteps, ...darkSteps]),
+    foreground,
+  ];
+  const candidates = ordered.filter((candidate) => minWcag(candidate) >= 4.5);
+  const textAccent = candidates.find((candidate) => minApca(candidate) >= 60)
+    ?? (candidates.length > 0
+      ? candidates.reduce((best, candidate) => (minApca(candidate) > minApca(best) ? candidate : best))
+      : foreground);
+  const textAccentIndex = candidates.indexOf(textAccent);
+  const textAccentHover = (textAccentIndex >= 0
+    ? candidates.slice(textAccentIndex + 1).find((candidate) => candidate !== textAccent)
+    : undefined)
+    ?? candidates.find((candidate) => candidate !== textAccent)
+    ?? textAccent;
+  return {
+    "--color-text-accent": textAccent,
+    "--color-text-accent-hover": textAccentHover,
+    "--color-ring-accent": wcagContrast(accent, surface) >= 3 ? accent : textAccent,
+  };
+}
+
+function solvePersonalizedAccentTokens(
+  params: { accent: string; surface: string; foreground: string },
+): Record<string, string> {
+  const { accent, surface } = params;
+  const surfaceRgb = rgbColor(surface);
+  const blendOnSurface = (hex: string, alpha: number) => mixRgbLinear(surfaceRgb, rgbColor(hex), alpha);
+  const softBackgrounds = (hex: string): Array<string | RgbColor> => [
+    surface,
+    ...[0.1, 0.17, 0.25].map((alpha) => blendOnSurface(hex, alpha)),
+  ];
+  const tint = [accent, BLACK_HEX].find((candidate) => (
+    wcagContrast(candidate, surface) >= 1.1
+    && [BLACK_HEX, WHITE_HEX].some((fg) => softBackgrounds(candidate).every((bg) => wcagContrast(fg, bg) >= 4.5))
+  )) ?? WHITE_HEX;
+  const textTokens = solveAccentTextAndRing(params, softBackgrounds(tint));
+  const textAccent = textTokens["--color-text-accent"];
+  const outlineBorder = wcagContrast(surface, blendOnSurface(accent, 0.45)) >= 3
+    ? `color-mix(in srgb, ${accent} 45%, transparent)`
+    : textAccent;
+  return {
+    "--color-accent": accent,
+    "--color-text-on-accent": ensureOnAccentText(accent),
+    ...solveSolidAccent(accent),
+    ...PERSONALIZED_ACCENT_CONTROL_BINDINGS,
+    ...textTokens,
+    "--color-text-accent-soft": textAccent,
+    "--color-border-accent-outline": outlineBorder,
+    "--color-background-accent-soft-alpha": `color-mix(in srgb, ${tint} 10%, transparent)`,
+    "--color-background-accent-soft-alpha-hover": `color-mix(in srgb, ${tint} 17%, transparent)`,
+    "--color-background-accent-soft-alpha-active": `color-mix(in srgb, ${tint} 25%, transparent)`,
+  };
+}
+
+function paletteShadeRgb(base: RgbColor, step: number): RgbColor {
+  return step < 400
+    ? mixRgbLinear(base, WHITE_RGB, (400 - step) / 400)
+    : mixRgbLinear(base, BLACK_RGB, (step - 400) / 625);
+}
+
+function solveCustomSurfaceSemanticText(
+  appearance: "light" | "dark",
+  surfaceHex: string,
+  foregroundHex: string,
+  palette: SemanticPalette,
+): Record<string, string> {
+  const surfaceRgb = rgbColor(surfaceHex);
+  const threshold = CUSTOM_SURFACE_THRESHOLD[appearance];
+  const withinDefaultSurface = appearance === "light"
+    ? surfaceRgb.red >= threshold.red && surfaceRgb.green >= threshold.green && surfaceRgb.blue >= threshold.blue
+    : surfaceRgb.red <= threshold.red && surfaceRgb.green <= threshold.green && surfaceRgb.blue <= threshold.blue;
+  if (withinDefaultSurface) return {};
+
+  const inkRgb = rgbColor(foregroundHex);
+  const dark = appearance === "dark";
+  const result: Record<string, string> = {};
+  for (const [semantic, hue] of SEMANTIC_PALETTE_ENTRIES) {
+    const baseHex = palette[hue];
+    if (!baseHex) continue;
+    const baseRgb = rgbColor(baseHex);
+    const startStep = SEMANTIC_TEXT_BASE_STEPS[semantic][dark ? 1 : 0];
+    const backgrounds = [surfaceRgb, mixRgbLinear(surfaceRgb, baseRgb, 0.25)];
+    const steps = dark
+      ? PALETTE_SCALE_STEPS.filter((step) => step <= startStep).reverse()
+      : PALETTE_SCALE_STEPS.filter((step) => step >= startStep);
+    let chosen: number | "ink" | "black" | "white" = startStep;
+    let bestScore = -1;
+    for (const candidate of [...steps, "ink" as const, "black" as const, "white" as const]) {
+      const candidateRgb = typeof candidate === "number"
+        ? paletteShadeRgb(baseRgb, candidate)
+        : candidate === "ink" ? inkRgb : candidate === "black" ? BLACK_RGB : WHITE_RGB;
+      const score = Math.min(...backgrounds.map((bg) => Math.abs(apcaContrast(candidateRgb, bg))));
+      if (score >= 60) {
+        chosen = candidate;
+        break;
+      }
+      if (score > bestScore) {
+        chosen = candidate;
+        bestScore = score;
+      }
+    }
+    result[`--color-text-${semantic}`] = typeof chosen === "number"
+      ? `var(--${hue}-${chosen})`
+      : chosen === "ink" ? roundHex(inkRgb) : `var(--${chosen})`;
+  }
+  return result;
+}
+
+function userMessageBackgroundLuminance(background: string, surfaceHex: string, defaultAlpha: number): number {
+  const rgbaMatch = /^rgb\((\d+) (\d+) (\d+) \/ (\d+)%\)$/.exec(background.trim());
+  const source = rgbaMatch
+    ? { red: Number(rgbaMatch[1]), green: Number(rgbaMatch[2]), blue: Number(rgbaMatch[3]) }
+    : rgbColor(background);
+  const alpha = Math.round((rgbaMatch ? Number(rgbaMatch[4]) / 100 : defaultAlpha) * 255) / 255;
+  if (alpha >= 1) return relativeLuminance(source);
+  const base = rgbColor(surfaceHex);
+  return relativeLuminance({
+    red: Math.round(base.red + alpha * (source.red - base.red)),
+    green: Math.round(base.green + alpha * (source.green - base.green)),
+    blue: Math.round(base.blue + alpha * (source.blue - base.blue)),
+  });
 }
 
 export function getAppearance(): AppearanceSettings {

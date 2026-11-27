@@ -1,6 +1,6 @@
 "use strict";
 
-const TITLEBAR_HEIGHT = 44;
+const TITLEBAR_HEIGHT = 48;
 const NATIVE_CONTROL_HEIGHT = 14;
 const NATIVE_CONTROL_INSET = 76;
 
@@ -14,4 +14,10 @@ function nativeControlInset(zoomFactor) {
   return NATIVE_CONTROL_INSET / zoomFactor;
 }
 
-module.exports = { nativeTrafficLightPosition, nativeControlInset };
+module.exports = {
+  TITLEBAR_HEIGHT,
+  NATIVE_CONTROL_HEIGHT,
+  NATIVE_CONTROL_INSET,
+  nativeTrafficLightPosition,
+  nativeControlInset,
+};

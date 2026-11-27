@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { animate } from "motion/react";
+import { useShouldReduceMotion } from "../../appearance";
 import type { WorkerEnvironmentProjection, WorkerEnvironmentSurfaceProjection } from "../../data/topology";
 import { OcIconButton } from "../../design-system/components";
 import { Glyph } from "../IconGlyphs";
@@ -63,6 +65,9 @@ export function SiteTestSurface({ environment, surface }: { environment: WorkerE
   const [resizing, setResizing] = useState(false);
   const [manualControlEnabled, setManualControlEnabled] = useState(false);
   const [manualControlWarningOpen, setManualControlWarningOpen] = useState(false);
+  const reduceMotion = useShouldReduceMotion();
+  const rotateButtonRef = useRef<HTMLButtonElement>(null);
+  const rotateAnimationRef = useRef<{ stop: () => void } | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const resizeDragRef = useRef<SiteTestResizeDrag | null>(null);
@@ -81,6 +86,7 @@ export function SiteTestSurface({ environment, surface }: { environment: WorkerE
 
   useEffect(() => () => {
     if (resizeFrameRef.current != null) window.cancelAnimationFrame(resizeFrameRef.current);
+    rotateAnimationRef.current?.stop();
   }, []);
 
   useEffect(() => {
@@ -233,12 +239,32 @@ export function SiteTestSurface({ environment, surface }: { environment: WorkerE
           />
         </div>
         <OcIconButton
+          buttonRef={rotateButtonRef}
           glyph="rotateDevice"
           label="Rotate viewport"
           onClick={(event) => {
             setViewportWidth(viewportHeight);
             setViewportHeight(viewportWidth);
             setPresetId("responsive");
+            if (!reduceMotion) {
+              const svg = rotateButtonRef.current?.querySelector("svg");
+              if (svg) {
+                rotateAnimationRef.current?.stop();
+                svg.style.transformOrigin = "50% 50%";
+                rotateAnimationRef.current = animate(
+                  svg,
+                  {
+                    rotate: [0, 44, 108, 158, 176, 180],
+                    scale: [1, 0.96, 0.98, 1.06, 1.02, 1],
+                  },
+                  {
+                    duration: 0.36,
+                    ease: "easeOut",
+                    times: [0, 0.22, 0.42, 0.64, 0.84, 1],
+                  },
+                );
+              }
+            }
             event.currentTarget.blur();
           }}
           size="sm"

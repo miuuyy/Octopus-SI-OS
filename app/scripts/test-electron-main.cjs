@@ -46,6 +46,7 @@ function fakeElectron(world) {
       this.destroyed = false;
       this.visible = false;
       this.minimized = false;
+      this.fullScreen = false;
       this.bounds = { x: options.x ?? 0, y: options.y ?? 0, width: options.width ?? 800, height: options.height ?? 600 };
       windows.push(this);
       world.events.push(["window"]);
@@ -59,8 +60,8 @@ function fakeElectron(world) {
     isVisible() { return this.visible; }
     isMinimized() { return this.minimized; }
     isMaximized() { return false; }
-    isFullScreen() { return false; }
-    setFullScreen(value) { this.calls.push(["setFullScreen", value]); }
+    isFullScreen() { return this.fullScreen; }
+    setFullScreen(value) { this.fullScreen = Boolean(value); this.calls.push(["setFullScreen", value]); }
     isDestroyed() { return this.destroyed; }
     getBounds() { return { ...this.bounds }; }
     getNormalBounds() { return { ...this.bounds }; }
@@ -154,7 +155,7 @@ function fakeElectron(world) {
         getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1440, height: 900 }, scaleFactor: world.scaleFactor }],
         getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 }, scaleFactor: world.scaleFactor }),
         getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 }, scaleFactor: world.scaleFactor }),
-        getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+        getCursorScreenPoint: () => world.cursorPoint ?? ({ x: 0, y: 0 }),
       },
       session: { defaultSession: { setPermissionRequestHandler: () => {}, setPermissionCheckHandler: () => {} } },
       shell: { openExternal: async (url) => { world.events.push(["external", url]); }, openPath: async () => "", showItemInFolder: () => {} },
@@ -532,9 +533,12 @@ test("the primary window restores its saved bounds and persists them on close, w
   const [primary] = main.windows();
   assert.deepEqual([primary.options.x, primary.options.y, primary.options.width, primary.options.height], [40, 50, 900, 700]);
   assert.equal(primary.options.backgroundColor, "#00000000");
-  assert.equal(primary.options.transparent, true);
-  assert.equal(primary.options.vibrancy, "under-window");
+  assert.equal(primary.options.titleBarStyle, "hidden");
+  assert.equal(primary.options.transparent, false);
+  assert.equal(primary.options.acceptFirstMouse, true);
+  assert.equal(primary.options.vibrancy, "menu");
   assert.equal(primary.options.visualEffectState, "active");
+  assert.deepEqual(primary.options.trafficLightPosition, require("../electron/windowChrome.cjs").nativeTrafficLightPosition(1));
   assert.equal(primary.options.webPreferences.additionalArguments, undefined);
   assert.deepEqual(primary.loads, [["file", path.join(appRoot, "dist/index.html"), undefined]]);
   const token = await main.unlock(primary);
@@ -558,6 +562,55 @@ test("the primary window restores its saved bounds and persists them on close, w
   assert.equal(linux.world.menu, undefined);
 });
 
+test("macOS fullscreen transitions keep window controls consistent, clear live-resize state, guard chrome IPC, and reset on reload", async () => {
+  const main = await launchMain();
+  const [primary] = main.windows();
+  primary.show();
+  primary.focus();
+  primary.calls.length = 0;
+
+  // Subframe sender is ignored for chrome visibility and pointer watch
+  const subframeHandler = main.electron.listeners.get("octopus:window-chrome-visibility");
+  subframeHandler({ sender: primary.webContents, senderFrame: { url: "https://subframe.invalid" } }, false);
+  assert.deepEqual(primary.calls.filter(([name]) => name === "setWindowButtonVisibility"), []);
+
+  // Main-frame chrome hide hides native buttons in windowed mode
+  main.sendSync("octopus:window-chrome-visibility", primary, false);
+  assert.deepEqual(primary.calls.filter(([name]) => name === "setWindowButtonVisibility").at(-1), ["setWindowButtonVisibility", false]);
+
+  // Stuck live-resize clears on enter-full-screen and restores native buttons
+  primary.emit("will-resize");
+  primary.fullScreen = true;
+  primary.emit("enter-full-screen");
+  const enteredState = primary.webContents.sentOn("octopus:window-state-changed").at(-1)?.[0];
+  assert.equal(enteredState.fullScreen, true);
+  assert.equal(enteredState.resizing, false);
+  assert.deepEqual(primary.calls.filter(([name]) => name === "setWindowButtonVisibility").at(-1), ["setWindowButtonVisibility", true]);
+
+  // Fullscreen menu-bar top overshoot stays insideWindow
+  main.world.cursorPoint = { x: primary.bounds.x + 120, y: primary.bounds.y - 20 };
+  main.sendSync("octopus:window-pointer-watch", primary, true);
+  const pointerSample = primary.webContents.sentOn("octopus:window-pointer-update").at(-1)?.[0];
+  assert.ok(pointerSample, "pointer watch emits edge sample on fullscreen menu-bar overshoot");
+  assert.equal(pointerSample.insideWindow, true);
+  assert.equal(pointerSample.resizing, false);
+
+  // Leaving fullscreen re-applies hidden chrome visibility and zoomed traffic light state
+  primary.fullScreen = false;
+  primary.emit("leave-full-screen");
+  assert.equal(primary.webContents.sentOn("octopus:window-state-changed").at(-1)?.[0].fullScreen, false);
+  assert.deepEqual(primary.calls.filter(([name]) => name === "setWindowButtonVisibility").at(-1), ["setWindowButtonVisibility", false]);
+
+  // Reload/navigation resets chrome visibility (restoring buttons) and stops pointer polling
+  const updatesBeforeReload = primary.webContents.sentOn("octopus:window-pointer-update").length;
+  primary.webContents.emit("did-start-navigation", {}, "file:///index.html", false, true);
+  assert.deepEqual(primary.calls.filter(([name]) => name === "setWindowButtonVisibility").at(-1), ["setWindowButtonVisibility", true]);
+  main.world.cursorPoint = { x: primary.bounds.x + 20, y: primary.bounds.y + 10 };
+  await settle(70);
+  assert.equal(primary.webContents.sentOn("octopus:window-pointer-update").length, updatesBeforeReload);
+  primary.close();
+});
+
 test("window appearance switches the macOS backdrop between translucent vibrancy and an opaque surface", async () => {
   const main = await launchMain();
   const [win] = main.windows();
@@ -569,7 +622,7 @@ test("window appearance switches the macOS backdrop between translucent vibrancy
   };
   backdrop();
   main.sendSync("octopus:window-appearance", win, { theme: "dark", translucent: true, preference: "dark" });
-  assert.deepEqual(backdrop(), [[["setBackgroundColor", "#00000000"], ["setVibrancy", "under-window"]], false]);
+  assert.deepEqual(backdrop(), [[["setBackgroundColor", "#00000000"], ["setVibrancy", "menu"]], false]);
   assert.equal(main.electron.module.nativeTheme.themeSource, "dark");
   const appearanceFile = path.join(main.world.userData, "window-appearance.json");
   assert.deepEqual(JSON.parse(fs.readFileSync(appearanceFile, "utf8")), { preference: "dark" });

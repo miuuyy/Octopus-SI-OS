@@ -3634,12 +3634,12 @@
   border: 0;
   border-top: 1px solid var(--line-light);
   background: transparent;
-  color: var(--accent);
+  color: var(--color-text-accent, var(--blue));
   font: inherit;
 }
 
 .eventlog-load-more:hover {
-  background: var(--surface-hover);
+  background: var(--color-token-list-hover-background);
 }
 
 .eventlog-row {
@@ -6662,17 +6662,6 @@ button.detail-row.is-clickable:hover {
 
 /* ------------------------------------------------------------------------- */
 /* ------------------------------------------------------------------------- */
-
-/* Squircle corners where the engine supports it — the softness plain radii can't reach. */
-@supports (corner-shape: superellipse(1.5)) {
-  .env-card,
-  .chat-composer,
-  .settings-dialog,
-  .metric-card,
-  .settings-avatar {
-    corner-shape: superellipse(1.5);
-  }
-}
 
 /* Elevated surfaces take the layered ladder instead of one flat blur. */
 .metric-card {

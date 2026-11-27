@@ -156,7 +156,8 @@ test("visible conversation coordinates include only exposed task or Home text pa
   const declarations = owner.body.statements.filter(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(d => ["homeChatIdentityReady", "visibleChatRunIds"].includes(d.name.getText(parsed))));
   assert.equal(declarations.length, 2);
   const visible = load(relative, {}, `export function visible(deps: any) {
-    const {settingsOpen, primaryPaneBlocked, activeSurface, primaryRunIdentityReady, primarySurfaceTarget, homeViewMode, homeRunId, homeChatWorkspace, secondaryPaneOpen, secondarySurface, secondaryRunIdentityReady, secondaryChatWorkspace, secondaryHomeViewMode} = deps;
+    const {settingsOpen, inboxOpen = false, primaryPaneBlocked, activeSurface, primaryRunIdentityReady, primarySurfaceTarget, homeViewMode, homeRunId, homeChatWorkspace, secondaryPaneOpen, secondarySurface, secondaryRunIdentityReady, secondaryChatWorkspace, secondaryHomeViewMode} = deps;
+    const systemOverlayOpen = Boolean(settingsOpen || inboxOpen);
     const useMemo = (read: any) => read(); ${declarations.map(node => node.getText(parsed)).join("\n")} return visibleChatRunIds;
   }`).visible;
   const base = {settingsOpen:false, primaryPaneBlocked:false, activeSurface:{rendererKind:"builtin.chat"}, primaryRunIdentityReady:true, primarySurfaceTarget:{runId:"task-primary"}, homeViewMode:"voice", homeRunId:"home-exact", homeChatWorkspace:{activeRunId:"home-exact", activeRun:{runId:"home-exact", clientSurfaceRole:"home"}}, secondaryPaneOpen:false, secondarySurface:{rendererKind:"builtin.chat"}, secondaryRunIdentityReady:true, secondaryChatWorkspace:{activeRunId:"task-secondary"}, secondaryHomeViewMode:"voice"};
@@ -721,7 +722,7 @@ test("Inbox selection stays on its detail surface and explicit open follows exac
   const activate = owner.body.statements.find((node) => ts.isExpressionStatement(node) && contains(node, "CLIENT_NOTIFICATION_ACTIVATE_EVENT"));
   assert.ok(open && activate, "Activity callback owners must exist");
   const create = load(relative, {}, `export function create(deps: any) {
-    const { useCallback, useEffect, markActivity, appToast, selectSurface, setActivitySelection, setActivitySelectionGroup, setQuery, setSecondaryPaneOpen, openSecondaryChatTab, openSecondaryTab, secondaryPaneTab, homeChatWorkspace, setSecondaryHomeViewMode, setSecondaryMovementSelection, window, CustomEvent, CLIENT_NOTIFICATION_ACTIVATE_EVENT } = deps;
+    const { useCallback, useEffect, markActivity, appToast, selectSurface, setSettingsOpen, setInboxOpen, openVoice, openChat, setHomeViewMode, setActivitySelection, setActivitySelectionGroup, setQuery, setSecondaryPaneOpen, openSecondaryChatTab, openSecondaryTab, secondaryPaneTab, homeChatWorkspace, setSecondaryHomeViewMode, setSecondaryMovementSelection, window, CustomEvent, CLIENT_NOTIFICATION_ACTIVATE_EVENT } = deps;
     ${select.getText(parsed)}\n${open.getText(parsed)}\n${activate.getText(parsed)}\nreturn { openActivityMark, selectInboxItem };
   }`).create;
   const calls = [], items = activity.decodeMarkActivity(projected), window = storageWindow();
@@ -731,7 +732,13 @@ test("Inbox selection stays on its detail surface and explicit open follows exac
     useCallback: (fn) => fn, useEffect: (fn) => { cleanup = fn(); }, window, CustomEvent, CLIENT_NOTIFICATION_ACTIVATE_EVENT: "activate",
     markActivity: { projectedItems: items, read: new Set(), markRead: (ids) => { calls.push(["read", ids]); return readResult; } },
     appToast: { warning: (message) => calls.push(["warning", message]) },
-    selectSurface: (id) => calls.push(["surface", id]), setActivitySelection: (value) => calls.push(["selected", value]), setActivitySelectionGroup: () => {},
+    selectSurface: (id) => calls.push(["surface", id]),
+    setSettingsOpen: (value) => calls.push(["settings", value]),
+    setInboxOpen: (value) => calls.push(["inbox", value]),
+    openVoice: () => calls.push(["home", "voice"]),
+    openChat: (id) => calls.push(["chat", id]),
+    setHomeViewMode: (mode) => calls.push(["home-mode", mode]),
+    setActivitySelection: (value) => calls.push(["selected", value]), setActivitySelectionGroup: () => {},
     openSecondaryChatTab: (id) => calls.push(["chat", id]),
     homeChatWorkspace: {selectRun: (id) => calls.push(["home", id])},
     setSecondaryHomeViewMode: (mode) => calls.push(["home-mode", mode]),
@@ -745,31 +752,34 @@ test("Inbox selection stays on its detail surface and explicit open follows exac
     handlers.selectInboxItem(items[0]);
     assert.deepEqual(calls.map(([kind]) => kind), ["selected", "read"]);
     calls.length = 0;
-    handler(items[0]); assert.deepEqual(calls.map(([kind]) => kind), ["movement-filter", "side-tab", "selected", "read"]);
-    assert.deepEqual(calls[1], ["side-tab", {workspaceKey: "dashboard", surfaceId: "event-log", runId: ""}]);
-    assert.deepEqual(calls[3], ["read", [items[0].id]]);
-    assert.notEqual(calls[0][1], items[0]); assert.equal(calls[0][1].sequence, 2);
+    handler(items[0]); assert.deepEqual(calls.map(([kind]) => kind), ["inbox", "movement-filter", "side-tab", "selected", "read"]);
+    assert.deepEqual(calls[0], ["inbox", false]);
+    assert.deepEqual(calls[2], ["side-tab", {workspaceKey: "dashboard", surfaceId: "event-log", runId: ""}]);
+    assert.deepEqual(calls[4], ["read", [items[0].id]]);
+    assert.notEqual(calls[1][1], items[0]); assert.equal(calls[1][1].sequence, 2);
     calls.length = 0; readResult = false; handler(items[0]); assert.equal(calls.at(-1)[0], "warning");
     calls.length = 0; handler({ ...items[0], id: "absent" }); assert.deepEqual(calls.map(([kind]) => kind), ["warning"]);
     items.push({ ...items[0], id: "unaddressable", sequence: null });
     calls.length = 0; handler(items.at(-1)); assert.deepEqual(calls.map(([kind]) => kind), ["warning"]);
     calls.length = 0; readResult = true;
     window.dispatchEvent(new CustomEvent("activate", { detail: { kind: "mark", movementId: items[0].id } }));
-    assert.deepEqual(calls[0], ["surface", "inbox"]); assert.ok(!calls.some(([kind]) => kind === "pane")); assert.deepEqual(calls.at(-1), ["read", [items[0].id]]);
+    assert.deepEqual(calls[0], ["settings", false]); assert.deepEqual(calls[1], ["inbox", true]); assert.ok(!calls.some(([kind]) => kind === "pane")); assert.deepEqual(calls.at(-1), ["read", [items[0].id]]);
     calls.length = 0; window.dispatchEvent(new CustomEvent("activate", { detail: { kind: "run", runId: "not-a-mark" } }));
     assert.deepEqual(calls, []);
     for (const role of ["home", "task"]) {
       const item = activity.decodeOperatorActivity(attentionSet(attentionRow(role === "home" ? 90 : 91, "message", { client_surface_role: role })))[0];
       items.push(item); calls.length = 0; handler(item);
-      assert.deepEqual(calls[0], [role === "home" ? "home" : "chat", "run-test"]);
+      assert.deepEqual(calls[0], ["inbox", false]);
       if (role === "home") {
-        assert.deepEqual(calls[1], ["home-mode", "activity"]);
-        assert.deepEqual(calls[2], ["side-tab", {workspaceKey: "octopus-os", surfaceId: "voice", runId: "run-test"}]);
+        assert.deepEqual(calls[1], ["home", "voice"]);
+        assert.deepEqual(calls[2], ["home-mode", "activity"]);
+      } else {
+        assert.deepEqual(calls[1], ["chat", "run-test"]);
       }
       assert.deepEqual(calls.at(-1), ["read", [item.id]]);
       assert.ok(!calls.some(([kind]) => kind === "surface"));
       calls.length = 0; window.dispatchEvent(new CustomEvent("activate", { detail: { kind: "mark", movementId: item.id } }));
-      assert.deepEqual(calls[0], ["surface", "inbox"]); assert.ok(!calls.some(([kind]) => kind === "pane")); assert.deepEqual(calls.at(-1), ["read", [item.id]]);
+      assert.deepEqual(calls[0], ["settings", false]); assert.deepEqual(calls[1], ["inbox", true]); assert.ok(!calls.some(([kind]) => kind === "pane")); assert.deepEqual(calls.at(-1), ["read", [item.id]]);
     }
   } finally { cleanup(); }
 });

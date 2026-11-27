@@ -194,6 +194,12 @@ export async function beginClientSetup(request: OctopusClientSetupBeginRequest):
   return host.clientSetupBegin(request);
 }
 
+export async function cancelClientSetup(operationId: string): Promise<{ cancelled: boolean; operationId: string }> {
+  const host = window.octopusTransport;
+  if (!host?.clientSetupCancel) throw new Error("Client setup cancellation is available only in the live desktop client.");
+  return host.clientSetupCancel({ operationId });
+}
+
 export async function resumeClientSetup(operationId: string, options: { allowSignIn?: boolean } = {}): Promise<OctopusClientSetupState> {
   const host = window.octopusTransport;
   if (!host?.clientSetupResume) throw new Error("Client setup is available only in the live desktop client.");

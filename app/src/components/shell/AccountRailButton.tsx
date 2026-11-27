@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { OcMenuItem } from "../../design-system/components";
 import { OcDropdown } from "../../design-system/OcDropdown";
-import { formatKeyboardShortcuts, useKeyboardShortcuts } from "../../keyboardShortcuts";
 import type { RuntimeHostView } from "../../runtimeHost";
 import { MessageTooltip } from "../chat/MessageTooltip";
 import { useChatgptAccount } from "../../account/useChatgptAccount";
@@ -16,7 +15,6 @@ export function AccountRailButton({ accessProfile, runtimeHost, onLogOut, onOpen
   onLogOut: () => void;
   onOpenSettings: (section?: string) => void;
 }) {
-  const shortcuts = useKeyboardShortcuts(accessProfile);
   const state = useChatgptAccount(accessProfile === "live");
   const { account } = state;
   const trigger = useRef<HTMLButtonElement>(null);
@@ -56,17 +54,16 @@ export function AccountRailButton({ accessProfile, runtimeHost, onLogOut, onOpen
   }
   const storageBlocked = accessProfile === "live" && runtimeHost.storageHealth && runtimeHost.storageHealth.status !== "writable";
   const connected = runtimeHost.available && runtimeHost.ready && !storageBlocked;
-  const settingsShortcut = formatKeyboardShortcuts(shortcuts.open_settings ?? []);
   const avatar = <span className="navigation-rail-avatar" aria-hidden="true">{name.slice(0, 1)}</span>;
 
   return (
     <div className="navigation-rail-account">
-      <MessageTooltip label="Account" side="right" delayMs={300} disabled={open}>
+      <MessageTooltip label="Account" side="bottom" delayMs={300} disabled={open}>
         <button
           aria-expanded={open}
           aria-haspopup="menu"
           aria-label={`Account: ${name}`}
-          className="oc-octopus-icon-control no-drag"
+          className="oc-octopus-icon-control top-dock-account-btn no-drag"
           data-appearance="rail"
           data-state={open ? "open" : "closed"}
           onClick={() => setOpen(!open)}
@@ -80,14 +77,14 @@ export function AccountRailButton({ accessProfile, runtimeHost, onLogOut, onOpen
           type="button"
         >{avatar}</button>
       </MessageTooltip>
-      <MessageTooltip asChild label={storageBlocked ? runtimeHost.storageHealth!.message || "Home storage unavailable" : connected ? "Runtime connected" : runtimeHost.error || runtimeHost.phase} side="right" delayMs={300}><span
+      <MessageTooltip asChild label={storageBlocked ? runtimeHost.storageHealth!.message || "Home storage unavailable" : connected ? "Runtime connected" : runtimeHost.error || runtimeHost.phase} side="bottom" delayMs={300}><span
         aria-label={storageBlocked ? "Home storage unavailable" : connected ? "Runtime connected" : "Runtime unavailable"}
         className={`sidebar-runtime-dot navigation-rail-account-status${connected ? " is-ready" : storageBlocked || runtimeHost.phase === "degraded" ? " is-error" : ""}`}
         role="status"
       /></MessageTooltip>
-      <OcDropdown align="end" alignOffset={-4} anchorRef={trigger} aria-label="Account" className="account-menu" contentWidth="sidebar" open={open} onOpenChange={setOpen} onCloseAutoFocus={(event) => {
+      <OcDropdown align="end" anchorRef={trigger} aria-label="Account" className="account-menu" contentWidth="sidebar" open={open} onOpenChange={setOpen} onCloseAutoFocus={(event) => {
         if (openingSettings.current) event.preventDefault();
-      }} side="right">
+      }} side="bottom" sideOffset={6}>
         <div className="account-menu-identity">{avatar}<div><strong>{name}</strong><small>{accountLabel}</small></div></div>
         {listAccounts && sessionsLoading && !session ? <OcMenuItem disabled label="Loading accounts…" role="menuitem" /> : null}
         {listAccounts && !sessionsLoading && sessionsError && !session ? <OcMenuItem descriptionAllowWrap disabled description={sessionsError} label="Workspaces unavailable" role="menuitem" /> : null}
@@ -95,11 +92,14 @@ export function AccountRailButton({ accessProfile, runtimeHost, onLogOut, onOpen
           aria-checked={workspace.accountId === session.selectedWorkspaceId} disabled={accountBusy} label={chatgptWorkspaceLabel(workspace)} role="menuitemradio"
           selected={workspace.accountId === session.selectedWorkspaceId}
           onClick={() => { if (workspace.accountId !== session.selectedWorkspaceId) void switchWorkspace(session.sessionId, workspace.accountId); }} />) : null}
-        {accessProfile === "live" && account?.signedIn ? <OcMenuItem disabled={accountBusy} label="Add account" leadingIcon="plus" onClick={addAccount} role="menuitem" /> : null}
-        <div className="account-menu-separator" role="separator" />
-        <OcMenuItem label="Settings" leadingIcon="settings" onClick={() => openSettings()} role="menuitem" trailing={settingsShortcut ? <span className="text-xs text-token-description-foreground">{settingsShortcut}</span> : undefined} />
-        {accessProfile === "live" && account?.signedIn ? <OcMenuItem label="Usage" leadingIcon="usage" onClick={() => openSettings("account")} role="menuitem"
-          trailing={usageWindow ? <span className="whitespace-nowrap text-token-description-foreground">{accountRemainingLabel(usageWindow.remaining)}</span> : undefined} /> : null}
+        {accessProfile === "live" && account?.signedIn ? (
+          <>
+            <OcMenuItem disabled={accountBusy} label="Add account" leadingIcon="plus" onClick={addAccount} role="menuitem" />
+            <div className="account-menu-separator" role="separator" />
+            <OcMenuItem label="Usage" leadingIcon="usage" onClick={() => openSettings("account")} role="menuitem"
+              trailing={usageWindow ? <span className="whitespace-nowrap text-token-description-foreground">{accountRemainingLabel(usageWindow.remaining)}</span> : undefined} />
+          </>
+        ) : null}
         <div className="account-menu-separator" role="separator" />
         <OcMenuItem label="Lock Octopus" leadingIcon="logOut" onClick={onLogOut} role="menuitem" />
       </OcDropdown>

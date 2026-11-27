@@ -1,9 +1,9 @@
 :root {
   --oc-color-canvas: var(--color-background-surface);
-  --oc-color-sidebar: var(--color-background-surface);
-  --oc-color-surface: var(--color-background-elevated-secondary-opaque);
-  --oc-color-card: var(--color-background-elevated-primary-opaque);
-  --oc-color-raised: var(--gray-700);
+  --oc-color-sidebar: var(--app-shell-sidebar-docked-background, var(--color-background-surface));
+  --oc-color-surface: var(--color-background-panel, var(--color-background-elevated-secondary-opaque));
+  --oc-color-card: var(--color-background-elevated-secondary-opaque);
+  --oc-color-raised: var(--color-background-control-opaque, var(--color-surface-elevated-secondary));
   --oc-color-control: var(--color-background-button-secondary);
   --oc-color-control-hover: var(--color-background-button-secondary-hover);
   --oc-color-control-active: var(--color-background-button-secondary-active);
@@ -59,12 +59,12 @@
   --oc-motion-ease-emphasized: cubic-bezier(0.23, 1, 0.32, 1);
   --oc-motion-fast: var(--oc-motion-duration-fast) var(--oc-motion-ease-standard);
   --oc-motion-med: var(--oc-motion-duration-medium) var(--oc-motion-ease-emphasized);
-  --oc-focus-color: rgba(51, 156, 255, 0.9);
+  --oc-focus-color: var(--color-ring);
   --oc-focus-ring: 0 0 0 2px var(--oc-color-canvas), 0 0 0 4px var(--oc-focus-color);
   --radius-control: var(--oc-radius-sm);
   --shell-titlebar-h: var(--oc-shell-titlebar-h);
   --shell-statusbar-h: var(--oc-shell-statusbar-h);
-  --surface-0: #151515;
+  --surface-0: var(--color-surface-secondary, var(--gray-fixed-925));
   --surface-1: var(--oc-color-canvas);
   --surface-2: var(--oc-color-surface);
   --surface-3: var(--oc-color-raised);
@@ -133,7 +133,6 @@
   border-radius: var(--oc-radius-sm);
   background: var(--oc-control-bg);
   color: var(--oc-control-fg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   cursor: pointer;
   transition:
     background var(--oc-motion-fast),
@@ -177,9 +176,9 @@
 
 .oc-button--primary,
 .oc-icon-button--primary {
-  --oc-control-bg: #f7f7f7;
-  --oc-control-border: #f7f7f7;
-  --oc-control-fg: #0d0d0d;
+  --oc-control-bg: var(--color-background-primary-solid);
+  --oc-control-border: var(--color-background-primary-solid);
+  --oc-control-fg: var(--color-text-primary-solid);
 }
 
 .oc-button:hover,
@@ -195,8 +194,9 @@
 .oc-icon-button--primary:hover,
 .oc-button--primary.is-selected,
 .oc-icon-button--primary.is-selected {
-  --oc-control-bg: #ffffff;
-  --oc-control-border: #ffffff;
+  --oc-control-bg: var(--color-background-primary-solid-hover);
+  --oc-control-border: var(--color-background-primary-solid-hover);
+  --oc-control-fg: var(--color-text-primary-solid);
 }
 
 .oc-button:disabled,
@@ -219,7 +219,7 @@
 }
 
 .oc-dialog-overlay {
-  background: #00000022;
+  background: var(--modal-backdrop-background);
 }
 
 .oc-dialog {
@@ -237,15 +237,14 @@
 .oc-dialog[data-oc-dialog-size="xwide"] { width: 680px; }
 .oc-dialog[data-oc-dialog-size="xxwide"] { width: 800px; }
 .oc-dialog-overlay[data-oc-dialog-variant="form"] {
-  background: #00000080;
-  -webkit-backdrop-filter: blur(1px);
-  backdrop-filter: blur(1px);
+  background: var(--modal-backdrop-fade-background);
+  -webkit-backdrop-filter: var(--modal-backdrop-fade-filter, blur(1px));
+  backdrop-filter: var(--modal-backdrop-fade-filter, blur(1px));
 }
-:root[data-theme="light"] .oc-dialog-overlay[data-oc-dialog-variant="form"] { background: #e3e3e380; }
 
 .oc-dialog[data-oc-dialog-variant="form"] {
-  border-radius: calc(var(--spacing) * 6 * var(--corner-radius-scale));
-  box-shadow: 0 0 0 .5px var(--color-border), 0 8px 10px -6px #0000001a, 0 20px 25px -5px #0000001a;
+  border-radius: var(--radius-form-dialog, var(--radius-4xl));
+  box-shadow: var(--modal-backdrop-fade-shadow);
 }
 
 .oc-dialog[data-oc-dialog-position="top"] {
@@ -401,7 +400,6 @@
   border-radius: var(--oc-radius-sm);
   background: var(--oc-color-control);
   color: var(--oc-color-text);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
   transition:
     background var(--oc-motion-fast),
     border-color var(--oc-motion-fast),
@@ -543,10 +541,10 @@
   border-radius: var(--oc-radius-pill);
   background: linear-gradient(
     to right,
-    var(--oc-color-accent) 0,
-    var(--oc-color-accent) var(--oc-slider-progress),
-    #4a4a4a var(--oc-slider-progress),
-    #4a4a4a 100%
+    var(--color-accent) 0,
+    var(--color-accent) var(--oc-slider-progress),
+    var(--color-border-strong) var(--oc-slider-progress),
+    var(--color-border-strong) 100%
   );
 }
 
@@ -555,10 +553,10 @@
   height: 16px;
   margin-top: -6px;
   appearance: none;
-  border: 0;
+  border: 1px solid var(--color-border-strong);
   border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  background: var(--white);
+  box-shadow: var(--shadow-100);
   transition:
     box-shadow var(--oc-motion-fast),
     transform var(--oc-motion-fast);
@@ -588,7 +586,7 @@
   z-index: 999;
   inset: 0;
   border: 0;
-  background: rgba(0, 0, 0, 0.18);
+  background: transparent;
 }
 
 .oc-popover__panel {
@@ -598,13 +596,13 @@
   min-width: 220px;
   max-width: min(360px, calc(100vw - 24px));
   overflow: hidden;
-  border: 1px solid var(--oc-color-border-strong);
-  border-radius: var(--oc-radius-lg);
-  background: var(--oc-color-raised);
-  color: var(--oc-color-text);
-  box-shadow:
-    0 18px 48px rgba(0, 0, 0, 0.42),
-    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  border: 0;
+  border-radius: var(--radius-2xl);
+  background: color-mix(in oklab, var(--color-surface-elevated-secondary) 90%, transparent);
+  color: var(--color-text);
+  box-shadow: var(--menu-box-shadow, 0 0 0 var(--dropdown-overlay-ring-width, 0.5px) var(--color-border-overlay, var(--color-border-subtle)), var(--shadow-dropdown-overlay));
+  -webkit-backdrop-filter: blur(var(--blur-sm));
+  backdrop-filter: blur(var(--blur-sm));
   animation: oc-popover-enter var(--oc-motion-duration-medium) var(--oc-motion-ease-emphasized) both;
   transform-origin: var(--oc-popover-origin, top left);
 }

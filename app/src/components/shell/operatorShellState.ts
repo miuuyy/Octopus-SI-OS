@@ -63,7 +63,6 @@ export type SurfaceNavigation = {
 export type ClientDestination = {
   runId?: string;
   surfaceId: string;
-  settingsSection?: string;
 };
 
 export function clientDestination(surfaceId: string, runId?: string): ClientDestination {
@@ -71,12 +70,17 @@ export function clientDestination(surfaceId: string, runId?: string): ClientDest
 }
 
 export function clientWindowInitialDestination(target: WorkspacePaneTarget): ClientDestination {
-  if (target.kind === "surface") return clientDestination(target.surfaceId, target.runId);
+  if (target.kind === "surface") return clientDestination(sanitizePrimarySurfaceId(target.surfaceId), target.runId);
   return clientDestination(target.workspaceKey === "dashboard" ? "dashboard" : "voice");
 }
 
 export function sameClientDestination(left: ClientDestination, right: ClientDestination): boolean {
-  return left.surfaceId === right.surfaceId && left.runId === right.runId && left.settingsSection === right.settingsSection;
+  return left.surfaceId === right.surfaceId && left.runId === right.runId;
+}
+
+function sanitizePrimarySurfaceId(surfaceId: string | undefined, fallback = "voice"): string {
+  const normalized = surfaceId?.trim() ?? "";
+  return !normalized || normalized === "inbox" ? fallback : normalized;
 }
 
 export function initializeSurfaceNavigation(
@@ -87,7 +91,8 @@ export function initializeSurfaceNavigation(
 ): SurfaceNavigation {
   const storage = clientWindowStateStorage(windowScope);
   const storedSurface = storage.getItem(clientWindowStateKey(windowScope, activeDestinationStorageKey(profile)))?.trim();
-  return { entries: [clientDestination(storedSurface || startupSurface, startupRunId)], index: 0 };
+  const resolved = sanitizePrimarySurfaceId(storedSurface, sanitizePrimarySurfaceId(startupSurface));
+  return { entries: [clientDestination(resolved, startupRunId)], index: 0 };
 }
 
 export function normalizeSurfaceNavigation(
@@ -95,7 +100,7 @@ export function normalizeSurfaceNavigation(
   surfaces: ClientSurfaceDescriptor[],
   chatRunIds?: ReadonlySet<string>,
 ): SurfaceNavigation {
-  const allowedIds = new Set(surfaces.map((surface) => surface.id));
+  const allowedIds = new Set(surfaces.filter((surface) => surface.id !== "inbox").map((surface) => surface.id));
   const valid = (destination: ClientDestination) => allowedIds.has(destination.surfaceId) && (
     destination.surfaceId !== "chat"
     || !destination.runId

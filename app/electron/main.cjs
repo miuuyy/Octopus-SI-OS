@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { createHash, randomBytes, randomUUID } = require("node:crypto");
-const { nativeTrafficLightPosition, nativeControlInset } = require("./windowChrome.cjs");
+const { NATIVE_CONTROL_INSET, nativeTrafficLightPosition, nativeControlInset } = require("./windowChrome.cjs");
 const { resolveClientLaunchSelection, saveClientLaunchSelection } = require("./clientLaunchSelection.cjs");
 const { writeJsonFileAtomicallySync } = require("./atomicJsonFile.cjs");
 
@@ -1866,9 +1866,11 @@ const MIN_WINDOW_BOUNDS = { width: 480, height: 600 };
 const windowBackdropModes = new WeakMap();
 const windowLiveResizeStates = new WeakMap();
 const windowAppearances = new WeakMap();
+const windowChromeVisibility = new WeakMap();
 const nativeChromeWindows = new WeakSet();
 const customChromeWindows = new WeakSet();
 const historyNavigationStates = new WeakMap();
+const windowPointerMonitors = new WeakMap();
 
 app.setName("Octopus");
 if (isDev) {
@@ -1900,11 +1902,26 @@ function persistAppZoomFactor() {
   fs.chmodSync(clientZoomPath, 0o600);
 }
 
+function syncNativeWindowButtons(win) {
+  if (process.platform !== "darwin" || !win || win.isDestroyed() || !nativeChromeWindows.has(win)) return;
+  if (win.isFullScreen()) return;
+  const visible = windowChromeVisibility.get(win) !== false;
+  win.setWindowButtonVisibility(visible);
+  if (visible) win.setWindowButtonPosition(nativeTrafficLightPosition(appZoomFactor));
+}
+
+function resetWindowChromeState(win) {
+  if (!win || win.isDestroyed()) return;
+  setWindowPointerWatch(win, false);
+  windowChromeVisibility.delete(win);
+  syncNativeWindowButtons(win);
+}
+
 function applyAppZoomFactor() {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
     win.webContents.setZoomFactor(appZoomFactor);
-    if (nativeChromeWindows.has(win)) win.setWindowButtonPosition(nativeTrafficLightPosition(appZoomFactor));
+    syncNativeWindowButtons(win);
     publishWindowState(win);
   }
 }
@@ -1957,11 +1974,12 @@ function createWindow(inheritedAccessToken = "", options = {}) {
     ...(iconPath ? { icon: iconPath } : {}),
     backgroundColor: isMac ? "#00000000" : "#181818",
     show: false,
-    titleBarStyle: isMac ? "hiddenInset" : "hidden",
-    transparent: isMac,
+    titleBarStyle: "hidden",
+    transparent: false,
     ...(isMac ? {
+      acceptFirstMouse: true,
       trafficLightPosition: nativeTrafficLightPosition(appZoomFactor),
-      vibrancy: "under-window",
+      vibrancy: "menu",
       visualEffectState: "active",
     } : {}),
     webPreferences: {
@@ -1993,7 +2011,11 @@ function createWindow(inheritedAccessToken = "", options = {}) {
   for (const [name, event] of [["unresponsive", "client.renderer.unresponsive"], ["responsive", "client.renderer.responsive"]]) {
     win.on(name, () => { void appendClientLog("warn", event).catch(() => {}); });
   }
+  win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) resetWindowChromeState(win);
+  });
   win.webContents.on("render-process-gone", (_event, details) => {
+    resetWindowChromeState(win);
     void appendClientLog("error", "client.renderer.gone", { message: `Renderer exited: ${details.reason}; exit code ${details.exitCode}` }).catch(() => {});
   });
   win.on("closed", () => {
@@ -2003,10 +2025,8 @@ function createWindow(inheritedAccessToken = "", options = {}) {
     if (accessClaim) accessInheritanceClaims.delete(accessClaim);
   });
 
-  if (isMac) {
-    nativeChromeWindows.add(win);
-    win.setWindowButtonVisibility(true);
-  } else customChromeWindows.add(win);
+  if (isMac) nativeChromeWindows.add(win);
+  else customChromeWindows.add(win);
   applyWindowBackdrop(win, true);
 
   win.once("ready-to-show", () => {
@@ -2018,7 +2038,19 @@ function createWindow(inheritedAccessToken = "", options = {}) {
   });
   if (primary) trackWindowState(win);
   for (const event of ["enter-full-screen", "leave-full-screen", "maximize", "unmaximize"]) {
-    win.on(event, () => publishWindowState(win));
+    win.on(event, () => {
+      if (event === "enter-full-screen" || event === "leave-full-screen") {
+        windowLiveResizeStates.set(win, false);
+        if (event === "enter-full-screen" && isMac && nativeChromeWindows.has(win)) {
+          win.setWindowButtonVisibility(true);
+        } else if (event === "leave-full-screen") {
+          syncNativeWindowButtons(win);
+        }
+        applyWindowBackdrop(win);
+        windowPointerMonitors.get(win)?.sync();
+      }
+      publishWindowState(win);
+    });
   }
   if (isMac) {
     win.on("will-resize", () => {
@@ -2050,6 +2082,7 @@ function createWindow(inheritedAccessToken = "", options = {}) {
   });
   win.webContents.on("did-finish-load", () => {
     win.webContents.setZoomFactor(appZoomFactor);
+    syncNativeWindowButtons(win);
     applyWindowBackdrop(win, true);
     publishWindowState(win);
   });
@@ -2177,6 +2210,7 @@ function createQuickTaskWindow(accessToken) {
   });
   win.webContents.on("did-finish-load", () => {
     win.webContents.setZoomFactor(appZoomFactor);
+    syncNativeWindowButtons(win);
     applyWindowBackdrop(win, true);
     publishWindowState(win);
   });
@@ -2310,6 +2344,7 @@ function createTaskMonitorWindow(accessToken, runId) {
   });
   win.webContents.on("did-finish-load", () => {
     win.webContents.setZoomFactor(appZoomFactor);
+    syncNativeWindowButtons(win);
     applyWindowBackdrop(win, true);
     publishWindowState(win);
   });
@@ -2885,24 +2920,36 @@ function labRuntimeHostState(token) {
     : null;
 }
 
+function clearRuntimeEventSubscription(senderId) {
+  const existing = runtimeEventSubscriptions.get(senderId);
+  if (!existing) return;
+  runtimeEventSubscriptions.delete(senderId);
+  if (existing.onDestroyed && existing.sender && !existing.sender.isDestroyed()) {
+    existing.sender.removeListener("destroyed", existing.onDestroyed);
+  }
+}
+
 function subscribeRuntimeEvents(event, token) {
   const lab = labRuntimeHostState(token);
   if (lab) {
-    runtimeEventSubscriptions.delete(event.sender.id);
+    clearRuntimeEventSubscription(event.sender.id);
     event.sender.send("octopus:runtime-host-state", lab);
     return { subscribed: true };
   }
   requireRuntimeStateAccess(event, token);
-  runtimeEventSubscriptions.set(event.sender.id, { sender: event.sender, token });
-  event.sender.once("destroyed", () => {
-    runtimeEventSubscriptions.delete(event.sender.id);
-  });
+  clearRuntimeEventSubscription(event.sender.id);
+  const senderId = event.sender.id;
+  const onDestroyed = () => {
+    runtimeEventSubscriptions.delete(senderId);
+  };
+  runtimeEventSubscriptions.set(senderId, { sender: event.sender, token, onDestroyed });
+  event.sender.once("destroyed", onDestroyed);
   if (runtimeHost) event.sender.send("octopus:runtime-host-state", runtimeHost.snapshot());
   return { subscribed: true };
 }
 
 function unsubscribeRuntimeEvents(event) {
-  runtimeEventSubscriptions.delete(event.sender.id);
+  clearRuntimeEventSubscription(event.sender.id);
   return { subscribed: false };
 }
 
@@ -3021,7 +3068,15 @@ let chatgptSignIn = null;
 function getChatgptSignIn() {
   if (!chatgptSignIn) {
     chatgptSignIn = createChatgptSignIn({
-      codexBinary: () => path.join(resolveInstallationRoot(), "bin", "codex"),
+      codexBinary: () => {
+        const root = resolveInstallationRoot();
+        const bundled = path.join(root, "bin", "codex");
+        if (app.isPackaged) return bundled;
+        if (require("node:fs").existsSync(bundled)) return bundled;
+        const repoManaged = path.join(root, "registry", "interface", "world_provider_codex", "packages", "bin", "codex");
+        if (require("node:fs").existsSync(repoManaged)) return repoManaged;
+        return bundled;
+      },
       codexHome: resolveOperatorCodexHome,
       octopusHome: resolveOctopusHome,
       version: () => app.getVersion(),
@@ -3494,7 +3549,10 @@ ipcMain.handle("octopus:access-lock", async (event, token) => {
       }
       if (quickTaskAccessToken === token && quickTaskWindow && !quickTaskWindow.isDestroyed()) desktopOwners.add(quickTaskWindow.webContents.id);
       const retained = targets.find((entry) => entry.primary) ?? targets.find((entry) => entry.win.webContents === sender);
-      for (const [id, subscription] of runtimeEventSubscriptions) if (subscription.token === token) runtimeEventSubscriptions.delete(id);
+      for (const [id, subscription] of runtimeEventSubscriptions) if (subscription.token === token) {
+        if (subscription.onDestroyed && subscription.sender && !subscription.sender.isDestroyed()) subscription.sender.removeListener("destroyed", subscription.onDestroyed);
+        runtimeEventSubscriptions.delete(id);
+      }
       clientWindows.clearAccessToken(token);
       for (const entry of targets) sendClientWindowEvent(entry.win, "octopus:client-access-locked", result);
       if (globalDictationAccessToken === token) clearGlobalDictationShortcut();
@@ -3719,17 +3777,20 @@ ipcMain.handle("octopus:power-save-blocker", async (event, token, enabled) => {
   const key = event.sender.id;
   const current = powerSaveBlockers.get(key);
   if (enabled === true) {
-    if (typeof current === "number" && powerSaveBlocker.isStarted(current)) return { enabled: true };
+    if (current && typeof current.id === "number" && powerSaveBlocker.isStarted(current.id)) return { enabled: true };
+    if (current?.onDestroyed && !event.sender.isDestroyed()) event.sender.removeListener("destroyed", current.onDestroyed);
     const id = powerSaveBlocker.start("prevent-app-suspension");
-    powerSaveBlockers.set(key, id);
-    event.sender.once("destroyed", () => {
+    const onDestroyed = () => {
       const active = powerSaveBlockers.get(key);
-      if (typeof active === "number" && powerSaveBlocker.isStarted(active)) powerSaveBlocker.stop(active);
+      if (active && typeof active.id === "number" && powerSaveBlocker.isStarted(active.id)) powerSaveBlocker.stop(active.id);
       powerSaveBlockers.delete(key);
-    });
+    };
+    powerSaveBlockers.set(key, { id, onDestroyed });
+    event.sender.once("destroyed", onDestroyed);
     return { enabled: true };
   }
-  if (typeof current === "number" && powerSaveBlocker.isStarted(current)) powerSaveBlocker.stop(current);
+  if (current?.onDestroyed && !event.sender.isDestroyed()) event.sender.removeListener("destroyed", current.onDestroyed);
+  if (current && typeof current.id === "number" && powerSaveBlocker.isStarted(current.id)) powerSaveBlocker.stop(current.id);
   powerSaveBlockers.delete(key);
   return { enabled: false };
 });
@@ -3764,6 +3825,168 @@ ipcMain.on("octopus:window-appearance", (event, appearance) => {
   applyThemePreference(preference);
   saveWindowDocument(windowAppearancePath(), { preference }, "client.window_appearance.save_failed");
   applyWindowBackdrop(win, true);
+});
+
+const POINTER_WATCH_ACTIVE_MS = 40;
+const POINTER_WATCH_IDLE_MS = 120;
+const POINTER_WATCH_IDLE_AFTER_MS = 1000;
+const POINTER_WATCH_EDGE_ZONE_PX = 72;
+const POINTER_WATCH_FULLSCREEN_TOP_SEAM_PX = 48;
+
+function setWindowPointerWatch(win, enabled) {
+  if (!win || win.isDestroyed()) return;
+  const existing = windowPointerMonitors.get(win);
+  if (!enabled) {
+    if (existing) {
+      existing.dispose();
+      windowPointerMonitors.delete(win);
+    }
+    return;
+  }
+  if (existing) {
+    existing.sync();
+    return;
+  }
+  let timer = null;
+  let scheduledDelay = null;
+  let lastPoint = null;
+  let lastInside = null;
+  let lastNearEdge = null;
+  let lastResizing = null;
+  let lastActiveAt = Date.now();
+
+  const stop = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+      scheduledDelay = null;
+    }
+    lastPoint = null;
+    lastInside = null;
+    lastNearEdge = null;
+    lastResizing = null;
+  };
+
+  const scheduleNext = (delayMs) => {
+    if (timer !== null) clearTimeout(timer);
+    scheduledDelay = delayMs;
+    timer = setTimeout(() => {
+      timer = null;
+      scheduledDelay = null;
+      sample();
+    }, delayMs);
+  };
+
+  const sample = () => {
+    if (win.isDestroyed() || win.webContents.isDestroyed() || !win.isFocused() || !win.isVisible() || win.isMinimized()) {
+      stop();
+      return;
+    }
+    const now = Date.now();
+    const point = screen.getCursorScreenPoint();
+    const bounds = win.getContentBounds();
+    const zoom = win.webContents.getZoomFactor() || 1;
+    const x = (point.x - bounds.x) / zoom;
+    const y = (point.y - bounds.y) / zoom;
+    const width = bounds.width / zoom;
+    const height = bounds.height / zoom;
+    const fullScreen = win.isFullScreen();
+    const seam = 3;
+    const topSeam = fullScreen ? POINTER_WATCH_FULLSCREEN_TOP_SEAM_PX : seam;
+    const insideWindow = x >= -seam && x <= width + seam && y >= -topSeam && y <= height + seam;
+    const resizing = windowLiveResizeStates.get(win) === true;
+    const chromeOpen = windowChromeVisibility.get(win) !== false;
+    const nearEdge = insideWindow && (x <= POINTER_WATCH_EDGE_ZONE_PX || y <= POINTER_WATCH_EDGE_ZONE_PX);
+    const moved = lastPoint !== null && (point.x !== lastPoint.x || point.y !== lastPoint.y);
+    const stateChanged = lastInside !== null && (
+      insideWindow !== lastInside
+      || nearEdge !== lastNearEdge
+      || resizing !== lastResizing
+    );
+    const isInitial = lastPoint === null;
+    lastPoint = point;
+    lastInside = insideWindow;
+    lastNearEdge = nearEdge;
+    lastResizing = resizing;
+    if (chromeOpen || nearEdge || moved || stateChanged || resizing) {
+      lastActiveAt = now;
+    }
+    const nextDelay = chromeOpen || nearEdge || moved || stateChanged || resizing || now - lastActiveAt < POINTER_WATCH_IDLE_AFTER_MS
+      ? POINTER_WATCH_ACTIVE_MS
+      : POINTER_WATCH_IDLE_MS;
+    scheduleNext(nextDelay);
+    const shouldEmitInitial = isInitial && nearEdge;
+    if (!shouldEmitInitial && (isInitial || (!moved && !stateChanged))) return;
+    if (!chromeOpen && !nearEdge && !stateChanged) return;
+    win.webContents.send("octopus:window-pointer-update", {
+      insideWindow,
+      focused: true,
+      resizing,
+      x,
+      y,
+      width,
+      height,
+    });
+  };
+
+  const sync = () => {
+    if (win.isDestroyed() || win.webContents.isDestroyed() || !win.isFocused() || !win.isVisible() || win.isMinimized()) {
+      stop();
+      return;
+    }
+    lastActiveAt = Date.now();
+    if (timer === null || scheduledDelay !== POINTER_WATCH_ACTIVE_MS) {
+      sample();
+    }
+  };
+
+  const onFocus = () => sync();
+  const onBlur = () => stop();
+  const onClosed = () => dispose();
+  const dispose = () => {
+    stop();
+    if (!win.isDestroyed()) {
+      win.removeListener("focus", onFocus);
+      win.removeListener("show", onFocus);
+      win.removeListener("restore", onFocus);
+      win.removeListener("enter-full-screen", onFocus);
+      win.removeListener("leave-full-screen", onFocus);
+      win.removeListener("blur", onBlur);
+      win.removeListener("hide", onBlur);
+      win.removeListener("minimize", onBlur);
+      win.removeListener("closed", onClosed);
+    }
+    windowPointerMonitors.delete(win);
+  };
+
+  win.on("focus", onFocus);
+  win.on("show", onFocus);
+  win.on("restore", onFocus);
+  win.on("enter-full-screen", onFocus);
+  win.on("leave-full-screen", onFocus);
+  win.on("blur", onBlur);
+  win.on("hide", onBlur);
+  win.on("minimize", onBlur);
+  win.on("closed", onClosed);
+  windowPointerMonitors.set(win, { sync, dispose });
+  sync();
+}
+
+ipcMain.on("octopus:window-chrome-visibility", (event, visible) => {
+  if (event.senderFrame !== event.sender.mainFrame || !clientWindows.entryForWebContents(event.sender.id)) return;
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  const revealed = visible !== false;
+  windowChromeVisibility.set(win, revealed);
+  syncNativeWindowButtons(win);
+  if (revealed) windowPointerMonitors.get(win)?.sync();
+});
+
+ipcMain.on("octopus:window-pointer-watch", (event, enabled) => {
+  if (event.senderFrame !== event.sender.mainFrame || !clientWindows.entryForWebContents(event.sender.id)) return;
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  setWindowPointerWatch(win, Boolean(enabled));
 });
 
 ipcMain.handle("octopus:validate-runtime-endpoint", async (_event, token, request) => {
@@ -3912,6 +4135,13 @@ ipcMain.handle("octopus:client-setup-begin", async (_event, token, request) => {
   getClientAccessController().requireSession(token, ["live"]);
   await validateClientSetupPlan(request?.plan);
   return getClientSetupStore().begin(request);
+});
+
+ipcMain.handle("octopus:client-setup-cancel", async (_event, token, request) => {
+  getClientAccessController().requireSession(token, ["live"]);
+  const result = await getClientSetupStore().cancel(request);
+  if (result.cancelled) latestSetupProgress = null;
+  return result;
 });
 
 ipcMain.handle("octopus:client-setup-resume", async (event, token, request) => {
@@ -5439,7 +5669,7 @@ function numberValue(value, fallback) {
 
 function windowStateSnapshot(win) {
   return {
-    nativeControlInset: win && nativeChromeWindows.has(win) ? nativeControlInset(appZoomFactor) : win && customChromeWindows.has(win) ? 76 : 0,
+    nativeControlInset: win && nativeChromeWindows.has(win) ? nativeControlInset(appZoomFactor) : win && customChromeWindows.has(win) ? NATIVE_CONTROL_INSET : 0,
     customWindowControls: Boolean(win && customChromeWindows.has(win)),
     fullScreen: Boolean(win && !win.isDestroyed() && win.isFullScreen()),
     maximized: Boolean(win && !win.isDestroyed() && win.isMaximized()),
@@ -5467,7 +5697,7 @@ function applyWindowBackdrop(win, force = false) {
   if (!force && windowBackdropModes.get(win) === opaqueSurface) return;
   if (!opaqueSurface) {
     win.setBackgroundColor("#00000000");
-    win.setVibrancy("under-window");
+    win.setVibrancy("menu");
   } else {
     win.setBackgroundColor(nativeTheme.shouldUseDarkColors ? "#000000" : "#f9f9f9");
     win.setVibrancy(null);

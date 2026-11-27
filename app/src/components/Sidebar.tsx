@@ -25,7 +25,7 @@ import {
 import type { ClientSurfaceDescriptor } from "../shell/surfaceTypes";
 import { navigationSectionForSurface, type ClientNavigationSection } from "../shell/navigation";
 import { appToast, useAppErrorToast } from "../toasts";
-import { OcButton, OcIconButton, OcDialog, OcDialogFooter, OcDialogHeader, OcMenuItem, OcMenuSurface, OcSelect, OcTextField } from "../design-system/components";
+import { OcButton, OcIconButton, OcDialog, OcDialogFooter, OcDialogHeader, OcMenuItem, OcMenuSectionLabel, OcMenuSeparator, OcMenuSurface, OcSelect, OcTextField } from "../design-system/components";
 import { TasksViewSwitcher } from "./task/TasksViewSwitcher";
 import { ScheduledSidebar } from "./scheduled/ScheduledSidebar";
 import { Glyph } from "./IconGlyphs";
@@ -650,7 +650,7 @@ function TaskNavigation({
                 ))}
               </SidebarSortableList>
               <button
-                className="octopus-nav-row group relative flex h-[var(--height-token-row)] w-full cursor-interaction items-center overflow-x-hidden rounded-[var(--radius-token-row)] text-left text-base font-medium text-token-input-placeholder-foreground hover:bg-token-list-hover-background hover:text-token-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-token-border"
+                className="octopus-nav-row group relative flex h-[var(--height-token-row)] w-full cursor-interaction items-center overflow-x-hidden sidebar-item px-[var(--padding-row-cell-x,var(--padding-row-x))] text-left text-base font-medium text-token-input-placeholder-foreground hover:bg-token-list-hover-background hover:text-token-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-token-border"
                 data-sidebar-nav-item=""
                 disabled={!canCreateRootProject || projectWorkspace.pending}
                 onClick={() => {
@@ -663,8 +663,8 @@ function TaskNavigation({
                 title={rootProjectUnavailableReason}
                 type="button"
               >
-                <div className="flex min-w-0 flex-1 items-center gap-1 pl-1">
-                  <span className="-mx-[3px] flex size-[var(--height-token-row)] shrink-0 items-center justify-center">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="sidebar-item-icon flex size-6 shrink-0 items-center justify-center">
                     <span
                       aria-hidden="true"
                       className="flex shrink-0 items-center justify-center rounded-[6px] bg-current/10"
@@ -774,11 +774,10 @@ function TaskNavigation({
           collapsed={tasksCollapsed}
           titleActions={(
             <div className="flex items-center gap-0.5">
-              <OcIconButton appearance="sidebar" glyph="plus" label={selectedProject ? `New task in ${selectedProject.name}` : "New task"} onClick={() => onNewChat(selectedProjectId || undefined)} />
+              <OcIconButton appearance="sidebar" glyph="newTask" label={selectedProject ? `New task in ${selectedProject.name}` : "New task"} onClick={() => onNewChat(selectedProjectId || undefined)} />
               <OcIconButton appearance="sidebar" glyph="search" label="Search tasks" onClick={onSearch} />
             </div>
           )}
-          titleRowClassName="flex items-center justify-between gap-2 pr-0.5 pl-2"
           title={(
             <SidebarSectionTitle
               collapsed={tasksCollapsed}
@@ -966,7 +965,7 @@ function ProjectActionsMenu({
     >
       <OcMenuItem disabled={!canCreateInside} label="New project inside" leadingIcon="plus" onClick={() => onCreateInside(project)} role="menuitem" />
       <OcMenuItem label="Edit project" leadingIcon="edit" onClick={() => onEdit(project.id)} role="menuitem" />
-      <div aria-hidden="true" className="mx-1 my-1 h-px bg-token-border" />
+      <OcMenuSeparator />
       <OcMenuItem label="Delete project" leadingIcon="trash" onClick={() => onDelete(project.id)} role="menuitem" tone="danger" />
     </OcMenuSurface>,
     document.body,
@@ -997,7 +996,7 @@ function TaskSortMenu({
       style={{ left: menu.left, top: menu.top } as CSSProperties}
       surfaceRef={menuRef}
     >
-      <div className="px-2 py-1 text-sm text-token-description-foreground">Sort by</div>
+      <OcMenuSectionLabel>Sort by</OcMenuSectionLabel>
       <OcMenuItem
         aria-checked={sortMode === "recent"}
         label="Last updated"

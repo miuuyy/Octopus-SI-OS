@@ -1,25 +1,36 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode, type Ref } from "react";
-import { AnimatePresence, motion, useMotionValueEvent, useTransform, type MotionValue } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { useShouldReduceMotion } from "../../appearance";
 import { Glyph, type GlyphName } from "../IconGlyphs";
 import { clientDialogOwnsCommands, formatKeyboardShortcuts, useKeyboardShortcuts } from "../../keyboardShortcuts";
 import type { OctopusClientAccessProfile } from "../../electron";
+import {
+  NATIVE_CONTROL_INSET_DEFAULT_PX,
+  TITLEBAR_CLUSTER_GAP_PX,
+  TITLEBAR_END_INSET_PX,
+  TITLEBAR_SAFE_LEFT_GAP_PX,
+  TITLEBAR_TRAY_RIGHT_OFFSET_PX,
+} from "../../shell/shellMetrics";
 import { ShellTooltip } from "./ShellTooltip";
 
 type Props = {
   accessProfile: OctopusClientAccessProfile;
+  chromeRevealed?: boolean;
+  dock?: ReactNode;
+  fullScreen?: boolean;
+  inboxOpen?: boolean;
+  nativeInset?: number;
+  systemTray?: ReactNode;
   onPrimaryActionsHostChange?: (host: HTMLDivElement | null) => void;
-  onPaneControlsHostChange?: (host: HTMLDivElement | null) => void;
   contentDisabled?: boolean;
   primaryPaneBlocked?: boolean;
   settingsOpen?: boolean;
-  onCloseSettings?: () => void;
   canNavigateBack: boolean;
   canNavigateForward: boolean;
   sidebarOpen: boolean;
   sidebarAvailable?: boolean;
   secondaryPaneFocused: boolean;
   secondaryPaneOpen: boolean;
-  secondaryPaneWidth: MotionValue<number>;
   surfaceActions?: TitlebarSurfaceAction[];
   surfaceContext?: TitlebarSurfaceContext;
   surfaceContextAccessory?: ReactNode;
@@ -33,10 +44,6 @@ type Props = {
   onToggleSecondaryPane: () => void;
   onSlotWidthsChange: (widths: { left: number; right: number }) => void;
 };
-
-const TITLEBAR_CLUSTER_GAP = 8;
-const TITLEBAR_END_INSET = 6;
-const SETTINGS_CONTEXT: TitlebarSurfaceContext = { glyph: "settings", title: "Settings" };
 
 export type TitlebarSurfaceAction = {
   actionId?: string;
@@ -55,19 +62,22 @@ export type TitlebarSurfaceContext = {
 
 export function DesktopTitleBar({
   accessProfile,
+  chromeRevealed = true,
+  dock,
+  fullScreen: controlledFullScreen,
+  inboxOpen = false,
+  nativeInset: controlledNativeInset,
+  systemTray,
   onPrimaryActionsHostChange,
-  onPaneControlsHostChange,
   contentDisabled = false,
   primaryPaneBlocked = false,
   settingsOpen = false,
-  onCloseSettings,
   canNavigateBack,
   canNavigateForward,
   sidebarOpen,
   sidebarAvailable = true,
   secondaryPaneFocused,
   secondaryPaneOpen,
-  secondaryPaneWidth,
   surfaceActions = [],
   surfaceContext,
   surfaceContextAccessory,
@@ -82,50 +92,55 @@ export function DesktopTitleBar({
   onSlotWidthsChange,
 }: Props) {
   const shortcuts = useKeyboardShortcuts(accessProfile);
+  const reduceMotion = useShouldReduceMotion();
   const isElectron = Boolean(window.octopusTransport);
-  const [fullScreen, setFullScreen] = useState(false);
-  const [nativeInset, setNativeInset] = useState(isElectron ? 76 : 0);
-  const [secondaryPaneCollapsed, setSecondaryPaneCollapsed] = useState(() => secondaryPaneWidth.get() < 1);
-  const secondaryPaneCollapsedRef = useRef(secondaryPaneCollapsed);
+  const [uncontrolledFullScreen, setUncontrolledFullScreen] = useState(false);
+  const [uncontrolledNativeInset, setUncontrolledNativeInset] = useState(isElectron ? NATIVE_CONTROL_INSET_DEFAULT_PX : 0);
+  const fullScreen = controlledFullScreen ?? uncontrolledFullScreen;
+  const nativeInset = controlledNativeInset ?? uncontrolledNativeInset;
+  const hasControlledWindowState = controlledFullScreen !== undefined && controlledNativeInset !== undefined;
+  const headerRef = useRef<HTMLElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
   const paneActionsRef = useRef<HTMLDivElement>(null);
-  const paneActionsRight = useTransform(secondaryPaneWidth, (width) => width + TITLEBAR_END_INSET);
-  const context = settingsOpen ? SETTINGS_CONTEXT : primaryPaneBlocked ? undefined : surfaceContext;
-  const contextTransfer = settingsOpen ? undefined : onSurfaceContextPointerDown;
-
-  useMotionValueEvent(secondaryPaneWidth, "change", (width) => {
-    const collapsed = width < 1;
-    if (secondaryPaneCollapsedRef.current === collapsed) return;
-    secondaryPaneCollapsedRef.current = collapsed;
-    setSecondaryPaneCollapsed(collapsed);
-  });
+  const systemTrayRef = useRef<HTMLDivElement>(null);
+  const [trayWidth, setTrayWidth] = useState(0);
+  const hasSystemTray = Boolean(systemTray);
+  const systemOverlayOpen = inboxOpen || settingsOpen;
+  const context = systemOverlayOpen || primaryPaneBlocked ? undefined : surfaceContext;
+  const contextTransfer = systemOverlayOpen ? undefined : onSurfaceContextPointerDown;
 
   useEffect(() => {
     const transport = window.octopusTransport;
-    if (!transport) return;
+    if (hasControlledWindowState || !transport) return;
     let cancelled = false;
     void transport.windowState().then((state) => {
-      if (!cancelled) { setFullScreen(state.fullScreen); setNativeInset(state.nativeControlInset); }
+      if (!cancelled) {
+        setUncontrolledFullScreen(state.fullScreen);
+        setUncontrolledNativeInset(state.nativeControlInset);
+      }
     });
-    const unsubscribe = transport.onWindowStateChanged((state) => { setFullScreen(state.fullScreen); setNativeInset(state.nativeControlInset); });
+    const unsubscribe = transport.onWindowStateChanged((state) => {
+      setUncontrolledFullScreen(state.fullScreen);
+      setUncontrolledNativeInset(state.nativeControlInset);
+    });
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [hasControlledWindowState]);
 
   useEffect(() => {
     const transport = window.octopusTransport;
     if (!transport) return;
-    const blocked = clientDialogOwnsCommands();
+    const blocked = systemOverlayOpen || clientDialogOwnsCommands();
     transport.setHistoryNavigationState({ canNavigateBack: !blocked && canNavigateBack, canNavigateForward: !blocked && canNavigateForward });
-    const unsubscribeBack = transport.onNavigateBack(() => { if (!clientDialogOwnsCommands()) onNavigateBack(); });
-    const unsubscribeForward = transport.onNavigateForward(() => { if (!clientDialogOwnsCommands()) onNavigateForward(); });
+    const unsubscribeBack = transport.onNavigateBack(() => { if (!systemOverlayOpen && !clientDialogOwnsCommands()) onNavigateBack(); });
+    const unsubscribeForward = transport.onNavigateForward(() => { if (!systemOverlayOpen && !clientDialogOwnsCommands()) onNavigateForward(); });
     return () => {
       unsubscribeBack();
       unsubscribeForward();
     };
-  }, [canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward, settingsOpen]);
+  }, [canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward, systemOverlayOpen]);
 
   useLayoutEffect(() => {
     const controls = controlsRef.current;
@@ -133,11 +148,16 @@ export function DesktopTitleBar({
     if (!controls || !paneActions) return;
 
     const measure = () => {
+      const headerLeft = headerRef.current?.getBoundingClientRect().left ?? 0;
       const controlsRect = controls.getBoundingClientRect();
       const paneActionsRect = paneActions.getBoundingClientRect();
+      const nextTrayWidth = systemTrayRef.current
+        ? Math.ceil(systemTrayRef.current.getBoundingClientRect().width) + TITLEBAR_TRAY_RIGHT_OFFSET_PX
+        : 0;
+      setTrayWidth((previous) => (previous === nextTrayWidth ? previous : nextTrayWidth));
       onSlotWidthsChange({
-        left: Math.ceil(controlsRect.right) + TITLEBAR_CLUSTER_GAP,
-        right: Math.ceil(paneActionsRect.width + TITLEBAR_END_INSET),
+        left: Math.ceil(controlsRect.right - headerLeft) + TITLEBAR_CLUSTER_GAP_PX,
+        right: Math.ceil(paneActionsRect.width + nextTrayWidth + TITLEBAR_END_INSET_PX),
       });
     };
 
@@ -145,39 +165,56 @@ export function DesktopTitleBar({
     const observer = new ResizeObserver(measure);
     observer.observe(controls);
     observer.observe(paneActions);
+    if (systemTrayRef.current) observer.observe(systemTrayRef.current);
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [fullScreen, nativeInset, onSlotWidthsChange, secondaryPaneFocused, secondaryPaneOpen]);
+  }, [
+    fullScreen,
+    hasSystemTray,
+    nativeInset,
+    onSlotWidthsChange,
+    primaryPaneBlocked,
+    secondaryPaneFocused,
+    secondaryPaneOpen,
+    sidebarAvailable,
+    systemOverlayOpen,
+  ]);
 
   return (
     <header
       aria-label="Window navigation"
-      className={`app-titlebar draggable${isElectron ? " is-electron" : ""}${fullScreen ? " is-fullscreen" : ""}`}
-      style={{ "--app-titlebar-safe-left": `${(fullScreen ? 0 : nativeInset) + 6}px` } as CSSProperties}
+      className={`app-titlebar${chromeRevealed ? " is-chrome-revealed" : " is-chrome-hidden"}${isElectron ? " is-electron" : ""}${fullScreen ? " is-fullscreen" : ""}${secondaryPaneOpen ? " has-secondary-pane" : ""}`}
+      ref={headerRef}
+      style={{
+        "--app-titlebar-safe-left": `${(fullScreen ? 0 : nativeInset) + TITLEBAR_SAFE_LEFT_GAP_PX}px`,
+        "--app-titlebar-tray-width": `${trayWidth}px`,
+      } as CSSProperties}
     >
-      <div aria-hidden="true" className="app-titlebar-drag-region" />
+      {!fullScreen ? <div aria-hidden="true" className="app-titlebar-drag-region" /> : null}
       <div className="app-titlebar-controls no-drag" ref={controlsRef}>
-        <span className="app-titlebar-history">
-          <TitlebarButton
-            disabled={!canNavigateBack}
-            glyph="navigateBack"
-            label="Back"
-            onClick={onNavigateBack}
-            shortcut={formatKeyboardShortcuts(shortcuts.navigate_back ?? [])}
-          />
-          <TitlebarButton
-            disabled={!canNavigateForward}
-            glyph="navigateBack"
-            glyphClassName="-scale-x-100"
-            label="Forward"
-            onClick={onNavigateForward}
-            shortcut={formatKeyboardShortcuts(shortcuts.navigate_forward ?? [])}
-          />
-        </span>
-        {!settingsOpen && sidebarAvailable ? <TitlebarButton
+        {!systemOverlayOpen ? (
+          <span className="app-titlebar-history">
+            <TitlebarButton
+              disabled={!canNavigateBack}
+              glyph="navigateBack"
+              label="Back"
+              onClick={onNavigateBack}
+              shortcut={formatKeyboardShortcuts(shortcuts.navigate_back ?? [])}
+            />
+            <TitlebarButton
+              disabled={!canNavigateForward}
+              glyph="navigateBack"
+              glyphClassName="-scale-x-100"
+              label="Forward"
+              onClick={onNavigateForward}
+              shortcut={formatKeyboardShortcuts(shortcuts.navigate_forward ?? [])}
+            />
+          </span>
+        ) : null}
+        {!systemOverlayOpen && sidebarAvailable ? <TitlebarButton
           buttonRef={sidebarToggleRef}
           glyph={sidebarOpen ? "sidebarOpen" : "sidebarClosed"}
           label={`${sidebarOpen ? "Hide" : "Show"} sidebar`}
@@ -187,49 +224,53 @@ export function DesktopTitleBar({
       </div>
       {context ? (
         <div className="app-titlebar-surface-context-slot">
-          <span aria-hidden="true" className="app-titlebar-surface-context-divider" />
           <span
             className={`app-titlebar-surface-context${contextTransfer ? " is-transferable no-drag" : ""}`}
             onPointerDown={contextTransfer}
           >
-            {context.glyph ? <Glyph className="icon-xs shrink-0" name={context.glyph} size={16} /> : null}
+            {context.glyph ? <Glyph className="icon-xs shrink-0" name={context.glyph} size={15} /> : null}
             <span title={context.title}>{context.title}</span>
-            {settingsOpen ? null : surfaceContextAccessory}
+            {surfaceContextAccessory}
           </span>
         </div>
       ) : null}
-      <AnimatePresence initial={false}>
-        {!settingsOpen && !primaryPaneBlocked && surfaceTitle ? (
-          <motion.div
-            animate={{ opacity: 1 }}
-            className="app-titlebar-surface-title-slot"
-            exit={{ opacity: 0 }}
-            initial={{ opacity: 0 }}
-            key={surfaceTitle}
-            transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
+      {!systemOverlayOpen && !primaryPaneBlocked && surfaceTitle ? (
+        <div className="app-titlebar-surface-title-inline">
+          <button
+            aria-label={onSurfaceTitleClick ? `Close ${surfaceTitle}` : surfaceTitle}
+            className="app-titlebar-surface-title no-drag"
+            onClick={onSurfaceTitleClick}
+            type="button"
           >
-            <button
-              aria-label={onSurfaceTitleClick ? `Close ${surfaceTitle}` : surfaceTitle}
-              className="app-titlebar-surface-title no-drag"
-              onClick={onSurfaceTitleClick}
-              type="button"
-            >
-              {onSurfaceTitleClick ? <Glyph className="icon-2xs" name="chevronUp" size={12} /> : null}
-              <span>{surfaceTitle}</span>
-            </button>
+            {onSurfaceTitleClick ? <Glyph className="icon-2xs" name="chevronUp" size={12} /> : null}
+            <span>{surfaceTitle}</span>
+          </button>
+        </div>
+      ) : null}
+      <AnimatePresence initial={false}>
+        {dock ? (
+          <motion.div
+            animate={{ opacity: 1, y: 0 }}
+            className="app-titlebar-dock-slot"
+            exit={{ opacity: 0, y: -4 }}
+            initial={{ opacity: 0, y: -4 }}
+            key="top-dock"
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+          >
+            {dock}
           </motion.div>
         ) : null}
       </AnimatePresence>
-      <motion.div
+      <div
         className="app-titlebar-pane-actions no-drag"
         data-pane-role="primary"
-        hidden={settingsOpen || primaryPaneBlocked}
-        inert={contentDisabled || settingsOpen || primaryPaneBlocked}
+        hidden={systemOverlayOpen || primaryPaneBlocked}
+        inert={contentDisabled || systemOverlayOpen || primaryPaneBlocked}
         ref={paneActionsRef}
-        style={{ right: paneActionsRight }}
+        style={{ right: trayWidth + TITLEBAR_END_INSET_PX }}
       >
         <div className="workspace-pane-header-actions no-drag" ref={onPrimaryActionsHostChange} />
-        {(settingsOpen ? [] : surfaceActions).map((surfaceAction) => (
+        {(systemOverlayOpen ? [] : surfaceActions).map((surfaceAction) => (
           <TitlebarButton
             actionId={surfaceAction.actionId}
             badge={surfaceAction.badge}
@@ -241,26 +282,21 @@ export function DesktopTitleBar({
             surfaceAction
           />
         ))}
-        {!settingsOpen && !secondaryPaneOpen && secondaryPaneCollapsed ? (
+        {!systemOverlayOpen ? (
           <TitlebarButton
             glyph="splitPane"
-            label="Open secondary pane"
+            label={secondaryPaneOpen ? "Close secondary pane" : "Open secondary pane"}
             onClick={onToggleSecondaryPane}
+            open={secondaryPaneOpen}
             shortcut={formatKeyboardShortcuts(shortcuts.toggle_split ?? [])}
           />
         ) : null}
-      </motion.div>
-      {settingsOpen ? (
-        <div className="app-titlebar-secondary-controls no-drag">
-          <ShellTooltip label="Close Settings"><button aria-label="Close Settings" className="app-titlebar-action no-drag" id="settings-window-close" onClick={onCloseSettings} type="button"><Glyph name="close" size={16} /></button></ShellTooltip>
+      </div>
+      {systemTray ? (
+        <div className="app-titlebar-system-tray no-drag" ref={systemTrayRef}>
+          {systemTray}
         </div>
-      ) : secondaryPaneOpen || !secondaryPaneCollapsed ? <motion.div
-        className="app-titlebar-secondary-pane"
-        aria-hidden={!secondaryPaneOpen || undefined}
-        inert={contentDisabled || !secondaryPaneOpen}
-        ref={onPaneControlsHostChange}
-        style={{ width: secondaryPaneWidth }}
-      /> : null}
+      ) : null}
     </header>
   );
 }

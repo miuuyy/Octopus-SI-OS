@@ -7,16 +7,6 @@
 
 @layer octopus-foundation {
   :root {
-    --gray-0: #ffffff;
-    --gray-100: #ededed;
-    --gray-300: #afafaf;
-    --gray-500: #5d5d5d;
-    --gray-600: #414141;
-    --gray-700: #303030;
-    --gray-750: #282828;
-    --gray-800: #212121;
-    --gray-900: #181818;
-    --gray-1000: #0d0d0d;
     --bg: #181818;
     --bg-deep: #000000;
     --sidebar: #212121;
@@ -47,25 +37,6 @@
     --amber: #ff8549;
     --danger: #ff6764;
     --danger-soft: rgba(250, 66, 62, 0.13);
-    --blue-100: #99ceff;
-    --blue-300: #339cff;
-    --blue-400: #0285ff;
-    --blue-900: #00284d;
-    --green-300: #40c977;
-    --green-400: #04b84c;
-    --green-500: #00a240;
-    --green-700: #00692a;
-    --orange-300: #ff8549;
-    --orange-400: #fb6a22;
-    --orange-500: #e25507;
-    --red-300: #ff6764;
-    --red-400: #fa423e;
-    --red-500: #e02e2a;
-    --yellow-300: #ffd240;
-    --yellow-400: #ffc300;
-    --purple-300: #ad7bf9;
-    --purple-400: #924ff7;
-    --pink-400: #ff66ad;
     --yellow: #ffd240;
     --red: #fa423e;
     --pink: #ff66ad;
@@ -77,16 +48,19 @@
     --button-secondary-hover: rgba(255, 255, 255, 0.08);
     --button-secondary-active: rgba(255, 255, 255, 0.12);
     --row-radius: 9999px;
-    --text-xs: 12px;
-    --text-sm: 13px;
+    --text-xs: 11px;
+    --text-sm: 12px;
     --text-base: 14px;
     --text-lg: 16px;
+    --text-heading-sm: 18px;
+    --text-heading-md: 20px;
+    --text-heading-lg: 24px;
+    --text-heading-app: 28px;
     --height-token-row: 30px;
     --sidebar-w: 216px;
     --inspector-w: 348px;
     --chat-rail-w: 260px;
     --radius: 10px;
-    --radius-sm: 6px;
     --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     --font-sans: var(--font-ui);
@@ -100,22 +74,26 @@
     --radius-2xl-base: 1rem;
     --radius-3xl-base: 1.25rem;
     --radius-4xl-base: 1.5rem;
-    --corner-radius-scale: var(--corner-scale, 1);
-    --radius-2xs: calc(var(--radius-2xs-base) * var(--corner-radius-scale));
-    --radius-xs: calc(var(--radius-xs-base) * var(--corner-radius-scale));
-    --radius-md: calc(var(--radius-md-base) * var(--corner-radius-scale));
-    --radius-lg: calc(var(--radius-lg-base) * var(--corner-radius-scale));
-    --radius-xl: calc(var(--radius-xl-base) * var(--corner-radius-scale));
-    --radius-2xl: calc(var(--radius-2xl-base) * var(--corner-radius-scale));
-    --radius-3xl: calc(var(--radius-3xl-base) * var(--corner-radius-scale));
-    --radius-4xl: calc(var(--radius-4xl-base) * var(--corner-radius-scale));
+    --radius-2xs: var(--radius-2xs-base);
+    --radius-xs: var(--radius-xs-base);
+    --radius-sm: var(--radius-sm-base);
+    --radius-md: var(--radius-md-base);
+    --radius-lg: var(--radius-lg-base);
+    --radius-xl: var(--radius-xl-base);
+    --radius-2xl: var(--radius-2xl-base);
+    --radius-3xl: var(--radius-3xl-base);
+    --radius-4xl: var(--radius-4xl-base);
+    --radius-suggestion-menu: var(--radius-2xl);
+    --radius-form-dialog: var(--radius-4xl);
     --radius-token-row: 9999px;
     --radius-full: 9999px;
     --composer-radius: calc(var(--spacing) * 5.5);
     --shadow-sm: 0 1px 2px -1px #00000014;
     --shadow-md: 0 2px 4px -1px #00000014;
     --shadow-lg: 0 4px 8px -2px #0000001a;
+    --shadow-lg-strong: 0px 4px 8px -2px #00000021;
     --shadow-xl: 0 8px 16px -4px #0000001f;
+    --shadow-xl-spread: 0px 0px 0px 0.5px var(--color-token-border), var(--shadow-xl);
     --shadow-2xl: 0 16px 32px -8px #00000030;
     --elevation-stroke: 0 0 0 0.5px var(--color-token-border-heavy);
     --elevation-sidebar: var(--elevation-stroke), 0 3px 7.5px #00000008, 0 0 16px #00000005;
@@ -138,9 +116,17 @@
     --spacing-token-button-composer-gap: var(--spacing);
     --transition-duration-basic: 150ms;
     --transition-duration-relaxed: 300ms;
+    --default-transition-duration: var(--transition-duration-basic);
+    --cubic-enter: cubic-bezier(0.19, 1, 0.22, 1);
+    --cubic-exit: cubic-bezier(0.8, 0, 0.4, 1);
     --ease-basic: ease;
-    --ease-enter: cubic-bezier(0.19, 1, 0.22, 1);
+    --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    --ease-enter: var(--cubic-enter);
+    --ease-cubic-enter: var(--cubic-enter);
     --ease-enter-snappy: cubic-bezier(0.23, 1, 0.32, 1);
+    --motion-fade-in: motion-fade-in;
+    --max-app-overlay-z-index: 2147480000;
+    --toast-z-index: calc(var(--max-app-overlay-z-index) - 1);
     --thread-content-max-width: 48rem;
     --octopus-window-zoom: 1;
     color: var(--text);
@@ -154,7 +140,6 @@
   }
 
   :is([data-octopus-window-type="browser"], [data-octopus-window-type="chrome-extension"], [data-octopus-window-type="electron"]) body {
-    --color-background-primary-soft-alpha: var(--color-background-elevated-secondary);
     --padding-panel-base: calc(var(--spacing) * 5);
     --padding-panel: var(--padding-panel-base);
     --padding-row-y: calc(var(--spacing) * 1.25);
@@ -170,7 +155,7 @@
     --color-token-badge-background: var(--color-background-button-secondary);
     --color-token-badge-foreground: var(--color-text-foreground-secondary);
     --color-token-bg-appshot: color-mix(in srgb, var(--color-background-editor-opaque) 75%, transparent);
-    --color-token-bg-fog: var(--color-background-elevated-secondary);
+    --color-token-bg-fog: color-mix(in oklab, var(--color-token-foreground) 2.5%, transparent);
     --color-token-bg-primary: var(--color-token-side-bar-background);
     --color-token-bg-secondary: color-mix(in srgb, var(--color-token-bg-primary) 92%, transparent);
     --color-token-bg-subtle: color-mix(in srgb, var(--color-text-foreground) 5%, transparent);
@@ -209,13 +194,13 @@
     --color-token-editor-group-drop-into-prompt-background: var(--color-background-accent-active);
     --color-token-editor-group-drop-into-prompt-foreground: var(--color-text-foreground);
     --color-token-editor-selection-background: var(--color-background-accent-active);
-    --color-token-editor-warning-foreground: var(--color-text-warning);
+    --color-token-editor-warning-foreground: var(--color-charts-orange);
     --color-token-editor-widget-background: var(--color-background-elevated-primary);
     --color-token-error-background: var(--color-background-status-error);
     --color-token-error-border: var(--color-border-error);
     --color-token-error-foreground: var(--color-text-error);
-    --color-token-focus: var(--color-border-focus);
-    --color-token-focus-border: var(--color-border-focus);
+    --color-token-focus: var(--color-ring);
+    --color-token-focus-border: var(--color-ring);
     --color-token-foreground: var(--color-text-foreground);
     --color-token-foreground-5: color-mix(in srgb, var(--color-text-foreground) 5%, transparent);
     --color-token-foreground-translucent: color-mix(in srgb, var(--color-text-foreground) 8%, transparent);
@@ -236,7 +221,7 @@
     --color-token-input-validation-warning-background: var(--color-background-status-warning);
     --color-token-input-validation-warning-border: var(--color-border-warning);
     --color-token-interactive-label-accent-default: var(--color-text-accent);
-    --color-token-link: var(--color-text-accent);
+    --color-token-link: var(--link-primary-text-color);
     --color-token-list-active-selection-background: var(--color-background-button-secondary);
     --color-token-list-active-selection-foreground: var(--color-text-foreground);
     --color-token-list-active-selection-icon-foreground: var(--color-icon-primary);
@@ -250,7 +235,7 @@
     --color-token-menubar-selection-foreground: var(--color-text-foreground);
     --color-token-muted-foreground: var(--color-text-foreground-tertiary);
     --color-token-non-assistant-body-descendant: color-mix(in srgb, var(--color-text-foreground) 50%, transparent);
-    --color-token-on-accent: var(--color-text-on-accent);
+    --color-token-on-accent: var(--color-text-on-accent, var(--white));
     --color-token-primary: var(--color-text-accent);
     --color-token-progress-bar-background: var(--color-background-accent-active);
     --color-token-radio-active-foreground: var(--color-text-foreground);
@@ -283,8 +268,8 @@
     --color-token-terminal-ansi-bright-white: var(--color-text-foreground);
     --color-token-text-accent: var(--color-text-accent);
     --color-token-text-code-block-background: var(--color-background-button-secondary);
-    --color-token-text-link-active-foreground: var(--color-text-accent);
-    --color-token-text-link-foreground: var(--color-text-accent);
+    --color-token-text-link-active-foreground: var(--link-primary-text-color-hover);
+    --color-token-text-link-foreground: var(--link-primary-text-color);
     --color-token-text-preformat-background: var(--color-background-elevated-secondary);
     --color-token-text-preformat-foreground: var(--color-text-foreground);
     --color-token-text-primary: var(--color-text-foreground);
@@ -304,7 +289,7 @@
     --vscode-editor-lineHighlightBackground: var(--color-text-foreground);
     --vscode-editor-selectionBackground: var(--color-text-accent);
     --vscode-errorForeground: var(--color-text-error);
-    --vscode-focusBorder: var(--color-border-focus);
+    --vscode-focusBorder: var(--color-ring);
     --vscode-font-family: var(--font-ui);
     --vscode-font-size: var(--ui-font-size, 13px);
     --vscode-font-weight: 400;
@@ -324,8 +309,8 @@
     --vscode-charts-purple: var(--color-accent-purple);
     --vscode-charts-orange: var(--color-accent-orange);
     --vscode-charts-yellow: var(--color-accent-yellow);
-    --vscode-textLink-foreground: var(--color-text-accent);
-    --vscode-textLink-activeForeground: var(--color-text-accent);
+    --vscode-textLink-foreground: var(--link-primary-text-color);
+    --vscode-textLink-activeForeground: var(--link-primary-text-color-hover);
     --vscode-textCodeBlock-background: var(--color-background-button-secondary);
     --vscode-terminal-background: var(--color-background-surface);
     --vscode-terminal-foreground: var(--color-text-foreground);
@@ -464,6 +449,13 @@
 
 }
 
+@layer base {
+  ::selection {
+    background-color: var(--color-background-text-selection);
+    color: var(--color-text);
+  }
+}
+
 .app-toast-viewport {
   position: fixed;
   z-index: 60;
@@ -508,33 +500,45 @@
   flex-direction: row;
   align-items: flex-start;
   gap: 4px;
-  padding: 8px;
+  padding: 8px 12px;
   border: 1px solid var(--color-token-border);
   border-radius: var(--radius-xl);
-  background: var(--color-token-dropdown-background);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
+  background-color: rgb(from var(--color-surface, Canvas) r g b / 1);
+  background-image: linear-gradient(var(--color-surface-elevated-secondary) 0 0);
+  box-shadow: var(--shadow-300), var(--shadow-hairline);
   color: var(--color-token-foreground);
   font-size: var(--text-base, 14px);
-  line-height: 1.5;
+  line-height: 1.4;
   pointer-events: auto;
   -webkit-app-region: no-drag;
 }
 
+.app-toast-alert.is-info {
+  border-color: var(--color-border-info-surface);
+  background-color: rgb(from var(--color-surface, Canvas) r g b / 1);
+  background-image: linear-gradient(var(--color-background-info-surface) 0 0);
+  color: var(--color-text-info-surface);
+}
+
 .app-toast-alert.is-danger {
-  border-color: var(--color-token-input-validation-error-border, color-mix(in srgb, var(--color-token-error-foreground) 35%, transparent));
-  background: var(--color-token-input-validation-error-background, color-mix(in srgb, var(--color-token-error-foreground) 10%, var(--color-token-dropdown-background)));
+  border-color: var(--color-border-danger-outline, var(--color-border-danger-surface));
+  background-color: rgb(from var(--color-surface, Canvas) r g b / 1);
+  background-image: linear-gradient(var(--color-background-danger-surface) 0 0), linear-gradient(var(--color-surface-elevated-secondary) 0 0);
+  color: var(--color-text-danger-surface);
 }
 
 .app-toast-alert.is-warning {
-  border-color: var(--color-token-input-validation-warning-border, var(--color-token-border));
-  background: var(--color-token-input-validation-warning-background, var(--color-token-dropdown-background));
+  border-color: var(--color-border-warning-outline, var(--color-border-warning-surface));
+  background-color: rgb(from var(--color-surface, Canvas) r g b / 1);
+  background-image: linear-gradient(var(--color-background-warning-surface) 0 0), linear-gradient(var(--color-surface-elevated-secondary) 0 0);
+  color: var(--color-text-warning-surface);
 }
 
 .app-toast-alert.is-success {
-  --color-background-success-surface: light-dark(#edfaf2, #011c0b);
-  border-color: color-mix(in oklab, var(--color-token-success-foreground) 20%, transparent);
-  background: var(--color-background-success-surface);
-  color: var(--color-token-success-foreground);
+  border-color: color-mix(in oklab, var(--color-text-success) 20%, transparent);
+  background-color: rgb(from var(--color-surface, Canvas) r g b / 1);
+  background-image: linear-gradient(var(--color-background-success-surface) 0 0), linear-gradient(var(--color-surface-elevated-secondary) 0 0);
+  color: var(--color-text-success-surface);
 }
 
 .app-toast-icon {

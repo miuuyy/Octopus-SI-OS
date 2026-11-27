@@ -14,15 +14,15 @@ export type ClientNavigationDestination = Readonly<{
   sidebar: boolean;
 }>;
 
-export const NAVIGATION_RAIL_WIDTH = 52;
+export const NAVIGATION_RAIL_WIDTH = 0;
 
 export const clientNavigationDestinations: readonly ClientNavigationDestination[] = [
   { id: "home", label: "Home", surfaceId: "voice", glyph: "home", selectedGlyph: "homeFilled", sidebar: false },
   { id: "tasks", label: "Tasks", surfaceId: "chat", glyph: "tasks", selectedGlyph: "tasksFilled", sidebar: true },
-  { id: "dashboard", label: "Dashboard", surfaceId: "dashboard", glyph: "dashboardRail", selectedGlyph: "dashboardRailFilled", sidebar: false },
-  { id: "inbox", label: "Inbox", surfaceId: "inbox", glyph: "inbox", selectedGlyph: "inboxFilled", sidebar: true },
+  { id: "inbox", label: "Inbox", surfaceId: "inbox", glyph: "bell", selectedGlyph: "bellFilled", sidebar: true },
   { id: "applications", label: "Applications", surfaceId: "applications", glyph: "applicationsRail", selectedGlyph: "applicationsRailFilled", sidebar: false },
   { id: "drivers", label: "Drivers", surfaceId: "drivers", glyph: "driversRail", selectedGlyph: "driversRailFilled", sidebar: false },
+  { id: "dashboard", label: "Dashboard", surfaceId: "dashboard", glyph: "dashboardRail", selectedGlyph: "dashboardRailFilled", sidebar: false },
 ];
 
 export function navigationSectionForSurface(surface: Pick<ClientSurfaceDescriptor, "id" | "placements">): ClientNavigationSection {

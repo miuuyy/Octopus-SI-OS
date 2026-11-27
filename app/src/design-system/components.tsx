@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import type {
   ButtonHTMLAttributes,
   CSSProperties,
@@ -14,6 +14,7 @@ import type {
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from "react";
+import { useShouldReduceMotion } from "../appearance";
 import "./octopusIconButton.css";
 import "./booleanControls.css";
 import "./nativeSlider.css";
@@ -28,7 +29,7 @@ export type OcTone = "neutral" | "accent" | "success" | "warning" | "danger" | "
 export type OcControlVariant = "primary" | "secondary" | "ghost" | "outline";
 export type OcControlSize = "xs" | "sm" | "md";
 
-const OCTOPUS_BUTTON_BASE = "border-default no-drag cursor-interaction flex items-center gap-1 rounded-lg border whitespace-nowrap select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:cursor-default";
+const OCTOPUS_BUTTON_BASE = "no-drag cursor-interaction flex items-center gap-1 border whitespace-nowrap select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 disabled:cursor-default";
 const OCTOPUS_BUTTON_SIZE: Record<OcControlSize, string> = {
   xs: "h-token-button-composer-sm px-1.5 py-0 text-sm leading-[18px]",
   sm: "h-token-button-composer px-2 py-0 text-base leading-[18px]",
@@ -40,17 +41,23 @@ const OCTOPUS_CONTROL_HEIGHT: Record<OcControlSize, string> = {
   md: "min-h-toolbar",
 };
 const OCTOPUS_BUTTON_VARIANT: Record<OcControlVariant, string> = {
-  primary: "bg-token-foreground text-token-dropdown-background enabled:hover:bg-token-foreground/80 data-[state=open]:bg-token-foreground/80",
-  secondary: "border-transparent bg-token-foreground/5 text-token-foreground enabled:hover:bg-token-foreground/10 data-[state=open]:bg-token-foreground/10",
-  ghost: "border-transparent bg-transparent text-tertiary enabled:hover:bg-primary-ghost-hover data-[state=open]:bg-primary-ghost-hover",
-  outline: "bg-primary-soft-alpha text-default enabled:hover:bg-primary-ghost-hover data-[state=open]:bg-primary-ghost-hover",
+  primary: "border-transparent bg-[var(--color-background-primary-solid)] text-[var(--color-text-primary-solid)] enabled:hover:bg-[var(--color-background-primary-solid-hover)] enabled:active:bg-[var(--color-background-primary-solid-active)] data-[state=open]:bg-[var(--color-background-primary-solid-hover)]",
+  secondary: "border-transparent bg-[var(--color-background-secondary-soft-alpha)] text-[var(--color-text-secondary-soft,var(--color-text))] enabled:hover:bg-[var(--color-background-secondary-soft-alpha-hover)] enabled:active:bg-[var(--color-background-secondary-soft-alpha-active)] data-[state=open]:bg-[var(--color-background-secondary-soft-alpha-hover)]",
+  ghost: "border-transparent bg-transparent text-tertiary enabled:hover:bg-[var(--color-background-secondary-ghost-hover)] enabled:hover:text-default enabled:active:bg-[var(--color-background-secondary-ghost-active)] data-[state=open]:bg-[var(--color-background-secondary-ghost-hover)] data-[state=open]:text-default",
+  outline: "border-[var(--color-border-secondary-outline)] bg-transparent text-default enabled:hover:border-[var(--color-border-secondary-outline-hover)] enabled:hover:bg-[var(--color-background-secondary-outline-hover)] enabled:active:bg-[var(--color-background-secondary-outline-active)] data-[state=open]:border-[var(--color-border-secondary-outline-hover)] data-[state=open]:bg-[var(--color-background-secondary-outline-hover)]",
+};
+const OCTOPUS_BUTTON_DANGER_VARIANT: Record<OcControlVariant, string> = {
+  primary: "border-transparent bg-[var(--color-background-danger-solid)] text-[var(--color-text-danger-solid)] enabled:hover:bg-[var(--color-background-danger-solid-hover)] enabled:active:bg-[var(--color-background-danger-solid-active)] data-[state=open]:bg-[var(--color-background-danger-solid-hover)]",
+  secondary: "border-transparent bg-[var(--color-background-danger-soft-alpha)] text-[var(--color-text-danger-soft-alpha,var(--color-text-danger))] enabled:hover:bg-[var(--color-background-danger-soft-alpha-hover)] enabled:active:bg-[var(--color-background-danger-soft-alpha-active)] data-[state=open]:bg-[var(--color-background-danger-soft-alpha-hover)]",
+  ghost: "border-transparent bg-transparent text-[var(--color-text-danger)] enabled:hover:bg-[var(--color-background-danger-soft-alpha)] enabled:active:bg-[var(--color-background-danger-soft-alpha-active)] data-[state=open]:bg-[var(--color-background-danger-soft-alpha)]",
+  outline: "border-[var(--color-border-danger-outline)] bg-transparent text-[var(--color-text-danger)] enabled:hover:bg-[var(--color-background-danger-soft-alpha)] enabled:active:bg-[var(--color-background-danger-soft-alpha-active)] data-[state=open]:bg-[var(--color-background-danger-soft-alpha)]",
 };
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
-export const OCTOPUS_COMPACT_SURFACE_CLASS = "border-token-border bg-token-dropdown-background/90 relative flex w-full flex-col overflow-hidden rounded-2xl border p-1 text-sm backdrop-blur-sm";
+export const OCTOPUS_COMPACT_SURFACE_CLASS = "border-default bg-surface-elevated-secondary relative flex w-full flex-col overflow-hidden rounded-[var(--radius-suggestion-menu,var(--radius-2xl))] border p-1 text-sm";
 export const OCTOPUS_FLOATING_SURFACE_CLASS = "group relative z-40 flex w-full flex-col overflow-hidden rounded-2xl bg-token-main-surface-primary/70 text-token-foreground shadow-lg ring-[0.5px] ring-token-border";
 export const OCTOPUS_WIDGET_SURFACE_CLASS = "group relative flex w-full flex-col overflow-hidden rounded-xl border border-token-foreground/5 bg-token-foreground/[0.01] text-token-foreground";
 
@@ -92,6 +99,20 @@ export function OcMenuSectionLabel({ className, ...props }: HTMLAttributes<HTMLD
         className,
       )}
     />
+  );
+}
+
+export function OcMenuSeparator({ className }: { className?: string }) {
+  return (
+    <div
+      className={cx(
+        "oc-menu-separator w-full px-[var(--app-menu-separator-inset,var(--padding-row-x))] py-[var(--app-menu-separator-gutter,var(--spacing))]",
+        className,
+      )}
+      role="separator"
+    >
+      <div className="h-px w-full bg-border" />
+    </div>
   );
 }
 
@@ -145,8 +166,10 @@ type OcMenuItemProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" 
   density?: "menu" | "workspace";
   description?: ReactNode;
   descriptionAllowWrap?: boolean;
+  keyboardShortcut?: ReactNode;
   label: ReactNode;
   leadingIcon?: GlyphName;
+  rightText?: ReactNode;
   selected?: boolean;
   tone?: "default" | "danger";
   trailing?: ReactNode;
@@ -160,8 +183,10 @@ export function OcMenuItem({
   description,
   descriptionAllowWrap = false,
   disabled,
+  keyboardShortcut,
   label,
   leadingIcon,
+  rightText,
   selected = false,
   tone = "default",
   trailing,
@@ -197,6 +222,7 @@ export function OcMenuItem({
           : "group cursor-interaction",
         className,
       )}
+      data-color={tone === "danger" ? "danger" : undefined}
       data-selected={selected || undefined}
       data-text-value={typeof label === "string" ? label : undefined}
       {...props}
@@ -205,13 +231,15 @@ export function OcMenuItem({
       type={type}
     >
       {description == null ? (
-        <span className="oc-menu-item-content">
+        <span className="oc-menu-item-content" data-menu-row-content="true">
           {icon ? <span className="oc-menu-item-icon">{icon}</span> : null}
           <span className={cx("min-w-0 flex-1", allowWrap ? "whitespace-normal" : "truncate")}>{label}</span>
+          {rightText != null ? <span className="oc-menu-item-right-text">{rightText}</span> : null}
+          {keyboardShortcut != null ? <span className="oc-menu-item-shortcut">{keyboardShortcut}</span> : null}
           {end}
         </span>
       ) : (
-        <span className="flex w-full items-center gap-1.5">
+        <span className="oc-menu-item-content" data-menu-row-content="true">
           {icon ? <span className="oc-menu-item-icon">{icon}</span> : null}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className={cx("min-w-0", allowWrap ? "whitespace-normal" : "truncate")}>{label}</span>
@@ -220,6 +248,8 @@ export function OcMenuItem({
               descriptionAllowWrap ? "whitespace-normal" : "truncate",
             )}>{description}</span>
           </span>
+          {rightText != null ? <span className="oc-menu-item-right-text">{rightText}</span> : null}
+          {keyboardShortcut != null ? <span className="oc-menu-item-shortcut">{keyboardShortcut}</span> : null}
           {end}
         </span>
       )}
@@ -265,6 +295,7 @@ type OcButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   trailingIcon?: GlyphName;
   meta?: ReactNode;
   selected?: boolean;
+  shape?: "default" | "pill";
   tone?: OcTone;
   variant?: OcControlVariant;
   size?: OcControlSize;
@@ -277,6 +308,7 @@ export function OcButton({
   trailingIcon,
   meta,
   selected = false,
+  shape = "default",
   tone = "neutral",
   variant = "secondary",
   size = "sm",
@@ -286,6 +318,9 @@ export function OcButton({
   title,
   ...props
 }: OcButtonProps) {
+  const variantClass = tone === "danger"
+    ? OCTOPUS_BUTTON_DANGER_VARIANT[variant]
+    : OCTOPUS_BUTTON_VARIANT[variant];
   const button = (
     <button
       ref={buttonRef}
@@ -293,12 +328,14 @@ export function OcButton({
         "oc-button-root",
         `oc-tone-${tone}`,
         OCTOPUS_BUTTON_BASE,
+        shape === "pill" ? "rounded-full" : "rounded-lg",
         !busy && "disabled:opacity-40",
         OCTOPUS_BUTTON_SIZE[size],
-        OCTOPUS_BUTTON_VARIANT[variant],
+        variantClass,
         selected && "is-selected bg-token-foreground/10",
         className,
       )}
+      data-color={tone === "danger" ? "danger" : undefined}
       data-oc-control="button"
       data-state={selected ? "selected" : undefined}
       {...props}
@@ -321,7 +358,7 @@ export type OcAnimatedActionSlotProps = {
 };
 
 export function OcAnimatedActionSlot({ children, className }: OcAnimatedActionSlotProps) {
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useShouldReduceMotion();
   const contentRef = useRef<HTMLSpanElement>(null);
   const [width, setWidth] = useState<number | null>(null);
 
@@ -420,6 +457,7 @@ type OcSegmentedProps<T extends string> = {
   onChange: (next: T) => void;
   className?: string;
   size?: OcControlSize;
+  variant?: "default" | "form" | "ghost";
 };
 
 export function OcSegmented<T extends string>({
@@ -511,7 +549,7 @@ export function OcInlineProgress({
   className,
   ...props
 }: OcInlineProgressProps) {
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useShouldReduceMotion();
   const determinate = typeof value === "number" && Number.isFinite(value);
   const progress = determinate ? Math.max(0, Math.min(100, value)) : null;
   const roundedProgress = progress == null ? null : Math.round(progress);
@@ -626,6 +664,7 @@ export function OcCheckbox({
   const descriptionId = description ? `${inputId}-description` : undefined;
   const inputRef = useRef<HTMLInputElement>(null);
   const state = checked === "mixed" ? "mixed" : checked ? "checked" : "unchecked";
+  const indicatorState = checked === "mixed" ? "indeterminate" : state;
 
   useEffect(() => {
     if (inputRef.current) inputRef.current.indeterminate = checked === "mixed";
@@ -634,6 +673,8 @@ export function OcCheckbox({
   return (
     <label
       className={cx("oc-checkbox inline-flex min-w-0 cursor-interaction items-center gap-2", disabled && "cursor-not-allowed", className)}
+      data-disabled={disabled ? "" : undefined}
+      data-has-label={showLabel ? "" : undefined}
       data-oc-control="checkbox"
       data-state={state}
     >
@@ -652,9 +693,18 @@ export function OcCheckbox({
       />
       <span
         aria-hidden="true"
-        className="oc-checkbox__control"
+        className="oc-checkbox__control relative inline-flex size-[18px] shrink-0 items-center justify-center rounded-[var(--radius-xs)]"
+        data-disabled={disabled ? "" : undefined}
+        data-state={indicatorState}
       >
-        {checked === "mixed" ? <svg width="14" height="14" viewBox="0 0 20 20" fill="none" focusable="false"><path d="M3.5 10.0002C3.5 9.63297 3.79777 9.33521 4.16504 9.33521H15.835C16.2022 9.33521 16.5 9.63297 16.5 10.0002C16.5 10.3675 16.2022 10.6652 15.835 10.6652H4.16504C3.79777 10.6652 3.5 10.3675 3.5 10.0002Z" fill="currentColor" /></svg> : checked ? <Glyph name="check" size={12} /> : null}
+        {checked === "mixed" || checked ? (
+          <span
+            aria-hidden="true"
+            className="oc-checkbox__mark"
+            data-disabled={disabled ? "" : undefined}
+            data-state={indicatorState}
+          />
+        ) : null}
       </span>
       <span className={cx("min-w-0", !showLabel && "sr-only")}>
         <span className="block min-w-0 text-sm font-medium text-token-text-primary" id={labelId}>{label}</span>
@@ -713,6 +763,8 @@ export type OcSwitchProps = {
   disabled?: boolean;
   className?: string;
   id?: string;
+  size?: "default" | "sm";
+  tone?: "accent" | "neutral";
   onCheckedChange?: (checked: boolean) => void;
 };
 
@@ -724,12 +776,20 @@ export function OcSwitch({
   disabled,
   onCheckedChange,
   id,
+  size = "default",
+  tone = "accent",
   checked,
 }: OcSwitchProps) {
   const generatedId = useId();
   const labelId = id ?? `${generatedId}-label`;
   const descriptionId = description ? `${generatedId}-description` : undefined;
   const state = checked ? "checked" : "unchecked";
+  const neutralCheckedStyle = tone === "neutral" && checked
+    ? {
+        "--switch-track-color-checked": "var(--color-text)",
+        "--switch-thumb-color-checked": "var(--color-surface)",
+      } as CSSProperties
+    : undefined;
 
   const control = (
     <button
@@ -741,7 +801,9 @@ export function OcSwitch({
         "inline-flex cursor-interaction items-center text-sm focus-visible:rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
         !showLabel && className,
       )}
+      data-size={size}
       data-state={state}
+      data-tone={tone}
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
       role="switch"
@@ -750,14 +812,24 @@ export function OcSwitch({
       <span
         aria-hidden="true"
         className={cx(
-          "oc-switch__track relative inline-flex h-5 w-8 shrink-0 items-center rounded-full transition-colors duration-basic ease-out",
-          checked ? "bg-token-charts-blue" : "bg-token-foreground/10",
+          "oc-switch__track relative inline-flex shrink-0 items-center rounded-full transition-colors duration-basic ease-out",
+          size === "sm" ? "h-4 w-7" : "h-5 w-8",
+          !checked && "bg-token-foreground/10",
+          checked && tone === "neutral" && "bg-[var(--color-text)]",
         )}
+        data-size={size}
         data-state={state}
+        data-tone={tone}
+        style={neutralCheckedStyle}
       >
         <span
-          className="oc-switch__thumb h-4 w-4 rounded-full border border-[color:var(--gray-0)] bg-[color:var(--gray-0)] shadow-sm transition-transform duration-basic ease-out"
+          className={cx(
+            "oc-switch__thumb rounded-full shadow-[var(--switch-thumb-shadow,0_1px_2px_#0003)] transition-transform duration-basic ease-out",
+            size === "sm" ? "h-3 w-3" : "h-4 w-4",
+          )}
+          data-size={size}
           data-state={state}
+          data-tone={tone}
         />
       </span>
     </button>
@@ -1000,6 +1072,7 @@ export type OcTextFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "size
   trailing?: ReactNode;
   showLabel?: boolean;
   size?: OcControlSize;
+  variant?: "outline" | "soft";
   inputRef?: Ref<HTMLInputElement>;
   inputClassName?: string;
 };
@@ -1012,6 +1085,7 @@ export function OcTextField({
   trailing,
   showLabel = false,
   size = "sm",
+  variant = "outline",
   inputRef,
   inputClassName,
   className,
@@ -1032,11 +1106,15 @@ export function OcTextField({
           {...props}
           aria-describedby={supportId}
           aria-invalid={Boolean(error) || undefined}
+          data-variant={variant}
           disabled={disabled}
           id={inputId}
           ref={inputRef}
           className={cx(
-            "w-full min-w-0 border border-primary-outline rounded-md bg-primary-soft text-sm text-default outline-none placeholder:text-tertiary focus:border-ring aria-invalid:border-text-danger aria-invalid:ring-2 aria-invalid:ring-text-danger/20 disabled:cursor-not-allowed disabled:bg-text/5 disabled:text-secondary",
+            "w-full min-w-0 rounded-md border text-sm text-default outline-none transition-[border-color,background-color] duration-basic ease-out placeholder:text-tertiary aria-invalid:border-[var(--input-border-color-invalid,var(--color-text-danger))] aria-invalid:ring-2 aria-invalid:ring-text-danger/20 disabled:cursor-not-allowed disabled:bg-text/5 disabled:text-secondary",
+            variant === "soft"
+              ? "border-transparent bg-[var(--input-soft-background-color,var(--color-background-neutral-soft-alpha))] focus:border-[var(--input-outline-border-color-focus,var(--color-ring))]"
+              : "border-[var(--input-outline-border-color,var(--color-border-secondary-outline))] bg-transparent enabled:hover:border-[var(--input-outline-border-color-hover,var(--color-border-secondary-outline-hover))] focus:border-[var(--input-outline-border-color-focus,var(--color-ring))]",
             size === "xs" ? "h-7 px-2" : "h-9 px-2.5",
             size === "xs" && props.type === "number" && "tabular-nums",
             inputClassName,
@@ -1058,6 +1136,7 @@ export type OcTextAreaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
   description?: ReactNode;
   error?: ReactNode;
   showLabel?: boolean;
+  variant?: "outline" | "soft";
   textareaClassName?: string;
 };
 
@@ -1066,6 +1145,7 @@ export function OcTextArea({
   description,
   error,
   showLabel = false,
+  variant = "outline",
   textareaClassName,
   className,
   id,
@@ -1084,9 +1164,13 @@ export function OcTextArea({
         aria-describedby={supportId}
         aria-invalid={Boolean(error) || undefined}
         className={cx(
-          "w-full min-w-0 min-h-24 resize-y rounded-md border border-primary-outline bg-primary-soft px-2.5 py-2 text-sm text-default outline-none placeholder:text-tertiary focus:border-ring aria-invalid:border-text-danger aria-invalid:ring-2 aria-invalid:ring-text-danger/20 disabled:cursor-not-allowed disabled:bg-text/5 disabled:text-secondary",
+          "w-full min-w-0 min-h-24 resize-y rounded-md border px-2.5 py-2 text-sm text-default outline-none transition-[border-color,background-color] duration-basic ease-out placeholder:text-tertiary aria-invalid:border-[var(--input-border-color-invalid,var(--color-text-danger))] aria-invalid:ring-2 aria-invalid:ring-text-danger/20 disabled:cursor-not-allowed disabled:bg-text/5 disabled:text-secondary",
+          variant === "soft"
+            ? "border-transparent bg-[var(--input-soft-background-color,var(--color-background-neutral-soft-alpha))] focus:border-[var(--input-outline-border-color-focus,var(--color-ring))]"
+            : "border-[var(--input-outline-border-color,var(--color-border-secondary-outline))] bg-transparent enabled:hover:border-[var(--input-outline-border-color-hover,var(--color-border-secondary-outline-hover))] focus:border-[var(--input-outline-border-color-focus,var(--color-ring))]",
           textareaClassName,
         )}
+        data-variant={variant}
         disabled={disabled}
         id={inputId}
       />
@@ -1235,7 +1319,7 @@ export type OcTreePreviewProps = Omit<HTMLAttributes<HTMLDivElement>, "children"
 };
 
 export function OcTreePreview({ items, label, className, ...props }: OcTreePreviewProps) {
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useShouldReduceMotion();
   const rows = useMemo(() => flattenTreePreviewItems(items), [items]);
   const transition = reducedMotion ? { duration: 0 } : { duration: 0.3, ease: [0.19, 1, 0.22, 1] as const };
   return (
@@ -1302,7 +1386,11 @@ function flattenTreePreviewItems(items: readonly OcTreePreviewItem[]): Array<{ i
 }
 
 export const OC_SEARCH_FIELD_CLASS = "no-drag flex h-8 min-w-0 items-center gap-2 rounded-full border border-token-input-border bg-token-input-background/90 px-2.5 py-0 text-base leading-[18px] backdrop-blur-sm electron:dark:bg-token-dropdown-background";
+const OC_SEARCH_FIELD_SIDEBAR_CLASS = "no-drag sidebar-item flex h-[var(--height-token-row)] min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border-0 bg-background-secondary-soft-alpha ps-[var(--padding-row-cell-x,var(--padding-row-x))] pe-[var(--padding-row-cell-x,var(--padding-row-x))] py-0 text-base leading-[18px]";
+const OC_SEARCH_FIELD_SETTINGS_DIALOG_CLASS = "no-drag flex h-10 min-w-0 items-center gap-2 rounded-full border border-primary-outline bg-transparent px-3 py-0 text-sm leading-5";
 const OC_SEARCH_INPUT_CLASS = "min-w-0 flex-1 bg-transparent text-base leading-[18px] text-token-input-foreground outline-none select-text placeholder:text-token-input-placeholder-foreground [&::placeholder]:select-none";
+
+export type OcSearchFieldVariant = "default" | "sidebar" | "settings-dialog";
 
 export type OcSearchFieldProps = {
   autoFocus?: boolean;
@@ -1315,6 +1403,7 @@ export type OcSearchFieldProps = {
   placeholder: string;
   trailing?: ReactNode;
   value: string;
+  variant?: OcSearchFieldVariant;
 };
 
 export function OcSearchField({
@@ -1328,16 +1417,38 @@ export function OcSearchField({
   placeholder,
   trailing,
   value,
+  variant = "default",
 }: OcSearchFieldProps) {
   const generatedId = useId();
   const id = providedId ?? generatedId;
+  const fieldClass = variant === "sidebar"
+    ? OC_SEARCH_FIELD_SIDEBAR_CLASS
+    : variant === "settings-dialog"
+      ? OC_SEARCH_FIELD_SETTINGS_DIALOG_CLASS
+      : OC_SEARCH_FIELD_CLASS;
+  const inputClass = variant === "settings-dialog"
+    ? "min-w-0 flex-1 bg-transparent text-sm leading-5 text-default outline-none select-text placeholder:text-tertiary [&::placeholder]:select-none"
+    : variant === "sidebar"
+      ? "min-w-0 flex-1 bg-transparent text-base leading-[18px] text-default outline-none select-text placeholder:text-tertiary [&::placeholder]:select-none"
+      : OC_SEARCH_INPUT_CLASS;
+
   return (
-    <div className={cx(OC_SEARCH_FIELD_CLASS, className)} role="search">
-      <Glyph className="icon-sm shrink-0 text-token-text-secondary" name="search" size={18} />
+    <div className={cx(fieldClass, className)} data-variant={variant} role="search">
+      {variant === "sidebar" ? (
+        <span aria-hidden="true" className="sidebar-item-icon flex size-6 shrink-0 items-center justify-center">
+          <Glyph className="icon-xs shrink-0 text-tertiary" name="search" size={16} />
+        </span>
+      ) : (
+        <Glyph
+          className={variant === "settings-dialog" ? "icon-xs shrink-0 text-tertiary" : "icon-sm shrink-0 text-token-text-secondary"}
+          name="search"
+          size={variant === "settings-dialog" ? 16 : 18}
+        />
+      )}
       <label className="sr-only" htmlFor={id}>{label}</label>
       <input
         autoFocus={autoFocus}
-        className={OC_SEARCH_INPUT_CLASS}
+        className={inputClass}
         id={id}
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={onKeyDown}
@@ -1353,7 +1464,7 @@ export function OcSearchField({
           onClick={() => onChange("")}
           type="button"
         >
-          <Glyph className="icon-sm" name="close" size={18} />
+          <Glyph className={variant === "default" ? "icon-sm" : "icon-xs"} name="close" size={variant === "default" ? 18 : 16} />
         </button>
       ) : trailing}
     </div>
@@ -1467,7 +1578,7 @@ export function OcDialog({
   variant = "default",
   position = "centered",
 }: OcDialogProps) {
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useShouldReduceMotion();
   const dialogRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const previousFocus = useMemo(() => open && document.activeElement instanceof HTMLElement ? document.activeElement : null, [open]);
@@ -1536,7 +1647,10 @@ export function OcDialog({
               "octopus-dialog oc-dialog flex flex-col overflow-hidden outline-none",
               variant === "form"
                 ? "relative bg-surface-elevated-secondary text-default"
-                : "rounded-3xl bg-token-dropdown-background/90 text-token-foreground shadow-lg ring-[0.5px] ring-token-border backdrop-blur-xl",
+                : cx(
+                    size === "compact" || size === "narrow" ? "rounded-2xl" : "rounded-3xl",
+                    "bg-token-dropdown-background/90 text-token-foreground shadow-lg ring-[0.5px] ring-token-border backdrop-blur-xl",
+                  ),
               panelClassName,
             )}
             data-oc-dialog
@@ -1608,7 +1722,7 @@ export function OcDialogFooter({ leading, children, className, ...props }: OcDia
       )}
     >
       {leading ? <div className="min-w-0 flex-1 text-xs leading-4 text-token-description-foreground">{leading}</div> : <div className="flex-1" />}
-      <div className="flex shrink-0 items-center justify-end gap-2">{children}</div>
+      <div className="flex shrink-0 items-center justify-end gap-2 [&>.oc-button-root]:rounded-full">{children}</div>
     </footer>
   );
 }
@@ -1621,11 +1735,55 @@ export type OcPopoverProps = {
   onDismiss?: () => void;
   placement?: "top" | "bottom";
   align?: "start" | "center" | "end";
+  sideOffset?: number;
   role?: "dialog" | "menu" | "listbox";
   modal?: boolean;
   className?: string;
   panelClassName?: string;
 };
+
+type PopoverGeometry = {
+  left: number;
+  top: number;
+  maxHeight: number;
+  maxWidth: number;
+  side: "top" | "bottom";
+  transformOrigin: string;
+};
+
+function computePopoverGeometry(
+  anchor: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+  panelWidth: number,
+  panelHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  preferredPlacement: "top" | "bottom",
+  align: "start" | "center" | "end",
+  sideOffset: number,
+): PopoverGeometry {
+  const padding = 8;
+  const maxWidth = Math.max(0, viewportWidth - padding * 2);
+  const below = Math.max(0, viewportHeight - anchor.bottom - sideOffset - padding);
+  const above = Math.max(0, anchor.top - sideOffset - padding);
+  const side: "top" | "bottom" = preferredPlacement === "top"
+    ? panelHeight > above && below > above ? "bottom" : "top"
+    : panelHeight > below && above > below ? "top" : "bottom";
+  const maxHeight = Math.max(0, Math.min(side === "top" ? above : below, viewportHeight - padding * 2));
+  const renderedWidth = Math.min(panelWidth || 0, maxWidth);
+  const renderedHeight = Math.min(panelHeight || 0, maxHeight);
+  const alignedLeft = align === "end"
+    ? anchor.right - renderedWidth
+    : align === "center"
+      ? (anchor.left + anchor.right - renderedWidth) / 2
+      : anchor.left;
+  const left = Math.max(padding, Math.min(alignedLeft, Math.max(padding, viewportWidth - renderedWidth - padding)));
+  const top = side === "top"
+    ? Math.max(padding, anchor.top - renderedHeight - sideOffset)
+    : anchor.bottom + sideOffset;
+  const originX = align === "end" ? "right" : align === "center" ? "center" : "left";
+  const originY = side === "top" ? "bottom" : "top";
+  return { left, top, maxHeight, maxWidth, side, transformOrigin: `${originX} ${originY}` };
+}
 
 export function OcPopover({
   open,
@@ -1635,17 +1793,169 @@ export function OcPopover({
   onDismiss,
   placement = "bottom",
   align = "start",
+  sideOffset = 6,
   role = "dialog",
   modal = false,
   className,
   panelClassName,
 }: OcPopoverProps) {
+  const reducedMotion = useShouldReduceMotion();
+  const anchorWrapRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+  const [geometry, setGeometry] = useState<PopoverGeometry | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const anchorEl = anchorWrapRef.current;
+      const panelEl = panelRef.current;
+      if (!anchorEl) return;
+      const anchorRect = anchorEl.getBoundingClientRect();
+      const panelRect = panelEl?.getBoundingClientRect();
+      const panelWidth = panelRect?.width || 300;
+      const panelHeight = Math.max(panelEl?.scrollHeight ?? 0, panelRect?.height ?? 0);
+      const next = computePopoverGeometry(
+        anchorRect,
+        panelWidth,
+        panelHeight,
+        window.innerWidth,
+        window.innerHeight,
+        placement,
+        align,
+        sideOffset,
+      );
+      setGeometry((current) =>
+        current
+        && current.left === next.left
+        && current.top === next.top
+        && current.maxHeight === next.maxHeight
+        && current.maxWidth === next.maxWidth
+        && current.side === next.side
+        && current.transformOrigin === next.transformOrigin
+          ? current
+          : next,
+      );
+    };
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    if (anchorWrapRef.current) observer?.observe(anchorWrapRef.current);
+    if (panelRef.current) observer?.observe(panelRef.current);
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [align, open, placement, sideOffset]);
+
+  useEffect(() => {
+    if (!open || !onDismiss) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const path = event.composedPath();
+      if (anchorWrapRef.current && path.includes(anchorWrapRef.current)) return;
+      if (panelRef.current && path.includes(panelRef.current)) return;
+      onDismissRef.current?.();
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Node) {
+        const inside = (panelRef.current?.contains(target) ?? false) || (anchorWrapRef.current?.contains(target) ?? false);
+        if (!inside) return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      onDismissRef.current?.();
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onDismiss, open]);
+
+  const resolvedSide = geometry?.side ?? placement;
+  const duration = reducedMotion ? 0 : 0.16;
+  const yOffset = reducedMotion ? 0 : resolvedSide === "top" ? 3 : -3;
+  const zIndex = anchorWrapRef.current?.closest("[data-oc-dialog]") ? 1200 : 1000;
+  const panelStyle: CSSProperties = {
+    position: "fixed",
+    left: geometry?.left ?? 0,
+    top: geometry?.top ?? 0,
+    right: "auto",
+    bottom: "auto",
+    maxHeight: geometry ? `min(${geometry.maxHeight}px, calc(100vh - 16px))` : "calc(100vh - 16px)",
+    maxWidth: geometry ? `${geometry.maxWidth}px` : "calc(100vw - 16px)",
+    pointerEvents: "auto",
+    transformOrigin: geometry?.transformOrigin ?? `${align === "end" ? "right" : align === "center" ? "center" : "left"} ${resolvedSide === "top" ? "bottom" : "top"}`,
+    animation: "none",
+    "--radix-popover-content-available-height": `${geometry?.maxHeight ?? 0}px`,
+    "--radix-popover-content-available-width": `${geometry?.maxWidth ?? 0}px`,
+  } as CSSProperties;
+
+  const portalContent = typeof document === "undefined" ? null : createPortal(
+    <AnimatePresence initial={false}>
+      {open ? (
+        <div
+          className={cx("oc-popover-layer", className)}
+          data-align={align}
+          data-open="true"
+          data-placement={resolvedSide}
+          data-settings-layer="true"
+          key="oc-popover-layer"
+          style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex }}
+        >
+          {onDismiss && modal ? (
+            <motion.button
+              animate={{ opacity: 1 }}
+              aria-label={`Close ${label}`}
+              className="oc-popover__scrim"
+              exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }}
+              onClick={onDismiss}
+              style={{ pointerEvents: "auto" }}
+              tabIndex={-1}
+              transition={{ duration }}
+              type="button"
+            />
+          ) : null}
+          <motion.div
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            aria-label={label}
+            aria-modal={modal || undefined}
+            className={cx("oc-popover__panel", panelClassName)}
+            exit={{ opacity: 0, scale: reducedMotion ? 1 : 0.98, y: yOffset }}
+            initial={{ opacity: 0, scale: reducedMotion ? 1 : 0.98, y: yOffset }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !event.defaultPrevented && onDismiss) {
+                event.preventDefault();
+                event.stopPropagation();
+                onDismiss();
+              }
+            }}
+            ref={panelRef}
+            role={role}
+            style={panelStyle}
+            transition={{ duration, ease: [0.23, 1, 0.32, 1] }}
+          >
+            {children}
+          </motion.div>
+        </div>
+      ) : null}
+    </AnimatePresence>,
+    document.body,
+  );
+
   return (
     <div
       className={cx("oc-popover", className)}
       data-align={align}
       data-open={open ? "true" : "false"}
-      data-placement={placement}
+      data-placement={resolvedSide}
       data-settings-layer={open || undefined}
       onKeyDown={(event) => {
         if (event.key === "Escape" && !event.defaultPrevented && open && onDismiss) {
@@ -1654,29 +1964,10 @@ export function OcPopover({
           onDismiss();
         }
       }}
+      ref={anchorWrapRef}
     >
       <div className="oc-popover__anchor">{anchor}</div>
-      {open ? (
-        <>
-          {onDismiss && modal ? (
-            <button
-              aria-label={`Close ${label}`}
-              className="oc-popover__scrim"
-              onClick={onDismiss}
-              tabIndex={-1}
-              type="button"
-            />
-          ) : null}
-          <div
-            aria-label={label}
-            aria-modal={modal || undefined}
-            className={cx("oc-popover__panel", panelClassName)}
-            role={role}
-          >
-            {children}
-          </div>
-        </>
-      ) : null}
+      {portalContent}
     </div>
   );
 }

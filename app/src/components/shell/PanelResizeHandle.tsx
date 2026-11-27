@@ -3,12 +3,41 @@ import {
   cancelFrame,
   frame,
   useMotionValue,
-  useReducedMotion,
   useTransform,
   type MotionValue,
 } from "motion/react";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useShouldReduceMotion } from "../../appearance";
 import "./panelResizeHandle.css";
+
+export type OverlaySidebarResizeContextValue = {
+  defaultWidth: number;
+  maximumWidth: number;
+  minimumWidth: number;
+  onResizingChange: (resizing: boolean) => void;
+  onWidthChange: (width: number) => void;
+  width: number;
+};
+
+const OverlaySidebarResizeContext = createContext<OverlaySidebarResizeContextValue | null>(null);
+
+export function OverlaySidebarResizeProvider({
+  value,
+  children,
+}: {
+  value: OverlaySidebarResizeContextValue;
+  children: ReactNode;
+}) {
+  return (
+    <OverlaySidebarResizeContext.Provider value={value}>
+      {children}
+    </OverlaySidebarResizeContext.Provider>
+  );
+}
+
+export function useOverlaySidebarResize() {
+  return useContext(OverlaySidebarResizeContext);
+}
 
 type PanelResizeEdge = "left" | "right";
 const CLOSE_THRESHOLD_FACTOR = 0.5;
@@ -28,14 +57,17 @@ export function useAnimatedPanelSize(
   size: number,
   mirroredSize?: MotionValue<number>,
   immediate = false,
+  transition: { type: "spring"; duration?: number; bounce?: number; stiffness?: number; damping?: number; mass?: number } = PANEL_MOTION_TRANSITION,
 ): { animatedSize: MotionValue<number>; mounted: boolean; opacity: MotionValue<number> } {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useShouldReduceMotion();
   const sizeValue = useMotionValue(size);
   const opacity = useMotionValue(open ? 1 : 0);
   const animatedSize = useTransform([opacity, sizeValue], ([progress, currentSize]) => (
     Math.max(0, Math.min(1, Number(progress))) * Number(currentSize)
   ));
   const [mounted, setMounted] = useState(open);
+  const transitionRef = useRef(transition);
+  transitionRef.current = transition;
 
   useLayoutEffect(() => {
     if (!mirroredSize) return;
@@ -55,8 +87,7 @@ export function useAnimatedPanelSize(
   useLayoutEffect(() => {
     if (reduceMotion || immediate) {
       opacity.set(open ? 1 : 0);
-      animatedSize.set(open ? sizeValue.get() : 0);
-      mirroredSize?.set(animatedSize.get());
+      mirroredSize?.set(open ? sizeValue.get() : 0);
       setMounted(open);
       return;
     }
@@ -65,7 +96,7 @@ export function useAnimatedPanelSize(
     const controls = animate(
       opacity,
       open ? 1 : 0,
-      PANEL_MOTION_TRANSITION,
+      transitionRef.current,
     );
     void controls.then(() => {
       if (active && !open) setMounted(false);
@@ -74,7 +105,7 @@ export function useAnimatedPanelSize(
       active = false;
       controls.stop();
     };
-  }, [animatedSize, immediate, mirroredSize, open, opacity, reduceMotion, sizeValue]);
+  }, [immediate, mirroredSize, open, opacity, reduceMotion, sizeValue]);
 
   return { animatedSize, mounted, opacity };
 }
@@ -82,6 +113,7 @@ export function useAnimatedPanelSize(
 type Props = {
   ariaLabel: string;
   className?: string;
+  collapsible?: boolean;
   defaultSize: number;
   edge: PanelResizeEdge;
   maximum: number;
@@ -97,6 +129,7 @@ type Props = {
 export function PanelResizeHandle({
   ariaLabel,
   className = "",
+  collapsible = true,
   defaultSize,
   edge,
   maximum,
@@ -117,8 +150,8 @@ export function PanelResizeHandle({
     startSize: number;
     lastSize: number;
   } | null>(null);
-  const current = useRef({ maximum, minimum, onChange, onCommit, onOpenChange, onResizingChange, value });
-  current.current = { maximum, minimum, onChange, onCommit, onOpenChange, onResizingChange, value };
+  const current = useRef({ collapsible, maximum, minimum, onChange, onCommit, onOpenChange, onResizingChange, value });
+  current.current = { collapsible, maximum, minimum, onChange, onCommit, onOpenChange, onResizingChange, value };
 
   useEffect(() => {
     if (!resizing) return;
@@ -132,6 +165,10 @@ export function PanelResizeHandle({
 
     const applySize = (proposed: number) => {
       const callbacks = current.current;
+      if (!callbacks.collapsible) {
+        callbacks.onChange(clampPanelSize(proposed, callbacks.minimum, callbacks.maximum));
+        return;
+      }
       const open = proposed >= callbacks.minimum * CLOSE_THRESHOLD_FACTOR;
       callbacks.onOpenChange(open);
       if (open) callbacks.onChange(clampPanelSize(proposed, callbacks.minimum, callbacks.maximum));
@@ -154,7 +191,7 @@ export function PanelResizeHandle({
       if (activeDrag.didMove) {
         const proposed = event.type === "pointerup" ? proposedSize(event.clientX) : activeDrag.lastSize;
         applySize(proposed);
-        if (proposed >= current.current.minimum * CLOSE_THRESHOLD_FACTOR) {
+        if (!current.current.collapsible || proposed >= current.current.minimum * CLOSE_THRESHOLD_FACTOR) {
           current.current.onCommit(clampPanelSize(proposed, current.current.minimum, current.current.maximum));
         }
       }

@@ -133,9 +133,9 @@ export function WorkspaceSurfacePane({
       /> : null}
       <PaneHeaderButton
         className="workspace-surface-close"
-        glyph="splitPane"
+        glyph={controlsInWindowHeader ? "splitPane" : "close"}
         label="Close secondary pane"
-        selected
+        selected={controlsInWindowHeader}
         onClick={onClose}
       />
     </div>
@@ -168,7 +168,7 @@ export function WorkspaceSurfacePane({
   return (
     <WorkspacePaneHeaderActionsProvider host={controlsInWindowHeader || tabStripVisible ? headerActionsHost : null}>
       <div
-        className={`workspace-surface-pane @container/app-shell-detail-panel flex h-full min-h-0 flex-col bg-surface${showTabStrip ? " has-tab-strip" : " has-compact-chrome"}${controlsInWindowHeader ? " has-window-controls" : ""}${focused ? " is-focused" : ""}`}
+        className={`workspace-surface-pane @container/app-shell-detail-panel flex h-full min-h-0 flex-col${showTabStrip ? " has-tab-strip" : " has-compact-chrome"}${controlsInWindowHeader ? " has-window-controls" : ""}${focused ? " is-focused" : ""}`}
         data-app-shell-tabs={showTabStrip || undefined}
         data-pane-role="secondary"
         inert={handoffPending}

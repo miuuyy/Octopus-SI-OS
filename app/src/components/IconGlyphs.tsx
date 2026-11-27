@@ -82,6 +82,7 @@ export type GlyphName =
   | "navigateBack"
   | "sidebarOpen"
   | "sidebarClosed"
+  | "sidebarClosedUnread"
   | "user"
   | "users"
   | "lock"
@@ -95,8 +96,10 @@ export type GlyphName =
   | "tool"
   | "sites"
   | "pin"
+  | "pinOutline"
   | "pinOff"
   | "bell"
+  | "bellFilled"
   | "activity"
   | "activityUnread"
   | "clearRead"
@@ -145,9 +148,33 @@ export type GlyphDef = {
   sizes?: Readonly<Record<number, { viewBox: string; node: ReactNode }>>;
 };
 
-const glyphs = new Map<GlyphName, GlyphDef>();
-const glyphPackOwners = new Map<GlyphName, GlyphPackName>();
+const glyphRegistryKey = Symbol.for("octopus.icon-glyphs.registry");
+
+type GlyphRegistry = {
+  glyphs: Map<GlyphName, GlyphDef>;
+  glyphPackOwners: Map<GlyphName, GlyphPackName>;
+};
+
+function resolveGlyphRegistry(): GlyphRegistry {
+  if (typeof window !== "undefined") {
+    const host = window as Window & { [glyphRegistryKey]?: GlyphRegistry };
+    if (host[glyphRegistryKey]) return host[glyphRegistryKey];
+    const created: GlyphRegistry = {
+      glyphs: new Map<GlyphName, GlyphDef>(),
+      glyphPackOwners: new Map<GlyphName, GlyphPackName>(),
+    };
+    host[glyphRegistryKey] = created;
+    return created;
+  }
+  return {
+    glyphs: new Map<GlyphName, GlyphDef>(),
+    glyphPackOwners: new Map<GlyphName, GlyphPackName>(),
+  };
+}
+
+const { glyphs, glyphPackOwners } = resolveGlyphRegistry();
 const glyphLoadPromises = new Map<GlyphName, Promise<void>>();
+const glyphLoadErrors = new Map<GlyphName, Error>();
 
 const glyphPackByName: Record<GlyphName, GlyphPackName> = {
   homeFilled: "navigation",
@@ -201,6 +228,7 @@ const glyphPackByName: Record<GlyphName, GlyphPackName> = {
   navigateBack: "shell",
   sidebarOpen: "shell",
   sidebarClosed: "shell",
+  sidebarClosedUnread: "shell",
   lock: "shell",
   lightbulb: "shell",
   folder: "shell",
@@ -210,6 +238,7 @@ const glyphPackByName: Record<GlyphName, GlyphPackName> = {
   pulse: "shell",
   viewAll: "shell",
   pin: "shell",
+  pinOutline: "shell",
   pinOff: "shell",
   chat: "shell",
   terminal: "shell",
@@ -269,6 +298,7 @@ const glyphPackByName: Record<GlyphName, GlyphPackName> = {
   progress: "voice",
   insights: "voice",
   bell: "settings",
+  bellFilled: "settings",
   activity: "shell",
   activityUnread: "shell",
   clearRead: "shell",
@@ -282,7 +312,7 @@ const glyphPackByName: Record<GlyphName, GlyphPackName> = {
 };
 
 const glyphPackLoaders: Record<GlyphPackName, () => Promise<unknown>> = {
-  shell: () => Promise.resolve(),
+  shell: () => import("./icon-glyphs/shell"),
   navigation: () => import("./icon-glyphs/navigation"),
   chat: () => import("./icon-glyphs/chat"),
   worker: () => import("./icon-glyphs/worker"),
@@ -296,6 +326,8 @@ export function registerGlyphPack(owner: GlyphPackName, pack: Partial<Record<Gly
     if (existingOwner && existingOwner !== owner) throw new Error("Glyph " + name + " is registered by more than one pack");
     glyphPackOwners.set(name, owner);
     glyphs.set(name, glyph);
+    glyphLoadErrors.delete(name);
+    glyphLoadPromises.delete(name);
   }
 }
 
@@ -309,12 +341,43 @@ export function Glyph(props: Props) {
 
 function ResolvedGlyph(props: Props) {
   const glyph = glyphs.get(props.name);
-  if (!glyph) throw loadGlyph(props.name);
+  if (!glyph) {
+    const error = glyphLoadErrors.get(props.name);
+    if (error) throw error;
+    throw loadGlyph(props.name);
+  }
   return <GlyphFrame {...props} glyph={glyph} />;
 }
 
+function parseViewBoxSize(viewBox?: string): number {
+  if (!viewBox) return 24;
+  const width = Number(viewBox.trim().split(/\s+/)[2]);
+  return Number.isFinite(width) && width > 0 ? width : 24;
+}
+
+function resolveGlyphShape(glyph: GlyphDef | undefined, size: number): { viewBox?: string; node: ReactNode } | undefined {
+  if (!glyph) return undefined;
+  if (!glyph.sizes) return glyph;
+  const exact = glyph.sizes[size];
+  if (exact) return exact;
+  const target = size <= 17 ? Math.min(size, 16) : Math.max(size, 20);
+  const preferredSize = size <= 17 ? 16 : 20;
+  let bestShape: { viewBox?: string; node: ReactNode } = glyph;
+  let bestDistance = Math.abs(parseViewBoxSize(glyph.viewBox) - target);
+  for (const [key, variant] of Object.entries(glyph.sizes)) {
+    const candidateSize = Number(key);
+    if (!Number.isFinite(candidateSize)) continue;
+    const distance = Math.abs(candidateSize - target);
+    if (distance < bestDistance || (distance === bestDistance && candidateSize === preferredSize)) {
+      bestDistance = distance;
+      bestShape = variant;
+    }
+  }
+  return bestShape;
+}
+
 function GlyphFrame({ name, className = "", size = 16, glyph }: Props & { glyph?: GlyphDef }) {
-  const shape = glyph?.sizes?.[size] ?? glyph;
+  const shape = resolveGlyphShape(glyph, size);
   return (
     <svg
       className={("glyph glyph-" + name + " " + className).trim()}
@@ -332,9 +395,14 @@ function GlyphFrame({ name, className = "", size = 16, glyph }: Props & { glyph?
 function loadGlyph(name: GlyphName): Promise<void> {
   const current = glyphLoadPromises.get(name);
   if (current) return current;
-  const promise = glyphPackLoaders[glyphPackByName[name]]().then(() => {
-    if (!glyphs.has(name)) throw new Error("Glyph pack did not register " + name);
-  });
+  const promise = glyphPackLoaders[glyphPackByName[name]]()
+    .then(() => {
+      if (!glyphs.has(name)) throw new Error("Glyph pack did not register " + name);
+    })
+    .catch((error) => {
+      glyphLoadPromises.delete(name);
+      glyphLoadErrors.set(name, error instanceof Error ? error : new Error(String(error)));
+    });
   glyphLoadPromises.set(name, promise);
   return promise;
 }

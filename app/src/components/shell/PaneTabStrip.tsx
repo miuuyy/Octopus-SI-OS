@@ -27,7 +27,7 @@ import {
   type PointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { OcMenuItem, OcMenuSurface } from "../../design-system/components";
+import { OcMenuItem, OcMenuSeparator, OcMenuSurface } from "../../design-system/components";
 import { useFloatingMenu } from "../../design-system/useFloatingMenu";
 import { Glyph, type GlyphName } from "../IconGlyphs";
 import "./paneTabs.css";
@@ -286,7 +286,7 @@ export function PaneTabStrip<Tab extends PaneTabPresentation>({
               role="menuitem"
             />
           ))}
-          {extraActions.length ? <div aria-hidden="true" className="workspace-pane-tab-menu-separator" /> : null}
+          {extraActions.length ? <OcMenuSeparator /> : null}
           <OcMenuItem
             label="Close"
             onClick={() => {
@@ -295,7 +295,7 @@ export function PaneTabStrip<Tab extends PaneTabPresentation>({
             }}
             role="menuitem"
           />
-          <div aria-hidden="true" className="workspace-pane-tab-menu-separator" />
+          <OcMenuSeparator />
           <OcMenuItem
             disabled={!hasOtherTabs}
             label="Close other tabs"

@@ -260,7 +260,7 @@
   --diffs-dark: currentColor;
   --diffs-light: currentColor;
   --diffs-min-number-column-width: 1ch;
-  --diffs-editor-selection-bg: var(--color-background-info-soft);
+  --diffs-editor-selection-bg: var(--color-background-text-selection);
   padding-inline-end: 16px;
 }
 

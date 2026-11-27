@@ -1,11 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { AnimatePresence } from "motion/react";
-import { AppShell, readSidebarOpen, readSidebarWidth } from "./AppShell";
+import { AppShell, readSidebarOpen, readSidebarWidth, writeSidebarWidth } from "./AppShell";
 import { isVoiceCallActive } from "../voice/voicePresentation";
 import { SurfacePage } from "./SurfacePage";
 import { ClientBrowserTab } from "./ClientBrowserTab";
 import { OPEN_WEB_LINK_EVENT, type ClientBrowserState } from "../../clientBrowser";
 import { TaskBrowserPane, emptyTaskBrowserTabs, type TaskBrowserTabs } from "./TaskBrowserPane";
+import { InboxSurface } from "../activity/InboxSurface";
 import { MarkActivityView } from "../activity/MarkActivityView";
 import { ScheduledWorkspaceProvider } from "../scheduled/ScheduledWorkspace";
 import type { MarkActivityItem } from "../activity/markActivity";
@@ -236,7 +237,11 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   const keyboardShortcuts = useKeyboardShortcuts(accessProfile);
   const homeRunId = agentProjectWorkspace.homeRunId;
   const osRootEeId = agentProjectWorkspace.rootEeId;
+  const [globalSidebarWidth, setGlobalSidebarWidth] = useState(() => readSidebarWidth(accessProfile, clientWindow.scope));
   const [effectiveSidebarWidth, setEffectiveSidebarWidth] = useState(() => readSidebarWidth(accessProfile, clientWindow.scope));
+  useEffect(() => {
+    setGlobalSidebarWidth(readSidebarWidth(accessProfile, clientWindow.scope));
+  }, [accessProfile, clientWindow.scope]);
   useEffect(() => {
     if (clientWindow.primary) offerClientProfileStorageRecovery(accessProfile);
   }, [accessProfile, clientWindow.primary]);
@@ -284,7 +289,11 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       ? { ...navigationDestination, runId: chatWorkspace.activeRunId }
       : navigationDestination
   ), [chatWorkspace.activeRunId, navigationDestination]);
-  const settingsOpen = Boolean(activeDestination.settingsSection);
+  const [settingsOpen, setSettingsOpenState] = useState(false);
+  const settingsOpenRef = useRef(settingsOpen);
+  settingsOpenRef.current = settingsOpen;
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const systemOverlayOpen = settingsOpen || inboxOpen;
   const paneScope = JSON.stringify([runtimeHost.home, activeDestination.surfaceId, activeDestination.runId ?? ""]);
   const paneStateKey = secondaryPaneStorageKey(accessProfile, homeRunId, clientWindow.scope, paneScope);
   const activePaneStateKeyRef = useRef(paneStateKey);
@@ -310,7 +319,12 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   const { state: workspacePaneState, tabs: secondaryTabModel, setOpen: setSecondaryPaneOpen, setFocused: setSecondaryPaneFocused,
     setActivePane, setSidebarWidth } = workspacePane;
   const secondaryPaneOpen = workspacePaneState.open;
-  const { activePane, focused: secondaryPaneFocused, sidebarWidth } = workspacePaneState.layout;
+  const { activePane, focused: secondaryPaneFocused } = workspacePaneState.layout;
+  const handleSidebarWidthChange = useCallback((width: number) => {
+    setGlobalSidebarWidth(width);
+    writeSidebarWidth(accessProfile, width, clientWindow.scope);
+    setSidebarWidth(width);
+  }, [accessProfile, clientWindow.scope, setSidebarWidth]);
   const paneOwner = useMemo<WorkspacePaneOwner>(() => ({
     key: paneStateKey,
     read: workspacePane.getState,
@@ -410,9 +424,10 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   useEffect(() => window.octopusTransport?.onNativeClientCommand?.((command) => {
     if (!isClientCommandId(command)) return;
     if (clientDialogOwnsCommands()) return;
+    if (systemOverlayOpen && command !== "open_settings" && command !== "navigate_back") return;
     if (keyboardTargetHasRichEditingOwner(document.activeElement) && keyboardCommandConflictsWithEditing(command, keyboardShortcuts)) return;
     dispatchClientCommand(command, "keyboard");
-  }), [keyboardShortcuts]);
+  }), [keyboardShortcuts, systemOverlayOpen]);
 
   useEffect(() => {
     if (clientWindow.primary || !window.octopusTransport?.clientWindowReady) return;
@@ -444,10 +459,11 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     };
   }, [secondaryPaneOpen, setActivePane]);
   useGestureFocus(accessProfile, gesturePreferences.enabled, gesturePreferences.spatialControl);
-  useCustomGestureDispatch(accessProfile, gesturePreferences.enabled && !settingsOpen);
+  useCustomGestureDispatch(accessProfile, gesturePreferences.enabled && !systemOverlayOpen);
   const activeSurfaceId = activeDestination.surfaceId;
   const shortcutNavigationDestinations = useMemo(() => clientNavigationDestinations.filter((destination) => (
-    visibleSurfaces.some((surface) => surface.id === destination.surfaceId)
+    destination.id !== "inbox"
+    && visibleSurfaces.some((surface) => surface.id === destination.surfaceId)
   )), [visibleSurfaces]);
   const activeSurface = useMemo(() => (
     visibleSurfaces.find((surface) => surface.id === activeSurfaceId)
@@ -535,8 +551,8 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     if (activeNavigationSection !== "tasks" || !primaryRunIdentityReady) return;
     lastTasksDestinationRef.current = clientDestination(primarySurfaceTarget.surfaceId, primarySurfaceTarget.runId);
   }, [primaryRunIdentityReady, primarySurfaceTarget.runId, primarySurfaceTarget.surfaceId, activeNavigationSection]);
-  const primaryCommandsActive = !settingsOpen && activeClientSurfaceIdentity.pane === "primary" && activeClientSurfaceIdentity.ready;
-  const secondaryCommandsActive = !settingsOpen && activeClientSurfaceIdentity.pane === "secondary" && activeClientSurfaceIdentity.ready;
+  const primaryCommandsActive = !systemOverlayOpen && activeClientSurfaceIdentity.pane === "primary" && activeClientSurfaceIdentity.ready;
+  const secondaryCommandsActive = !systemOverlayOpen && activeClientSurfaceIdentity.pane === "secondary" && activeClientSurfaceIdentity.ready;
   const titlebarTransferTarget = useMemo(() => {
     if (!paneOwnsWindowTitlebar(activeClientSurfaceIdentity.pane) || secondaryPaneOpen) return null;
     if (!activeClientSurfaceIdentity.ready || !activeClientSurfaceIdentity.surfaceId) return null;
@@ -614,15 +630,15 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   const [secondaryHomeViewMode, setSecondaryHomeViewMode] = useState<HomeViewMode>("voice");
   const homeChatIdentityReady = Boolean(homeRunId && homeChatWorkspace.activeRunId === homeRunId
     && homeChatWorkspace.activeRun?.runId === homeRunId && homeChatWorkspace.activeRun.clientSurfaceRole === "home");
-  const visibleChatRunIds = useMemo(() => settingsOpen ? [] : [
+  const visibleChatRunIds = useMemo(() => systemOverlayOpen ? [] : [
     !primaryPaneBlocked && activeSurface?.rendererKind === "builtin.chat" && primaryRunIdentityReady ? primarySurfaceTarget.runId : "",
     !primaryPaneBlocked && activeSurface?.rendererKind === "builtin.voice" && homeViewMode === "activity" && homeChatIdentityReady ? homeRunId : "",
     secondaryPaneOpen && secondarySurface?.rendererKind === "builtin.chat" && secondaryRunIdentityReady ? secondaryChatWorkspace.activeRunId : "",
     secondaryPaneOpen && secondarySurface?.rendererKind === "builtin.voice" && secondaryHomeViewMode === "activity" && homeChatIdentityReady ? homeRunId : "",
-  ].filter(Boolean), [settingsOpen, primaryPaneBlocked, activeSurface?.rendererKind, primaryRunIdentityReady, primarySurfaceTarget.runId,
+  ].filter(Boolean), [systemOverlayOpen, primaryPaneBlocked, activeSurface?.rendererKind, primaryRunIdentityReady, primarySurfaceTarget.runId,
     homeViewMode, homeChatIdentityReady, homeRunId, secondaryPaneOpen, secondarySurface?.rendererKind,
     secondaryRunIdentityReady, secondaryChatWorkspace.activeRunId, secondaryHomeViewMode]);
-  const markActivity = useMarkActivity(accessProfile, runtimeHost.home, clientWindow.primary, activeNavigationSection === "inbox", visibleChatRunIds);
+  const markActivity = useMarkActivity(accessProfile, runtimeHost.home, clientWindow.primary, inboxOpen || activeNavigationSection === "inbox", visibleChatRunIds);
   const [activitySelection, setActivitySelection] = useState<MarkActivityItem | null>(null);
   const [activitySelectionGroup, setActivitySelectionGroup] = useState<readonly string[]>([]);
   const [secondaryMovementSelection, setSecondaryMovementSelection] = useState<MarkActivityItem | null>(null);
@@ -724,37 +740,22 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   }, []);
 
   const setSettingsOpen = useCallback((open: boolean) => {
+    if (open) setInboxOpen(false);
+    if (!open && !settingsOpenRef.current) return;
     if (!open) setSettingsRecordingId("");
-    setSurfaceNavigation((current) => {
-      const destination = current.entries[current.index];
-      if (open) {
-        if (destination.settingsSection) return current;
-        const next = { ...destination, settingsSection: normalizeSettingsSection(clientPreferences.settingsSection) };
-        const entries = [...current.entries.slice(0, current.index + 1), next].slice(-50);
-        return { entries, index: entries.length - 1 };
-      }
-      if (!destination.settingsSection) return current;
-      const previous = current.entries[current.index - 1];
-      if (previous && !previous.settingsSection) return { ...current, index: current.index - 1 };
-      const entries = current.entries.map((entry, index) => (
-        index === current.index ? clientDestination(destination.surfaceId, destination.runId) : entry
-      ));
-      return { ...current, entries };
-    });
+    settingsOpenRef.current = open;
+    setSettingsOpenState(open);
     setClientPreferences({ settingsSearch: "" });
-  }, [clientPreferences.settingsSection, setClientPreferences]);
+  }, [setClientPreferences]);
+
+  const closeSystemOverlays = useCallback(() => {
+    setSettingsOpen(false);
+    setInboxOpen(false);
+  }, [setSettingsOpen]);
 
   const selectSettingsSection = useCallback((section: string) => {
     const settingsSection = normalizeSettingsSection(section);
     setClientPreferences({ settingsSection });
-    setSurfaceNavigation((current) => {
-      const destination = current.entries[current.index];
-      if (!destination.settingsSection || destination.settingsSection === settingsSection) return current;
-      const entries = current.entries.map((entry, index) => (
-        index === current.index ? { ...destination, settingsSection } : entry
-      ));
-      return { ...current, entries };
-    });
   }, [setClientPreferences]);
 
   const selectSurface = useCallback((surfaceId: string, exactRunId?: string) => {
@@ -1107,6 +1108,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     ...(["dashboard", "octopus-os"] as const).flatMap((workspaceKey) => visibleSurfaces
       .filter((surface) => (
         surface.id !== "chat"
+        && surface.id !== "inbox"
         && !isSidebarOnlySurface(surface)
         && surfaceBelongsToWorkspace(surface, workspaceKey)
       ))
@@ -1170,7 +1172,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   }, [homeChatWorkspace, homeRunId, selectSurface, voiceSession.context?.homeRunId, voiceSession.phase]);
 
   const reportedVoiceFailure = useRef("");
-  const homeCallControlsVisible = !settingsOpen && (
+  const homeCallControlsVisible = !systemOverlayOpen && (
     (activeSurface?.id === "voice" && homeViewMode === "voice")
     || (secondaryPaneOpen && secondarySurfaceId === "voice")
   );
@@ -1182,10 +1184,10 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     appToast.danger(voiceSession.error ? "Voice call failed." : "Check your audio devices.", 5, {
       action: {
         label: "Open Home",
-        onSelect: () => { openVoice(); setHomeViewMode("voice"); },
+        onSelect: () => { closeSystemOverlays(); openVoice(); setHomeViewMode("voice"); },
       },
     });
-  }, [homeCallControlsVisible, openVoice, voiceSession.deviceError, voiceSession.error]);
+  }, [closeSystemOverlays, homeCallControlsVisible, openVoice, voiceSession.deviceError, voiceSession.error]);
 
   const openHomeRun = useCallback((runId: string) => {
     if (!runId) return;
@@ -1214,6 +1216,13 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   }, [homeChatWorkspace, openSecondaryChatTab, openSecondaryTab]);
 
   const openNavigationSection = useCallback((section: ClientNavigationSection) => {
+    if (section === "inbox") {
+      setSettingsOpen(false);
+      setInboxOpen((open) => !open);
+      return;
+    }
+    setSettingsOpen(false);
+    setInboxOpen(false);
     if (section === "home") {
       openVoice();
       setHomeViewMode("voice");
@@ -1246,16 +1255,26 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       return surface && navigationSectionForSurface(surface) === "dashboard";
     }) : undefined;
     selectSurface(previous?.surfaceId || destination.surfaceId);
-  }, [chatWorkspace, openVoice, selectSurface, surfaceNavigation.entries, taskChatRuns, visibleSurfaces]);
+  }, [chatWorkspace, openVoice, selectSurface, setSettingsOpen, surfaceNavigation.entries, taskChatRuns, visibleSurfaces]);
 
   const openPrimarySurface = useCallback((surface: ClientSurfaceDescriptor, exactTarget = false) => {
+    if (surface.id === "inbox") {
+      if (exactTarget) {
+        setSettingsOpen(false);
+        setInboxOpen(true);
+      } else {
+        openNavigationSection("inbox");
+      }
+      return;
+    }
     const destination = clientNavigationDestinations.find((candidate) => candidate.surfaceId === surface.id);
     if (destination && !exactTarget) {
       openNavigationSection(destination.id);
       return;
     }
+    closeSystemOverlays();
     selectSurface(surface.id);
-  }, [openNavigationSection, selectSurface]);
+  }, [closeSystemOverlays, openNavigationSection, selectSurface, setSettingsOpen]);
 
   const openExtensionDestination = useCallback((destination: ClientExtensionDestination) => {
     if (destination.kind === "settings") {
@@ -1290,23 +1309,36 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     const current = markActivity.projectedItems.find((candidate) => candidate.id === item.id);
     if (!current) { appToast.warning("This activity is no longer available in the current projection."); return; }
     if (current.navigation.kind === "run") {
+      setInboxOpen(false);
       if (current.navigation.clientSurfaceRole === "home") {
-        homeChatWorkspace.selectRun(current.navigation.runId);
-        setSecondaryHomeViewMode("activity");
-        openSecondaryTab(secondaryPaneTab("octopus-os", "voice", current.navigation.runId));
+        openVoice();
+        setHomeViewMode("activity");
       } else {
-        openSecondaryChatTab(current.navigation.runId);
+        openChat(current.navigation.runId);
       }
     } else if (current.sequence === null || !Number.isSafeInteger(current.sequence) || current.sequence < 0 || current.sequence >= Number.MAX_SAFE_INTEGER) {
       appToast.warning("This mark has no addressable movement sequence to open.");
       return;
     } else {
+      setInboxOpen(false);
       setSecondaryMovementSelection({ ...current });
       openSecondaryTab(secondaryPaneTab("dashboard", "event-log", ""));
     }
     setActivitySelection({ ...current });
     if (!markActivity.read.has(current.id) && !markActivity.markRead([current.id])) appToast.warning("Could not save this notification's read state.");
-  }, [markActivity.projectedItems, markActivity.markRead, markActivity.read, homeChatWorkspace.selectRun, openSecondaryChatTab, openSecondaryTab]);
+  }, [markActivity.projectedItems, markActivity.markRead, markActivity.read, openChat, openSecondaryTab, openVoice]);
+
+  useEffect(() => {
+    if (!inboxOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || clientDialogOwnsCommands()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setInboxOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [inboxOpen]);
 
   useEffect(() => {
     const activate = (event: Event) => {
@@ -1315,26 +1347,27 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       if (target?.kind !== "mark") return;
       const item = markActivity.projectedItems.find((candidate) => candidate.id === target.movementId);
       if (!item) { appToast.warning("This activity is no longer available in the current projection."); return; }
-      selectSurface("inbox");
+      setSettingsOpen(false);
+      setInboxOpen(true);
       selectInboxItem(item);
     };
     window.addEventListener(CLIENT_NOTIFICATION_ACTIVATE_EVENT, activate);
     return () => window.removeEventListener(CLIENT_NOTIFICATION_ACTIVATE_EVENT, activate);
-  }, [markActivity.projectedItems, selectInboxItem, selectSurface]);
+  }, [markActivity.projectedItems, selectInboxItem, setSettingsOpen]);
 
   useEffect(() => window.octopusTransport?.onGlobalDictationRequested?.(() => {
-    setSettingsOpen(false);
+    closeSystemOverlays();
     setCommandMenuOpen(false);
     openChat(chatWorkspace.activeRunId);
     window.setTimeout(() => dispatchClientCommand("start_dictation", "keyboard"), 80);
-  }), [chatWorkspace.activeRunId, openChat, setSettingsOpen]);
+  }), [chatWorkspace.activeRunId, closeSystemOverlays, openChat]);
 
   useEffect(() => window.octopusTransport?.onOpenRunRequested?.((runId) => {
     if (typeof runId !== "string" || !runId.trim()) return;
-    setSettingsOpen(false);
+    closeSystemOverlays();
     setCommandMenuOpen(false);
     openChat(runId.trim());
-  }), [openChat, setSettingsOpen]);
+  }), [closeSystemOverlays, openChat]);
 
   useEffect(() => {
     const prepareReview = (event: Event) => {
@@ -1342,6 +1375,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       const detail = event.detail as OperatorDiffReviewSendDetail | undefined;
       if (detail?.schemaVersion !== 1 || !detail.runId || !detail.text || !detail.context) return;
       const workspace = chatWorkspace;
+      closeSystemOverlays();
       openChat(detail.runId);
       workspace.setText(`${detail.text}\n\n${detail.context}`);
       event.preventDefault();
@@ -1349,7 +1383,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     };
     window.addEventListener(OCTOPUS_OPERATOR_DIFF_REVIEW_SEND_EVENT, prepareReview);
     return () => window.removeEventListener(OCTOPUS_OPERATOR_DIFF_REVIEW_SEND_EVENT, prepareReview);
-  }, [chatWorkspace, openChat]);
+  }, [chatWorkspace, closeSystemOverlays, openChat]);
 
   useEffect(() => {
     const prepareArtifact = async (event: Event) => {
@@ -1375,6 +1409,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
           appToast.danger(error instanceof Error ? error.message : String(error));
           return;
         }
+        closeSystemOverlays();
         openChat(targetRunId);
       }
       const reference = stringifyPreparedContext({
@@ -1396,7 +1431,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     };
     window.addEventListener(ARTIFACT_CONTEXT_PREPARED_EVENT, prepareArtifact);
     return () => window.removeEventListener(ARTIFACT_CONTEXT_PREPARED_EVENT, prepareArtifact);
-  }, [chatWorkspace, openChat]);
+  }, [chatWorkspace, closeSystemOverlays, openChat]);
 
   useEffect(() => {
     const prepareMcpAction = (event: Event) => {
@@ -1410,6 +1445,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         || !detail.provenance.resourceUri?.trim()
       ) return;
       const workspace = chatWorkspace;
+      closeSystemOverlays();
       openChat(detail.provenance.runId.trim());
       const action = stringifyPreparedContext({
         action: detail.action,
@@ -1428,11 +1464,11 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     };
     window.addEventListener(MCP_RESOURCE_ACTION_EVENT, prepareMcpAction);
     return () => window.removeEventListener(MCP_RESOURCE_ACTION_EVENT, prepareMcpAction);
-  }, [chatWorkspace, openChat]);
+  }, [chatWorkspace, closeSystemOverlays, openChat]);
 
   useEffect(() => window.octopusTransport?.onOpenWorkerEnvironmentRequested?.((target) => {
     if (!target?.workerEnvironmentId) return;
-    setSettingsOpen(false);
+    closeSystemOverlays();
     setCommandMenuOpen(false);
     openWorkerEnvironmentPane({
       workerEnvironmentId: target.workerEnvironmentId,
@@ -1449,6 +1485,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       const detail = event.detail as WorkerEnvironmentPaneTarget | undefined;
       if (detail?.schemaVersion !== 1 || !detail.workerEnvironmentId) return;
       setSettingsOpen(false);
+      setInboxOpen(false);
       setCommandMenuOpen(false);
       openWorkerEnvironmentPane(detail);
     };
@@ -1462,6 +1499,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       const detail = event.detail as TaskSourcesPaneTarget | undefined;
       if (detail?.schemaVersion !== 1 || !detail.runId.trim() || !Array.isArray(detail.sources)) return;
       setSettingsOpen(false);
+      setInboxOpen(false);
       setCommandMenuOpen(false);
       openTaskSourcesPane(detail);
     };
@@ -1646,25 +1684,70 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
       if (queued?.requestId === request.requestId && queued.generation === request.generation) queued = null;
       if (current?.request.requestId === request.requestId && current.request.generation === request.generation) cancelCurrent();
     });
-    void bridge.registerClientWindowCloseGuard().then((guard) => {
-      if (disposed) {
-        return bridge.unregisterClientWindowCloseGuard(guard);
+    let retryTimer: number | null = null;
+    let pendingLoadListener: (() => void) | null = null;
+    const clearPendingRetry = () => {
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
       }
-      if (guard.windowId !== clientWindow.windowId) throw new Error("Native window close guard does not match this window.");
-      registration = guard;
-      const request = queued;
-      queued = null;
-      if (request) void handleClose(request);
-    }).catch((error) => {
-      if (!disposed) appToast.danger(error instanceof Error ? error.message : String(error));
-    });
+      if (pendingLoadListener) {
+        window.removeEventListener("load", pendingLoadListener);
+        pendingLoadListener = null;
+      }
+    };
+    const markUnloading = () => {
+      disposed = true;
+      clearPendingRetry();
+    };
+    window.addEventListener("pagehide", markUnloading);
+    window.addEventListener("beforeunload", markUnloading);
+    const registerGuard = (attempt: number) => {
+      void bridge.registerClientWindowCloseGuard().then((guard) => {
+        if (disposed) {
+          return bridge.unregisterClientWindowCloseGuard(guard);
+        }
+        if (guard.windowId !== clientWindow.windowId) throw new Error("Native window close guard does not match this window.");
+        registration = guard;
+        const request = queued;
+        queued = null;
+        if (request) void handleClose(request);
+      }).catch((error) => {
+        if (disposed) return;
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt < 3 && /teardown or navigation/i.test(message)) {
+          clearPendingRetry();
+          if (document.readyState !== "complete") {
+            pendingLoadListener = () => {
+              pendingLoadListener = null;
+              if (!disposed) registerGuard(attempt + 1);
+            };
+            window.addEventListener("load", pendingLoadListener, { once: true });
+          } else {
+            retryTimer = window.setTimeout(() => {
+              retryTimer = null;
+              if (!disposed) registerGuard(attempt + 1);
+            }, 150 * (attempt + 1));
+          }
+          return;
+        }
+        appToast.danger(message);
+      });
+    };
+    registerGuard(0);
     return () => {
       disposed = true;
+      clearPendingRetry();
+      window.removeEventListener("pagehide", markUnloading);
+      window.removeEventListener("beforeunload", markUnloading);
       queued = null;
       cancelCurrent();
       requested();
       cancelled();
-      if (registration) void bridge.unregisterClientWindowCloseGuard(registration).catch((error) => appToast.danger(error instanceof Error ? error.message : String(error)));
+      if (registration) void bridge.unregisterClientWindowCloseGuard(registration).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/teardown or navigation/i.test(message)) appToast.danger(message);
+      });
     };
   }, [accessProfile, clientWindow.scope, clientWindow.windowId, getWorkspacePaneStates]);
 
@@ -2099,12 +2182,12 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   }, [setSecondaryPaneOpen]);
 
   useEffect(() => subscribeAirHandGestures((gesture, source) => {
-    if (!gesturePreferences.enabled || settingsOpen) return;
+    if (!gesturePreferences.enabled || systemOverlayOpen) return;
     if (accessProfile === "live" && source === "test") return;
     if (clientDialogOwnsCommands()) return;
     const command = gesturePreferences.mappings[gesture];
     if (command !== "none") dispatchClientCommand(command, "gesture");
-  }), [accessProfile, gesturePreferences, settingsOpen]);
+  }), [accessProfile, gesturePreferences, systemOverlayOpen]);
 
   useEffect(() => {
     if (!gesturePreferences.enabled) {
@@ -2125,86 +2208,102 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
 
   useEffect(() => () => stopGestureRecognition(), []);
 
-  useEffect(() => subscribeClientCommands((command, _source, settingsDestination) => {
-    if (command === "open_command_menu") {
-      setCommandMenuOpen(true);
-      return;
-    }
-    if (command === "new_chat") {
-      setCommandMenuOpen(false);
-      openChat("", activeNavigationSection === "tasks" ? projectFilterEeId || undefined : undefined);
-      return;
-    }
-    if (command === "open_voice") {
-      openVoice();
-      return;
-    }
-    if (command === "open_settings") {
-      setCommandMenuOpen(false);
-      setSettingsRecordingId(settingsDestination?.dictationRecordingId ?? "");
-      setSettingsOpen(true);
-      if (settingsDestination?.sectionId) selectSettingsSection(settingsDestination.sectionId);
-      return;
-    }
-    if (command === "toggle_gesture_control") {
-      setGesturePreferences((current) => ({ enabled: !current.enabled }));
-      return;
-    }
-    if (command === "toggle_pin_task") {
-      const runId = activeClientSurfaceIdentity.runId;
-      if (!runId) return;
-      setAgentPinnedChatIds((current) => current.includes(runId)
-        ? current.filter((candidate) => candidate !== runId)
-        : [runId, ...current]);
-      return;
-    }
-    if (command === "open_side_task") {
-      const runId = activeClientSurfaceIdentity.runId;
-      if (!runId) return;
-      openSecondaryChatTab(runId);
-      return;
-    }
-    if (command === "open_terminal") {
-      setCommandMenuOpen(false);
-      openTerminalTab();
-      return;
-    }
-    const requestedWorkerEnvironmentPanel: WorkerEnvironmentPanelKind | null = command === "open_browser" ? "browser"
-        : command === "open_changes" ? "changes"
-          : null;
-    if (requestedWorkerEnvironmentPanel) {
-      setCommandMenuOpen(false);
-      const action = workerEnvironmentActions.find((candidate) => candidate.panelKind === requestedWorkerEnvironmentPanel);
-      if (!action) {
-        appToast.warning(`No active Worker Environment projects a ${requestedWorkerEnvironmentPanel} surface.`);
+  const clientCommandHandlerRef = useRef<Parameters<typeof subscribeClientCommands>[0]>(() => undefined);
+  useLayoutEffect(() => {
+    clientCommandHandlerRef.current = (command, _source, settingsDestination) => {
+      if (systemOverlayOpen && command === "navigate_back") {
+        closeSystemOverlays();
         return;
       }
-      openWorkerEnvironmentPane(action.target);
-      return;
-    }
-    if (command === "focus_search") {
-      if (activeClientSurfaceIdentity.pane === "secondary") {
-        setSecondarySearchFocusTick((tick) => tick + 1);
-      } else {
-        setSearchFocusTick((tick) => tick + 1);
+      if (systemOverlayOpen && command !== "open_settings") return;
+      if (command === "open_command_menu") {
+        setCommandMenuOpen(true);
+        return;
       }
-      return;
-    }
-    if (command === "toggle_split") {
-      toggleSecondaryPane();
-      return;
-    }
-    if (command === "navigate_back" || command === "navigate_forward") {
-      navigateSurfaceHistory(command === "navigate_back" ? -1 : 1);
-      return;
-    }
-    if (command !== "previous_surface" && command !== "next_surface") return;
-    const index = shortcutNavigationDestinations.findIndex((destination) => destination.id === activeNavigationSection);
-    if (index < 0 || shortcutNavigationDestinations.length === 0) return;
-    const direction = command === "previous_surface" ? -1 : 1;
-    const next = (index + direction + shortcutNavigationDestinations.length) % shortcutNavigationDestinations.length;
-    openNavigationSection(shortcutNavigationDestinations[next].id);
-  }), [accessProfile, activeClientSurfaceIdentity, activeNavigationSection, navigateSurfaceHistory, openChat, openNavigationSection, openSecondaryChatTab, openTerminalTab, openVoice, openWorkerEnvironmentPane, projectFilterEeId, selectSettingsSection, setGesturePreferences, setSettingsOpen, shortcutNavigationDestinations, toggleSecondaryPane, workerEnvironmentActions]);
+      if (command === "new_chat") {
+        setCommandMenuOpen(false);
+        openChat("", activeNavigationSection === "tasks" ? projectFilterEeId || undefined : undefined);
+        return;
+      }
+      if (command === "open_voice") {
+        openVoice();
+        return;
+      }
+      if (command === "open_settings") {
+        setCommandMenuOpen(false);
+        if (settingsOpen && !settingsDestination?.sectionId && !settingsDestination?.dictationRecordingId) {
+          setSettingsOpen(false);
+          return;
+        }
+        setSettingsRecordingId(settingsDestination?.dictationRecordingId ?? "");
+        setSettingsOpen(true);
+        if (settingsDestination?.sectionId) selectSettingsSection(settingsDestination.sectionId);
+        return;
+      }
+      if (command === "toggle_gesture_control") {
+        setGesturePreferences((current) => ({ enabled: !current.enabled }));
+        return;
+      }
+      if (command === "toggle_pin_task") {
+        const runId = activeClientSurfaceIdentity.runId;
+        if (!runId) return;
+        setAgentPinnedChatIds((current) => current.includes(runId)
+          ? current.filter((candidate) => candidate !== runId)
+          : [runId, ...current]);
+        return;
+      }
+      if (command === "open_side_task") {
+        const runId = activeClientSurfaceIdentity.runId;
+        if (!runId) return;
+        openSecondaryChatTab(runId);
+        return;
+      }
+      if (command === "open_terminal") {
+        setCommandMenuOpen(false);
+        openTerminalTab();
+        return;
+      }
+      const requestedWorkerEnvironmentPanel: WorkerEnvironmentPanelKind | null = command === "open_browser" ? "browser"
+        : command === "open_changes" ? "changes"
+          : null;
+      if (requestedWorkerEnvironmentPanel) {
+        setCommandMenuOpen(false);
+        const action = workerEnvironmentActions.find((candidate) => candidate.panelKind === requestedWorkerEnvironmentPanel);
+        if (!action) {
+          appToast.warning(`No active Worker Environment projects a ${requestedWorkerEnvironmentPanel} surface.`);
+          return;
+        }
+        openWorkerEnvironmentPane(action.target);
+        return;
+      }
+      if (command === "focus_search") {
+        if (activeClientSurfaceIdentity.pane === "secondary") {
+          setSecondarySearchFocusTick((tick) => tick + 1);
+        } else {
+          setSearchFocusTick((tick) => tick + 1);
+        }
+        return;
+      }
+      if (command === "toggle_split") {
+        toggleSecondaryPane();
+        return;
+      }
+      if (command === "navigate_back" || command === "navigate_forward") {
+        navigateSurfaceHistory(command === "navigate_back" ? -1 : 1);
+        return;
+      }
+      if (command !== "previous_surface" && command !== "next_surface") return;
+      const index = shortcutNavigationDestinations.findIndex((destination) => destination.id === activeNavigationSection);
+      if (index < 0 || shortcutNavigationDestinations.length === 0) return;
+      const direction = command === "previous_surface" ? -1 : 1;
+      const next = (index + direction + shortcutNavigationDestinations.length) % shortcutNavigationDestinations.length;
+      openNavigationSection(shortcutNavigationDestinations[next].id);
+    };
+  });
+
+  useEffect(() => subscribeClientCommands((command, source, settingsDestination) => {
+    clientCommandHandlerRef.current(command, source, settingsDestination);
+  }), []);
 
   useEffect(() => {
     const handleClientSurfaceAction = (event: Event) => {
@@ -2265,15 +2364,21 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   });
 
   useEffect(() => {
-    if (settingsOpen) setCommandMenuOpen(false);
-  }, [settingsOpen]);
+    if (systemOverlayOpen) setCommandMenuOpen(false);
+  }, [systemOverlayOpen]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || commandMenuOpen) return;
       if (clientDialogOwnsCommands()) return;
       const command = keyboardCommandForEvent(event, keyboardShortcuts);
-      if (settingsOpen && command !== "navigate_back" && command !== "navigate_forward" && command !== "toggle_sidebar") return;
+      if (systemOverlayOpen) {
+        if (command === "open_settings" || command === "navigate_back") {
+          event.preventDefault();
+          dispatchClientCommand(command, "keyboard");
+        }
+        return;
+      }
       if (command) {
         if (keyboardTargetHasRichEditingOwner(event.target) && keyboardCommandConflictsWithEditing(command, keyboardShortcuts)) return;
         event.preventDefault();
@@ -2291,14 +2396,16 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandMenuOpen, keyboardShortcuts, openNavigationSection, settingsOpen, shortcutNavigationDestinations]);
+  }, [commandMenuOpen, keyboardShortcuts, openNavigationSection, shortcutNavigationDestinations, systemOverlayOpen]);
 
   useEffect(() => {
     const surface = visibleSurfaces.find((candidate) => candidate.id === activeClientSurfaceIdentity.surfaceId);
-    document.title = settingsOpen ? "Settings — Octopus" : surface
-      ? `${surface.label} — Octopus`
-      : "Octopus";
-  }, [activeClientSurfaceIdentity, settingsOpen, visibleSurfaces]);
+    document.title = settingsOpen ? "Settings — Octopus"
+      : inboxOpen ? "Inbox — Octopus"
+        : surface
+          ? `${surface.label} — Octopus`
+          : "Octopus";
+  }, [activeClientSurfaceIdentity, inboxOpen, settingsOpen, visibleSurfaces]);
 
   function toggleDashboardFullscreen() {
     setInspectorOpen((open) => !open);
@@ -2375,7 +2482,6 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
   ) : null;
   const secondaryPane = secondarySurface || secondaryPaneOpen ? (
     <WorkspaceSurfacePane
-      controlsInWindowHeader
       activeTabId={activeSecondaryTabId}
       addActions={secondaryPaneAddActions}
       canNativeDrag={secondaryTabCanNativeDrag}
@@ -2410,7 +2516,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         activeTabId={activeSecondaryTabId}
         tabs={secondaryTabs}
       />
-      {secondaryTabs.map(tab => tab.target.kind === "client_browser" ? <div key={tab.id} className="h-full min-h-0" hidden={!secondaryPaneOpen || tab.id !== activeSecondaryTabId}><ClientBrowserTab id={tab.target.pageId} active={accessProfile === "live" && secondaryPaneOpen && tab.id === activeSecondaryTabId && !settingsOpen} /></div> : null)}
+      {secondaryTabs.map(tab => tab.target.kind === "client_browser" ? <div key={tab.id} className="h-full min-h-0" hidden={!secondaryPaneOpen || tab.id !== activeSecondaryTabId}><ClientBrowserTab id={tab.target.pageId} active={accessProfile === "live" && secondaryPaneOpen && tab.id === activeSecondaryTabId && !systemOverlayOpen} /></div> : null)}
       <RetainedWorkerEnvironmentTabs
         accessProfile={accessProfile}
         active={secondaryPaneOpen}
@@ -2463,10 +2569,6 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
     </WorkspaceSurfacePane>
   ) : null;
 
-  const titlebarTask = activeSurface.rendererKind === "builtin.chat" && primarySurfaceTarget.runId !== homeRunId
-    ? taskChatRuns.find((run) => run.runId === primarySurfaceTarget.runId)
-    : undefined;
-
   return (
     <ScheduledWorkspaceProvider key={JSON.stringify([accessProfile, runtimeHost.home])} active={activeSurface.id === "scheduled" || (secondaryPaneOpen && secondarySurfaceId === "scheduled")}
       onCreateTask={(text) => {
@@ -2480,7 +2582,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         paneStateKey={paneStateKey}
         preferredSidebarOpen={workspacePaneState.layout.sidebarOpen}
         onSidebarOpenChange={workspacePane.setSidebarOpen}
-        sidebarWidth={sidebarWidth}
+        sidebarWidth={globalSidebarWidth}
         surfaces={visibleSurfaces}
         navigationSection={activeNavigationSection}
         activeSurfaceId={primarySurfaceTarget.surfaceId}
@@ -2507,6 +2609,20 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         dashboardExpanded={!inspectorOpen}
         interactionDisabled={settingsOpen}
         onCloseSettings={() => setSettingsOpen(false)}
+        inboxOpen={inboxOpen}
+        onToggleInbox={() => {
+          setSettingsOpen(false);
+          setInboxOpen((open) => !open);
+        }}
+        inboxSurface={inboxOpen ? (
+          <InboxSurface
+            activity={markActivity}
+            selected={activitySelection}
+            selectedGroup={activitySelectionGroup}
+            onSelect={selectInboxItem}
+            onOpen={openActivityMark}
+          />
+        ) : undefined}
         settingsSurface={settingsOpen ? (
           <Suspense fallback={<SurfaceLoadingState label="Loading settings…" />}>
             <SettingsPage
@@ -2518,7 +2634,8 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
               onClose={() => setSettingsOpen(false)}
               onOpenExtensionDestination={openExtensionDestination}
               onSectionChange={selectSettingsSection}
-              sectionId={activeDestination.settingsSection!}
+              onSidebarWidthChange={handleSidebarWidthChange}
+              sectionId={normalizeSettingsSection(clientPreferences.settingsSection)}
               recordingId={settingsRecordingId}
               sidebarWidth={effectiveSidebarWidth}
               surfaceErrors={surfaceRegistry.errors}
@@ -2531,9 +2648,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         secondaryPaneOpen={secondaryPaneOpen}
         secondaryPane={secondaryPane}
         secondaryTaskPaneWidthPercent={workspacePaneState.layout.widthPercent}
-        titlebarSurfaceContext={titlebarTask
-          ? { glyph: "folder", title: clientTaskTitle(titlebarTask.runId, titlebarTask.title, taskOrganization) }
-          : { glyph: activeSurface.chrome.titlebarGlyph ?? activeSurface.glyph, title: activeSurface.label }}
+        titlebarSurfaceContext={{ glyph: activeSurface.chrome.titlebarGlyph ?? activeSurface.glyph, title: activeSurface.label }}
         onTitlebarSurfaceContextPointerDown={!clientWindow.primary && titlebarTransferTarget ? (event) => titlebarWindowPointerDown(clientWindow.windowId, event) : undefined}
         surfaceErrors={surfaceRegistry.errors}
         onNavigationChange={openNavigationSection}
@@ -2555,7 +2670,7 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
         onOpenSettings={(section) => { setSettingsOpen(true); if (section) selectSettingsSection(section); }}
         onLogOut={onLogOut}
         onSearch={() => setCommandMenuOpen(true)}
-        onSidebarWidthChange={setSidebarWidth}
+        onSidebarWidthChange={handleSidebarWidthChange}
         onEffectiveSidebarWidthChange={setEffectiveSidebarWidth}
         canNavigateBack={activeNavigation.index > 0}
         canNavigateForward={activeNavigation.index < activeNavigation.entries.length - 1}
@@ -2626,11 +2741,11 @@ export function OperatorShell({ accessProfile, clientWindow, onLogOut, runtimeHo
           <VoiceCallPuck
             key="home-call"
             accessProfile={accessProfile}
-            onOpenHome={() => { openVoice(); setHomeViewMode("voice"); }}
+            onOpenHome={() => { closeSystemOverlays(); openVoice(); setHomeViewMode("voice"); }}
             session={voiceSession}
           />
       ) : null}</AnimatePresence></Suspense>
-      {commandMenuOpen && !settingsOpen ? (
+      {commandMenuOpen && !systemOverlayOpen ? (
         <Suspense fallback={null}>
           <CommandMenu
             accessProfile={accessProfile}

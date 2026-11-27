@@ -54,7 +54,7 @@ export function OctopusNavItem({
       <span
         {...dragHandle?.listeners}
         className={cx(
-          "flex w-4 shrink-0 items-center justify-center",
+          "sidebar-item-icon flex size-6 shrink-0 items-center justify-center",
           dragHandle && "cursor-grab touch-none active:cursor-grabbing",
         )}
         ref={dragHandle?.setActivatorNodeRef}
@@ -138,8 +138,8 @@ export function OctopusNavSection({
   return (
     <div className={cx("flex flex-col", collapsed == null && "gap-1", className)}>
       {title ? (
-        <div className={cx("group/nav-section-title flex items-center justify-between gap-2", titleRowClassName ?? "pr-0.5 pl-2")}>
-          <div className={cx("min-w-0 flex-1", titleClassName ?? "text-base font-medium text-[var(--color-text-tertiary)] opacity-75")}>
+        <div className={cx("group/nav-section-title flex min-h-[var(--height-token-row)] items-center justify-between gap-2", titleRowClassName ?? "ps-[var(--padding-row-cell-x,var(--padding-row-x))] pe-1.5")}>
+          <div className={cx("min-w-0 flex-1", titleClassName ?? "text-base font-medium text-tertiary")}>
             {title}
           </div>
           {titleActions != null || titleTrailing != null ? (
@@ -312,7 +312,7 @@ export function OctopusAgentRow({
         onClick={onClick}
         type="button"
       >
-        <span className="flex size-5 shrink-0 items-center justify-center">{logo}</span>
+        <span className="sidebar-item-icon flex size-6 shrink-0 items-center justify-center">{logo}</span>
         <span className="text-fade-truncate min-w-0 flex-1">{label}</span>
         {meta ? (
           <span className={cx(
@@ -360,7 +360,7 @@ export function OctopusProjectRow({
       aria-label={workingTaskCount ? `${label}, ${workingTaskCount} running ${workingTaskCount === 1 ? "task" : "tasks"}` : label}
       aria-busy={workingTaskCount > 0 || undefined}
       className={cx(
-        "octopus-nav-row group/folder-row group relative flex h-[var(--height-token-row)] cursor-interaction items-center justify-between overflow-x-hidden sidebar-item text-sm text-token-foreground hover:bg-token-list-hover-background focus-visible:outline focus-visible:outline-offset-2",
+        "octopus-nav-row group/folder-row group relative flex h-[var(--height-token-row)] cursor-interaction items-center justify-between overflow-x-hidden sidebar-item px-[var(--padding-row-cell-x,var(--padding-row-x))] text-sm text-token-foreground hover:bg-token-list-hover-background focus-visible:outline focus-visible:outline-offset-2",
         active && "bg-token-list-hover-background",
       )}
       data-sidebar-nav-item=""
@@ -374,11 +374,11 @@ export function OctopusProjectRow({
         onClick();
       }}
       role="button"
-      style={depth > 0 ? { paddingLeft: depth * 14 } : undefined}
+      style={depth > 0 ? { paddingLeft: `calc(var(--padding-row-cell-x, var(--padding-row-x)) + ${depth * 14}px)` } : undefined}
       tabIndex={0}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-1 pl-1">
-        <span className="-mx-[3px] flex size-[var(--height-token-row)] shrink-0 items-center justify-center">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="sidebar-item-icon flex size-6 shrink-0 items-center justify-center">
           {logo ?? <Glyph className="icon-xs shrink-0" name={collapsed === false ? "folderOpen" : "folder"} size={16} />}
         </span>
         <div

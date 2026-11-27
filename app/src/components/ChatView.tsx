@@ -518,30 +518,38 @@ export function ChatView({
     <div className="min-w-0 w-full" data-dropdown-overlay-side="top">{composerStack}</div>
   );
 
+  const activeProjectContext = useMemo(() => {
+    if (!chat.activeRun) return null;
+    const context = chat.executionContexts.find((candidate) => candidate.eeId === chat.activeRun?.eeId && !candidate.isOsRoot);
+    return context ? { color: context.presentationColor, icon: context.presentationIcon } : null;
+  }, [chat.activeRun, chat.executionContexts]);
+  const showInlineThreadHeader = headerMode === "pane" || (headerMode === "window" && Boolean(chat.activeRun));
+
   return (
     <FilesPaneNavigationProvider onOpen={onOpenFiles}>
     <section className={chatViewClassName(composerVisible, headerMode)}>
       <main className="chat-thread relative isolate flex min-h-0 flex-1 flex-col">
-        {headerMode !== "pane" ? <div
+        {!showInlineThreadHeader ? <div
           aria-hidden="true"
           className="chat-thread-top-fade"
           data-app-shell-main-content-top-fade={headerEdgeScrolled ? "visible" : undefined}
         /> : null}
-        {headerMode === "pane" ? <ChatThreadHeader
-          actionsVisible={!headerActionsHost}
+        {showInlineThreadHeader ? <ChatThreadHeader
+          actionsVisible={headerMode === "window" ? true : !headerActionsHost}
           accessProfile={chat.accessProfile}
           activeRun={chat.activeRun}
           edgeScrolled={headerEdgeScrolled}
           pinnedContextCount={chat.pinnedMessages.length + chat.pinnedContextItems.length + (chat.continuation ? 1 : 0)}
           pinnedContextOpen={pinnedContextOpen}
+          projectContext={activeProjectContext}
           summaryDisplayMode={summaryDisplayMode}
           summaryOpen={summaryOpen}
           summaryPopoverContent={taskSummary}
-          mode={headerMode}
+          mode={headerMode === "pane" ? "pane" : "window"}
           onPinnedContextOpenChange={setPinnedContextOpen}
           onSummaryOpenChange={setSummaryPanelOpen}
         /> : null}
-        {headerMode !== "pane" || headerActionsHost ? (
+        {headerMode === "pane" && headerActionsHost ? (
           <WorkspacePaneHeaderActions>
             <ChatThreadHeaderActions
               activeRun={chat.activeRun}

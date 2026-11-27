@@ -27,6 +27,7 @@ import {
 } from "../../onboarding/workspaceSetup";
 import {
   beginClientSetup,
+  cancelClientSetup,
   onClientSetupProgress,
   openSetupFile,
   probeApplicationConnection,
@@ -257,6 +258,11 @@ async function isProviderReadyForAutoVerify(
     }
   }
   return chatgptSignInCompleted();
+}
+
+function canCancelClientSetup(setup: OctopusClientSetupState | null | undefined): boolean {
+  if (!setup || setup.status !== "in_progress") return false;
+  return setup.steps.find((entry) => entry.step === "workspace")?.state !== "complete";
 }
 
 function resolvePackSetupProvider(
@@ -562,6 +568,43 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
     return operation;
   }, [catalogResult.pack, draftState.draft, refresh]);
 
+  const reviewChoices = useCallback((): Promise<void> => {
+    if (inFlight.current) return inFlight.current;
+    const operation = Promise.resolve().then(async () => {
+      const currentSetup = snapshot?.clientSetup ?? await readCurrentClientSetup();
+      if (currentSetup?.status === "in_progress") {
+        if (!canCancelClientSetup(currentSetup)) {
+          throw new ProductSetupError("Home and projects were already created, so earlier setup choices can no longer be changed.");
+        }
+        await cancelClientSetup(currentSetup.operationId);
+      }
+      const baseDraft = draftState.draft ?? createDefaultWorkspaceSetupDraft();
+      const nextDraft = saveWorkspaceSetupDraft({
+        ...baseDraft,
+        operationId: crypto.randomUUID(),
+        step: "review",
+        updatedAt: new Date().toISOString(),
+      });
+      await refresh(false, () => {
+        setDraftState({ draft: nextDraft, error: "" });
+        setApplyState(APPLY_IDLE);
+      });
+    }).catch((error) => {
+      console.error("Workspace setup could not return to choices", error);
+      setApplyState((current) => ({
+        ...current,
+        state: "failed",
+        error: error instanceof ProductSetupError
+          ? error.productMessage
+          : "Octopus could not return to setup choices right now. Try again.",
+      }));
+    }).finally(() => {
+      inFlight.current = null;
+    });
+    inFlight.current = operation;
+    return operation;
+  }, [draftState.draft, refresh, snapshot?.clientSetup]);
+
   useEffect(() => {
     const draft = draftState.draft;
     if (
@@ -653,19 +696,24 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
   if (!matrix) return <OpeningState />;
   if (matrix.mode === "shell") return <>{children}</>;
   if (matrix.mode === "resume" && draftState.draft?.step !== "applying") {
+    const allowReviewChoices = canCancelClientSetup(snapshot.clientSetup);
     if (snapshot.clientSetup && (applyState.state === "awaiting_sign_in" || applyState.signInProvider)) {
       return (
         <WorkspaceSetupProgress
           applyState={applyState}
+          onBack={allowReviewChoices ? () => void reviewChoices() : undefined}
           onSignIn={() => resumeCurrent(snapshot.clientSetup!, draftState.draft, true)}
         />
       );
     }
     return (
       <GateState
-        action={applyState.state === "failed" && snapshot.clientSetup
-          ? <OcButton onClick={() => void resumeCurrent(snapshot.clientSetup!)}>Try again</OcButton>
-          : undefined}
+        action={applyState.state === "failed" && snapshot.clientSetup ? (
+          <div className="flex items-center justify-center gap-2">
+            <OcButton onClick={() => void resumeCurrent(snapshot.clientSetup!)}>Try again</OcButton>
+            {allowReviewChoices ? <OcButton variant="secondary" onClick={() => void reviewChoices()}>Review choices</OcButton> : null}
+          </div>
+        ) : undefined}
         detail={applyState.error || applyState.detail || matrix.detail}
         title={applyState.label || matrix.title}
         tone={applyState.state === "failed" ? "danger" : "neutral"}
@@ -699,6 +747,7 @@ function WorkspaceSetupFlow({ accessProfile, children, initialSetup }: Omit<Prop
       homeRecipe={catalogResult.pack?.recipe ?? null}
       agentPresets={catalogResult.pack?.recipe.agent_presets ?? []}
       onApply={apply}
+      onReviewChoices={!snapshot.clientSetup || canCancelClientSetup(snapshot.clientSetup) ? reviewChoices : undefined}
       onSignIn={async () => {
         try {
           const setup = await readCurrentClientSetup();

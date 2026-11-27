@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import "../icon-glyphs/chat";
 import "../icon-glyphs/settings";
 import "../icon-glyphs/voice";
@@ -9,6 +9,8 @@ import {
   useSetClientPreferences,
 } from "../../clientPreferences";
 import { Glyph } from "../IconGlyphs";
+import { PanelResizeHandle, useOverlaySidebarResize } from "../shell/PanelResizeHandle";
+import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "../../shell/shellMetrics";
 import { OcSelect } from "../../design-system/components";
 import { restoreModalFocus } from "../../design-system/modalFocus";
 import { clientDialogOwnsCommands } from "../../keyboardShortcuts";
@@ -37,6 +39,7 @@ export function SettingsPage({
   onClose,
   onOpenExtensionDestination,
   onSectionChange,
+  onSidebarWidthChange,
   sectionId,
   recordingId = "",
   sidebarWidth,
@@ -51,6 +54,7 @@ export function SettingsPage({
   onClose: () => void;
   onOpenExtensionDestination: (destination: ClientExtensionDestination) => void;
   onSectionChange: (sectionId: string) => void;
+  onSidebarWidthChange?: (width: number) => void;
   sectionId: string;
   recordingId?: string;
   sidebarWidth: number;
@@ -63,6 +67,13 @@ export function SettingsPage({
   const searchResultRefs = useRef(new Map<number, HTMLButtonElement>());
   const preferences = useClientPreferences();
   const setClientPreferences = useSetClientPreferences();
+  const overlaySidebar = useOverlaySidebarResize();
+  const resolvedSidebarWidth = overlaySidebar?.width ?? sidebarWidth;
+  const resolvedSidebarMin = overlaySidebar?.minimumWidth ?? SIDEBAR_MIN_WIDTH;
+  const resolvedSidebarMax = overlaySidebar?.maximumWidth ?? SIDEBAR_MAX_WIDTH;
+  const resolvedSidebarDefault = overlaySidebar?.defaultWidth ?? SIDEBAR_DEFAULT_WIDTH;
+  const handleSidebarWidthChange = overlaySidebar?.onWidthChange ?? onSidebarWidthChange;
+  const handleSidebarResizingChange = overlaySidebar?.onResizingChange ?? (() => {});
   const [highlightedSearchIndex, setHighlightedSearchIndex] = useState(-1);
   const [pendingDestinationId, setPendingDestinationId] = useState("");
   const [selectedRecordingId, setSelectedRecordingId] = useState(recordingId);
@@ -78,13 +89,24 @@ export function SettingsPage({
     ? storedSection
     : visibleSections[0]?.id;
 
-  function closeSettings() {
+  const closeSettings = useCallback(() => {
     setClientPreferences({ settingsSearch: "" });
     onClose();
-  }
+  }, [onClose, setClientPreferences]);
 
   useEffect(() => {
+    let frame = 0;
+    if (!recordingId) {
+      frame = window.requestAnimationFrame(() => {
+        const container = dialogRef.current;
+        if (!container) return;
+        if (document.activeElement instanceof HTMLElement && container.contains(document.activeElement)) return;
+        const search = container.querySelector<HTMLInputElement>("#settings-search");
+        (search ?? container).focus({ preventScroll: true });
+      });
+    }
     return () => {
+      if (frame) window.cancelAnimationFrame(frame);
       restoreModalFocus(previousFocusRef.current);
     };
   }, []);
@@ -166,21 +188,21 @@ export function SettingsPage({
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose, preferences.settingsSearch]);
+  }, [closeSettings, preferences.settingsSearch, setClientPreferences]);
 
   return (
     <div
       aria-label="Settings"
-      className="settings-page flex h-full min-h-0"
+      className="shell-overlay-layout settings-page flex h-full min-h-0"
       ref={dialogRef}
       role="region"
       tabIndex={-1}
     >
       <aside
-        className={`settings-rail app-shell-left-panel relative flex min-h-0 w-token-sidebar shrink-0 flex-col overflow-hidden${query ? " is-searching" : ""}`}
-        style={{ "--settings-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+        className={`shell-overlay-rail settings-rail relative flex min-h-0 shrink-0 flex-col${query ? " is-searching" : ""}`}
+        style={{ "--settings-sidebar-width": `${resolvedSidebarWidth}px` } as CSSProperties}
       >
-        <nav className="flex min-h-0 flex-1 flex-col px-row-x select-none" aria-label="Settings sections">
+        <nav className="flex min-h-0 flex-1 flex-col overflow-hidden px-row-x select-none" aria-label="Settings sections">
           <div className="flex min-h-0 flex-1 flex-col">
           <div className="mb-4 flex shrink-0 items-center gap-2">
           <div className="settings-search sidebar-item no-drag flex h-[var(--height-token-row)] min-w-0 flex-1 items-center bg-background-secondary-soft-alpha py-0 pe-[var(--padding-row-cell-x,var(--padding-row-x))] text-base leading-[18px]">
@@ -283,40 +305,54 @@ export function SettingsPage({
           </div>
           </div>
         </nav>
+        {handleSidebarWidthChange ? (
+          <PanelResizeHandle
+            ariaLabel="Resize Settings sidebar"
+            className="app-shell-sidebar-resizer"
+            collapsible={false}
+            defaultSize={resolvedSidebarDefault}
+            edge="right"
+            maximum={resolvedSidebarMax}
+            minimum={resolvedSidebarMin}
+            value={resolvedSidebarWidth}
+            onChange={handleSidebarWidthChange}
+            onCommit={handleSidebarWidthChange}
+            onOpenChange={() => {}}
+            onResizingChange={handleSidebarResizingChange}
+          />
+        ) : null}
       </aside>
 
-      <div className="relative isolate min-h-0 min-w-0 flex-1 overflow-visible">
-        <div className="main-surface flex h-full min-h-0 flex-col">
-          <div className="settings-compact-navigation">
-            <OcSelect label="Settings section" value={activeSection ?? ""} options={visibleSections.map((section) => ({ value: section.id, label: section.label }))} onChange={(section) => { setClientPreferences({ settingsSearch: "" }); onSectionChange(section); }} />
-          </div>
-          <main className="settings-main scrollbar-stable flex-1 overflow-y-auto p-panel" ref={mainRef}>
-            <div className="settings-content mx-auto flex w-full min-w-0 max-w-3xl flex-col" data-settings-section={activeSection} tabIndex={-1}>
-              {activeSection ? (
-                <SettingsSectionContent
-                  accessProfile={accessProfile}
-                  documentRoot={documentRoot}
-                  documentVerdicts={documentVerdicts}
-                  documents={documents}
-                  extensions={extensions}
-                  onOpenExtensionDestination={onOpenExtensionDestination}
-                  sectionId={activeSection}
-                  dictationRecordingId={selectedRecordingId}
-                  onShowAllRecordings={() => setSelectedRecordingId("")}
-                  surfaceErrors={surfaceErrors}
-                  surfaces={surfaces}
-                />
-              ) : null}
-              {!activeSection ? (
-                <section className="settings-section settings-empty-section">
-                  <Glyph name="search" size={22} />
-                  <h1>No matching settings</h1>
-                  <p>Clear the search or use a different term.</p>
-                </section>
-              ) : null}
-            </div>
-          </main>
+      <div className="settings-main-column relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-visible">
+        <div className="settings-compact-navigation">
+          <OcSelect label="Settings section" value={activeSection ?? ""} options={visibleSections.map((section) => ({ value: section.id, label: section.label }))} onChange={(section) => { setClientPreferences({ settingsSearch: "" }); onSectionChange(section); }} />
         </div>
+        <main className="shell-overlay-main settings-main scrollbar-stable flex-1 overflow-x-hidden overflow-y-auto p-panel" ref={mainRef}>
+          <div className="settings-content mx-auto flex w-full min-w-0 max-w-3xl flex-col" data-settings-section={activeSection} tabIndex={-1}>
+            {activeSection ? (
+              <SettingsSectionContent
+                accessProfile={accessProfile}
+                documentRoot={documentRoot}
+                documentVerdicts={documentVerdicts}
+                documents={documents}
+                extensions={extensions}
+                onOpenExtensionDestination={onOpenExtensionDestination}
+                sectionId={activeSection}
+                dictationRecordingId={selectedRecordingId}
+                onShowAllRecordings={() => setSelectedRecordingId("")}
+                surfaceErrors={surfaceErrors}
+                surfaces={surfaces}
+              />
+            ) : null}
+            {!activeSection ? (
+              <section className="settings-section settings-empty-section">
+                <Glyph name="search" size={22} />
+                <h1>No matching settings</h1>
+                <p>Clear the search or use a different term.</p>
+              </section>
+            ) : null}
+          </div>
+        </main>
       </div>
     </div>
   );

@@ -1,4 +1,192 @@
-export const octopusDiffUnsafeCss = "@layer base, theme, rendered, unsafe;\n@layer unsafe {\n  \n  [data-diffs-header],\n  :is([data-diff], [data-file]) {\n    \n  --octopus-diffs-surface: var(--color-token-main-surface-primary);\n  --octopus-diffs-context-surface: color-mix(\n  in srgb,\n  var(--octopus-diffs-surface) 94%,\n  var(--color-token-main-surface-primary)\n);\n  --octopus-diffs-separator-surface: color-mix(\n  in srgb,\n  var(--octopus-diffs-surface) 94%,\n  var(--color-token-text-link-foreground)\n);\n  --octopus-diffs-hover-surface: color-mix(\n  in srgb,\n  var(--octopus-diffs-surface) 92%,\n  var(--color-token-main-surface-primary)\n);\n  --octopus-diffs-header-surface: var(--octopus-diffs-surface);\n  --octopus-diffs-context-number: color-mix(\n  in lab,\n  var(--octopus-diffs-surface) 98.5%,\n  var(--diffs-mixer)\n);\n  --octopus-diffs-addition-number: light-dark(\n  color-mix(in lab, var(--diffs-light-bg, #fff) 91%, var(--diffs-addition-base)),\n  color-mix(in lab, var(--diffs-dark-bg, #000) 85%, var(--diffs-addition-base))\n);\n  --octopus-diffs-deletion-number: light-dark(\n  color-mix(in lab, var(--diffs-light-bg, #fff) 91%, var(--diffs-deletion-base)),\n  color-mix(in lab, var(--diffs-dark-bg, #000) 85%, var(--diffs-deletion-base))\n);\n  --octopus-diffs-addition-hover: light-dark(\n  color-mix(\n    in lab,\n    var(--diffs-light-bg, #fff) 80%,\n    var(--diffs-addition-base)\n  ),\n  color-mix(\n    in lab,\n    var(--diffs-dark-bg, #000) 70%,\n    var(--diffs-addition-base)\n  )\n);\n  --octopus-diffs-deletion-hover: light-dark(\n  color-mix(\n    in lab,\n    var(--diffs-light-bg, #fff) 80%,\n    var(--diffs-deletion-base)\n  ),\n  color-mix(\n    in lab,\n    var(--diffs-dark-bg, #000) 75%,\n    var(--diffs-deletion-base)\n  )\n);\n  /* Keep unhighlighted lines readable while syntax tokens are pending. */\n  --diffs-dark: var(--color-token-editor-foreground);\n  --diffs-light: var(--color-token-editor-foreground);\n  --diffs-bg-context-override: var(--octopus-diffs-context-surface);\n  --diffs-bg-separator-override: var(--octopus-diffs-separator-surface);\n  --diffs-bg-hover-override: var(--octopus-diffs-hover-surface);\n\n    --diffs-bg: var(--octopus-diffs-surface) !important;\n    background-color: var(--octopus-diffs-surface) !important;\n  }\n\n  :is([data-diff], [data-file]) [data-utility-button] {\n    background-color: var(--color-token-foreground);\n    color: var(--color-token-side-bar-background);\n    border: none;\n    border-radius: 4px;\n    margin-right: 0;\n  }\n\n  :is([data-diff], [data-file]) [data-utility-button]:hover {\n    background-color: color-mix(\n      in srgb,\n      var(--color-token-foreground) 88%,\n      var(--color-token-side-bar-background)\n    );\n  }\n\n  :is([data-diff], [data-file]) [data-selected-line][data-line-annotation] {\n    background-color: var(--diffs-bg);\n  }\n\n  [data-placeholder][data-loading] {\n    --octopus-diffs-placeholder-base: color-mix(in srgb, var(--color-token-description-foreground) 10%, transparent);\n    --octopus-diffs-placeholder-highlight: color-mix(in srgb, var(--color-token-description-foreground) 16%, transparent);\n    position: relative;\n    overflow: hidden;\n    background-image: linear-gradient(90deg, var(--octopus-diffs-placeholder-base) 82%, transparent 82%);\n    background-position: 12px 8px;\n    background-size: calc(100% - 24px) 22px;\n    background-repeat: repeat-y;\n  }\n\n  [data-placeholder][data-loading]::before {\n    content: \"\";\n    position: absolute;\n    inset: 8px 12px;\n    background: linear-gradient(90deg, #0000, var(--octopus-diffs-placeholder-highlight), #0000);\n    translate: -100% 0;\n    mask-image: repeating-linear-gradient(180deg, #000 0 14px, transparent 14px 22px);\n    animation: octopus-diffs-placeholder-shimmer 3s linear infinite;\n  }\n\n  @keyframes octopus-diffs-placeholder-shimmer {\n    to { translate: 100% 0; }\n  }\n\n  @media (prefers-reduced-motion: reduce) {\n    [data-placeholder][data-loading]::before { animation: none; }\n  }\n\n\n  /* Preserve the pre-beta split-column width instead of reserving a scrollbar gutter in every pane. */\n  :is([data-diff], [data-file]) [data-code] {\n    scrollbar-gutter: auto;\n  }\n\n  :is([data-diff], [data-file]) [data-line-type='change-addition']:is([data-line], [data-no-newline]) {\n    --diffs-computed-diff-line-bg: var(--diffs-bg-addition);\n  }\n\n  :is([data-diff], [data-file]) [data-line-type='change-addition']:is([data-column-number], [data-gutter-buffer]) {\n    --diffs-computed-diff-line-bg: var(--octopus-diffs-addition-number);\n  }\n\n  :is([data-diff], [data-file]) [data-line-type='change-deletion']:is([data-line], [data-no-newline]) {\n    --diffs-computed-diff-line-bg: var(--diffs-bg-deletion);\n  }\n\n  :is([data-diff], [data-file]) [data-line-type='change-deletion']:is([data-column-number], [data-gutter-buffer]) {\n    --diffs-computed-diff-line-bg: var(--octopus-diffs-deletion-number);\n  }\n\n  :is([data-diff], [data-file]) [data-line-type='change-addition'][data-hovered]:not([data-selected-line]) {\n    --diffs-computed-hovered-line-bg: var(--octopus-diffs-addition-hover);\n  }\n\n  :is([data-diff], [data-file]) [data-line-type='change-deletion'][data-hovered]:not([data-selected-line]) {\n    --diffs-computed-hovered-line-bg: var(--octopus-diffs-deletion-hover);\n  }\n\n\n  /* Cover fractional-pixel seams between consecutive solid addition markers. */\n  :is([data-diff], [data-file]) [data-line-type=\"change-addition\"][data-column-number]\n    + [data-line-type=\"change-addition\"][data-column-number]::before {\n    contain: none;\n    top: -1px;\n    height: calc(100% + 1px);\n  }\n\n\n\n  mark.octopus-thread-find-match {\n    background-color: var(--vscode-charts-yellow);\n    color: var(--color-token-foreground);\n    border-radius: var(--radius-2xs);\n    padding: 0;\n    margin: 0;\n    border: 0;\n    font: inherit;\n    line-height: inherit;\n    letter-spacing: inherit;\n    word-spacing: inherit;\n    vertical-align: baseline;\n  }\n\n  mark.octopus-thread-find-active {\n    background-color: var(--vscode-charts-orange);\n  }\n\n  :host(.composer-diff-simple-line) [data-separator]:empty {\n    background-color: transparent;\n  }\n\n  :host(.composer-diff-simple-line) [data-separator]:empty::after {\n    content: \"\";\n    grid-column: 2 / 3;\n    align-self: center;\n    margin-inline: 1ch;\n    border-top: 1px solid color-mix(in srgb, var(--diffs-fg) 18%, transparent);\n  }\n\n}";
+export const octopusDiffUnsafeCss = `@layer base, theme, rendered, unsafe;
+@layer unsafe {
+  [data-diffs-header],
+  :is([data-diff], [data-file]) {
+    --codex-diffs-surface: var(--color-surface);
+    --codex-diffs-context-surface: color-mix(
+      in srgb,
+      var(--codex-diffs-surface) 94%,
+      var(--color-surface)
+    );
+    --codex-diffs-separator-surface: color-mix(
+      in srgb,
+      var(--codex-diffs-surface) 94%,
+      var(--color-text-info)
+    );
+    --codex-diffs-hover-surface: color-mix(
+      in srgb,
+      var(--codex-diffs-surface) 92%,
+      var(--color-surface)
+    );
+    --codex-diffs-header-surface: var(--codex-diffs-surface);
+    --codex-diffs-context-number: color-mix(
+      in lab,
+      var(--codex-diffs-surface) 98.5%,
+      var(--diffs-mixer)
+    );
+    --codex-diffs-addition-number: light-dark(
+      color-mix(in lab, var(--diffs-light-bg, #fff) 91%, var(--diffs-addition-base)),
+      color-mix(in lab, var(--diffs-dark-bg, #000) 85%, var(--diffs-addition-base))
+    );
+    --codex-diffs-deletion-number: light-dark(
+      color-mix(in lab, var(--diffs-light-bg, #fff) 91%, var(--diffs-deletion-base)),
+      color-mix(in lab, var(--diffs-dark-bg, #000) 85%, var(--diffs-deletion-base))
+    );
+    --codex-diffs-addition-hover: light-dark(
+      color-mix(
+        in lab,
+        var(--diffs-light-bg, #fff) 80%,
+        var(--diffs-addition-base)
+      ),
+      color-mix(
+        in lab,
+        var(--diffs-dark-bg, #000) 70%,
+        var(--diffs-addition-base)
+      )
+    );
+    --codex-diffs-deletion-hover: light-dark(
+      color-mix(
+        in lab,
+        var(--diffs-light-bg, #fff) 80%,
+        var(--diffs-deletion-base)
+      ),
+      color-mix(
+        in lab,
+        var(--diffs-dark-bg, #000) 75%,
+        var(--diffs-deletion-base)
+      )
+    );
+    --octopus-diffs-surface: var(--codex-diffs-surface);
+    --octopus-diffs-context-surface: var(--codex-diffs-context-surface);
+    --octopus-diffs-separator-surface: var(--codex-diffs-separator-surface);
+    --octopus-diffs-hover-surface: var(--codex-diffs-hover-surface);
+    --octopus-diffs-header-surface: var(--codex-diffs-header-surface);
+    --octopus-diffs-context-number: var(--codex-diffs-context-number);
+    --octopus-diffs-addition-number: var(--codex-diffs-addition-number);
+    --octopus-diffs-deletion-number: var(--codex-diffs-deletion-number);
+    --octopus-diffs-addition-hover: var(--codex-diffs-addition-hover);
+    --octopus-diffs-deletion-hover: var(--codex-diffs-deletion-hover);
+    /* Keep unhighlighted lines readable while syntax tokens are pending. */
+    --diffs-dark: var(--color-text);
+    --diffs-light: var(--color-text);
+    --diffs-bg-context-override: var(--codex-diffs-context-surface);
+    --diffs-bg-separator-override: var(--codex-diffs-separator-surface);
+    --diffs-bg-hover-override: var(--codex-diffs-hover-surface);
+    --diffs-bg: var(--codex-diffs-surface) !important;
+    background-color: var(--codex-diffs-surface) !important;
+  }
+
+  :is([data-diff], [data-file]) [data-utility-button] {
+    background-color: var(--color-background-primary-solid);
+    color: var(--color-text-primary-solid);
+    border: none;
+    border-radius: 4px;
+    margin-right: 0;
+  }
+
+  :is([data-diff], [data-file]) [data-utility-button]:hover {
+    background-color: var(--color-background-primary-solid-hover);
+  }
+
+  :is([data-diff], [data-file]) [data-selected-line][data-line-annotation] {
+    background-color: var(--diffs-bg);
+  }
+
+  [data-placeholder][data-loading] {
+    --codex-diffs-placeholder-base: color-mix(in srgb, var(--color-codex-description, var(--color-text-description)) 10%, transparent);
+    --codex-diffs-placeholder-highlight: color-mix(in srgb, var(--color-codex-description, var(--color-text-description)) 16%, transparent);
+    position: relative;
+    overflow: hidden;
+    background-image: linear-gradient(90deg, var(--codex-diffs-placeholder-base) 82%, transparent 82%);
+    background-position: 12px 8px;
+    background-size: calc(100% - 24px) 22px;
+    background-repeat: repeat-y;
+  }
+
+  [data-placeholder][data-loading]::before {
+    content: "";
+    position: absolute;
+    inset: 8px 12px;
+    background: linear-gradient(90deg, #0000, var(--codex-diffs-placeholder-highlight), #0000);
+    translate: -100% 0;
+    mask-image: repeating-linear-gradient(180deg, #000 0 14px, transparent 14px 22px);
+    animation: octopus-diffs-placeholder-shimmer 3s linear infinite;
+  }
+
+  @keyframes octopus-diffs-placeholder-shimmer {
+    to { translate: 100% 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-placeholder][data-loading]::before { animation: none; }
+  }
+
+  :is([data-diff], [data-file]) [data-code] {
+    scrollbar-gutter: auto;
+  }
+
+  :is([data-diff], [data-file]) [data-line-type='change-addition']:is([data-line], [data-no-newline]) {
+    --diffs-computed-diff-line-bg: var(--diffs-bg-addition);
+  }
+
+  :is([data-diff], [data-file]) [data-line-type='change-addition']:is([data-column-number], [data-gutter-buffer]) {
+    --diffs-computed-diff-line-bg: var(--codex-diffs-addition-number);
+  }
+
+  :is([data-diff], [data-file]) [data-line-type='change-deletion']:is([data-line], [data-no-newline]) {
+    --diffs-computed-diff-line-bg: var(--diffs-bg-deletion);
+  }
+
+  :is([data-diff], [data-file]) [data-line-type='change-deletion']:is([data-column-number], [data-gutter-buffer]) {
+    --diffs-computed-diff-line-bg: var(--codex-diffs-deletion-number);
+  }
+
+  :is([data-diff], [data-file]) [data-line-type='change-addition'][data-hovered]:not([data-selected-line]) {
+    --diffs-computed-hovered-line-bg: var(--codex-diffs-addition-hover);
+  }
+
+  :is([data-diff], [data-file]) [data-line-type='change-deletion'][data-hovered]:not([data-selected-line]) {
+    --diffs-computed-hovered-line-bg: var(--codex-diffs-deletion-hover);
+  }
+
+  :is([data-diff], [data-file]) [data-line-type="change-addition"][data-column-number]
+    + [data-line-type="change-addition"][data-column-number]::before {
+    contain: none;
+    top: -1px;
+    height: calc(100% + 1px);
+  }
+
+  mark.octopus-thread-find-match {
+    background-color: var(--vscode-charts-yellow);
+    color: var(--gray-fixed-1000, #0d0d0d);
+    border-radius: var(--radius-2xs);
+    padding: 0;
+    margin: 0;
+    border: 0;
+    font: inherit;
+    line-height: inherit;
+    letter-spacing: inherit;
+    word-spacing: inherit;
+    vertical-align: baseline;
+  }
+
+  mark.octopus-thread-find-active {
+    background-color: var(--vscode-charts-orange);
+    color: var(--gray-fixed-1000, #0d0d0d);
+  }
+
+  :host(.composer-diff-simple-line) [data-separator]:empty {
+    background-color: transparent;
+  }
+
+  :host(.composer-diff-simple-line) [data-separator]:empty::after {
+    content: "";
+    grid-column: 2 / 3;
+    align-self: center;
+    margin-inline: 1ch;
+    border-top: 1px solid color-mix(in srgb, var(--diffs-fg) 18%, transparent);
+  }
+}`;
 
 export const octopusDiffRawUnsafeCss = octopusDiffUnsafeCss
   .replace(/^@layer base, theme, rendered, unsafe;\n@layer unsafe \{\n/, "")

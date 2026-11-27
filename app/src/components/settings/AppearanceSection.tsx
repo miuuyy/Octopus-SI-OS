@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { HexColorPicker } from "react-colorful";
 import {
   darkCodeThemes,
+  defaultAppearance,
   lightCodeThemes,
   codeThemeSeed,
   appearanceAccentColor,
@@ -75,34 +76,44 @@ type ThemeKind = "light" | "dark";
 
 function codeThemeAppearancePatch(kind: ThemeKind, id: CodeThemeId): Partial<AppearanceSettings> {
   const seed = codeThemeSeed(kind, id);
-  const shared = {
-    ...(seed.contrast == null ? {} : { [`${kind}Contrast`]: seed.contrast }),
-    ...(seed.fonts?.ui === undefined ? {} : { [`${kind}UiFont`]: seed.fonts.ui ?? "" }),
-    ...(seed.fonts?.code === undefined ? {} : { [`${kind}CodeFont`]: seed.fonts.code ?? "" }),
-    ...(seed.opaqueWindows == null ? {} : { [`${kind}TranslucentSidebar`]: !seed.opaqueWindows }),
-  };
+  const contrast = seed.contrast ?? (kind === "light" ? defaultAppearance.lightContrast : defaultAppearance.darkContrast);
+  const uiFont = seed.fonts?.ui === undefined
+    ? (kind === "light" ? defaultAppearance.lightUiFont : defaultAppearance.darkUiFont)
+    : (seed.fonts.ui ?? "");
+  const codeFont = seed.fonts?.code === undefined
+    ? (kind === "light" ? defaultAppearance.lightCodeFont : defaultAppearance.darkCodeFont)
+    : (seed.fonts.code ?? "");
+  const translucentSidebar = seed.opaqueWindows == null
+    ? (kind === "light" ? defaultAppearance.lightTranslucentSidebar : defaultAppearance.darkTranslucentSidebar)
+    : !seed.opaqueWindows;
   return kind === "light"
     ? {
-        ...shared,
         lightAccent: seed.accent,
         lightAccentSource: id === "codex" ? "codex" : "custom",
         lightBackground: seed.surface,
+        lightCodeFont: codeFont,
         lightCodeTheme: id,
+        lightContrast: contrast,
         lightDiffAdded: seed.semanticColors.diffAdded,
         lightDiffRemoved: seed.semanticColors.diffRemoved,
         lightForeground: seed.ink,
         lightSkill: seed.semanticColors.skill,
+        lightTranslucentSidebar: translucentSidebar,
+        lightUiFont: uiFont,
       }
     : {
-        ...shared,
         darkAccent: seed.accent,
         darkAccentSource: id === "codex" ? "codex" : "custom",
         darkBackground: seed.surface,
+        darkCodeFont: codeFont,
         darkCodeTheme: id,
+        darkContrast: contrast,
         darkDiffAdded: seed.semanticColors.diffAdded,
         darkDiffRemoved: seed.semanticColors.diffRemoved,
         darkForeground: seed.ink,
         darkSkill: seed.semanticColors.skill,
+        darkTranslucentSidebar: translucentSidebar,
+        darkUiFont: uiFont,
       };
 }
 

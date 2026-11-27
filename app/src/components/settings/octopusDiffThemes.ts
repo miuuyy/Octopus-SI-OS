@@ -43,6 +43,7 @@ const darkThemes = {
   "night-owl": theme("dark", "night-owl", () => import("@shikijs/themes/night-owl")),
   nord: theme("dark", "nord", () => import("@shikijs/themes/nord")),
   notion: theme("dark", "notion", () => import("./code-themes/dark-notion.json")),
+  og: theme("dark", "og", () => import("./code-themes/dark-og.json")),
   one: theme("dark", "one", () => import("@shikijs/themes/one-dark-pro")),
   oscurange: theme("dark", "oscurange", () => import("./code-themes/dark-oscurange.json")),
   raycast: theme("dark", "raycast", () => import("./code-themes/dark-raycast")),

@@ -24,12 +24,6 @@
     }
   },
   "shapes": {
-    "bell": {
-      "path": "upstream/lucide-2023/bell.svg",
-      "upstream": "lucide-2023",
-      "source_url": "https://raw.githubusercontent.com/lucide-icons/lucide/7816ed88f67d31484fcf6f18c531180c9b50b67e/icons/bell.svg",
-      "sha256": "cd99105767b89241308bf5c7d0235f16b8d0eceea4865f5bc68795fc76b0baac"
-    },
     "flask-conical": {
       "path": "upstream/lucide-2023/flask-conical.svg",
       "upstream": "lucide-2023",
@@ -89,12 +83,6 @@
       "name": "hand",
       "shapes": [
         "hand"
-      ]
-    },
-    {
-      "name": "bell",
-      "shapes": [
-        "bell"
       ]
     },
     {

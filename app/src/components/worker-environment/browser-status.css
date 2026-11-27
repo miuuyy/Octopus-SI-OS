@@ -217,7 +217,7 @@
   .we-downloads > button { position: relative; }
   .we-downloads button { cursor: var(--cursor-interaction); }
   .we-downloads button:disabled { cursor: default; opacity: .45; }
-  .we-downloads .has-download-activity { color: var(--color-token-charts-blue); }
+  .we-downloads .has-download-activity { color: var(--color-text-accent); }
   .we-download-panel, .we-download-peek { background: var(--color-surface-elevated-secondary); position: absolute; right: 0; top: calc(100% + 6px); width: 360px; max-width: calc(100vw - 32px); padding: 8px; z-index: 60; }
   .we-download-panel { max-height: 480px; display: flex; flex-direction: column; }
   .we-download-panel > header, .we-download-peek > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 0 8px; font-size: 14px; font-weight: 500; }
@@ -232,7 +232,7 @@
   .we-download-copy small { color: var(--color-text-tertiary); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .we-download-copy small.is-failed, .we-download-error { color: var(--color-text-danger); }
   .we-download-progress { height: 4px; margin-top: 4px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
-  .we-download-progress > i { display: block; height: 100%; width: 100%; border-radius: inherit; transform-origin: left; background: var(--color-text-info); transition: transform .3s cubic-bezier(.4, 0, .2, 1), opacity .3s cubic-bezier(.4, 0, .2, 1); }
+  .we-download-progress > i { display: block; height: 100%; width: 100%; border-radius: inherit; transform-origin: left; background: var(--color-accent); transition: transform .3s cubic-bezier(.4, 0, .2, 1), opacity .3s cubic-bezier(.4, 0, .2, 1); }
   .we-download-progress > i.is-paused { background: var(--color-text-tertiary); }
   .we-download-progress > i.is-indeterminate { width: 33.333%; animation: we-download-pulse 2s cubic-bezier(.4, 0, .6, 1) infinite; }
   .we-download-progress > i.is-paused.is-indeterminate { visibility: hidden; }

@@ -96,19 +96,20 @@ export function GeneralSection({ accessProfile, surfaces }: { accessProfile: Oct
     return options;
   }, [providerInterfaceId, providerState.providers, storedProviderMissing]);
   const selectedProvider = providerState.providers.find((provider) => provider.id === providerInterfaceId);
+  const effectiveStartupSurfaceId = preferences.startupSurfaceId === "inbox" ? "voice" : preferences.startupSurfaceId;
   const startupSurfaceOptions = useMemo(() => {
     const options: Array<{ value: string; label: string; glyph: GlyphName; disabled?: boolean }> = clientNavigationDestinations
-      .filter((destination) => surfaces.some((surface) => surface.id === destination.surfaceId))
+      .filter((destination) => destination.id !== "inbox" && surfaces.some((surface) => surface.id === destination.surfaceId))
       .map((destination) => ({ value: destination.surfaceId, label: destination.label, glyph: destination.glyph }));
     for (const surface of surfaces) {
-      if (options.some((option) => option.value === surface.id)) continue;
+      if (surface.id === "inbox" || options.some((option) => option.value === surface.id)) continue;
       options.push({ value: surface.id, label: surface.label, glyph: surface.glyph });
     }
-    if (!options.some((option) => option.value === preferences.startupSurfaceId)) {
-      options.unshift({ value: preferences.startupSurfaceId, label: `${preferences.startupSurfaceId} · unavailable`, glyph: "descriptor", disabled: true });
+    if (!options.some((option) => option.value === effectiveStartupSurfaceId)) {
+      options.unshift({ value: effectiveStartupSurfaceId, label: `${effectiveStartupSurfaceId} · unavailable`, glyph: "descriptor", disabled: true });
     }
     return options;
-  }, [preferences.startupSurfaceId, surfaces]);
+  }, [effectiveStartupSurfaceId, surfaces]);
 
   function selectProvider(next: string) {
     const provider = providerState.providers.find((candidate) => candidate.id === next);
@@ -139,7 +140,7 @@ export function GeneralSection({ accessProfile, surfaces }: { accessProfile: Oct
                 label="Open on launch"
                 onChange={(startupSurfaceId) => setClientPreferences({ startupSurfaceId })}
                 options={startupSurfaceOptions}
-                value={preferences.startupSurfaceId}
+                value={effectiveStartupSurfaceId}
               />
             )}
             description="Choose the launch destination. The last opened surface is restored when available."

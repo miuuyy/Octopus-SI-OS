@@ -14,7 +14,7 @@
 }
 
 .sidebar-task-status[data-state="running"] { --task-status-accent: var(--color-text-secondary); }
-.sidebar-task-status[data-state="unread"] { --task-status-accent: var(--color-token-charts-blue); }
+.sidebar-task-status[data-state="unread"] { --task-status-accent: var(--color-accent); }
 .sidebar-task-status[data-state="failed"] { --task-status-accent: color-mix(in oklab, var(--color-token-charts-red) 88%, var(--color-text)); }
 .sidebar-task-status[data-state="waiting"] { --task-status-accent: var(--color-token-charts-orange); }
 .sidebar-task-status[data-state="scheduled"] { --task-status-accent: var(--color-token-description-foreground); }

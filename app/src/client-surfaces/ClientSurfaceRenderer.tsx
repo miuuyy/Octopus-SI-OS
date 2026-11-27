@@ -825,7 +825,7 @@ function initializeWidgetGeometry(
       if (saved?.x != null && saved.y != null) return [{ x: saved.x, y: saved.y, width: saved.width ?? peer.offsetWidth, height: saved.height ?? peer.offsetHeight }];
       return peer.style.visibility === "visible" ? [localRect(peer)] : [];
     });
-  const protectedAreas = [...stage.closest(".voice-view")?.querySelectorAll<HTMLElement>("[data-voice-placement-obstacle]") ?? []]
+  const protectedAreas = [...(stage.closest(".home-view-transition") ?? stage.closest(".voice-view"))?.querySelectorAll<HTMLElement>("[data-voice-placement-obstacle]") ?? []]
     .map(localRect).filter((rect) => rect.width > 0 && rect.height > 0);
   const { x, y } = placeVoiceWidget(stageBounds, { width, height }, occupied, protectedAreas);
   return constrainWidgetGeometry(element, stage, {

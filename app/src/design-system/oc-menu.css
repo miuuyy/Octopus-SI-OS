@@ -1,15 +1,18 @@
 .oc-menu-surface {
+  margin: var(--menu-surface-margin, 1px);
   padding: var(--menu-gutter, var(--spacing));
   border-radius: var(--radius-2xl);
+  corner-shape: round;
+  -webkit-app-region: no-drag;
   color: var(--color-text);
   background: color-mix(in oklab, var(--color-surface-elevated-secondary) 90%, transparent);
-  box-shadow: 0 0 0 0.5px var(--color-border), 0 0 0 0.5px var(--color-token-border), var(--shadow-xl);
+  box-shadow: var(--menu-box-shadow, 0 0 0 var(--dropdown-overlay-ring-width, 0.5px) var(--color-border-overlay, var(--color-border-subtle)), var(--shadow-dropdown-overlay, var(--shadow-xl-spread)));
   backdrop-filter: blur(var(--blur-sm));
 }
 
 .oc-menu-surface.is-opaque {
   background: var(--color-surface-elevated-secondary);
-  box-shadow: 0 0 0 0.5px var(--color-token-border), var(--shadow-xl);
+  box-shadow: var(--shadow-xl-spread);
   backdrop-filter: none;
 }
 
@@ -23,20 +26,78 @@
   backdrop-filter: blur(var(--blur-lg));
 }
 
+.oc-menu-surface[data-floating-menu="entering"] {
+  opacity: 0;
+  transform: scale(0.95);
+  will-change: transform, opacity;
+}
+
+.oc-menu-surface[data-floating-menu="entering-active"] {
+  opacity: 1;
+  transform: scale(1);
+  transition-property: opacity, transform;
+  transition-duration: 0.15s;
+  transition-timing-function: var(--cubic-enter);
+}
+
+.oc-menu-surface[data-floating-menu="exiting"] {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.oc-menu-surface[data-floating-menu="exiting-active"] {
+  opacity: 0;
+  transform: scale(0.95);
+  pointer-events: none;
+  transition-property: opacity, transform;
+  transition-duration: 0.1s;
+  transition-timing-function: var(--cubic-exit);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.full-motion) .oc-menu-surface[data-floating-menu] {
+    transition: none;
+    transform: none;
+  }
+}
+
+:root.reduce-motion .oc-menu-surface[data-floating-menu],
+:root[data-reduced-motion="true"] .oc-menu-surface[data-floating-menu] {
+  transition: none;
+  transform: none;
+}
+
+.oc-menu-separator {
+  width: 100%;
+  padding: var(--app-menu-separator-gutter, var(--spacing)) var(--app-menu-separator-inset, var(--padding-row-x));
+}
+
+.oc-menu-separator > div {
+  height: 1px;
+  width: 100%;
+  background: var(--color-border);
+}
+
 .oc-menu-section-label {
   padding: 4px var(--padding-row-x);
   font-size: var(--text-sm);
   line-height: var(--text-sm--line-height);
-  color: var(--color-text-description);
+  color: var(--color-codex-description, var(--color-text-description));
 }
 
 .oc-menu-item {
+  --menu-item-background-color: var(--color-background-secondary-ghost-hover);
+  --menu-item-extra-padding-end: 0px;
   min-height: var(--menu-item-height, 0px);
   flex-shrink: 0;
+  align-content: center;
   align-items: center;
   justify-content: center;
   padding: var(--menu-item-padding, var(--padding-row-y) var(--padding-row-x));
   border-radius: var(--radius-xl);
+  corner-shape: round;
   background: transparent;
   color: var(--color-text);
   font-size: var(--text-sm);
@@ -48,13 +109,22 @@
   font-size: var(--text-base);
 }
 
-.oc-menu-item.is-danger {
-  color: var(--color-text-danger);
+.oc-menu-item.is-danger,
+.oc-menu-item[data-color="danger"] {
+  --menu-item-background-color: var(--color-background-danger-soft-alpha);
+  color: var(--menu-danger-color, var(--color-text-danger));
 }
 
-.oc-menu-item:enabled:hover,
-.oc-menu-item:enabled:focus {
-  background: var(--color-background-primary-ghost-hover);
+@media (hover: hover) {
+  .oc-menu-item:enabled:hover {
+    background: var(--menu-item-background-color);
+  }
+}
+
+.oc-menu-item:enabled:focus,
+.oc-menu-item:enabled[data-highlighted],
+.oc-menu-item:enabled[data-state="open"] {
+  background: var(--menu-item-background-color);
 }
 
 .oc-menu-item-content {
@@ -63,6 +133,7 @@
   min-width: 0;
   align-items: center;
   gap: var(--spacing-menu-item-content, calc(var(--spacing) * 1.5));
+  padding-inline-end: var(--menu-item-extra-padding-end, 0px);
 }
 
 .oc-menu-item-icon {
@@ -72,6 +143,20 @@
   flex: none;
   align-items: center;
   justify-content: center;
+}
+
+.oc-menu-item-right-text {
+  flex-shrink: 0;
+  padding-inline-end: var(--spacing);
+  font-size: var(--text-xs);
+  color: var(--color-codex-description, var(--color-text-description));
+}
+
+.oc-menu-item-shortcut {
+  margin-inline-start: calc(var(--spacing) * 2);
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--color-codex-description, var(--color-text-description));
 }
 
 .oc-menu-item .icon-xs {

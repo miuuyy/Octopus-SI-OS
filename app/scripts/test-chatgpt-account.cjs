@@ -631,10 +631,11 @@ test("account menu prefers top placement and retains viewport collision handling
   });
   const menu = () => renderToStaticMarkup(React.createElement(AccountRailButton, { accessProfile: "live", runtimeHost: {}, onLogOut() {}, onOpenSettings() {} }));
   assert.match(menu(), /Account: Administrator/); assert.match(menu(), /<small>ChatGPT Pro \(Max\)<\/small>/);
-  assert.doesNotMatch(menu(), /first@example.test/); assert.ok(menu().indexOf("Settings") < menu().indexOf("Usage"));
+  assert.doesNotMatch(menu(), /first@example.test/); assert.doesNotMatch(menu(), />Settings</);
+  assert.ok(menu().indexOf("Add account") < menu().indexOf("Usage"));
   assert.doesNotMatch(menu(), /Log out of ChatGPT|Usage remaining|Using ChatGPT/); assert.match(menu(), /Add account/);
   account = null; assert.match(menu(), /Administrator/); assert.match(menu(), /ChatGPT unavailable/);
-  const { dropdownPlacement } = loadTs("design-system/OcDropdown.tsx", { "./components": ui, "./modalFocus": {} }, "\nexport { dropdownPlacement };\n");
+  const { dropdownPlacement } = loadTs("design-system/OcDropdown.tsx", { "./components": ui, "./modalFocus": {}, "../appearance": { useShouldReduceMotion: () => true } }, "\nexport { dropdownPlacement };\n");
   const anchor = { left: 24, right: 64, top: 350, bottom: 390 };
   const top = dropdownPlacement(anchor, 240, 120, 1000, 800, "start", 6, 0, "top");
   assert.equal(top.side, "top"); assert.equal(top.left, 24); assert.equal(top.top, 224);
@@ -764,6 +765,7 @@ test("completed Home uses checked local receipts offline and cancels proof acros
       },
       onClientSetupProgress: () => () => {},
       beginClientSetup: async () => { setupWrites++; throw new Error("unexpected setup write"); },
+      cancelClientSetup: async () => { setupWrites++; throw new Error("unexpected setup cancel"); },
       resumeClientSetup: async () => { setupWrites++; throw new Error("unexpected setup resume"); },
     },
     "../../projectionLive": { useProjectionStructureGeneration: () => 0 }, "../../design-system/components": ui,

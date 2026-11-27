@@ -796,8 +796,7 @@ function CodeBlock({ language, reveal = NO_STREAMING_REVEAL, value }: { language
     ? (systemDark ? "dark" : "light")
     : appearance.themeMode;
   const highlighted = useHighlightedCode(value, language);
-  const userControlledWrap = language === "" || language === "text" || language === "md" || language === "markdown";
-  const shouldWrap = useCodeBlockWordWrap() && userControlledWrap;
+  const shouldWrap = useCodeBlockWordWrap();
   const highlightedPrefix = highlighted !== null && value.startsWith(highlighted.code) ? highlighted : null;
   const highlightedLines = highlightedPrefix?.html.split("\n") ?? null;
   const unhighlightedTail = highlightedPrefix === null ? "" : value.slice(highlightedPrefix.code.length);
@@ -810,50 +809,52 @@ function CodeBlock({ language, reveal = NO_STREAMING_REVEAL, value }: { language
 
   return (
     <div
-      className={`relative w-full min-w-0 overflow-clip rounded-lg bg-token-text-code-block-background contain-inline-size ${theme} octopus-markdown-code-block${reveal.className ? ` ${reveal.className}` : ""}`}
+      className={`relative w-full min-w-0 overflow-clip rounded-3xl border border-subtle text-default contain-inline-size ${theme} octopus-markdown-code-block octopus-code-surface${reveal.className ? ` ${reveal.className}` : ""}`}
       data-markdown-copy="code-block"
       data-theme={theme}
       ref={reveal.ref}
     >
       <div
-        className="flex items-center py-1 pe-2 ps-2 font-sans text-sm text-token-description-foreground select-none rounded-t-lg"
+        className="octopus-code-sticky-action-bar flex min-h-12 items-center gap-2 py-1.5 ps-4 pe-1.5 md:ps-5 font-sans text-sm font-medium text-default select-none"
         data-markdown-copy="exclude"
       >
         <div className="min-w-0 flex-1 truncate">{language}</div>
-        <div className="ml-auto flex shrink-0 items-center">
-          <div className="flex items-center gap-px">
-            {userControlledWrap ? (
-              <ShellTooltip label={shouldWrap ? "Disable word wrap" : "Enable word wrap"}>
-                <button
-                  aria-label={shouldWrap ? "Disable word wrap" : "Enable word wrap"}
-                  aria-pressed={shouldWrap}
-                  className={`border-token-border no-drag cursor-interaction flex items-center gap-1 border whitespace-nowrap select-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 rounded-full electron:rounded-md text-token-text-tertiary enabled:hover:bg-token-list-hover-background data-[state=open]:bg-token-list-hover-background border-transparent electron:p-1 electron:[&>svg]:icon-sm items-center justify-center p-0.5${shouldWrap ? " hover:text-token-foreground" : ""}`}
-                  onClick={() => setCodeBlockWordWrap(!shouldWrap)}
-                  type="button"
-                >
-                  {shouldWrap
-                    ? <WrapDisabledIcon className="icon-2xs" />
-                    : <WrapEnabledIcon className="icon-2xs" />}
-                </button>
-              </ShellTooltip>
-            ) : null}
-          <ShellTooltip label={copied ? "Copied" : "Copy code"}>
-            <button
-              aria-label={copied ? "Copied" : "Copy code"}
-              className={`border-token-border no-drag cursor-interaction flex items-center gap-1 border whitespace-nowrap select-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 rounded-full electron:rounded-md text-token-text-tertiary enabled:hover:bg-token-list-hover-background data-[state=open]:bg-token-list-hover-background border-transparent electron:p-1 electron:[&>svg]:icon-sm items-center justify-center p-0.5${copied ? " text-token-foreground" : ""}`}
-              onClick={() => {
-                copyText(value);
-                setCopied(true);
-              }}
-              type="button"
-            >
-              <Glyph className="icon-xs" name={copied ? "check" : "copy"} size={16} />
-            </button>
-          </ShellTooltip>
+        <div className="ms-auto flex min-w-0 max-w-full items-center">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-px" data-code-block-controls="" role="presentation">
+            <ShellTooltip label={shouldWrap ? "Disable word wrap" : "Enable word wrap"}>
+              <button
+                aria-label={shouldWrap ? "Disable word wrap" : "Enable word wrap"}
+                aria-pressed={shouldWrap}
+                className={`border-token-border no-drag cursor-interaction flex items-center gap-1 border whitespace-nowrap select-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 rounded-full electron:rounded-md text-token-text-tertiary enabled:hover:bg-token-list-hover-background data-[state=open]:bg-token-list-hover-background border-transparent electron:p-1 electron:[&>svg]:icon-sm justify-center p-0.5${shouldWrap ? " text-token-foreground" : " hover:text-token-foreground"}`}
+                onClick={() => setCodeBlockWordWrap(!shouldWrap)}
+                type="button"
+              >
+                {shouldWrap
+                  ? <WrapDisabledIcon className="icon-2xs" />
+                  : <WrapEnabledIcon className="icon-2xs" />}
+              </button>
+            </ShellTooltip>
+            <ShellTooltip label={copied ? "Copied" : "Copy code"}>
+              <button
+                aria-label={copied ? "Copied" : "Copy code"}
+                className={`border-token-border no-drag cursor-interaction flex items-center gap-1 border whitespace-nowrap select-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 rounded-full electron:rounded-md text-token-text-tertiary enabled:hover:bg-token-list-hover-background data-[state=open]:bg-token-list-hover-background border-transparent electron:p-1 electron:[&>svg]:icon-sm justify-center p-0.5${copied ? " text-token-foreground" : " hover:text-token-foreground"}`}
+                onClick={() => {
+                  copyText(value);
+                  setCopied(true);
+                }}
+                type="button"
+              >
+                <Glyph className="icon-xs" name={copied ? "check" : "copy"} size={16} />
+              </button>
+            </ShellTooltip>
           </div>
         </div>
       </div>
-      <div className="text-size-chat overflow-auto p-2" dir="ltr">
+      <div
+        className={`octopus-code-block-source text-size-chat overflow-auto px-4 pt-0 pb-3 md:px-5 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${shouldWrap ? "wrap-anywhere whitespace-pre-wrap" : "whitespace-pre"}`}
+        data-code-block-source=""
+        dir="ltr"
+      >
         <code className={shouldWrap ? "whitespace-pre-wrap!" : "whitespace-pre!"}>
           {highlightedLines === null ? (
             <span>{value}</span>

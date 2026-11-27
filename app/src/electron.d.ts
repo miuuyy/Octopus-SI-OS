@@ -129,6 +129,8 @@ declare global {
       windowState(): Promise<OctopusWindowState>;
       setHistoryNavigationState(state: OctopusHistoryNavigationState): void;
       setWindowAppearance(appearance: OctopusWindowAppearance): void;
+      setWindowChromeVisible?(visible: boolean): void;
+      onWindowPointerUpdate?(listener: (state: { insideWindow: boolean; focused: boolean; resizing: boolean; x: number; y: number; width: number; height: number }) => void): () => void;
       setPowerSaveBlocker(enabled: boolean): Promise<{ enabled: boolean }>;
       setGlobalDictationShortcut(request: OctopusGlobalDictationShortcutRequest): Promise<OctopusGlobalDictationShortcutState>;
       setNativeCommandShortcuts(shortcuts: Record<string, readonly string[]>): Promise<{ configured: number }>;
@@ -171,6 +173,7 @@ declare global {
       clientSetupRead(request: { operationId: string }): Promise<OctopusClientSetupState | null>;
       clientSetupReadCurrent(): Promise<OctopusClientSetupState | null>;
       clientSetupBegin(request: OctopusClientSetupBeginRequest): Promise<OctopusClientSetupState>;
+      clientSetupCancel?(request: { operationId: string }): Promise<{ cancelled: boolean; operationId: string }>;
       clientSetupResume(request: { operationId: string; stopBefore?: "provider" }): Promise<OctopusClientSetupState>;
       mutateScheduledInterface(request: OctopusScheduledMutationRequest): Promise<OctopusScheduledMutationOutcome>;
       mutateApplicationPrivateConfiguration(request: OctopusApplicationPrivateConfigurationMutation): Promise<OctopusApplicationPrivateConfigurationOutcome>;

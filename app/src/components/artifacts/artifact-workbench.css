@@ -357,9 +357,9 @@
   min-height: calc(920px * var(--artifact-preview-scale, 1));
   padding: calc(68px * var(--artifact-preview-scale, 1)) calc(72px * var(--artifact-preview-scale, 1));
   border: 1px solid var(--color-token-border-default);
-  background: #fff;
-  box-shadow: 0 4px 16px #0000000d;
-  color: #202020;
+  background: var(--color-surface-elevated-secondary);
+  box-shadow: var(--shadow-200);
+  color: var(--color-text);
   font-family: Georgia, "Times New Roman", serif;
   font-size: calc(14px * var(--artifact-preview-scale, 1));
   line-height: 1.65;
@@ -370,7 +370,7 @@
   position: absolute;
   right: 18px;
   bottom: 14px;
-  color: #888;
+  color: var(--color-text-tertiary);
   font-family: var(--font-sans);
   font-size: 10px;
   user-select: none;
@@ -414,14 +414,14 @@
   min-height: 560px;
   border: 1px solid var(--color-token-border-light);
   border-radius: var(--radius-lg);
-  background: #fff;
+  background: var(--color-surface);
 }
 
 .artifact-media-preview video {
   max-width: 100%;
   max-height: calc(100vh - 190px);
   border-radius: var(--radius-xl);
-  background: #000;
+  background: var(--black);
   box-shadow: var(--shadow-lg);
 }
 

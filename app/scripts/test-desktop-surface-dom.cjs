@@ -60,7 +60,7 @@ test('application pane hides native layer under overlays and detaches to the wid
   const overlay=f.w.document.createElement('div');overlay.setAttribute('role','menu');f.w.document.body.append(overlay);await f.tick();assert.equal(views.at(-1).operation,'hide');
   await React.act(async()=>resolveAttach({attached:true}));assert.equal(f.w.document.querySelector('[data-attached]'),null,'late attach acknowledgement cannot cover an overlay');
   overlay.remove();await f.tick();assert.equal(views.at(-1).operation,'attach');assert.equal(views.at(-1).viewId,views[0].viewId);assert(f.w.document.querySelector('[data-attached]'));
-  await f.click('Computer use settings');assert.deepEqual(settingsCommands.slice(-2),[{settingsSection:'computer-use'},['open_settings','surface']]);
+  await f.click('Computer use settings');assert.deepEqual(settingsCommands.slice(-2),[{settingsSection:'computer-use'},['open_settings','surface',{sectionId:'computer-use'}]]);
   await render(false);assert.equal(views.at(-1).operation,'detach');assert(calls.some(c=>c.operation==='pause_view'));
   await render(true);await f.tick();assert.equal(views.at(-1).operation,'attach');assert.notEqual(views.at(-1).viewId,views[0].viewId);
  } finally {await f.close();}

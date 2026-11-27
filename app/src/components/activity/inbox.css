@@ -1,3 +1,35 @@
+.inbox-overlay-rail-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.inbox-overlay-main {
+  position: relative;
+  overflow: hidden;
+}
+
+@container shell-overlay (max-width: 640px) {
+  .inbox-overlay-page {
+    flex-direction: column;
+  }
+
+  .inbox-overlay-rail {
+    width: 100%;
+    max-height: 44%;
+    padding: 4px 0 8px;
+  }
+
+  .inbox-overlay-rail > .app-shell-sidebar-resizer {
+    display: none;
+  }
+
+  .inbox-overlay-main {
+    margin: 0;
+  }
+}
+
 .inbox-surface {
   position: absolute;
   inset: 0;

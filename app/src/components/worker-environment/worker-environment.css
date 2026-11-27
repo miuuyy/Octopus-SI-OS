@@ -2588,8 +2588,9 @@
 }
 
 .we-change-file-viewed[aria-pressed="true"] {
-  border-color: var(--color-token-charts-blue, var(--color-token-accent));
-  background: var(--color-token-charts-blue, var(--color-token-accent));
+  border-color: var(--color-background-accent-solid);
+  background: var(--color-background-accent-solid);
+  color: var(--color-text-accent-solid);
 }
 
 .we-change-file-viewed:focus-visible {
@@ -3594,15 +3595,15 @@
   padding: 0;
   border: 0;
   outline: 0;
-  color: var(--gray-300, #d2d2d2);
-  background: var(--gray-600, #4f4f4f);
+  color: var(--gray-fixed-300, #d2d2d2);
+  background: var(--gray-fixed-600, #4f4f4f);
   pointer-events: auto;
   touch-action: none;
 }
 
 .we-site-test-resize-handle:hover,
 .we-site-test-resize-corner:hover {
-  background: var(--gray-550, #5b5b5b);
+  background: var(--gray-fixed-550, #5b5b5b);
 }
 
 .we-site-test-resize-handle.is-left,

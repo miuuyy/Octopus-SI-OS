@@ -9,12 +9,8 @@
   border: 1px solid color-mix(in oklab, var(--color-border) 80%, transparent);
   border-bottom: 0;
   border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
-  background: color-mix(in oklab, var(--color-background-primary-soft) 70%, transparent);
-  backdrop-filter: blur(8px);
+  background: var(--color-surface-elevated-secondary);
   transition: margin-bottom .3s cubic-bezier(.19, 1, .22, 1), top .3s cubic-bezier(.19, 1, .22, 1);
-}
-@supports (corner-shape: superellipse(1.5)) {
-  .composer-queue-surface { corner-shape: var(--octopus-corner-shape); }
 }
 .composer-queue-surface[data-composer-rail-item="exiting"] { top: var(--spacing); margin-bottom: 0; }
 .composer-queue-content { min-height: 0; min-width: 0; }
@@ -180,7 +176,7 @@
   background-color: var(--color-background-composer-primary);
   color: var(--color-text-composer-primary);
 }
-.composer-primary-action:focus-visible { outline-color: var(--color-background-composer-primary); }
-@supports (corner-shape: superellipse(1.5)) {
-  .composer-queue-surface { corner-shape: var(--octopus-corner-shape); }
+.composer-primary-action:enabled:not([aria-disabled="true"]):hover {
+  background-color: color-mix(in srgb, var(--color-background-composer-primary) 80%, transparent);
 }
+.composer-primary-action:focus-visible { outline-color: var(--color-background-composer-primary); }

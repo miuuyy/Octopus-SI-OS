@@ -1,10 +1,26 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useShouldReduceMotion } from "../appearance";
 import { OcMenuSurface } from "./components";
 import { isolateModalLayer, restoreModalFocus } from "./modalFocus";
 import "./oc-dropdown.css";
 
 type Placement = { left: number; top: number; maxHeight: number; maxWidth: number; side: "top" | "bottom" | "left" | "right" };
+
+export type OcDropdownContentWidth =
+  | "menu"
+  | "menuNarrow"
+  | "menuFixed"
+  | "menuBounded"
+  | "menuWide"
+  | "menuReadout"
+  | "railMenu"
+  | "sidebar"
+  | "workspace"
+  | "panel"
+  | "panelWide"
+  | "panelExtraWide"
+  | "modelPicker";
 
 export type OcDropdownProps = Omit<HTMLAttributes<HTMLDivElement>, "role"> & {
   open: boolean;
@@ -12,17 +28,49 @@ export type OcDropdownProps = Omit<HTMLAttributes<HTMLDivElement>, "role"> & {
   anchorRef: RefObject<HTMLElement | null>;
   align?: "start" | "center" | "end";
   side?: "top" | "bottom" | "right";
-  contentWidth?: "menu" | "sidebar" | "menuBounded" | "menuWide" | "modelPicker";
+  contentWidth?: OcDropdownContentWidth;
   sideOffset?: number;
   alignOffset?: number;
   modal?: boolean;
   role?: "menu" | "dialog";
   surface?: "menu" | "opaque";
+  scrollFade?: boolean;
+  scrollPeek?: boolean;
   onOpenAutoFocus?: (event: Event) => void;
   onCloseAutoFocus?: (event: Event) => void;
 };
 
 const itemSelector = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]';
+const ENTER_DURATION_MS = 150;
+const EXIT_DURATION_MS = 100;
+
+const CONTENT_WIDTH_MAX: Partial<Record<OcDropdownContentWidth, number>> = {
+  menuNarrow: 208,
+  menuFixed: 220,
+  menuBounded: 320,
+  menuWide: 240,
+  menuReadout: 260,
+  railMenu: 228,
+  sidebar: 240,
+  panel: 280,
+  panelWide: 360,
+  panelExtraWide: 408,
+  modelPicker: 254,
+};
+
+type MotionPhase = "idle" | "entering" | "entering-active" | "open" | "exiting" | "exiting-active";
+
+function dropdownTransformOrigin(side: Placement["side"] | undefined, align: "start" | "center" | "end"): string {
+  const resolvedSide = side ?? "bottom";
+  if (resolvedSide === "right" || resolvedSide === "left") {
+    const x = resolvedSide === "right" ? "left" : "right";
+    const y = align === "start" ? "top" : align === "end" ? "bottom" : "center";
+    return `${x} ${y}`;
+  }
+  const x = align === "start" ? "left" : align === "end" ? "right" : "center";
+  const y = resolvedSide === "top" ? "bottom" : "top";
+  return `${x} ${y}`;
+}
 
 function availableMenuItem(item: HTMLElement, element: HTMLElement): boolean {
   return item.closest('[data-oc-dropdown]') === element
@@ -75,13 +123,18 @@ function dropdownPlacement(anchor: Pick<DOMRect, "left" | "right" | "top" | "bot
   return { left, top, maxHeight, maxWidth, side };
 }
 
-export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", side = "bottom", contentWidth = "menu", sideOffset, alignOffset = 0, modal = false, role = "menu", surface = "menu", onOpenAutoFocus, onCloseAutoFocus, className = "", style, children, onKeyDown, onClick, onPointerMove, ...props }: OcDropdownProps) {
+export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", side = "bottom", contentWidth = "menu", sideOffset, alignOffset = 0, modal = false, role = "menu", surface = "menu", scrollFade = false, scrollPeek = false, onOpenAutoFocus, onCloseAutoFocus, className = "", style, children, onKeyDown, onClick, onPointerMove, ...props }: OcDropdownProps) {
+  const reducedMotion = useShouldReduceMotion();
+  const reducedMotionRef = useRef(reducedMotion);
+  reducedMotionRef.current = reducedMotion;
   const generatedId = useId();
   const id = props.id ?? generatedId;
   const contentRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<Placement | null>(null);
+  const [motionPhase, setMotionPhase] = useState<MotionPhase>("idle");
   const positioned = placement !== null;
+  const wasOpenRef = useRef(false);
   const keyboardRef = useRef(false);
   const searchRef = useRef("");
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -138,9 +191,33 @@ export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", sid
 
   useLayoutEffect(() => {
     if (!open) {
-      setPlacement(null);
-      return;
+      if (!wasOpenRef.current || !placement || reducedMotionRef.current) {
+        wasOpenRef.current = false;
+        setMotionPhase("idle");
+        setPlacement(null);
+        return;
+      }
+      wasOpenRef.current = false;
+      setMotionPhase("exiting");
+      let rafId = 0;
+      const startActive = () => setMotionPhase("exiting-active");
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        rafId = window.requestAnimationFrame(startActive);
+      } else {
+        startActive();
+      }
+      const timer = setTimeout(() => {
+        setMotionPhase("idle");
+        setPlacement(null);
+      }, EXIT_DURATION_MS);
+      return () => {
+        if (rafId && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(rafId);
+        }
+        clearTimeout(timer);
+      };
     }
+    wasOpenRef.current = true;
     const content = contentRef.current;
     const anchor = anchorRef.current;
     if (!content || !anchor) return;
@@ -148,9 +225,10 @@ export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", sid
     restoreFocusRef.current = true;
     const update = () => {
       const bounds = anchor.getBoundingClientRect();
-      const offset = sideOffset ?? (5 - (window.octopusTransport ? window.octopusTransport.windowZoomFactor() : 1));
+      const offset = sideOffset ?? (5 - (window.octopusTransport?.windowZoomFactor?.() ?? 1));
       const next = dropdownPlacement(bounds, content.getBoundingClientRect().width, content.scrollHeight, window.innerWidth, window.innerHeight, align, offset, alignOffset, side);
-      if (contentWidth !== "menu") next.maxWidth = Math.min(next.maxWidth, contentWidth === "menuBounded" ? 320 : contentWidth === "modelPicker" ? 254 : 240);
+      const presetMax = CONTENT_WIDTH_MAX[contentWidth];
+      if (presetMax !== undefined) next.maxWidth = Math.min(next.maxWidth, presetMax);
       setPlacement((current) => current && Object.keys(next).every((key) => current[key as keyof Placement] === next[key as keyof Placement]) ? current : next);
     };
     update();
@@ -165,6 +243,29 @@ export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", sid
       window.removeEventListener("scroll", update, true);
     };
   }, [align, alignOffset, anchorRef, contentWidth, open, side, sideOffset]);
+
+  useLayoutEffect(() => {
+    if (!open || !positioned) return;
+    if (reducedMotion) {
+      setMotionPhase("open");
+      return;
+    }
+    setMotionPhase("entering");
+    let rafId = 0;
+    const activate = () => setMotionPhase("entering-active");
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      rafId = window.requestAnimationFrame(activate);
+    } else {
+      activate();
+    }
+    const timer = setTimeout(() => setMotionPhase("open"), ENTER_DURATION_MS);
+    return () => {
+      if (rafId && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(rafId);
+      }
+      clearTimeout(timer);
+    };
+  }, [open, positioned, reducedMotion]);
 
   useLayoutEffect(() => {
     if (!open || !positioned) return;
@@ -215,25 +316,43 @@ export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", sid
     };
   }, [anchorRef, modal, open, positioned, role]);
 
-  if (!open) return null;
+  const exiting = !open && (motionPhase === "exiting" || motionPhase === "exiting-active");
+  if (!open && !exiting) return null;
   return createPortal(
-    <div className={modal ? "oc-dropdown-layer is-modal" : "oc-dropdown-layer"} data-settings-layer="true" ref={layerRef} style={{ zIndex: anchorRef.current?.closest('[data-oc-dialog]') ? 1200 : 300 }}>
+    <div className={modal && open ? "oc-dropdown-layer is-modal" : "oc-dropdown-layer"} data-settings-layer="true" ref={layerRef} style={{ zIndex: anchorRef.current?.closest('[data-oc-dialog]') ? 1200 : 300 }}>
       <OcMenuSurface
         {...props}
         id={id}
-        aria-modal={role === "dialog" && modal || undefined}
-        aria-orientation={role === "menu" ? "vertical" : undefined}
-        className={`oc-dropdown ${className}`}
-        data-oc-dropdown=""
+        aria-hidden={exiting || undefined}
+        aria-modal={open && role === "dialog" && modal || undefined}
+        aria-orientation={open && role === "menu" ? "vertical" : undefined}
+        className={`oc-dropdown${scrollFade ? " vertical-scroll-fade-mask" : ""}${className ? ` ${className}` : ""}`}
+        data-oc-dropdown={exiting ? undefined : ""}
         data-align={align}
         data-side={placement?.side ?? "bottom"}
-        data-state="open"
+        data-state={exiting ? "closed" : "open"}
+        data-entering={motionPhase === "entering" ? "" : undefined}
+        data-entering-active={motionPhase === "entering-active" ? "" : undefined}
+        data-exiting={motionPhase === "exiting" ? "" : undefined}
+        data-exiting-active={motionPhase === "exiting-active" ? "" : undefined}
         data-content-width={contentWidth}
-        role={role}
+        data-scroll-peek={scrollPeek ? "true" : undefined}
+        inert={exiting ? true : undefined}
+        role={exiting ? undefined : role}
         surface={surface}
         surfaceRef={contentRef}
-        tabIndex={-1}
-        style={{ ...style, left: placement?.left, top: placement?.top, maxHeight: placement?.maxHeight, maxWidth: placement?.maxWidth, visibility: positioned ? "visible" : "hidden", "--radix-dropdown-menu-content-available-height": `${placement?.maxHeight ?? 0}px`, "--radix-dropdown-menu-content-transform-origin": placement?.side === "right" ? "left bottom" : placement?.side === "left" ? "right bottom" : `center ${placement?.side === "top" ? "bottom" : "top"}` } as CSSProperties}
+        tabIndex={exiting ? undefined : -1}
+        style={{
+          ...style,
+          left: placement?.left,
+          top: placement?.top,
+          maxHeight: placement?.maxHeight,
+          maxWidth: placement?.maxWidth,
+          visibility: positioned ? "visible" : "hidden",
+          "--radix-dropdown-menu-content-available-width": `${placement?.maxWidth ?? 0}px`,
+          "--radix-dropdown-menu-content-available-height": `${placement?.maxHeight ?? 0}px`,
+          "--radix-dropdown-menu-content-transform-origin": dropdownTransformOrigin(placement?.side, align),
+        } as CSSProperties}
         onFocusCapture={(event) => {
           props.onFocusCapture?.(event);
           if (role !== "menu") return;
@@ -282,10 +401,24 @@ export function OcDropdown({ open, onOpenChange, anchorRef, align = "start", sid
             return;
           }
           if (event.target instanceof HTMLTextAreaElement || event.ctrlKey || event.metaKey || event.altKey) return;
-          const next = event.key === "Home" || event.key === "PageUp" ? 0 : event.key === "End" || event.key === "PageDown" ? items.length - 1 : event.key === "ArrowDown" ? index + 1 : event.key === "ArrowUp" ? index < 0 ? items.length - 1 : index - 1 : null;
+          const next = items.length === 0
+            ? null
+            : event.key === "Home" || event.key === "PageUp"
+              ? 0
+              : event.key === "End" || event.key === "PageDown"
+                ? items.length - 1
+                : event.key === "ArrowDown"
+                  ? (index < 0 ? 0 : (index + 1) % items.length)
+                  : event.key === "ArrowUp"
+                    ? (index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length)
+                    : null;
           if (next !== null && !event.shiftKey) {
             event.preventDefault();
-            items[next]?.focus({ preventScroll: true });
+            const target = items[next];
+            if (target) {
+              target.focus({ preventScroll: true });
+              target.scrollIntoView?.({ block: "nearest" });
+            }
             return;
           }
           if ((event.key === "Enter" || event.key === " " && !searchRef.current) && index >= 0) {

@@ -81,7 +81,8 @@ export function DesktopSurface({ active = true, environment, surface }: {
     finally { if (controlPending.current === pending) { controlPending.current = null; setPendingControl(null); } }
   }
   function openSettings() {
-    setPreferences({ settingsSection: "computer-use" }); dispatchClientCommand("open_settings", "surface");
+    setPreferences({ settingsSection: "computer-use" });
+    dispatchClientCommand("open_settings", "surface", { sectionId: "computer-use" });
   }
   if (surface?.mode === "fixture") return <div className="we-desktop-shell"><div className="we-desktop-fixture">
     <div className="we-desktop-fixture-toolbar"><span /><span /><span /><strong>{dataText(surface.data, "title") || surface.label}</strong></div>

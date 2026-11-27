@@ -41,21 +41,21 @@
 }
 
 .oc-status.oc-tone-accent {
-  --oc-status-background: color-mix(in srgb, var(--color-text-accent) 30%, transparent);
-  --oc-status-foreground: var(--color-text-accent);
+  --oc-status-background: var(--color-background-info-soft-alpha);
+  --oc-status-foreground: var(--color-text-info-soft-alpha);
 }
 
 .oc-status.oc-tone-success {
-  --oc-status-background: color-mix(in srgb, var(--color-text-success) 15%, transparent);
-  --oc-status-foreground: var(--color-text-success);
+  --oc-status-background: var(--color-background-success-soft-alpha);
+  --oc-status-foreground: var(--color-text-success-soft-alpha);
 }
 
 .oc-status.oc-tone-warning {
-  --oc-status-background: color-mix(in oklab, var(--color-text-warning) 16%, transparent);
-  --oc-status-foreground: var(--color-text-warning);
+  --oc-status-background: var(--color-background-warning-soft-alpha);
+  --oc-status-foreground: var(--color-text-warning-soft-alpha);
 }
 
 .oc-status.oc-tone-danger {
-  --oc-status-background: color-mix(in oklab, var(--color-text-error) 16%, transparent);
-  --oc-status-foreground: var(--color-text-error);
+  --oc-status-background: var(--color-background-danger-soft-alpha);
+  --oc-status-foreground: var(--color-text-danger-soft-alpha);
 }

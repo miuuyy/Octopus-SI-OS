@@ -1,0 +1,103 @@
+{
+  "bg": "#343541",
+  "colors": {
+    "activityBar.background": "#202123",
+    "activityBarBadge.background": "#10a37f",
+    "button.background": "#10a37f",
+    "editor.background": "#343541",
+    "editor.foreground": "#d1d5db",
+    "editorCursor.foreground": "#ececf1",
+    "editorGroupHeader.tabsBackground": "#444654",
+    "focusBorder": "#10a37f",
+    "foreground": "#d1d5db",
+    "panel.background": "#444654",
+    "sideBar.background": "#202123",
+    "sideBar.foreground": "#ececf1",
+    "textLink.foreground": "#10a37f"
+  },
+  "fg": "#d1d5db",
+  "name": "OG Dark",
+  "settings": [
+    {
+      "scope": [
+        "comment",
+        "punctuation.definition.comment"
+      ],
+      "settings": {
+        "foreground": "#acacbe"
+      }
+    },
+    {
+      "scope": [
+        "string",
+        "string.quoted",
+        "constant.other.symbol"
+      ],
+      "settings": {
+        "foreground": "#65c99a"
+      }
+    },
+    {
+      "scope": [
+        "constant.numeric",
+        "constant.language",
+        "constant.character.escape"
+      ],
+      "settings": {
+        "foreground": "#f8b86f"
+      }
+    },
+    {
+      "scope": [
+        "keyword",
+        "storage",
+        "storage.type",
+        "storage.modifier"
+      ],
+      "settings": {
+        "foreground": "#b4a1e5"
+      }
+    },
+    {
+      "scope": [
+        "entity.name.type",
+        "entity.other.inherited-class",
+        "support.class",
+        "support.type"
+      ],
+      "settings": {
+        "foreground": "#8bd5ca"
+      }
+    },
+    {
+      "scope": [
+        "entity.name.function",
+        "support.function",
+        "variable.function"
+      ],
+      "settings": {
+        "foreground": "#8dc8f4"
+      }
+    },
+    {
+      "scope": [
+        "variable",
+        "punctuation",
+        "keyword.operator"
+      ],
+      "settings": {
+        "foreground": "#d1d5db"
+      }
+    },
+    {
+      "scope": [
+        "invalid",
+        "invalid.deprecated"
+      ],
+      "settings": {
+        "foreground": "#f28b82"
+      }
+    }
+  ],
+  "type": "dark"
+}

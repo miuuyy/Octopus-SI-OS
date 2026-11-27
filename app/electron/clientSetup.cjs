@@ -103,6 +103,34 @@ function createClientSetupStore(options) {
     });
   }
 
+  async function cancel(operationIdValue) {
+    const operationId = requiredOperationId(operationIdValue?.operationId ?? operationIdValue);
+    return withClientSetupLock(root, () => withClientSetupLock(root, async () => {
+      await ensureRoot();
+      const receipt = await readReceipt(operationId);
+      if (receipt) {
+        throw new Error(`Client setup operation '${operationId}' is already complete and cannot be cancelled.`);
+      }
+      const operation = await readOperation(operationId);
+      if (!operation) {
+        const selected = await readCurrentSelection();
+        if (selected?.operation_id === operationId) {
+          await fsPromises.rm(currentPath, { force: true });
+        }
+        return { cancelled: false, operationId };
+      }
+      if (operation.steps.some((entry) => entry.step === "workspace" && entry.state === "complete")) {
+        throw new Error(`Client setup operation '${operationId}' already created Home and projects and cannot be cancelled.`);
+      }
+      await fsPromises.rm(operationPath(operationId), { force: true });
+      const selected = await readCurrentSelection();
+      if (selected?.operation_id === operationId) {
+        await fsPromises.rm(currentPath, { force: true });
+      }
+      return { cancelled: true, operationId };
+    }), executionTails);
+  }
+
   async function resume(operationIdValue, resumeOptions = {}) {
     const stopBefore = typeof operationIdValue === "object" ? operationIdValue?.stopBefore : undefined;
     if (stopBefore !== undefined && stopBefore !== "provider") throw new Error("Unsupported client setup stop point.");
@@ -364,7 +392,7 @@ function createClientSetupStore(options) {
     return path.join(receiptsRoot, `${requiredOperationId(operationId)}.json`);
   }
 
-  return { root, begin, read, readCurrent, resume, ensureRoot };
+  return { root, begin, cancel, read, readCurrent, resume, ensureRoot };
 }
 
 async function listDocumentIds(directory, label) {
