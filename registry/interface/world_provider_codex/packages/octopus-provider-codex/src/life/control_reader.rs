@@ -229,6 +229,7 @@ pub(crate) async fn process_control_reader_source(
                     broker: Some(broker),
                     control_gates,
                     error: error.to_string(),
+                    independent_reader: true,
                 },
             )
             .await?;
@@ -342,6 +343,19 @@ pub(crate) async fn remove_control_if_same(
 }
 
 pub(crate) async fn handle_control_source(
+    ctx: &InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    handoff_session: &ProviderHandoffSession,
+    interrupted_effects: &InterruptedEffectArbiter,
+    run: &RunId,
+    source: ControlSource<'_>,
+) -> Result<ControlSourceDisposition, String> {
+    let seq = source.source_movement_seq;
+    let result = handle_control_source_inner(ctx, descriptor, handoff_session, interrupted_effects, run, source).await;
+    record_provider_source_result(ctx, run, seq, result).await
+}
+
+async fn handle_control_source_inner(
     ctx: &InterfaceLiftContext,
     descriptor: &InterfaceDescriptor,
     handoff_session: &ProviderHandoffSession,
@@ -563,7 +577,7 @@ pub(crate) async fn handle_control_source(
             effect_guard,
             result: &mut result,
             recovery,
-            defer_message_receipt: independent_reader,
+            independent_reader,
         },
     )
     .await;
@@ -626,9 +640,11 @@ pub(crate) fn handle_malformed_control_source<'a>(
     run: &'a RunId,
     source: MalformedControlSource<'a>,
 ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<(), String>> + 'a>> {
-    Box::pin(handle_malformed_control_source_inner(
-        ctx, descriptor, handoff_session, interrupted_effects, run, source,
-    ))
+    Box::pin(async move {
+        let seq = source.source_movement_seq;
+        let result = handle_malformed_control_source_inner(ctx, descriptor, handoff_session, interrupted_effects, run, source).await;
+        record_provider_source_result(ctx, run, seq, result).await
+    })
 }
 
 pub(crate) async fn handle_malformed_control_source_inner(
@@ -645,6 +661,7 @@ pub(crate) async fn handle_malformed_control_source_inner(
         broker,
         control_gates,
         error,
+        independent_reader,
     } = source;
     let gate = control_source_gate(control_gates, run).await;
     let _control_guard = gate.lock().await;
@@ -704,7 +721,7 @@ pub(crate) async fn handle_malformed_control_source_inner(
     };
     let handoff_barrier = None;
     let effect_guard = None;
-    hand_control_result(
+    let delivered = hand_control_result(
         ctx,
         descriptor,
         handoff_session,
@@ -718,10 +735,11 @@ pub(crate) async fn handle_malformed_control_source_inner(
             effect_guard,
             result: &mut result,
             recovery,
-            defer_message_receipt: false,
+            independent_reader,
         },
     )
     .await?;
+    if !delivered { return Ok(()); }
     persist_control_journal(
         ctx,
         source_movement_seq,

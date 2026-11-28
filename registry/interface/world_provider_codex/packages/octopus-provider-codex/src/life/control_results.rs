@@ -61,7 +61,7 @@ pub(crate) async fn hand_control_result(
         effect_guard,
         result,
         recovery,
-        defer_message_receipt,
+        independent_reader,
     } = delivery;
     let interrupted_continuity = exact_interrupted_control_continuity(&result)?;
     let control_id = result.control_id.clone();
@@ -99,8 +99,8 @@ pub(crate) async fn hand_control_result(
             }
         }
     }
-    if admitted_seq.is_none() && defer_message_receipt
-        && matches!(result.action.as_str(), "queue_message" | "steer")
+    if admitted_seq.is_none() && independent_reader
+        && (!result.acknowledged || matches!(result.action.as_str(), "queue_message" | "steer"))
     {
         return Ok(false);
     }

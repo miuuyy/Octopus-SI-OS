@@ -498,6 +498,7 @@ pub(crate) async fn codex_life(
                                 control_gates: &control_gates,
                                 error: "journaled turn-control source decoded to no control"
                                     .to_string(),
+                                independent_reader: false,
                             },
                         )
                         .await?;
@@ -515,6 +516,7 @@ pub(crate) async fn codex_life(
                                 broker: existing_control.as_ref(),
                                 control_gates: &control_gates,
                                 error: error.to_string(),
+                                independent_reader: false,
                             },
                         )
                         .await?;
@@ -580,6 +582,7 @@ pub(crate) async fn codex_life(
                                 broker: Some(broker),
                                 control_gates: &control_gates,
                                 error: error.to_string(),
+                                independent_reader: false,
                             },
                         )
                         .await?;
@@ -625,6 +628,7 @@ pub(crate) async fn codex_life(
                                 control_gates: &control_gates,
                                 error: "explicit turn-control label decoded to no control"
                                     .to_string(),
+                                independent_reader: false,
                             },
                         )
                         .await?;
@@ -642,6 +646,7 @@ pub(crate) async fn codex_life(
                                 broker: None,
                                 control_gates: &control_gates,
                                 error: error.to_string(),
+                                independent_reader: false,
                             },
                         )
                         .await?;

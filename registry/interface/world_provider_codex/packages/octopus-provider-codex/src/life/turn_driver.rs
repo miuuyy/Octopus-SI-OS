@@ -8,12 +8,7 @@ pub(crate) fn drive_turn_with_retries<'a>(
     Box::pin(async move {
         let (ctx, run, source) = (scope.ctx, scope.run, turn.seq);
         let result = drive_turn_with_retries_inner(scope, driver, turn).await;
-        if let Err(error) = &result && !ctx.cancel.is_cancelled() {
-            let message = format!("provider failed while processing movement {source}: {error}");
-            report_provider_source_failure(ctx, run, source, &message).await
-                .map_err(|failure| format!("{message}; recording the failure also failed: {failure}"))?;
-        }
-        result
+        record_provider_source_result(ctx, run, source, result).await
     })
 }
 

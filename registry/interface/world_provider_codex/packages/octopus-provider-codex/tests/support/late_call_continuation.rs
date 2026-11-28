@@ -17,6 +17,13 @@ async fn late_call_native_turn(root: &Path, descriptor: &InterfaceDescriptor) ->
             "turnId":"turn-a","callId":call,"namespace":"formed_interfaces","tool":"coder-dexec","arguments":{"command":call}}});
         socket.send(tokio_tungstenite::tungstenite::Message::Text(call("request-a", "call-a").to_string().into())).await.unwrap();
         late_rx.await.unwrap();
+        for total in [40, 40, 41] {
+            let count = json!({"totalTokens":total,"inputTokens":30,"cachedInputTokens":0,
+                "outputTokens":total - 30,"reasoningOutputTokens":0});
+            let usage = json!({"method":"thread/tokenUsage/updated","params":{"threadId":"thread-a",
+                "turnId":"turn-a","tokenUsage":{"total":count,"last":count,"modelContextWindow":32000}}});
+            socket.send(tokio_tungstenite::tungstenite::Message::Text(usage.to_string().into())).await.unwrap();
+        }
         let note = json!({"method":"item/completed","params":{"threadId":"thread-a","turnId":"turn-a","completedAtMs":5,
             "item":{"type":"agentMessage","id":"note-b","text":"checking b as well","phase":"commentary"}}});
         socket.send(tokio_tungstenite::tungstenite::Message::Text(note.to_string().into())).await.unwrap();

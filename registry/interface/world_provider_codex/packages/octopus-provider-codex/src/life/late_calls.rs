@@ -59,14 +59,17 @@ async fn frontier_handoff(
     seq: u64,
     source: &InterfaceInvocationEnvelope,
 ) -> Result<(ProviderOutputHandoff, Option<u64>), String> {
-    let pinned = ctx.pinned_run_record_bytes(source)?;
-    let handoff =
-        wait_for_provider_handoff(ctx, descriptor, handoff_session, run, source, seq, &pinned).await?;
-    let record: serde_json::Value = serde_json::from_slice(&handoff.current_run_record_bytes().await)
-        .map_err(|error| error.to_string())?;
-    let frontier = &record["interface_state"][ctx.interface.as_str()]["pending_handoff"];
-    let completed = frontier["terminal"] == true;
-    Ok((handoff, frontier["source_movement_seq"].as_u64().filter(|_| completed)))
+    let result = async {
+        let pinned = ctx.pinned_run_record_bytes(source)?;
+        let handoff =
+            wait_for_provider_handoff(ctx, descriptor, handoff_session, run, source, seq, &pinned).await?;
+        let record: serde_json::Value = serde_json::from_slice(&handoff.current_run_record_bytes().await)
+            .map_err(|error| error.to_string())?;
+        let frontier = &record["interface_state"][ctx.interface.as_str()]["pending_handoff"];
+        let completed = frontier["terminal"] == true;
+        Ok((handoff, frontier["source_movement_seq"].as_u64().filter(|_| completed)))
+    }.await;
+    record_provider_source_result(ctx, run, seq, result).await
 }
 
 pub(crate) async fn wake_late_calls(
@@ -114,16 +117,24 @@ pub(crate) async fn wake_late_calls(
         return Ok(());
     }
     let (seq, envelope) = source;
-    let refused = |reason: String| refused(seq, reason);
-    match handoff.recover_source().await.map_err(&refused)? {
+    let result = deliver_late_calls(ctx, descriptor, driver, broker, wake, handoff, &envelope, seq).await
+        .map_err(|error| refused(seq, error));
+    record_provider_source_result(ctx, run, seq, result).await
+}
+
+async fn deliver_late_calls(
+    ctx: &InterfaceLiftContext, descriptor: &InterfaceDescriptor, driver: &CodexAppServerInterfaceDriver,
+    broker: &Arc<CodexTurnControlBroker>, wake: &Arc<LateCallWake>, handoff: ProviderOutputHandoff,
+    envelope: &InterfaceInvocationEnvelope, seq: u64,
+) -> Result<(), String> {
+    match handoff.recover_source().await? {
         ProviderSourceRecovery::Completed => {}
-        recovery => return Err(refused(format!("its completed handoff recovered as {recovery:?}"))),
+        recovery => return Err(format!("its completed handoff recovered as {recovery:?}")),
     }
     handoff
         .validate_client_output_routes(
-            &codex_projection_output_labels(descriptor).map_err(|error| refused(error.to_string()))?,
-        )
-        .map_err(&refused)?;
+            &codex_projection_output_labels(descriptor).map_err(|error| error.to_string())?,
+        )?;
     let (output_stream, emit_rx) = ProviderOutputStream::channel();
     let handoff_barrier = ProviderHandoffBarrier::new();
     let output_root = ctx.interface_var_dir().join("emitted");
@@ -133,7 +144,7 @@ pub(crate) async fn wake_late_calls(
             .drain_late_calls(LateCallDrain {
                 control: broker,
                 wake,
-                source: &envelope,
+                source: envelope,
                 source_movement_seq: seq,
                 emit: &output_stream,
                 handoff_barrier: &handoff_barrier,
@@ -146,25 +157,24 @@ pub(crate) async fn wake_late_calls(
     };
     let (drained, collected) = tokio::join!(drain, collect_late_call_emissions(emit_rx));
     let handed = async {
-        drained.map_err(|error| refused(error.to_string()))?;
-        let emissions = collected.map_err(&refused)?;
+        drained.map_err(|error| error.to_string())?;
+        let emissions = collected?;
         if emissions.is_empty() {
             return Ok(());
         }
         for emission in emissions {
             let outcomes = handoff
                 .hand_completed_source_continuation(vec![emission])
-                .await
-                .map_err(&refused)?;
+                .await?;
             if let Some((failure_seq, failure_class)) = outcomes.iter().find_map(|outcome| match outcome {
                 ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. } => {
                     Some((*failure_seq, failure_class.clone()))
                 }
                 ProviderHandoffOutcome::Admitted { .. } => None,
             }) {
-                return Err(refused(format!(
+                return Err(format!(
                     "run authoring replaced it with failure '{failure_class}' at movement {failure_seq}"
-                )));
+                ));
             }
         }
         Ok(())

@@ -434,13 +434,19 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     let gates=Default::default();
     let driver=Some(native.driver.clone());
     let woken=wake_late_calls(ctx,descriptor,&session,&gates,&driver,&ready);
-    let gate=pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,2,true,27,true);
+    let gate=pump(ctx,root,run_path,authoring_id,listener,receiver,&input.artifact,0,usize::MAX,true,27,true);
     tokio::time::timeout(std::time::Duration::from_secs(10),async {
         tokio::select! {
             woken=woken => woken.unwrap(),
             _=gate => panic!("authoring gate ended before the late call was handed"),
         }
     }).await.unwrap();
+    let usage_admissions = std::fs::read_to_string(&ctx.movements_path).unwrap().lines()
+        .map(|line| serde_json::from_str::<Movement>(line).unwrap())
+        .filter(|row| row.kind == MovementKind::InterfaceArrival
+            && row.artifact.as_ref().is_some_and(|artifact| artifact.id.as_str().starts_with("turn.token_usage:")))
+        .count();
+    assert_eq!(usage_admissions, 2);
     assert_eq!(arrivals_to_provider(),arrivals_before,"the late call is emitted without a new provider arrival");
     let after=std::fs::read(run_path).unwrap();let current=RunRecord::from_bytes(&after).unwrap();
     let pending=&current.interface_state[&descriptor.id]["pending_handoff"];
@@ -526,16 +532,51 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     assert!(result_input_row(&waiting,&call_b).artifact_bindings.iter().any(|binding|binding.id==call_b.id),
         "the later call's result row admits the call as context");
 
-    let (result_b,result_b_seq,pinned)=admit_call_result(ctx,root,run_path,descriptor,&tool,&call_b,"call-b");
-    let later=session.from_invocation(ctx,descriptor,run,&result_b,result_b_seq,&pinned).unwrap();
+    let (result_b,result_b_seq,pinned_b)=admit_call_result(ctx,root,run_path,descriptor,&tool,&call_b,"call-b");
+    let later=session.from_invocation(ctx,descriptor,run,&result_b,result_b_seq,&pinned_b).unwrap();
     let recovery=hand_through_gate(Box::pin(later.recover_source()),
         pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
     assert_eq!(recovery,ProviderSourceRecovery::Process);
     let update=artifact(&ctx.interface_var_dir().join("parallel-update"),"interface.context.updated",
         json!({"label":"interface.context.updated","text":"the later call's result is consumed"}));
-    let outcome=hand_through_gate(Box::pin(later.hand_final(ProviderEmission{artifact:update,route:ProviderEmissionRoute::ClientProjection})),
-        pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
-    let update=admitted_artifact(&outcome);
+    let publication = later.hand_final(ProviderEmission { artifact: update, route: ProviderEmissionRoute::ClientProjection });
+    let update = if failing {
+        let outcome = hand_through_gate(Box::pin(publication),
+            pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+        admitted_artifact(&outcome)
+    } else {
+        let stop = artifact(&root.join("stop"), "operator.turn.control", json!({"action":"stop","control_id":"stop-b"}));
+        let control_checkpoint = waiting.checkpoints.iter().find(|cp| waiting.active_checkpoints.contains(&cp.id)
+            && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.turn.control")).unwrap();
+        let row = edge(ctx, &pinned_b, control_checkpoint, &stop, MovementKind::InterfaceOutbound, descriptor.id.clone());
+        let stop = source_envelope(ctx, root, &row, stop);
+        let stop_seq = append(ctx, row);
+        let blocked = pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,1,true,8,true);
+        tokio::select! { biased; _ = blocked => {}, _ = Box::pin(publication) => panic!("write was not interrupted") }
+        let result = crate::handler::failed_control_result(&decode_admitted_turn_control(ctx, descriptor, &stop).unwrap().unwrap(),
+            None, None, "the interrupted provider turn still has one unresolved exact external result");
+        persist_control_journal(ctx,stop_seq,run,"stop-b","stop",TurnControlJournalPhase::Result { result }).unwrap();
+        let broker = CodexTurnControlBroker::new(Some(result_b_seq));
+        broker.finish();
+        let gates = Default::default();
+        let arbiter = InterruptedEffectArbiter::new(ctx.clone());
+        let source = |independent_reader| ControlSource { envelope:&stop, source_movement_seq:stop_seq, broker:&broker,
+            control_gates:&gates, control:decode_admitted_turn_control(ctx,descriptor,&stop).unwrap().unwrap(),
+            terminal_control_fenced:true, independent_reader };
+        let cold = ProviderHandoffSession::new(ctx).unwrap();
+        handle_control_source(ctx,descriptor,&cold,&arbiter,run,source(true)).await.unwrap();
+        assert!(matches!(load_control_journal(ctx,stop_seq,run,"stop-b","stop").unwrap().unwrap().phase, TurnControlJournalPhase::Result { .. }));
+        let resumed = cold.from_invocation(ctx,descriptor,run,&result_b,result_b_seq,&pinned_b).unwrap();
+        let (status, receipts) = hand_through_gate(resumed.recover_source_with_outcomes(),
+            pump(ctx,root,run_path,authoring_id,listener,receiver,&result_b.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+        assert_eq!(status, ProviderSourceRecovery::Completed);
+        let control = handle_control_source(ctx,descriptor,&cold,&arbiter,run,source(false));
+        hand_through_gate(Box::pin(control), pump(ctx,root,run_path,authoring_id,listener,receiver,
+            &stop.artifact,0,usize::MAX,true,phase,true)).await.unwrap();
+        assert!(matches!(load_control_journal(ctx,stop_seq,run,"stop-b","stop").unwrap().unwrap().phase,
+            TurnControlJournalPhase::Delivered { result } if !result.acknowledged));
+        admitted_artifact(&receipts[0])
+    };
     drop(later);
 
     let (result_a,result_a_seq,pinned)=admit_call_result(ctx,root,run_path,descriptor,&tool,&call_a,"call-a");
@@ -568,6 +609,11 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
     assert!(positions.windows(2).all(|pair|pair[0]<pair[1]),
         "the snapshot keeps both calls before their results, in the order the turn consumed them: {sources:?}");
 
+    let restarted = ProviderHandoffSession::new(ctx).unwrap();
+    let replay = restarted.from_invocation(ctx, descriptor, run, &result_b, result_b_seq, &pinned_b).unwrap();
+    let (status, receipts) = replay.recover_source_with_outcomes().await.unwrap();
+    assert_eq!(status, ProviderSourceRecovery::Completed);
+    assert!(receipts.iter().any(|receipt| admitted_artifact(receipt) == update));
     let cp=closed.checkpoints.iter().find(|cp|closed.active_checkpoints.contains(&cp.id)
         && cp.outbound_interfaces().any(|id|id==&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("operator.message")).unwrap();
     let file=artifact(&root.join("parallel-next"),"operator.message",json!({"text":"continue","message_id":"parallel-next"}));
@@ -673,10 +719,20 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 let mut reader_task=tokio::spawn(control_reader_life(ctx.clone(),descriptor.clone(),session.clone(),controls.clone(),
                     gates.clone(),arbiter.clone(),progress_rx,fence_rx));
                 if matches!(phase,7|11) {
-                    let ledger=std::fs::read(&ctx.movements_path).unwrap();
-                    let error=tokio::time::timeout(std::time::Duration::from_secs(20),&mut reader_task).await.unwrap().unwrap().unwrap_err();
-                    assert!(error.contains(if phase==7 {"output already reached an edge"}else{"hand-in outcome is uncertain"}),"{error}");
-                    assert_eq!(std::fs::read(run_path).unwrap(),installed);assert_eq!(std::fs::read(&ctx.movements_path).unwrap(),ledger);
+                    let observed = if phase==7 { "output already reached an edge" } else { "hand-in outcome is uncertain" };
+                    let failure = tokio::time::timeout(std::time::Duration::from_secs(20), receiver.recv()).await.unwrap().unwrap();
+                    let manifest = failure.artifact.read_manifest().unwrap();
+                    assert_eq!(manifest.label, "turn.error");
+                    let payload: serde_json::Value = serde_json::from_slice(&failure.artifact.read_payload_bytes().unwrap()).unwrap();
+                    assert_eq!(payload["additional_details"]["source_movement_seq"], stop_seq);
+                    assert!(payload["message"].as_str().unwrap().contains(observed));
+                    let cp = installed_record.checkpoints.iter().find(|cp| installed_record.active_checkpoints.contains(&cp.id)
+                        && cp.inbound_interface() == Some(&descriptor.id) && cp.interface_binding.as_ref().unwrap().admits("turn.error")).unwrap();
+                    let seq = append(ctx, edge(ctx, &installed, cp, &failure.artifact, MovementKind::InterfaceArrival, installed_record.worker.clone()));
+                    failure.verdict_tx.unwrap().send(DeliveryVerdict::Admitted { seq }).unwrap();
+                    let error = reader_task.await.unwrap().unwrap_err();
+                    assert!(error.contains(observed), "{error}");
+                    assert_eq!(std::fs::read(run_path).unwrap(),installed);
                     assert!(receiver.try_recv().is_err());server.abort();return;
                 }
                 let (delivered,broker)=if matches!(phase,6|8|9|12|13) {

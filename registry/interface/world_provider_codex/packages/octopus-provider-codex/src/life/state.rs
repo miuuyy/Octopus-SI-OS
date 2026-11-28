@@ -83,6 +83,7 @@ pub(crate) struct MalformedControlSource<'a> {
     pub(crate) broker: Option<&'a Arc<CodexTurnControlBroker>>,
     pub(crate) control_gates: &'a ControlSourceGates,
     pub(crate) error: String,
+    pub(crate) independent_reader: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +107,7 @@ pub(crate) struct ControlResultDelivery<'a> {
     pub(crate) effect_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
     pub(crate) result: &'a mut CodexTurnControlResult,
     pub(crate) recovery: bool,
-    pub(crate) defer_message_receipt: bool,
+    pub(crate) independent_reader: bool,
 }
 
 #[derive(Clone)]

@@ -1623,12 +1623,10 @@ pub(super) fn checked_topology_advance(
         return Ok(true);
     }
     if !after.checkpoints.contains(consumed) {
-        let pending = persisted_pending_handoff(current, &before.provider_interface)?
+        persisted_pending_handoff(current, &before.provider_interface)?
             .ok_or("retired result invocation has no checked handoff")?;
-        if pending.source_movement_seq != source || !consumed_by_own_write() {
-            return Err(
-                "result invocation was removed without consuming its own admitted source".into(),
-            );
+        if !consumed_by_own_write() {
+            return Err("result invocation was removed without consuming its own admitted source".into());
         }
     }
     Ok(true)

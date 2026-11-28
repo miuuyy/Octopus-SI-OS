@@ -340,7 +340,8 @@ impl ProviderOutputHandoff {
         }
         let mut prepared = Vec::with_capacity(emissions.len());
         let mut standing_checkpoints_by_output = Vec::with_capacity(emissions.len());
-        for emission in emissions {
+        let mut replayed = Vec::new();
+        for (position, emission) in emissions.into_iter().enumerate() {
             let ProviderHandoffEmission {
                 mut artifact,
                 route,
@@ -409,6 +410,14 @@ impl ProviderOutputHandoff {
                 &active.granted_tools,
                 &active.granted_interfaces,
             )?;
+            if continuation && route == ProviderHandoffRoute::ClientProjection && !context_output && !snapshot_output {
+                if let Some(receipt) = active.admitted_continuation_observation(
+                    &record, &state.run_record_bytes, &identity.artifact, &output_checkpoint,
+                )? {
+                    replayed.push((position, receipt));
+                    continue;
+                }
+            }
             standing_checkpoints_by_output.push(if standing && !snapshot_output && verified_inputs.is_empty() {
                 active.standing_route_for(&record, &route, &output_checkpoint, &manifest.label)?
             } else {
@@ -419,6 +428,9 @@ impl ProviderOutputHandoff {
                 output_checkpoint,
                 verified_inputs,
             });
+        }
+        if prepared.is_empty() && !replayed.is_empty() {
+            return Ok(replayed.into_iter().map(|(_, receipt)| receipt).collect());
         }
         let additional_input = independent_source.map(|source| active.independent_input_at_source(&state.run_record_bytes, source)).transpose()?.flatten();
         if let (Some(own), Some(additional)) = (&state.consumed_context_free_independent_input, &additional_input) {
@@ -554,7 +566,7 @@ impl ProviderOutputHandoff {
         if terminal {
             state.consumed_verified_input = false;
         }
-        let outcomes = active.hand_pending_items(&pending, &state.run_record_bytes).await?;
+        let mut outcomes = active.hand_pending_items(&pending, &state.run_record_bytes).await?;
         Self::ground_admitted_context_outputs(
             &mut next_session_context,
             &pending,
@@ -569,6 +581,9 @@ impl ProviderOutputHandoff {
             state.context_artifacts = active.published_context_artifacts(
                 &RunRecord::from_bytes(&state.run_record_bytes).map_err(|error| error.to_string())?, &active.config,
             )?;
+        }
+        for (position, receipt) in replayed {
+            outcomes.insert(position, receipt);
         }
         Ok(outcomes)
     }

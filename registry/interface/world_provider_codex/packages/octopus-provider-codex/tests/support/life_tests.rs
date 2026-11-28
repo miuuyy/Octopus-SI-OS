@@ -995,7 +995,7 @@
                     effect_guard: None,
                     result: &mut ack_result,
                     recovery: true,
-                    defer_message_receipt: false,
+                    independent_reader: false,
                 },
             )
             .await
@@ -1415,7 +1415,7 @@
                     effect_guard: None,
                     result: &mut ack_result,
                     recovery: true,
-                    defer_message_receipt: false,
+                    independent_reader: false,
                 },
             )
             .await

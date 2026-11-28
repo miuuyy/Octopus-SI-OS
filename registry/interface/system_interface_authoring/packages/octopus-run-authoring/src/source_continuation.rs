@@ -206,6 +206,28 @@ impl ProviderOutputHandoff {
         Ok(authored)
     }
 
+    pub(super) fn admitted_continuation_observation(
+        &self,
+        record: &RunRecord,
+        current: &[u8],
+        artifact: &ArtifactRef,
+        route: &RunAuthoringCheckpoint,
+    ) -> Result<Option<ProviderHandoffOutcome>, String> {
+        let Some(prior) = persisted_pending_handoff(record, &self.config.provider_interface)? else {
+            return Ok(None);
+        };
+        if !prior.items.iter().chain(&prior.standing).any(|item| {
+            item.artifact_id == artifact.id && pending_output_matches_template(item, route)
+        }) {
+            return Ok(None);
+        }
+        let prior = self.completed_source_continuation_predecessor(record, current)?;
+        self.admitted_replay_handoff(&prior.with_standing_items())?.into_iter()
+            .find(|receipt| matches!(receipt, ProviderHandoffOutcome::Admitted { artifact: admitted, .. } if admitted == artifact))
+            .map(Some)
+            .ok_or_else(|| "repeated source observation has no matching admitted artifact".into())
+    }
+
     fn completed_source_continuation_predecessor(
         &self,
         record: &RunRecord,

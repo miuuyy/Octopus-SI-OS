@@ -50,6 +50,17 @@ pub(crate) async fn record_invalid_provider_context(
     report_provider_source_failure(ctx, run, turn.seq, &message).await
 }
 
+pub(crate) async fn record_provider_source_result<T>(
+    ctx: &InterfaceLiftContext, run: &RunId, source: u64, result: Result<T, String>,
+) -> Result<T, String> {
+    if let Err(error) = &result && !ctx.cancel.is_cancelled() {
+        let message = format!("provider failed while processing movement {source}: {error}");
+        report_provider_source_failure(ctx, run, source, &message).await
+            .map_err(|failure| format!("{message}; recording the failure also failed: {failure}"))?;
+    }
+    result
+}
+
 pub(crate) async fn report_provider_source_failure(
     ctx: &InterfaceLiftContext, run: &RunId, source: u64, message: &str,
 ) -> Result<(), String> {
@@ -90,7 +101,12 @@ pub(crate) async fn hand_failure_into_standing_route(
         return Err(format!("provider run record '{}' names run '{}'", run.as_str(), record.id.as_str()));
     }
     octopus_run_authoring::standing_route_admits_only(&record, &ctx.interface, crate::handler::TURN_ERROR_LABEL)?;
-    match ctx.hand_arrival(materialize_failed_source_error(ctx, source_movement_seq, message)?, Vec::new()).await? {
+    let artifact = materialize_failed_source_error(ctx, source_movement_seq, message)?;
+    let reference = materialized_artifact_ref(&artifact)?;
+    if await_artifact_admission_scan(ctx, run, source_movement_seq, &reference).await?.movement_seq.is_some() {
+        return Ok(());
+    }
+    match ctx.hand_arrival(artifact, Vec::new()).await? {
         octopus_ledger::DeliveryVerdict::Admitted { .. } => Ok(()),
         octopus_ledger::DeliveryVerdict::Refused { reason, detail } => Err(format!(
             "its turn.error was refused as '{}': {detail}",
