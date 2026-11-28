@@ -93,6 +93,52 @@ fn refresh_persistence_rotates_tokens_and_keeps_fields_it_does_not_interpret() {
 }
 
 #[tokio::test]
+async fn token_rotation_preserves_only_an_identified_chatgpt_owner() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("auth.json");
+    let original = chatgpt_auth_json("workspace", "first");
+    std::fs::write(&path, original.to_string()).unwrap();
+    let manager = AuthManager::new(home.path().into(), false, AuthCredentialsStoreMode::File).await;
+    let revision = manager.auth_change_receiver();
+    let mut rotated = chatgpt_auth_json("workspace", "second");
+    rotated["tokens"]["access_token"] = "renewed".into();
+    std::fs::write(&path, rotated.to_string()).unwrap();
+    assert!(manager.reload().await);
+    assert_eq!(*revision.borrow(), 1);
+    assert_eq!(manager.owner_revision(), 0);
+
+    let mut another_user = rotated.clone();
+    another_user["tokens"]["id_token"] = jwt(serde_json::json!({
+        "https://api.openai.com/auth": {"chatgpt_user_id":"another-user"}
+    }))
+    .into();
+    let mut missing_user = rotated.clone();
+    missing_user["tokens"]["id_token"] = jwt(serde_json::json!({})).into();
+    let mut another_login = rotated.clone();
+    another_login["tokens"]["login_owner_id"] = "another-login".into();
+    for replacement in [
+        chatgpt_auth_json("another-workspace", "elsewhere"),
+        another_user,
+        another_login,
+        missing_user,
+        chatgpt_auth_json("", "unknown"),
+        serde_json::json!({"OPENAI_API_KEY":"fixture"}),
+    ] {
+        let before = manager.owner_revision();
+        std::fs::write(&path, replacement.to_string()).unwrap();
+        assert!(manager.reload().await);
+        assert_eq!(manager.owner_revision(), before + 1);
+        std::fs::write(&path, original.to_string()).unwrap();
+        assert!(manager.reload().await);
+        assert_eq!(manager.owner_revision(), before + 2);
+    }
+    let before = manager.owner_revision();
+    std::fs::remove_file(path).unwrap();
+    assert!(manager.reload().await);
+    assert_eq!(manager.owner_revision(), before + 1);
+}
+
+#[tokio::test]
 async fn an_unreadable_store_keeps_the_cached_credential_and_publishes_no_sign_out() {
     let home = tempfile::tempdir().expect("tempdir");
     let auth_file = home.path().join("auth.json");
@@ -118,6 +164,7 @@ async fn an_unreadable_store_keeps_the_cached_credential_and_publishes_no_sign_o
         Some("sk-cached")
     );
     assert_eq!(*manager.auth_change_receiver().borrow(), revision);
+    assert_eq!(manager.owner_revision(), 0);
     assert!(manager.auth_store_failure().is_some());
 
     let unreadable = open().await;

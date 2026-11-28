@@ -861,33 +861,27 @@ pub(crate) async fn shutdown_driver(
     })
 }
 
-pub(crate) fn current_auth_revision(manager: &AuthManager) -> u64 {
-    let receiver = manager.auth_change_receiver();
-    *receiver.borrow()
-}
-
-pub(crate) async fn adopt_current_machine_auth_generation(
+pub(crate) async fn adopt_current_machine_auth_owner(
     ctx: &InterfaceLiftContext,
-    runtime_auth: &CodexRuntimeAuth,
+    manager: &AuthManager,
     driver: &mut Option<Arc<CodexAppServerInterfaceDriver>>,
 ) -> Result<(), String> {
-    runtime_auth.manager.reload().await;
-    let current_revision = current_auth_revision(&runtime_auth.manager);
+    manager.reload().await;
     let Some(live) = driver.as_ref() else {
         return Ok(());
     };
-    let connected_revision = live.connected_auth_revision().ok_or_else(|| {
+    let connected_owner = live.connected_auth_owner_revision.ok_or_else(|| {
         format!(
-            "codex interface '{}' connected a driver without explicit auth-generation evidence",
+            "codex interface '{}' connected a driver without its machine sign-in owner",
             ctx.interface.as_str()
         )
     })?;
-    if connected_revision == current_revision {
+    if connected_owner == manager.owner_revision() {
         return Ok(());
     }
     if !live.is_strictly_quiescent().await {
         return Err(format!(
-            "codex interface '{}' observed a new machine auth generation while its exact driver was not quiescent",
+            "codex interface '{}' cannot switch the machine sign-in while a native request is pending",
             ctx.interface.as_str()
         ));
     }

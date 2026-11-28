@@ -172,6 +172,13 @@ must be an exact prefix of the newest one. If the histories conflict while a
 queued input is being resumed, the provider reports the failure against that
 input and retains it for recovery.
 
+The native Codex provider shares the machine's file-backed ChatGPT sign-in
+with its app-server. Renewing that sign-in preserves the connection and its
+outstanding tool requests. On HTTP 401 the app-server can reload the same
+account's credentials and retry the model request. Switching sign-in owners
+requires an idle connection. A pending request stays bound to its original
+connection, and a refused switch is recorded against the input.
+
 ### Providers served through OpenCodex
 
 Most providers are one entry in the Codex provider's OpenCodex bridge,
@@ -255,6 +262,11 @@ total can span several model calls.
 Its breakdown is included only when it agrees with a tool-free exchange's
 occupancy. An SDK-confirmed input overflow becomes `context_length_exceeded`
 so the caller can enter its native compaction path.
+
+The ACP process loads the owner's `home/antigravity-acp/acp_token.json` at
+sign-in. While a prompt is running it uses its cached credentials and can
+write them back after a Google OAuth refresh. A replacement file takes effect
+when a new ACP process signs in.
 
 After a completed turn the process exits. The next input resumes the session
 when the caller's history extends the recorded response. Replacing history

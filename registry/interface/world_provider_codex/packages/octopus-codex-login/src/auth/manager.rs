@@ -8,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
@@ -117,6 +118,29 @@ impl ChatgptAuth {
             .last_refresh
             .and(self.auth_dot_json.tokens.as_ref())
     }
+}
+
+fn same_chatgpt_owner(previous: Option<&CodexAuth>, current: Option<&CodexAuth>) -> bool {
+    let (Some(CodexAuth::Chatgpt(previous)), Some(CodexAuth::Chatgpt(current))) =
+        (previous, current)
+    else {
+        return false;
+    };
+    let (Some(previous), Some(current)) = (
+        &previous.auth_dot_json.tokens,
+        &current.auth_dot_json.tokens,
+    ) else {
+        return false;
+    };
+    let (Some(user), Some(workspace)) = (&previous.id_token.chatgpt_user_id, &previous.account_id)
+    else {
+        return false;
+    };
+    !user.trim().is_empty()
+        && !workspace.trim().is_empty()
+        && current.id_token.chatgpt_user_id.as_ref() == Some(user)
+        && current.account_id.as_ref() == Some(workspace)
+        && (current.login_owner_id.is_none() || current.login_owner_id == previous.login_owner_id)
 }
 
 fn same_credentials(a: Option<&CodexAuth>, b: Option<&CodexAuth>) -> bool {
@@ -403,6 +427,7 @@ pub struct AuthManager {
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
+    owner_revision: AtomicU64,
     refresh_lock: Semaphore,
 }
 
@@ -488,12 +513,17 @@ impl AuthManager {
                 generation: 0,
             }),
             auth_change_tx: watch::channel(0).0,
+            owner_revision: AtomicU64::new(0),
             refresh_lock: Semaphore::new(1),
         }
     }
 
     pub fn auth_change_receiver(&self) -> watch::Receiver<u64> {
         self.auth_change_tx.subscribe()
+    }
+
+    pub fn owner_revision(&self) -> u64 {
+        self.owner_revision.load(Ordering::Acquire)
     }
 
     pub fn auth_store_failure(&self) -> Option<String> {
@@ -593,11 +623,16 @@ impl AuthManager {
             return None;
         }
         let changed = !same_credentials(cached.auth.as_ref(), stored.auth.as_ref());
+        let owner_changed =
+            changed && !same_chatgpt_owner(cached.auth.as_ref(), stored.auth.as_ref());
         cached.auth = stored.auth;
         cached.store_failure = stored.unusable;
         if changed {
             cached.permanent_refresh_failure = None;
             cached.generation += 1;
+            if owner_changed {
+                self.owner_revision.fetch_add(1, Ordering::Release);
+            }
             self.auth_change_tx.send_modify(|revision| *revision += 1);
         }
         tracing::info!("Reloaded auth, changed: {changed}");

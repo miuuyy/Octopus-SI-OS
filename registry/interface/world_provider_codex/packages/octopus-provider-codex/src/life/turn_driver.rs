@@ -34,7 +34,7 @@ pub(crate) async fn drive_turn_with_retries_inner(
             turn.seq
         ));
     }
-    adopt_current_machine_auth_generation(ctx, runtime_auth, driver).await?;
+    adopt_current_machine_auth_owner(ctx, &runtime_auth.manager, driver).await?;
     let pinned_run_record = match ctx.pinned_run_record_bytes(&turn.envelope) {
         Ok(record) => record,
         Err(error) => {

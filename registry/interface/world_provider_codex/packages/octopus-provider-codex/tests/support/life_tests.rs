@@ -254,11 +254,70 @@
         })
         .await
         .unwrap();
-        let driver = Arc::new(CodexAppServerInterfaceDriver::new_with_config(
+        let manager = AuthManager::shared(
+            root.to_owned(), false, octopus_login::AuthCredentialsStoreMode::File,
+        ).await;
+        let driver = Arc::new(CodexAppServerInterfaceDriver::new_with_config_and_auth_boundaries(
             crate::AppServerClient::Remote(client),
             descriptor.interface_driver_config.as_ref(),
+            None,
+            manager,
+            root.to_owned(),
         ));
         (driver, release_tx, method_rx, server)
+    }
+
+    #[tokio::test]
+    async fn machine_token_rotation_keeps_the_pending_native_tool_request() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use crate::handler::{PendingServerRequest, PendingServerRequestKind, TransportStateScope, TurnDrainOutcome};
+
+        let root = tempfile::tempdir().unwrap();
+        let descriptor = descriptor();
+        let ctx = context(root.path(), &descriptor);
+        let claims = json!({"https://api.openai.com/auth": {"chatgpt_user_id": "user"}});
+        let id_token = format!("header.{}.signature", URL_SAFE_NO_PAD.encode(claims.to_string()));
+        let replace_auth = |account: &str, token: &str| {
+            let replacement = root.path().join("replacement.json");
+            let auth = json!({
+                "auth_mode": "chatgpt",
+                "last_refresh": "2026-01-01T00:00:00Z",
+                "tokens": {
+                    "account_id": account,
+                    "id_token": id_token,
+                    "access_token": token,
+                    "refresh_token": "fixture"
+                }
+            });
+            std::fs::write(&replacement, auth.to_string()).unwrap();
+            std::fs::rename(replacement, root.path().join("auth.json")).unwrap();
+        };
+        replace_auth("workspace", "first");
+        let (live, _release, _methods, server) = interrupted_drain_driver(root.path(), &descriptor).await;
+        let manager = live.auth_manager.clone().unwrap();
+        let scope = TransportStateScope::Run("run-a".into());
+        let pending = PendingServerRequest {
+            request_id: octopus_appserver_proto::RequestId::Integer(3),
+            thread_id: "thread-a".into(),
+            turn_id: "turn-a".into(),
+            key: "tool:call-a".into(),
+            kind: PendingServerRequestKind::DynamicTool { call_id: "call-a".into(), tool: "coder.exec".into() },
+            effect_gate: Default::default(),
+            turn_interrupted: Default::default(),
+        };
+        live.record_drain_outcome(&scope, TurnDrainOutcome::Suspended(pending.clone())).await.unwrap();
+        let mut driver = Some(live);
+        replace_auth("workspace", "renewed");
+        adopt_current_machine_auth_owner(&ctx, &manager, &mut driver).await.unwrap();
+        driver.as_ref().unwrap().ensure_pending_request_current(&scope, &pending).await.unwrap();
+
+        replace_auth("another-workspace", "other");
+        let error = adopt_current_machine_auth_owner(&ctx, &manager, &mut driver).await.unwrap_err();
+        assert!(error.contains("cannot switch the machine sign-in"));
+        driver.as_ref().unwrap().remove_pending_request(&scope, &pending).await.unwrap();
+        adopt_current_machine_auth_owner(&ctx, &manager, &mut driver).await.unwrap();
+        assert!(driver.is_none());
+        server.await.unwrap();
     }
 
     #[tokio::test]

@@ -11,12 +11,7 @@ pub struct CodexAppServerInterfaceDriver {
     pub(crate) secret_store: Option<Arc<dyn ScopedSecretStore>>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) auth_store_home: Option<PathBuf>,
-    pub(crate) connected_auth_revision: Option<u64>,
-}
-
-pub(crate) fn auth_manager_revision(manager: &AuthManager) -> u64 {
-    let receiver = manager.auth_change_receiver();
-    *receiver.borrow()
+    pub(crate) connected_auth_owner_revision: Option<u64>,
 }
 
 impl CodexAppServerInterfaceDriver {
@@ -72,9 +67,7 @@ impl CodexAppServerInterfaceDriver {
         let interface_private_config = interface_driver_config
             .map(|config| config.private_config.clone())
             .unwrap_or_default();
-        let connected_auth_revision = auth_manager
-            .as_ref()
-            .map(|manager| auth_manager_revision(manager));
+        let connected_auth_owner_revision = auth_manager.as_deref().map(AuthManager::owner_revision);
         Self {
             life_context: std::sync::OnceLock::new(),
             client: Mutex::new(client),
@@ -86,7 +79,7 @@ impl CodexAppServerInterfaceDriver {
             secret_store,
             auth_manager,
             auth_store_home,
-            connected_auth_revision,
+            connected_auth_owner_revision,
         }
     }
 
@@ -104,10 +97,6 @@ impl CodexAppServerInterfaceDriver {
             .await
             .values()
             .any(|state| matches!(state, ProviderLoginState::Pending { .. }))
-    }
-
-    pub(crate) fn connected_auth_revision(&self) -> Option<u64> {
-        self.connected_auth_revision
     }
 
     pub(crate) fn attach_life_context(&self, ctx: octopus_interface_transport::InterfaceLiftContext) -> Result<(), String> {
