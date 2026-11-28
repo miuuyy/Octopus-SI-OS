@@ -470,7 +470,7 @@ pub(crate) fn collect_bound_context_from_cache(
             for entry in explicit {
                 let pinned = covered.get(&artifact_ref_key(&entry.source_artifact));
                 if pinned.is_none_or(|item| item.label != entry.label || item.payload != entry.payload) {
-                    return Err(format!("bound context '{}' before the snapshot is absent or differs from its history", entry.source_artifact.id));
+                    return Err(format!("provider invocation places unrelated dynamic context before its current session snapshot ('{}')", entry.source_artifact.id));
                 }
             }
         }
