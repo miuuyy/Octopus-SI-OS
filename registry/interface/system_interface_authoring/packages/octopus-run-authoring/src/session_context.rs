@@ -444,17 +444,6 @@ pub(crate) fn collect_bound_context_from_cache(
                 artifact.id.as_str()
             ));
         }
-        if session_snapshot_head.is_some() {
-            return Err(
-                "provider invocation carries multiple current session snapshots".to_string(),
-            );
-        }
-        if !session_context.artifacts.is_empty() {
-            return Err(
-                "provider invocation places dynamic context before its current session snapshot"
-                    .to_string(),
-            );
-        }
         let resolved_artifacts = resolve_session_snapshot_chain(
             blobs_dir,
             limits,
@@ -464,10 +453,25 @@ pub(crate) fn collect_bound_context_from_cache(
             session_snapshot_labels,
             provider,
         )?;
+        let prefix_agrees = |prefix: &[SessionContextArtifact], full: &[SessionContextArtifact]| {
+            prefix.len() <= full.len() && prefix.iter().zip(full).all(|(a, b)| session_context_entries_agree(a, b))
+        };
+        if let Some(head) = session_snapshot_head.as_ref() {
+            let selected = session_context.artifacts.get(..=head.covered_artifact_count)
+                .ok_or("selected session snapshot exceeds its resolved history")?;
+            if artifact != &head.artifact && prefix_agrees(&resolved_artifacts, selected) {
+                return Ok(());
+            }
+            if artifact == &head.artifact || !prefix_agrees(&session_context.artifacts, &resolved_artifacts) {
+                return Err("provider invocation carries multiple current session snapshots with conflicting histories".into());
+            }
+        } else if !prefix_agrees(&session_context.artifacts, &resolved_artifacts) {
+            return Err("provider invocation places unrelated dynamic context before its current session snapshot".into());
+        }
         let covered_artifact_count = resolved_artifacts.len().saturating_sub(1);
         let covered_fingerprint =
             session_snapshot_prefix_fingerprint(&resolved_artifacts[..covered_artifact_count])?;
-        session_context.artifacts.extend(resolved_artifacts);
+        session_context.artifacts = resolved_artifacts;
         *session_snapshot_head = Some(SessionSnapshotHead {
             artifact: artifact.clone(),
             covered_artifact_count,
@@ -494,11 +498,16 @@ pub(crate) fn collect_bound_context_from_cache(
             artifact.id.as_str()
         )
     })?;
+    if let Some(existing) = session_snapshot_head.as_ref().and_then(|head| {
+        session_context.artifacts[..=head.covered_artifact_count].iter().find(|entry| &entry.source_artifact == artifact)
+    }) {
+        if existing.label != label || existing.payload != value {
+            return Err(format!("bound context '{}' conflicts with its selected snapshot", artifact.id));
+        }
+        return Ok(());
+    }
     session_context.artifacts.push(SessionContextArtifact {
-        label,
-        payload: value,
-        source_artifact: artifact.clone(),
-        source_movement_seq: provenance.movement_seq,
+        label, payload: value, source_artifact: artifact.clone(), source_movement_seq: provenance.movement_seq,
     });
     Ok(())
 }

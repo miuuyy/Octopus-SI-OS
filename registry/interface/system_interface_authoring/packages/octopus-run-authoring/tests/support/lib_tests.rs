@@ -723,6 +723,50 @@
     }
 
     #[test]
+    fn bound_snapshot_history_is_reconstructed_once_in_either_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let blobs = temp.path().join("blobs");
+        std::fs::create_dir(&blobs).unwrap();
+        let provider = InterfaceId::new("world_provider_test");
+        let label = "interface.artifact.output";
+        let labels = BTreeSet::from([label.to_owned()]);
+        let limits = InterfaceHostIoLimits { max_control_frame_bytes: 65536, max_stderr_bytes: 1024, max_manifest_bytes: 65536, max_payload_bytes: 65536 };
+        let write = |text: &str, parent: Option<&SessionContextArtifact>, seq: u64| {
+            let value = serde_json::json!({"label":label, "text":text});
+            let mut payload = value.clone();
+            payload["session_context"] = serde_json::json!({
+                "schema_version":3, "provider_interface":provider,
+                "parent":parent.map(|entry| &entry.source_artifact), "artifacts":parent.into_iter().collect::<Vec<_>>()
+            });
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            let file = InterfaceArtifactFile::write(&temp.path().join("emitted"), label, &bytes).unwrap();
+            let entry = SessionContextArtifact {
+                label: label.into(), payload: value, source_artifact: pin_artifact(&file, &blobs), source_movement_seq: Some(seq),
+            };
+            (entry, bytes)
+        };
+        let parent = write("first", None, 30);
+        let head = write("next", Some(&parent.0), 45);
+        let sibling = write("different next", Some(&parent.0), 60);
+        for order in [[&head, &parent], [&parent, &head]] {
+            let mut fixed = Vec::new();
+            let mut selected = None;
+            let mut context = ResolvedSessionContext { provider_interface: provider.clone(), artifacts: vec![] };
+            for (entry, bytes) in order {
+                collect_bound_context_from_cache(&blobs, limits, &mut fixed, &mut context, &mut selected,
+                    &entry.source_artifact, bytes, BoundArtifactProvenance { movement_seq:entry.source_movement_seq,
+                        provider_arrival_seq:entry.source_movement_seq }, &labels, &provider).unwrap();
+            }
+            assert_eq!(selected.as_ref().unwrap().artifact, head.0.source_artifact);
+            assert_eq!(context.artifacts.iter().map(|entry| &entry.source_artifact).collect::<Vec<_>>(),
+                vec![&parent.0.source_artifact, &head.0.source_artifact]);
+            assert!(collect_bound_context_from_cache(&blobs, limits, &mut fixed, &mut context, &mut selected,
+                &sibling.0.source_artifact, &sibling.1, BoundArtifactProvenance { movement_seq:Some(60), provider_arrival_seq:Some(60) },
+                &labels, &provider).is_err());
+        }
+    }
+
+    #[test]
     fn foreign_snapshot_evidence_preserves_the_complete_source_payload() {
         let dir = tempfile::tempdir().unwrap();
         let blobs = dir.path().join("blobs");

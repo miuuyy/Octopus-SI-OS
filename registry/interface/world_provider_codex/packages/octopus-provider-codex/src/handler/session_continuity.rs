@@ -17,6 +17,7 @@ pub(crate) struct SessionContextSnapshot {
 pub(crate) enum BoundSessionContext {
     Current(Arc<Vec<SessionContextArtifact>>),
     Foreign,
+    InSnapshot,
 }
 
 pub(crate) type BoundSessionContexts = BTreeMap<String, BoundSessionContext>;
@@ -57,6 +58,9 @@ pub(crate) fn recover_codex_continuity_resolved(
     let mut current_snapshot_seen = false;
     for bound in artifact_binding_payloads {
         if input_sources.contains(&bound.artifact) { continue; }
+        if matches!(bound_session_contexts.get(&continuity_source_key(&bound.artifact)), Some(BoundSessionContext::InSnapshot)) {
+            continue;
+        }
         let bytes = bound.read_bytes()
             .map_err(|error| InterfaceDriverError::FailedClosed(error.to_string()))?;
         let value: serde_json::Value =

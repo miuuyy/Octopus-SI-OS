@@ -10,16 +10,30 @@ impl CodexAppServerInterfaceDriver {
         let mut resolved = BTreeMap::new();
         let mut current_seen = false;
         let mut grounded_snapshot_used = false;
+        let covered = resolved_session_snapshot.into_iter().flat_map(|snapshot| {
+            snapshot.artifacts.iter().filter(|entry| entry.source_artifact != snapshot.carrier)
+                .map(|entry| (continuity_source_key(&entry.source_artifact), entry))
+        }).collect::<BTreeMap<_, _>>();
         for bound in artifact_binding_payloads {
+            let key = continuity_source_key(&bound.artifact);
             let bytes = bound.read_bytes()
                 .map_err(|error| InterfaceDriverError::FailedClosed(error.to_string()))?;
-            let value: serde_json::Value =
+            let mut value: serde_json::Value =
                 serde_json::from_slice(bytes.as_ref()).map_err(|error| {
                     InterfaceDriverError::Protocol(format!(
                         "Codex session carrier '{}' is not JSON: {error}",
                         bound.artifact.id
                     ))
                 })?;
+            if let Some(entry) = covered.get(&key) {
+                if value.get(SESSION_CONTEXT_FIELD).and_then(|snapshot| snapshot["provider_interface"].as_str()) == Some(provider_interface.as_str()) {
+                    value.as_object_mut().expect("a session carrier is an object").remove(SESSION_CONTEXT_FIELD);
+                }
+                if value != entry.payload || resolved.insert(key, BoundSessionContext::InSnapshot).is_some() {
+                    return Err(InterfaceDriverError::FailedClosed("bound artifact conflicts with its checked snapshot or repeats a binding".into()));
+                }
+                continue;
+            }
             let Some(raw) = value.get(SESSION_CONTEXT_FIELD) else {
                 continue;
             };
@@ -43,7 +57,6 @@ impl CodexAppServerInterfaceDriver {
                     bound.artifact.id, snapshot.schema_version
                 )));
             }
-            let key = continuity_source_key(&bound.artifact);
             if snapshot.provider_interface != *provider_interface {
                 if resolved.insert(key, BoundSessionContext::Foreign).is_some() {
                     return Err(InterfaceDriverError::FailedClosed(

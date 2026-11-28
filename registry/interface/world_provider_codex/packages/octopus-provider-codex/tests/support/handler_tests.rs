@@ -4120,6 +4120,32 @@ while IFS= read -r _; do :; done
     }
 
     #[test]
+    fn bound_history_already_in_the_checked_snapshot_is_used_once() {
+        let provider = InterfaceId::new("world_provider_test");
+        let label = "interface.artifact.output";
+        let old = bound("prior", serde_json::json!({"label":label,"text":"first",
+            "session_context":{"schema_version":3,"provider_interface":provider,"artifacts":[]}}));
+        let new = bound("current", serde_json::json!({"label":label,"text":"second",
+            "session_context":{"schema_version":3,"provider_interface":provider,"parent":old.artifact,"artifacts":[]}}));
+        let grounded = ProviderInvocationSessionSnapshot { carrier: new.artifact.clone(), artifacts: Arc::new(vec![
+            SessionContextArtifact { label:label.into(), payload:serde_json::json!({"label":label,"text":"first"}),
+                source_artifact:old.artifact.clone(), source_movement_seq:Some(8) },
+            SessionContextArtifact { label:label.into(), payload:serde_json::json!({"label":label,"text":"second"}),
+                source_artifact:new.artifact.clone(), source_movement_seq:Some(15) },
+        ]) };
+        for bindings in [[old.clone(), new.clone()], [new.clone(), old.clone()]] {
+            let labels = codex_snapshot_labels();
+            let contexts = CodexAppServerInterfaceDriver::resolve_bound_session_contexts(&bindings, &provider, &labels, Some(&grounded)).unwrap();
+            let assembled = assemble_context_resolved(&bindings, &contexts, &provider, &labels, ModelResultProjection { max_tokens: 1024 }).unwrap();
+            assert_eq!(assembled.conversation, vec!["Assistant\nfirst", "Assistant\nsecond"]);
+        }
+        let unrelated = bound("another", serde_json::json!({"label":label,"text":"unrelated",
+            "session_context":{"schema_version":3,"provider_interface":provider,"artifacts":[]}}));
+        assert!(CodexAppServerInterfaceDriver::resolve_bound_session_contexts(&[new, unrelated], &provider,
+            &codex_snapshot_labels(), Some(&grounded)).is_err());
+    }
+
+    #[test]
     fn session_snapshots_are_provider_scoped_and_globally_source_unique() {
         let source = session_artifact(
             "operator.message:one",

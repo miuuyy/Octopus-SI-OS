@@ -34,6 +34,9 @@ pub(crate) fn assemble_context_resolved(
     let mut assembled = AssembledContext::default();
     let mut session_sources = BTreeSet::new();
     for bound in artifact_binding_payloads {
+        if matches!(bound_session_contexts.get(&continuity_source_key(&bound.artifact)), Some(BoundSessionContext::InSnapshot)) {
+            continue;
+        }
         let bytes = bound.read_bytes()
             .map_err(|error| InterfaceDriverError::FailedClosed(error.to_string()))?;
         let mut value: serde_json::Value =

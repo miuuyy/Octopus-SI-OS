@@ -163,6 +163,10 @@ a late tool result twice, recovery checks the admitted result and its preceding
 context. It emits one `interface.context.updated` receipt for the correction.
 The remaining calls keep their identities and the completed tool is not run again.
 
+When a binding names a saved context and some of its older snapshots, the
+provider reads their common history once. It accepts the newer snapshot only
+when the older history is its exact prefix. Conflicting histories stop recovery.
+
 ### Providers served through OpenCodex
 
 Most providers are one entry in the Codex provider's OpenCodex bridge,
