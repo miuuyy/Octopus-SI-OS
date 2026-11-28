@@ -284,9 +284,14 @@ they contain no text. These heartbeats are not retained as conversation content
 or replayed from the response cache; silence still reaches the stream deadline.
 
 The descriptor lists the server's residual instructions and MCP resource tools.
-The client endpoint publishes only its declared functions. A native execution
-failure reaches Codex as a failed response, including when ACP formats it as
-an agent message.
+The client endpoint publishes only its declared functions. ACP 1.5.0 can
+return a normal end-of-turn response after an SDK exception. The provider
+checks the native error diagnostic for the same session before it accepts
+that response. On Linux the release arguments send error diagnostics to
+stderr. When Google supplies an HTTP status and error code, the public
+failure message includes both. A Google `400 INVALID_ARGUMENT` on a model
+request reaches Codex as `invalid_prompt`, which ends the turn without
+resubmitting the request.
 
 ### Model catalogs
 

@@ -45,7 +45,7 @@ type Exchange = {
 type LiveCall = { call: Call; result: ReturnType<typeof Promise.withResolvers<Row>> };
 type Native = {
   connection: AcpConnection; configuration: string; endpoint?: ReturnType<typeof openToolEndpoint>;
-  session: string; calls: LiveCall[]; waiting?: LiveCall; finished: boolean; sdkError: boolean;
+  session: string; calls: LiveCall[]; waiting?: LiveCall; finished: boolean; sdkError?: { status?: number; code?: string };
   used?: number; offered: number;
 };
 
@@ -186,7 +186,7 @@ class Conversation {
     await this.disconnect();
     this.checkAbort(input);
     const connection = this.host.start(this.root);
-    const native: Native = { connection, configuration, session: resume ?? "", calls: [], offered: 0, finished: false, sdkError: false };
+    const native: Native = { connection, configuration, session: resume ?? "", calls: [], offered: 0, finished: false };
     this.native = native;
     const { tools, wireByName } = input;
     if (tools.length) {
@@ -236,8 +236,11 @@ class Conversation {
       // In this release prompt() logs its exception and emits the formatted error as the last message chunk with end_turn.
       const marker = /^E\d{4} [\d:.]+\s+\d+ server\.py:\d+\] (?:Antigravity SDK error processing prompt|Agent connection lost|Failed to rebuild agent) for session ([\w-]+)/.exec(line);
       if (marker && marker[1] === native.session) {
-        native.sdkError = true;
+        native.sdkError = {};
         this.clearTextTimer();
+      } else if (native.sdkError) {
+        const upstream = /^google\.antigravity\.types\.Antigravity(?:Execution|Connection|Validation)Error: .*?\bError ([45]\d{2}), Message: .*?, Status: ([A-Z][A-Z0-9_]*)\b/.exec(line);
+        if (upstream) native.sdkError = { status: Number(upstream[1]), code: upstream[2] };
       }
     };
     connection.onRequest = (method, params) => {
@@ -286,6 +289,11 @@ class Conversation {
         const message = this.active?.text || this.active?.lastText || "Antigravity's agent failed during this turn.";
         if (/\binput token count(?:\s*\([\d,]+\))? exceeds the maximum number of tokens allowed\b/i.test(message)) {
           throw new AcpFailure(message, "context_length_exceeded", 400);
+        }
+        const { status, code } = native.sdkError;
+        if (status && code) {
+          const responseCode = status === 400 && code === "INVALID_ARGUMENT" ? "invalid_prompt" : code;
+          throw new AcpFailure(`Google HTTP ${status} (${code}): ${message}`, responseCode, status);
         }
         throw new AcpFailure(message, "antigravity_execution_failed");
       }

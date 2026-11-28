@@ -112,7 +112,7 @@ test("Antigravity stderr scanner emits each authorization URL once across split 
 
 test("Antigravity flushes trailing text while a turn stays open and still suppresses SDK error chunks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "octopus-acp-flush-"));
-  const runCase = async (scenario: "timer" | "tool-call" | "sdk-error") => {
+  const runCase = async (scenario: "timer" | "tool-call" | "sdk-error" | "invalid-argument" | "quoted-error") => {
     const entered = Promise.withResolvers<void>(), finished = Promise.withResolvers<Record<string, unknown>>(), closed = Promise.withResolvers<number | null>();
     const connection: AcpConnection = {
       authenticate: async () => {}, kill: () => closed.resolve(0), closed: closed.promise,
@@ -138,6 +138,11 @@ test("Antigravity flushes trailing text while a turn stays open and still suppre
       update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "calling tool." } });
       update({ sessionUpdate: "tool_call", toolCallId: "tc-1", status: "in_progress" });
       expect(texts()).toEqual(["calling tool."]);
+    } else if (scenario === "invalid-argument" || scenario === "quoted-error") {
+      const session = scenario === "invalid-argument" ? `s-${scenario}` : "another-session";
+      connection.onDiagnostic(`E1128 10:53:13.579982 1954399 server.py:5737] Antigravity SDK error processing prompt for session ${session}`);
+      connection.onDiagnostic('google.antigravity.types.AntigravityConnectionError: Agent execution terminated due to error. ("agent executor error: Error 400, Message: Request contains an invalid argument., Status: INVALID_ARGUMENT, Details: []")');
+      update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Request contains an invalid argument." } });
     } else {
       update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "The input token count exceeds the maximum number of tokens allowed (1048576)" } });
       connection.onDiagnostic(`E1124 04:20:00.000 12345 server.py:5737] Antigravity SDK error processing prompt for session s-${scenario}`);
@@ -147,9 +152,21 @@ test("Antigravity flushes trailing text while a turn stays open and still suppre
     finished.resolve({ stopReason: "end_turn" });
     await running;
     if (scenario === "sdk-error") expect(events.find(e => e.type === "error")).toMatchObject({ type: "error", code: "context_length_exceeded" });
+    else if (scenario === "invalid-argument") {
+      expect(events.filter(e => e.type === "error")).toEqual([{
+        type: "error", status: 400, code: "invalid_prompt", errorType: "invalid_request_error",
+        message: "Google HTTP 400 (INVALID_ARGUMENT): Request contains an invalid argument.", retryable: false,
+      }]);
+      expect(events.some(e => e.type === "done")).toBe(false);
+      expect(texts()).toEqual([]);
+    } else if (scenario === "quoted-error") {
+      expect(events.some(e => e.type === "error")).toBe(false);
+      expect(events.find(e => e.type === "done")).toMatchObject({ stopReason: "stop" });
+      expect(texts()).toEqual(["Request contains an invalid argument."]);
+    }
     else if (scenario === "timer") expect(texts()).toEqual(["first ", "tail."]);
   };
-  try { for (const scenario of ["timer", "tool-call", "sdk-error"] as const) await runCase(scenario); }
+  try { for (const scenario of ["timer", "tool-call", "sdk-error", "invalid-argument", "quoted-error"] as const) await runCase(scenario); }
   finally { await closeAntigravityConversations(directory); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -189,7 +206,10 @@ test("Antigravity release manifest pins Linux x64/arm64 and macOS targets and fa
     expect(entry.archive_bytes).toBeGreaterThan(0);
     expect(entry.executable_bytes).toBeGreaterThan(0);
     expect(entry.harness_bytes).toBeGreaterThan(0);
-    expect(entry.args).toEqual(key.startsWith("linux-") ? ["--uid="] : []);
+    if (key.startsWith("linux-")) {
+      expect(entry.args).toContain("--uid=");
+      expect(entry.args).toContain("--stderrthreshold=2");
+    }
   }
   expect(() => antigravityReleaseAsset("linux-riscv64")).toThrow(AntigravityAccountError);
   try { antigravityReleaseAsset("linux-riscv64"); } catch (error) {
