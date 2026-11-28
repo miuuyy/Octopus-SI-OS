@@ -815,12 +815,15 @@ async function receive(message) {
   const update = (update) => send({ method: "session/update", params: { sessionId: session, update } });
   const say = (text) => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
   const overflow = "The input token count exceeds the maximum number of tokens allowed (1048576); input token count: 1257138";
-  if (text.includes("native-invalid-argument")) {
+  const rejectGeneration = () => {
     if (process.platform !== "linux" || process.argv.includes("--stderrthreshold=2")) {
       process.stderr.write("E1128 10:53:13.579982 1954399 server.py:5737] Antigravity SDK error processing prompt for session " + session + "\n");
       process.stderr.write("google.antigravity.types.AntigravityConnectionError: Error 400, Message: Request contains an invalid argument., Status: INVALID_ARGUMENT, Details: []\n");
     }
     say("Request contains an invalid argument.");
+  };
+  if (text.includes("native-invalid-argument")) {
+    rejectGeneration();
   } else if (text.includes("native-error") || text.includes("native-overflow")) {
     say(text.includes("native-overflow") ? overflow : "Agent execution error: trajectory converted to zero chat messages");
     process.stderr.write("E1117 01:02:03.004 12345 server.py:5737] Antigravity SDK error processing prompt for session " + session + "\n");
@@ -836,8 +839,9 @@ async function receive(message) {
     const response = await fetch(mcp.url, { method: "POST", headers: { "content-type": "application/json", authorization: mcp.headers[0].value },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "exact_tool", arguments: { value: "a" } } }) });
     const returned = (await response.json()).result;
-    log({ returned });
-    say("Result received.");
+    log({ session, returned });
+    if (text.includes("fail-after-result")) rejectGeneration();
+    else say("Result received.");
   } else say(text.includes("quote-overflow") ? overflow : text.includes("quote-error") ? "Agent execution error: trajectory converted to zero chat messages" : "Continued.");
   if (!text.includes("no-checkpoint")) update({ sessionUpdate: "usage_update", used: 128, size: 1048576 });
   const aggregate = text.includes("aggregate") || text.includes("no-checkpoint");
@@ -952,9 +956,27 @@ test("Antigravity retains native context, delivers exact external results and di
   const invalid = await turn("invalid", [user("native-invalid-argument")]);
   expect(invalid.some(row => row.type === "response.completed" || row.type === "response.output_text.delta")).toBe(false);
   expect(invalid.find(row => row.type === "response.failed").response).toMatchObject({
-    retryable: false, error: { type: "invalid_request_error", code: "invalid_prompt",
+    retryable: true, error: { type: "invalid_request_error", code: "INVALID_ARGUMENT",
       message: "Google HTTP 400 (INVALID_ARGUMENT): Request contains an invalid argument." },
   });
+  const recovering = [user("call-inspect fail-after-result")];
+  const issued = end(await turn("recovery", recovering));
+  const issuedCall = issued.output.find((item: any) => item.type === "function_call");
+  const admitted = [...recovering, ...issued.output, {
+    type: "function_call_output", call_id: issuedCall.call_id, output: "saved effect",
+  }];
+  const beforeRecovery = logs().filter(row => row.returned).length;
+  const rejected = await turn("recovery", admitted);
+  expect(rejected.find(row => row.type === "response.failed").response).toMatchObject({
+    retryable: true, error: { code: "INVALID_ARGUMENT" },
+  });
+  const resumed = end(await turn("recovery", admitted));
+  expect(JSON.stringify(resumed.output)).toContain("Continued.");
+  expect(logs().filter(row => row.method === "session/new").at(-1).session)
+    .not.toBe(logs().filter(row => row.returned).at(-1).session);
+  expect(logs().filter(row => row.method === "session/prompt").at(-1).text)
+    .toContain(`TOOL RESULT (call_id: ${issuedCall.call_id}):\nsaved effect`);
+  expect(logs().filter(row => row.returned)).toHaveLength(beforeRecovery + 1);
   expect(JSON.stringify(end(await turn("alpha", [user("quote-error")])).output)).toContain("trajectory converted to zero chat messages");
   expect(end(await turn("no-tools", [user("hello")], [])).status).toBe("completed");
   const empty = logs().filter(row => row.method === "session/new").at(-1);

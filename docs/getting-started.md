@@ -237,10 +237,6 @@ place Codex CLI uses. So:
 
 - If Codex CLI on this Mac is already signed in with ChatGPT, Octopus starts
   signed in.
-- Renewing the current ChatGPT sign-in in `CODEX_HOME/auth.json` leaves a
-  running task connected, including while it waits for a tool. If a model
-  request gets HTTP 401, Codex can read the renewed token and retry that
-  request. Switch accounts or workspaces between turns.
 - Signing in or out in either one changes it for both. Both take the same
   write lock, `auth.lock` in that Codex home, so a token refresh in Octopus and
   one in Codex CLI never overwrite each other.

@@ -154,8 +154,8 @@ test("Antigravity flushes trailing text while a turn stays open and still suppre
     if (scenario === "sdk-error") expect(events.find(e => e.type === "error")).toMatchObject({ type: "error", code: "context_length_exceeded" });
     else if (scenario === "invalid-argument") {
       expect(events.filter(e => e.type === "error")).toEqual([{
-        type: "error", status: 400, code: "invalid_prompt", errorType: "invalid_request_error",
-        message: "Google HTTP 400 (INVALID_ARGUMENT): Request contains an invalid argument.", retryable: false,
+        type: "error", status: 400, code: "INVALID_ARGUMENT", errorType: "invalid_request_error",
+        message: "Google HTTP 400 (INVALID_ARGUMENT): Request contains an invalid argument.", retryable: true,
       }]);
       expect(events.some(e => e.type === "done")).toBe(false);
       expect(texts()).toEqual([]);

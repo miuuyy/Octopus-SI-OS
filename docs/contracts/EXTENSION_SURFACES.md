@@ -156,29 +156,6 @@ never from memory, and a turn it cannot finish ends as `turn.error` on the run's
 declared route. An output larger than the host's `max_payload_bytes` fails
 closed with both sizes.
 
-Startup recovery reports failures against the admitted input that triggered them.
-If its declared route cannot deliver `turn.error`, the runtime records the
-failure against that input in the movement ledger. When the provider counted
-a late tool result twice, recovery checks the admitted result and its preceding
-context. The original receipt must confirm that the input changed that context.
-Recovery emits one `interface.context.updated` receipt for the correction.
-The remaining calls keep their identities and the completed tool is not run again.
-
-When a binding names a saved context and some of its older snapshots, the
-provider reads their common history once. An artifact bound separately and
-already present in that history keeps its recorded position. Immediate and
-queued inputs use the same rule when choosing a snapshot. Each older history
-must be an exact prefix of the newest one. If the histories conflict while a
-queued input is being resumed, the provider reports the failure against that
-input and retains it for recovery.
-
-The native Codex provider shares the machine's file-backed ChatGPT sign-in
-with its app-server. Renewing that sign-in preserves the connection and its
-outstanding tool requests. On HTTP 401 the app-server can reload the same
-account's credentials and retry the model request. Switching sign-in owners
-requires an idle connection. A pending request stays bound to its original
-connection, and a refused switch is recorded against the input.
-
 ### Providers served through OpenCodex
 
 Most providers are one entry in the Codex provider's OpenCodex bridge,
@@ -263,11 +240,6 @@ Its breakdown is included only when it agrees with a tool-free exchange's
 occupancy. An SDK-confirmed input overflow becomes `context_length_exceeded`
 so the caller can enter its native compaction path.
 
-The ACP process loads the owner's `home/antigravity-acp/acp_token.json` at
-sign-in. While a prompt is running it uses its cached credentials and can
-write them back after a Google OAuth refresh. A replacement file takes effect
-when a new ACP process signs in.
-
 After a completed turn the process exits. The next input resumes the session
 when the caller's history extends the recorded response. Replacing history
 starts a fresh ACP session with the supplied transcript. If a restart interrupts
@@ -284,14 +256,9 @@ they contain no text. These heartbeats are not retained as conversation content
 or replayed from the response cache; silence still reaches the stream deadline.
 
 The descriptor lists the server's residual instructions and MCP resource tools.
-The client endpoint publishes only its declared functions. ACP 1.5.0 can
-return a normal end-of-turn response after an SDK exception. The provider
-checks the native error diagnostic for the same session before it accepts
-that response. On Linux the release arguments send error diagnostics to
-stderr. When Google supplies an HTTP status and error code, the public
-failure message includes both. A Google `400 INVALID_ARGUMENT` on a model
-request reaches Codex as `invalid_prompt`, which ends the turn without
-resubmitting the request.
+The client endpoint publishes only its declared functions. A native execution
+failure reaches Codex as a failed response, including when ACP formats it as
+an agent message.
 
 ### Model catalogs
 

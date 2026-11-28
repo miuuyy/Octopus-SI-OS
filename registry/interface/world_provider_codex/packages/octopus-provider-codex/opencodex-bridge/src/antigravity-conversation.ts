@@ -292,10 +292,9 @@ class Conversation {
         }
         const { status, code } = native.sdkError;
         if (status && code) {
-          const responseCode = status === 400 && code === "INVALID_ARGUMENT" ? "invalid_prompt" : code;
-          throw new AcpFailure(`Google HTTP ${status} (${code}): ${message}`, responseCode, status);
+          throw new AcpFailure(`Google HTTP ${status} (${code}): ${message}`, code, status, true);
         }
-        throw new AcpFailure(message, "antigravity_execution_failed");
+        throw new AcpFailure(message, "antigravity_execution_failed", 502, true);
       }
       if (result.stopReason === "cancelled") throw new AcpFailure("Antigravity cancelled the turn.", "aborted");
       if (result.stopReason === "refusal") throw new AcpFailure("Antigravity refused this request.", "antigravity_refusal", 400);
