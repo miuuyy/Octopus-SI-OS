@@ -440,12 +440,12 @@ pub(crate) async fn admit_interrupted_result(
             return Err("native result input consumption conflicts with checked source recovery".into());
         }
         let generation = handoff.context_generation().await?;
-        let delta = emissions[outcomes.len()..].iter().map(|emission| emission.artifact.read_manifest()
-            .map(|manifest| u64::from(labels.contains(&manifest.label))).map_err(|error| error.to_string()))
-            .collect::<Result<Vec<_>, _>>()?.into_iter().sum::<u64>();
+        let remaining = emissions[outcomes.len()..].iter().map(|emission| emission.artifact.read_manifest()
+            .map(|manifest| manifest.label).map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>()?;
+        let delta = crate::handler::native_result_context_delta(input_context, remaining.iter().map(String::as_str), &labels);
         let settled = expected_payload.get("codex_continuity").and_then(|state| state.get("context_generation"))
             .and_then(serde_json::Value::as_u64).ok_or("native result closure has no exact settled generation")?;
-        if generation.checked_add(u64::from(input_context)).and_then(|value| value.checked_add(delta)) != Some(settled) {
+        if generation.checked_add(delta) != Some(settled) {
             return Err("native result closure conflicts with checked authored context generation".into());
         }
     }

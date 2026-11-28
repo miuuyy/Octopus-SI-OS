@@ -299,6 +299,35 @@ pub(crate) fn native_terminal_events(payload: &serde_json::Value) -> Result<&[se
     }
 }
 
+pub(crate) fn native_result_context_delta<'a>(
+    input_context: bool,
+    outputs: impl IntoIterator<Item = &'a str>,
+    context_labels: &BTreeSet<String>,
+) -> u64 {
+    outputs.into_iter().enumerate()
+        .filter(|(index, label)| (*index == 0 && input_context) || context_labels.contains(*label))
+        .count() as u64
+}
+
+fn closure_context_delta(
+    payload: &serde_json::Value,
+    input_context: bool,
+    retained: &[serde_json::Value],
+    context_labels: &BTreeSet<String>,
+) -> Result<u64, String> {
+    // A new stream (or its separately admitted activity) consumes the input first.
+    // A late result starts with the first retained output or the closure itself.
+    let separate_input = match payload.get("preceding_stream") {
+        None => input_context,
+        Some(reference) if reference["source_movement_seq"].as_u64().is_some()
+            && reference["payload_blake3"].as_str().and_then(octopus_ledger::ContentHash::from_hex).is_some() => false,
+        Some(_) => return Err("native result has an invalid preceding stream reference".into()),
+    };
+    let outputs = retained.iter().filter_map(|output| output["label"].as_str())
+        .chain(std::iter::once(TURN_INTERRUPTED_RESULT_LABEL));
+    Ok(u64::from(separate_input) + native_result_context_delta(input_context && !separate_input, outputs, context_labels))
+}
+
 pub(crate) fn retained_native_output_payloads(payload: &serde_json::Value, context_output_labels: &BTreeSet<String>) -> Result<Vec<serde_json::Value>, String> {
     let state: CodexContinuityState = serde_json::from_value(payload.get(CODEX_CONTINUITY_FIELD)
         .ok_or("native result closure has no continuity")?.clone()).map_err(|error| error.to_string())?;
@@ -523,11 +552,7 @@ pub(crate) fn interrupted_result_closure_payload(
     let native_minimum_generation = if native_status.is_some() {
         let input_context = payload.get("native_terminal_input_context").and_then(serde_json::Value::as_bool)
             .ok_or("native terminal closure lost its exact input context consumption")?;
-        let outputs = retained.iter().filter(|output| output.get("label").and_then(serde_json::Value::as_str)
-            .is_some_and(|label| context_output_labels.contains(label))).count() as u64;
-        Some(interrupted.context_generation.checked_add(u64::from(input_context))
-            .and_then(|generation| generation.checked_add(outputs))
-            .and_then(|generation| generation.checked_add(u64::from(context_output_labels.contains(TURN_INTERRUPTED_RESULT_LABEL))))
+        Some(interrupted.context_generation.checked_add(closure_context_delta(&payload, input_context, &retained, context_output_labels)?)
             .ok_or("native terminal closure generation overflow")?)
     } else { None };
     if closure.thread_id != interrupted.thread_id
@@ -602,8 +627,7 @@ fn native_terminal_sibling_closure(
     let mut expected = source.clone();
     expected.settle_outstanding(&key);
     let minimum_generation = source.context_generation
-        .checked_add(u64::from(input_context))
-        .and_then(|generation| generation.checked_add(u64::from(context_output_labels.contains(TURN_INTERRUPTED_RESULT_LABEL))))
+        .checked_add(closure_context_delta(payload, input_context, &[], context_output_labels)?)
         .ok_or_else(|| refused("parallel native result closure generation overflowed"))?;
     expected.context_generation = closure.context_generation;
     if closure != expected || closure.context_generation < minimum_generation {

@@ -64,6 +64,14 @@ fn a_late_tool_result_is_admitted_after_an_earlier_source_sealed_the_turn() {
     }).unwrap().join().unwrap();
 }
 
+#[test]
+fn a_late_parallel_result_preserves_the_next_wait_across_restart() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+            .block_on(native_terminal_handoff_cases(Some(32)));
+    }).unwrap().join().unwrap();
+}
+
 include!("retained_native_delivery.rs");
 include!("late_call_continuation.rs");
 include!("earlier_parallel_result.rs");
@@ -1212,7 +1220,8 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let authoring_id=InterfaceId::new(authoring);
         let socket=octopus_app_server_interface::interface_control_socket_path_from_root(&root.join("control"),&authoring_id);
         std::fs::create_dir_all(socket.parent().unwrap()).unwrap(); let listener=tokio::net::UnixListener::bind(socket).unwrap();
-        let native=serde_json::to_value(octopus_appserver_proto::Turn { id:"turn-a".into(),items:if with_answer {vec![octopus_appserver_proto::ThreadItem::AgentMessage{delivery:None,id:"answer-a".into(),text:"Retained native answer".into(),phase:Some(octopus_protocol::models::MessagePhase::FinalAnswer)}]} else {vec![]},items_view:octopus_appserver_proto::TurnItemsView::Full,status:if with_answer {octopus_appserver_proto::TurnStatus::Completed} else if native_interrupted {octopus_appserver_proto::TurnStatus::Interrupted} else {octopus_appserver_proto::TurnStatus::Failed},error:None,started_at:Some(10),completed_at:Some(20),duration_ms:Some(10_000) }).unwrap();
+        let terminal_has_answer = with_answer || settlement_phase == Some(32);
+        let native=serde_json::to_value(octopus_appserver_proto::Turn { id:"turn-a".into(),items:if terminal_has_answer {vec![octopus_appserver_proto::ThreadItem::AgentMessage{delivery:None,id:"answer-a".into(),text:"Retained native answer".into(),phase:Some(octopus_protocol::models::MessagePhase::FinalAnswer)}]} else {vec![]},items_view:octopus_appserver_proto::TurnItemsView::Full,status:if terminal_has_answer {octopus_appserver_proto::TurnStatus::Completed} else if native_interrupted {octopus_appserver_proto::TurnStatus::Interrupted} else {octopus_appserver_proto::TurnStatus::Failed},error:None,started_at:Some(10),completed_at:Some(20),duration_ms:Some(10_000) }).unwrap();
         let before_context=record.interface_state[&descriptor.id]["context_generation"].as_u64().unwrap();
         let mut state=serde_json::to_value(continuity(before_context,Some(if with_stop {"interrupted_pending"}else{"pending"}))).unwrap();
         state["provider_interface"]=json!(descriptor.id); state["run"]=json!(run);
@@ -1382,7 +1391,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             Box::pin(earlier_parallel_result_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&authoring_id,&listener,&mut receiver,phase)).await;
             return;
         }
-        if let Some(phase)=settlement_phase.filter(|phase| *phase != 31) {
+        if let Some(phase)=settlement_phase.filter(|phase| !matches!(phase, 31 | 32)) {
             settlement_case(&ctx,root,&plan.run_write.path,&plan.worker_interface_id,&descriptor,&run,&record,
                 &initial,state,before_context,native,phase,&authoring_id,&listener,&mut receiver,selected_file.as_ref()).await;
             return;
@@ -1416,11 +1425,16 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let base_context=record.interface_state[&descriptor.id]["context_generation"].as_u64().unwrap();
         assert_eq!(base_context,before_context+u64::from(with_stop));
         assert_eq!(state["context_generation"],json!(base_context));
-        let original:crate::handler::CodexContinuityState=serde_json::from_value(state).unwrap();
+        let mut original:crate::handler::CodexContinuityState=serde_json::from_value(state).unwrap();
+        if settlement_phase == Some(32) {
+            original.admit_outstanding(serde_json::from_value(json!({
+                "kind":"dynamic_tool", "turn_id":"turn-a", "call_id":"call-c", "tool":"coder.exec"
+            })).unwrap()).unwrap();
+        }
         let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id)
             && cp.inbound_interface()==Some(&InterfaceId::new(&plan.worker_interface_id))
             && cp.outbound_interfaces().any(|id|id==&descriptor.id)).unwrap();
-        let prior_source = if settlement_phase == Some(31) {
+        let prior_source = if matches!(settlement_phase, Some(31 | 32)) {
             let earlier = artifact(&root.join("earlier-result"), "coder.exec.result",
                 json!({"label":"coder.exec.result","tool":"coder.exec","correlation_id":"call-b","ok":true,"body":{"value":2}}));
             let row = edge(&ctx, &initial, cp, &earlier, MovementKind::InterfaceOutbound, descriptor.id.clone());
@@ -1432,7 +1446,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         if with_stop { assert!(arbiter.begin_result(&run,source_seq,&envelope).await.unwrap()); }
         let session=ProviderHandoffSession::new(&ctx).unwrap();
         let mut handoff=session.from_invocation(&ctx,&descriptor,&run,&envelope,source_seq,&initial).unwrap();
-        if with_answer || native_interrupted {
+        if (with_answer && settlement_phase != Some(31)) || native_interrupted {
             let progress=ProviderEmission{artifact:artifact(&ctx.interface_var_dir().join("usage"),"turn.token_usage",json!({"label":"turn.token_usage"})),route:ProviderEmissionRoute::ClientProjection};
             let admit=Box::pin(handoff.hand_batch_with_outgoing_bindings(vec![progress],false,&[]));
             let gate=pump(&ctx,root,&plan.run_write.path,&authoring_id,&listener,&mut receiver,&result_ref,0,usize::MAX,true,1,false);
@@ -1471,6 +1485,18 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 assert_eq!(payload["correlation_id"], "call-a");
                 assert_eq!(payload["preceding_stream"]["source_movement_seq"], prior_source);
                 assert_eq!(payload["preceding_stream"]["payload_blake3"], ContentHash::of_bytes(&before).to_hex());
+                if settlement_phase == Some(32) {
+                    assert!(input_context && retained_outputs.is_empty());
+                    assert_eq!(payload["codex_continuity"]["pending"]["call_id"], "call-c");
+                    let labels = codex_context_output_labels(&descriptor).unwrap();
+                    let check = |value: &serde_json::Value| crate::handler::interrupted_result_closure_payload(
+                        TURN_INTERRUPTED_RESULT_LABEL, &serde_json::to_vec(value).unwrap(), &original, &result_ref, &labels,
+                    );
+                    assert!(check(&payload).unwrap().is_some());
+                    let mut invalid = payload.clone();
+                    invalid["preceding_stream"] = serde_json::Value::Null;
+                    assert!(check(&invalid).is_err());
+                }
                 retained_outputs.push(closure);
                 retained_outputs
             };
@@ -1494,6 +1520,15 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 .from_invocation_when_ready(&ctx, &descriptor, &run, &envelope, source_seq, &initial).await.unwrap();
             let replay = group();
             admit_interrupted_result(&ctx,&recovered,&control,None,&run,source_seq,&reference,replay).await.unwrap();
+            if settlement_phase == Some(32) {
+                let (_, outcomes) = recovered.recover_completed_source_with_outcomes().await.unwrap();
+                let pending = crate::handler::completed_source_pending_continuity(
+                    &ctx, &descriptor, &run, &envelope, source_seq, &outcomes,
+                    recovered.context_generation().await.unwrap(), &recovered.current_session_context_artifacts().await,
+                ).unwrap().unwrap();
+                assert_eq!(pending.outstanding_len(), 1);
+                assert!(pending.outstanding_call("tool:call-c").is_some());
+            }
             assert_eq!(sealed.read_payload_bytes().unwrap(), before);
             assert!(receiver.try_recv().is_err());
             return;

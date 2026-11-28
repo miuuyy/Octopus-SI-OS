@@ -304,6 +304,9 @@ jobs:
       - name: Tool-door sleep, wake boundaries and ledger reader continuity
         run: cargo nextest run --locked -p octopus-process-session-tool-runtime --lib -E 'test(reading_the_ledger_does_not_wake_its_readers) | test(deferred_decode_preserves_prepared_sources) | test(sleeping_door) | test(callback_sleep_veto) | test(host_shutdown_detaches_and_same_formation_can_restart)'
 
+      - name: Late tool results and provider recovery on Linux
+        run: cargo nextest run --locked -p octopus-provider-codex --lib -E 'test(a_late_parallel_result_preserves_the_next_wait_across_restart) | test(a_late_tool_result_is_admitted_after_an_earlier_source_sealed_the_turn)'
+
       - name: Standalone mcp-identity-guard contracts
         run: cargo test --manifest-path examples/mcp-identity-guard/Cargo.toml --locked
 

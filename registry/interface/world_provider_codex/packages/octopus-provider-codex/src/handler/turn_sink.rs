@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) const DELTA_FLUSH_WINDOW: std::time::Duration = std::time::Duration::from_millis(150);
 
+#[derive(Clone)]
 pub(crate) struct ContinuityEmitterState {
     pub(crate) continuity: Option<CodexContinuityState>,
     pub(crate) pending_input_context: bool,
@@ -16,6 +17,24 @@ impl Default for ContinuityEmitterState {
             authored_context_generation: 0,
         }
     }
+}
+
+impl ContinuityEmitterState {
+    fn advance(&mut self, context_output: bool) -> Result<Option<&CodexContinuityState>, InterfaceDriverError> {
+        let advance = std::mem::take(&mut self.pending_input_context) || context_output;
+        if let Some(continuity) = self.continuity.as_mut() && advance {
+            continuity.context_generation = continuity.context_generation.checked_add(1).ok_or_else(|| {
+                InterfaceDriverError::FailedClosed("Codex continuity context generation overflowed".into())
+            })?;
+        }
+        Ok(self.continuity.as_ref())
+    }
+}
+
+fn encoded_output(output: &CodexTurnOutput) -> Result<Vec<u8>, InterfaceDriverError> {
+    serde_json::to_vec(&output.value).map_err(|error| {
+        InterfaceDriverError::Protocol(format!("failed to encode provider output: {error}"))
+    })
 }
 
 pub(crate) struct TurnSink<'a> {
@@ -187,23 +206,9 @@ impl TurnSink<'_> {
     pub(crate) fn advance_continuity(
         &self,
         context_output: bool,
-    ) -> Result<Option<CodexContinuityState>, InterfaceDriverError> {
-        let mut state = self.continuity.lock().expect("continuity lock");
-        let advance = state.pending_input_context || context_output;
-        state.pending_input_context = false;
-        if let Some(continuity) = state.continuity.as_mut()
-            && advance
-        {
-            continuity.context_generation = continuity
-                .context_generation
-                .checked_add(1)
-                .ok_or_else(|| {
-                    InterfaceDriverError::FailedClosed(
-                        "Codex continuity context generation overflowed".to_string(),
-                    )
-                })?;
-        }
-        Ok(state.continuity.clone())
+    ) -> Result<(), InterfaceDriverError> {
+        self.continuity.lock().expect("continuity lock").advance(context_output)?;
+        Ok(())
     }
 
     pub(crate) fn set_continuity(&self, continuity: CodexContinuityState) {
@@ -277,15 +282,16 @@ impl TurnSink<'_> {
         mut output: CodexTurnOutput,
         append_boundary: bool,
     ) -> Result<ProviderEmission, InterfaceDriverError> {
-        let bytes = self.encode_output_with_continuity(&mut output)?;
-        self.materialize_encoded(output, &bytes, append_boundary)
+        self.attach_output_continuity(&mut self.continuity.lock().expect("continuity lock"), &mut output)?;
+        self.materialize_prepared(output, append_boundary)
     }
 
-    fn encode_output_with_continuity(
+    fn attach_output_continuity(
         &self,
+        state: &mut ContinuityEmitterState,
         output: &mut CodexTurnOutput,
-    ) -> Result<Vec<u8>, InterfaceDriverError> {
-        let continuity = self.advance_continuity(self.context_output_labels.contains(&output.label))?;
+    ) -> Result<(), InterfaceDriverError> {
+        let continuity = state.advance(self.context_output_labels.contains(&output.label))?;
         let continuity = continuity
             .map(|continuity| {
                 serde_json::to_value(continuity).map_err(|error| {
@@ -310,19 +316,16 @@ impl TurnSink<'_> {
                 })?
                 .insert(CODEX_CONTINUITY_FIELD.to_string(), continuity);
         }
-        serde_json::to_vec(&output.value).map_err(|e| {
-            InterfaceDriverError::Protocol(format!("failed to encode provider output: {e}"))
-        })
+        Ok(())
     }
 
-    fn materialize_encoded(
+    fn materialize_prepared(
         &self,
         output: CodexTurnOutput,
-        bytes: &[u8],
         append_boundary: bool,
     ) -> Result<ProviderEmission, InterfaceDriverError> {
         let file =
-            materialize_codex_emitted_artifact(self.output_root, &output.label, bytes)?;
+            materialize_codex_emitted_artifact(self.output_root, &output.label, &encoded_output(&output)?)?;
         if append_boundary
             && let Some(stream) = self.live_stream.lock().expect("live stream lock").as_mut()
         {
@@ -612,7 +615,7 @@ impl TurnSink<'_> {
             ))?;
             continuity.context_generation = continuity.context_generation.max(authored);
         }
-        if self.has_live_stream() {
+        if self.has_live_stream() && preceding_seal.is_none() {
             self.advance_continuity(false)?;
         }
         if let Some(terminal) = &native_terminal {
@@ -658,22 +661,15 @@ impl TurnSink<'_> {
         {
             continuity.settle_outstanding(&settled);
         }
-        let mut retained_outputs = Vec::new();
-        if let Some(terminal) = &native_terminal {
-            let events = native_terminal_events(&closure.value)?;
-            let mut payloads = Vec::new();
-            for mut output in terminal.outputs(events)? {
-                if !self.projection_admits(&output) {
-                    return Err(InterfaceDriverError::FailedClosed("descriptor projection removed retained native completion evidence".into()));
-                }
-                self.normalize_output_label(&mut output)?;
-                let emission = self.materialize_normalized(output, false)?;
-                payloads.push(serde_json::from_slice::<serde_json::Value>(
-                    &emission.artifact.read_payload_bytes().map_err(|error| InterfaceDriverError::FailedClosed(error.to_string()))?
-                ).map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?);
-                retained_outputs.push(emission);
+        let mut retained = match &native_terminal {
+            Some(terminal) => terminal.outputs(native_terminal_events(&closure.value)?)?,
+            None => Vec::new(),
+        };
+        for output in &mut retained {
+            if !self.projection_admits(output) {
+                return Err(InterfaceDriverError::FailedClosed("descriptor projection removed retained native completion evidence".into()));
             }
-            closure.value["retained_native_outputs"] = serde_json::Value::Array(payloads);
+            self.normalize_output_label(output)?;
         }
         if !self.projection_admits(&closure) {
             return Err(InterfaceDriverError::FailedClosed(
@@ -682,23 +678,40 @@ impl TurnSink<'_> {
         }
         self.normalize_output_label(&mut closure)?;
         let closure_label = closure.label.clone();
-        let mut bytes = self.encode_output_with_continuity(&mut closure)?;
-        // A redelivery proves the same terminal artifact, even at a later movement.
-        // A different outstanding call can only reference the already sealed stream.
-        let late_result = if let Some((seal, stream_hash)) = &preceding_seal
-            && !seal.matches_artifact(&closure_label, blake3::hash(&bytes).to_hex().as_str())
-        {
-            closure.value["preceding_stream"] = serde_json::json!({
-                "source_movement_seq": seal.source_movement_seq,
-                "payload_blake3": stream_hash,
-            });
-            bytes = serde_json::to_vec(&closure.value)
-                .map_err(|error| InterfaceDriverError::Protocol(error.to_string()))?;
-            true
-        } else {
-            false
+        let prepare = |state: &mut ContinuityEmitterState, retained: &mut [CodexTurnOutput], closure: &mut CodexTurnOutput| {
+            for output in retained.iter_mut() {
+                self.attach_output_continuity(state, output)?;
+            }
+            if native_terminal.is_some() {
+                closure.value["retained_native_outputs"] = retained.iter().map(|output| output.value.clone()).collect();
+            }
+            self.attach_output_continuity(state, closure)
         };
-        let closure = self.materialize_encoded(closure, &bytes, false)?;
+        let late_result = {
+            let mut state = self.continuity.lock().expect("continuity lock");
+            if let Some((seal, stream_hash)) = &preceding_seal {
+                // Test the original group, including its stream, without consuming this input.
+                let mut replay = state.clone();
+                replay.advance(false)?;
+                prepare(&mut replay, &mut retained, &mut closure)?;
+                if seal.matches_artifact(&closure_label, blake3::hash(&encoded_output(&closure)?).to_hex().as_str()) {
+                    *state = replay;
+                    false
+                } else {
+                    closure.value["preceding_stream"] = serde_json::json!({
+                        "source_movement_seq": seal.source_movement_seq, "payload_blake3": stream_hash,
+                    });
+                    prepare(&mut state, &mut retained, &mut closure)?;
+                    true
+                }
+            } else {
+                prepare(&mut state, &mut retained, &mut closure)?;
+                false
+            }
+        };
+        let retained_outputs = retained.into_iter().map(|output| self.materialize_prepared(output, false))
+            .collect::<Result<Vec<_>, _>>()?;
+        let closure = self.materialize_prepared(closure, false)?;
         let stream = if late_result {
             None
         } else {
@@ -759,8 +772,12 @@ pub(crate) fn native_terminal_group_for_test(
     input_changes_context: bool, authored_context_generation: u64,
 ) -> ProviderStreamEmission {
     let mut retired = original.clone();
-    if !with_stop { retired.interrupted_pending = retired.pending.take(); }
-    retired.native_terminal = native_turn.map(|turn| NativeTerminalEvidence { thread_id: retired.thread_id.clone(), turn });
+    let terminal = native_turn.map(|turn| NativeTerminalEvidence { thread_id: retired.thread_id.clone(), turn });
+    let sibling = !with_stop && retired.outstanding_len() > 1;
+    if !sibling {
+        if !with_stop { retired.interrupted_pending = retired.pending.take(); }
+        retired.native_terminal = terminal.clone();
+    }
     let enriched = with_stop && original.native_terminal.is_none() && retired.native_terminal.is_some();
     let (emit, mut outputs) = ProviderOutputStream::channel();
     emit.continuity.lock().unwrap().continuity = Some(retired);
@@ -780,8 +797,15 @@ pub(crate) fn native_terminal_group_for_test(
         closure.value["result_origin"] = serde_json::json!(if enriched { "interrupted_turn_completion" } else { "native_turn_completion" });
         closure.value["terminal_evidence_source"] = serde_json::json!("thread/read");
     }
-    sink.send_interrupted_result(Some(CodexTurnOutput::dynamic_tool_completed_after_interrupt("formed_interfaces".into(), "coder.exec".into(), "call-a".into(), original.thread_id.clone(), "turn-a".into(), false, None,
-        Some(octopus_tool_handlers::ToolResultError { code: "tool_effect_indeterminate".into(), message: "uncertain exact effect".into(), details: None }))), false, closure).unwrap();
+    let mut activity = CodexTurnOutput::dynamic_tool_completed_after_interrupt("formed_interfaces".into(), "coder.exec".into(), "call-a".into(), original.thread_id.clone(), "turn-a".into(), false, None,
+        Some(octopus_tool_handlers::ToolResultError { code: "tool_effect_indeterminate".into(), message: "uncertain exact effect".into(), details: None }));
+    if sibling {
+        let terminal = terminal.as_ref().unwrap();
+        closure.value["native_terminal"] = serde_json::to_value(terminal).unwrap();
+        terminal.apply_disposition(&mut closure).unwrap();
+        terminal.apply_disposition(&mut activity).unwrap();
+    }
+    sink.send_interrupted_result(Some(activity), false, closure).unwrap();
     outputs.try_recv().unwrap()
 }
 
