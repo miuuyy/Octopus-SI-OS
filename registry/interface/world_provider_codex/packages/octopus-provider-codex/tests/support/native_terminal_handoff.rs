@@ -73,6 +73,14 @@ fn a_late_parallel_result_preserves_the_next_wait_across_restart() {
 }
 
 include!("retained_native_delivery.rs");
+
+#[test]
+fn a_recorded_late_result_reconciles_its_context_once() {
+    std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+            .block_on(native_terminal_handoff_cases(Some(33)));
+    }).unwrap().join().unwrap();
+}
 include!("late_call_continuation.rs");
 include!("earlier_parallel_result.rs");
 
@@ -255,7 +263,9 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                     let payload:serde_json::Value=serde_json::from_slice(&incoming.artifact.read_payload_bytes().unwrap()).unwrap_or(json!({}));
                     if let Some(continuity)=payload.get("codex_continuity") {
                         let persisted=&current_record.interface_state[&gate_ctx.interface]["context_generation"];
-                        if standing { assert!(continuity["context_generation"].as_u64().unwrap()>=persisted.as_u64().unwrap()); }
+                        if phase == 33 && label == TURN_INTERRUPTED_RESULT_LABEL {
+                            assert_eq!(continuity["context_generation"].as_u64(), persisted.as_u64().unwrap().checked_add(1));
+                        } else if standing { assert!(continuity["context_generation"].as_u64().unwrap()>=persisted.as_u64().unwrap()); }
                         else { assert_eq!(&continuity["context_generation"],persisted); }
                     }
                     if label==TURN_INTERRUPTED_RESULT_LABEL { assert_eq!(payload["source_artifact"],json!(expected_source)); }
@@ -1220,7 +1230,8 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let authoring_id=InterfaceId::new(authoring);
         let socket=octopus_app_server_interface::interface_control_socket_path_from_root(&root.join("control"),&authoring_id);
         std::fs::create_dir_all(socket.parent().unwrap()).unwrap(); let listener=tokio::net::UnixListener::bind(socket).unwrap();
-        let terminal_has_answer = with_answer || settlement_phase == Some(32);
+        let parallel_late_result = matches!(settlement_phase, Some(32 | 33));
+        let terminal_has_answer = with_answer || parallel_late_result;
         let native=serde_json::to_value(octopus_appserver_proto::Turn { id:"turn-a".into(),items:if terminal_has_answer {vec![octopus_appserver_proto::ThreadItem::AgentMessage{delivery:None,id:"answer-a".into(),text:"Retained native answer".into(),phase:Some(octopus_protocol::models::MessagePhase::FinalAnswer)}]} else {vec![]},items_view:octopus_appserver_proto::TurnItemsView::Full,status:if terminal_has_answer {octopus_appserver_proto::TurnStatus::Completed} else if native_interrupted {octopus_appserver_proto::TurnStatus::Interrupted} else {octopus_appserver_proto::TurnStatus::Failed},error:None,started_at:Some(10),completed_at:Some(20),duration_ms:Some(10_000) }).unwrap();
         let before_context=record.interface_state[&descriptor.id]["context_generation"].as_u64().unwrap();
         let mut state=serde_json::to_value(continuity(before_context,Some(if with_stop {"interrupted_pending"}else{"pending"}))).unwrap();
@@ -1391,7 +1402,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             Box::pin(earlier_parallel_result_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&authoring_id,&listener,&mut receiver,phase)).await;
             return;
         }
-        if let Some(phase)=settlement_phase.filter(|phase| !matches!(phase, 31 | 32)) {
+        if let Some(phase)=settlement_phase.filter(|phase| !matches!(phase, 31..=33)) {
             settlement_case(&ctx,root,&plan.run_write.path,&plan.worker_interface_id,&descriptor,&run,&record,
                 &initial,state,before_context,native,phase,&authoring_id,&listener,&mut receiver,selected_file.as_ref()).await;
             return;
@@ -1426,15 +1437,38 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         assert_eq!(base_context,before_context+u64::from(with_stop));
         assert_eq!(state["context_generation"],json!(base_context));
         let mut original:crate::handler::CodexContinuityState=serde_json::from_value(state).unwrap();
-        if settlement_phase == Some(32) {
+        if parallel_late_result {
             original.admit_outstanding(serde_json::from_value(json!({
                 "kind":"dynamic_tool", "turn_id":"turn-a", "call_id":"call-c", "tool":"coder.exec"
             })).unwrap()).unwrap();
         }
+        let (initial, record) = if settlement_phase == Some(33) {
+            let checkpoint = record.checkpoints.iter().find(|cp| record.active_checkpoints.contains(&cp.id)
+                && cp.outbound_interfaces().any(|id| id == &descriptor.id)
+                && cp.interface_binding.as_ref().is_some_and(|binding| binding.admits("operator.message"))).unwrap();
+            let message = artifact(&root.join("original-input"), "operator.message", json!({"text":"start"}));
+            let row = edge(&ctx, &initial, checkpoint, &message, MovementKind::InterfaceOutbound, descriptor.id.clone());
+            let input = source_envelope(&ctx, root, &row, message);
+            let seq = append(&ctx, row);
+            let session = ProviderHandoffSession::new(&ctx).unwrap();
+            let handoff = session.from_invocation(&ctx, &descriptor, &run, &input, seq, &initial).unwrap();
+            original.context_generation = handoff.context_generation().await.unwrap() + 1;
+            let label = "interface.artifact.output";
+            let snapshot = artifact(&ctx.interface_var_dir().join("earlier-output"), label,
+                json!({"label":label, "text":"waiting for parallel calls", "codex_continuity":original}));
+            let hand = Box::pin(handoff.hand_final(ProviderEmission { artifact: snapshot, route: ProviderEmissionRoute::ClientProjection }));
+            let gate = pump(&ctx, root, &plan.run_write.path, &authoring_id, &listener, &mut receiver, &input.artifact, 0, 1, true, 1, true);
+            let (result, _) = tokio::time::timeout(std::time::Duration::from_secs(5), async { tokio::join!(hand, gate) }).await.unwrap();
+            result.unwrap();
+            assert_eq!(handoff.context_generation().await.unwrap(), original.context_generation);
+            let bytes = std::fs::read(&plan.run_write.path).unwrap();
+            let record = RunRecord::from_bytes(&bytes).unwrap();
+            (bytes, record)
+        } else { (initial, record) };
         let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id)
             && cp.inbound_interface()==Some(&InterfaceId::new(&plan.worker_interface_id))
             && cp.outbound_interfaces().any(|id|id==&descriptor.id)).unwrap();
-        let prior_source = if matches!(settlement_phase, Some(31 | 32)) {
+        let prior_source = if matches!(settlement_phase, Some(31..=33)) {
             let earlier = artifact(&root.join("earlier-result"), "coder.exec.result",
                 json!({"label":"coder.exec.result","tool":"coder.exec","correlation_id":"call-b","ok":true,"body":{"value":2}}));
             let row = edge(&ctx, &initial, cp, &earlier, MovementKind::InterfaceOutbound, descriptor.id.clone());
@@ -1501,6 +1535,46 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 retained_outputs
             };
             let outgoing = group();
+            if settlement_phase == Some(33) {
+                let [closure] = outgoing.as_slice() else { panic!("expected one late result"); };
+                let mut value: serde_json::Value = serde_json::from_slice(&closure.artifact.read_payload_bytes().unwrap()).unwrap();
+                value["codex_continuity"]["context_generation"] = json!(authored_context + 2);
+                let saved = artifact(&output_root.join("reported"), TURN_INTERRUPTED_RESULT_LABEL, value);
+                let hand = Box::pin(handoff.hand_final(ProviderEmission { artifact: saved, route: ProviderEmissionRoute::ClientProjection }));
+                let gate = pump(&ctx, root, &plan.run_write.path, &authoring_id, &listener, &mut receiver, &result_ref, 0, 1, false, 33, true);
+                let (result, _) = tokio::time::timeout(std::time::Duration::from_secs(5), async { tokio::join!(hand, gate) }).await.unwrap();
+                result.unwrap();
+                drop(handoff);
+                let session = ProviderHandoffSession::new(&ctx).unwrap();
+                let recovered = session.from_invocation_when_ready(&ctx, &descriptor, &run, &envelope, source_seq, &initial).await.unwrap();
+                let (_, outcomes) = recovered.recover_completed_source_with_outcomes().await.unwrap();
+                let generation = recovered.context_generation().await.unwrap();
+                assert_eq!(generation, authored_context + 1);
+                let entries = recovered.current_session_context_artifacts().await;
+                let receipt = crate::handler::completed_result_context_receipt(&ctx, &descriptor, &run, &envelope, source_seq,
+                    &outcomes, generation, &entries).unwrap().expect("the exact prior state and result account for the discrepancy");
+                assert!(crate::handler::completed_result_context_receipt(&ctx, &descriptor, &run, &envelope, source_seq + 1,
+                    &outcomes, generation, &entries).unwrap().is_none());
+                let send = Box::pin(recovered.hand_completed_source_continuation(vec![receipt]));
+                let gate = pump(&ctx, root, &plan.run_write.path, &authoring_id, &listener, &mut receiver, &result_ref, 0, 1, false, 1, true);
+                let (result, delivered) = tokio::time::timeout(std::time::Duration::from_secs(5), async { tokio::join!(send, gate) }).await.unwrap();
+                result.unwrap();
+                assert_eq!(delivered[0].0, "interface.context.updated");
+                drop(recovered);
+                let session = ProviderHandoffSession::new(&ctx).unwrap();
+                let cold = session.from_invocation_when_ready(&ctx, &descriptor, &run, &envelope, source_seq, &initial).await.unwrap();
+                let (_, outcomes) = cold.recover_completed_source_with_outcomes().await.unwrap();
+                let generation = cold.context_generation().await.unwrap();
+                let entries = cold.current_session_context_artifacts().await;
+                assert_eq!(generation, authored_context + 2);
+                assert!(crate::handler::completed_result_context_receipt(&ctx, &descriptor, &run, &envelope, source_seq,
+                    &outcomes, generation, &entries).unwrap().is_none());
+                let state = crate::handler::completed_source_pending_continuity(&ctx, &descriptor, &run, &envelope, source_seq,
+                    &outcomes, generation, &entries).unwrap().unwrap();
+                assert_eq!(state.outstanding_len(), 1);
+                assert!(state.outstanding_call("tool:call-c").is_some());
+                return;
+            }
             let reference = materialized_artifact_ref(&outgoing.last().unwrap().artifact).unwrap();
             if with_answer {
                 let answers: Vec<_> = outgoing.iter().filter(|output| output.artifact.read_manifest().unwrap().label == "interface.artifact.output").collect();

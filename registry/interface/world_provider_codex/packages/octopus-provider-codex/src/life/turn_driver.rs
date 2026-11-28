@@ -5,7 +5,16 @@ pub(crate) fn drive_turn_with_retries<'a>(
     driver: &'a mut Option<Arc<CodexAppServerInterfaceDriver>>,
     turn: QueuedTurn,
 ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<(), String>> + 'a>> {
-    Box::pin(drive_turn_with_retries_inner(scope, driver, turn))
+    Box::pin(async move {
+        let (ctx, run, source) = (scope.ctx, scope.run, turn.seq);
+        let result = drive_turn_with_retries_inner(scope, driver, turn).await;
+        if let Err(error) = &result && !ctx.cancel.is_cancelled() {
+            let message = format!("provider failed while processing movement {source}: {error}");
+            report_provider_source_failure(ctx, run, source, &message).await
+                .map_err(|failure| format!("{message}; recording the failure also failed: {failure}"))?;
+        }
+        result
+    })
 }
 
 pub(crate) async fn drive_turn_with_retries_inner(

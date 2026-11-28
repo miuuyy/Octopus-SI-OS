@@ -47,20 +47,15 @@ pub(crate) async fn record_invalid_provider_context(
     if author_failed_provider_source(ctx, descriptor, handoff_session, run, turn, &message, false).await? {
         return Ok(());
     }
-    if let Err(route_error) = hand_failure_into_standing_route(ctx, run, turn.seq, &message).await {
-        tracing::warn!(
-            interface = ctx.interface.as_str(),
-            run = run.as_str(),
-            seq = turn.seq,
-            error = %route_error,
-            "codex failed provider source has no proven standing route into its run"
-        );
-        ctx.hand_admitted_failure(
-            turn.seq,
-            "provider_source_unroutable",
-            serde_json::json!({"error": message, "route_error": route_error}),
-        )
-        .await?;
+    report_provider_source_failure(ctx, run, turn.seq, &message).await
+}
+
+pub(crate) async fn report_provider_source_failure(
+    ctx: &InterfaceLiftContext, run: &RunId, source: u64, message: &str,
+) -> Result<(), String> {
+    if let Err(route_error) = hand_failure_into_standing_route(ctx, run, source, message).await {
+        ctx.hand_admitted_failure(source, "provider_source_unroutable",
+            serde_json::json!({"error": message, "route_error": route_error})).await?;
     }
     Ok(())
 }
@@ -145,7 +140,9 @@ pub(crate) async fn author_failed_provider_source(
             })
             .await
         {
-            Ok(_) => return Ok(true),
+            Ok(ProviderHandoffOutcome::Admitted { .. }) => return Ok(true),
+            Ok(ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. }) =>
+                format!("error delivery failed at movement {failure_seq}: {failure_class}"),
             Err(FailedSourceHandoffError::Interrupted(error)) => return Err(error),
             Err(FailedSourceHandoffError::Unavailable(error)) => error,
         },
@@ -304,8 +301,21 @@ pub(crate) async fn retain_completed_source_control(
     if let Some(continuity) = interrupted.durable_continuity(run).await? {
         return control.publish_recovered_interrupted_pending(&continuity);
     }
+    let mut generation = handoff.context_generation().await?;
+    let mut session = handoff.current_session_context_artifacts().await;
+    if let Some(receipt) = crate::handler::completed_result_context_receipt(
+        ctx, descriptor, run, &turn.envelope, turn.seq, outcomes, generation, &session,
+    ).map_err(|error| error.to_string())? {
+        let delivered = handoff.hand_completed_source_continuation(vec![receipt]).await?;
+        match delivered.as_slice() {
+            [ProviderHandoffOutcome::Admitted { .. }] => {}
+            _ => return Err(format!("late result context recovery was not admitted: {delivered:?}")),
+        }
+        generation = handoff.context_generation().await?;
+        session = handoff.current_session_context_artifacts().await;
+    }
     let continuity = crate::handler::completed_source_pending_continuity(ctx, descriptor, run, &turn.envelope, turn.seq, outcomes,
-        handoff.context_generation().await?, &handoff.current_session_context_artifacts().await)
+        generation, &session)
         .map_err(|error| error.to_string())?;
     if let Some(continuity) = continuity {
         if driver.is_none() {
@@ -322,101 +332,83 @@ pub(crate) async fn restore_completed_provider_sources(
     active_controls: &ActiveTurnControls, interrupted: &InterruptedEffectArbiter, committed_before: u64,
 ) -> Result<(), String> {
     for (run, source) in session.completed_source_candidates(ctx)? {
-        let turn = replay_provider_source(ctx, &run, source)?.ok_or("completed result source lost its original admitted input")?;
-        let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
-        let saved = async {
-            let handoff = wait_for_provider_handoff(ctx, descriptor, session, &run, &turn.envelope, source, &pinned).await?;
-            let intent = handoff.pending_source_intent().await?;
-            let withdrawn = if intent.is_none() {
-                validate_saved_source_withdrawal(ctx, descriptor, &run, &turn, &handoff).await?;
-                handoff.pending_source_withdrawal().await?.is_some()
-            } else { false };
-            Ok::<_, String>((handoff, intent, withdrawn))
-        }.await;
-        let (handoff, intent, withdrawn) = match saved {
-            Ok(saved) => saved,
-            Err(error) if ctx.cancel.is_cancelled() => return Err(error),
-            Err(error) => {
-                let message = format!(
-                    "codex run contract cannot be read for its completed turn (movement seq {source}): {error}"
-                );
-                if let Err(unreported) = hand_failure_into_standing_route(ctx, &run, source, &message).await {
-                    tracing::warn!(
-                        interface = ctx.interface.as_str(),
-                        run = run.as_str(),
-                        seq = source,
-                        error = %message,
-                        unreported = %unreported,
-                        "completed provider source has an unreadable run contract"
-                    );
-                }
-                continue;
-            }
-        };
-        if let Some(intent) = intent {
-            let continuity = crate::handler::stopped_result::intent_control_continuity(descriptor, &turn.envelope, intent, &handoff.current_session_context_artifacts().await)
-                .map_err(|error| error.to_string())?;
-            if driver.is_none() {
-                *driver = Some(connect_declared_interface_driver(ctx, descriptor, auth, Some(&turn.envelope)).await.map_err(|error| error.message)?);
-            }
-            let broker = CodexTurnControlBroker::new(Some(source));
-            driver.as_ref().expect("connected pending recovery transport").restore_pending_control(&broker, continuity).await;
-            active_controls.lock().await.insert(run.to_string(), broker);
-            continue;
+        if let Err(error) = restore_completed_provider_source(
+            ctx, descriptor, session, auth, driver, active_controls, interrupted, committed_before, &run, source,
+        ).await {
+            if ctx.cancel.is_cancelled() { return Err(error); }
+            let message = format!("provider recovery failed at movement {source}: {error}");
+            report_provider_source_failure(ctx, &run, source, &message).await
+                .map_err(|failure| format!("{message}; recording the failure also failed: {failure}"))?;
         }
-        if withdrawn {
-            let broker = CodexTurnControlBroker::new(Some(source));
-            broker.finish();
-            active_controls.lock().await.insert(run.to_string(), broker);
-            continue;
-        }
-        if source >= committed_before { continue; }
-        let (recovery, outcomes) = match handoff.recover_completed_source_with_outcomes().await {
-            Ok(recovered) => recovered,
-            Err(error) if ctx.cancel.is_cancelled() => return Err(error),
-            Err(error) => {
-                let message = format!("completed provider output could not be recovered (movement seq {source}): {error}");
-                if let Err(unreported) = record_invalid_provider_context(ctx, descriptor, session, &run, &turn, message.clone()).await {
-                    if ctx.cancel.is_cancelled() { return Err(unreported); }
-                    tracing::warn!(interface = ctx.interface.as_str(), run = run.as_str(), seq = source,
-                        error = %message, unreported = %unreported, "completed provider source remains failed");
-                }
-                continue;
-            }
-        };
-        if try_settle_completed_interrupted_result(ctx, descriptor, &run, &turn, &handoff, interrupted).await? { continue; }
-        if recovery != ProviderSourceRecovery::Completed { continue; }
-        let record = handoff.current_run_record_bytes().await;
-        let context = handoff.current_session_context_artifacts().await;
-        let Some(proof) = crate::handler::stopped_result::prove(descriptor, &turn.envelope, source, &record, &context, &outcomes)
-            .map_err(|error| error.to_string())? else {
-                let broker = CodexTurnControlBroker::new(Some(source));
-                retain_completed_source_control(ctx, descriptor, auth, driver, &broker, interrupted, &run, &turn, &handoff, &outcomes).await?;
-                if !broker.is_finished() { active_controls.lock().await.insert(run.to_string(), broker); }
-                continue;
-            };
-        validate_stopped_result_control(ctx, descriptor, &run, &proof)?;
+    }
+    Ok(())
+}
+
+async fn restore_completed_provider_source(
+    ctx: &InterfaceLiftContext, descriptor: &InterfaceDescriptor, session: &ProviderHandoffSession,
+    auth: &CodexRuntimeAuth, driver: &mut Option<Arc<CodexAppServerInterfaceDriver>>,
+    active_controls: &ActiveTurnControls, interrupted: &InterruptedEffectArbiter, committed_before: u64,
+    run: &RunId, source: u64,
+) -> Result<(), String> {
+    let turn = replay_provider_source(ctx, run, source)?.ok_or("completed result source lost its original admitted input")?;
+    let pinned = ctx.pinned_run_record_bytes(&turn.envelope)?;
+    let handoff = wait_for_provider_handoff(ctx, descriptor, session, run, &turn.envelope, source, &pinned).await?;
+    let intent = handoff.pending_source_intent().await?;
+    let withdrawn = if intent.is_none() {
+        validate_saved_source_withdrawal(ctx, descriptor, run, &turn, &handoff).await?;
+        handoff.pending_source_withdrawal().await?.is_some()
+    } else { false };
+    if let Some(intent) = intent {
+        let continuity = crate::handler::stopped_result::intent_control_continuity(descriptor, &turn.envelope, intent, &handoff.current_session_context_artifacts().await)
+            .map_err(|error| error.to_string())?;
         if driver.is_none() {
             *driver = Some(connect_declared_interface_driver(ctx, descriptor, auth, Some(&turn.envelope)).await.map_err(|error| error.message)?);
         }
-        let closure = driver.as_ref().expect("connected recovery transport").stopped_result_settlement(
-            &proof, &turn.envelope, &ctx.interface_var_dir().join("emitted"),
-            &codex_context_output_labels(descriptor).map_err(|error| error.to_string())?,
-        ).await.map_err(|error| error.to_string())?;
-        let expected: serde_json::Value = serde_json::from_slice(&closure.artifact.read_payload_bytes().map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-        match handoff.hand_completed_source_settlement(&proof.predecessor, proof.context_generation(), closure).await? {
-            ProviderHandoffOutcome::Admitted { seq, artifact } => {
-                let (manifest, bytes) = read_pinned_provider_artifact(ctx, &artifact, "stopped result settlement")?;
-                let mut actual: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-                actual.as_object_mut().ok_or("stopped result settlement is not an object")?.remove("session_context");
-                if manifest.label != TURN_INTERRUPTED_RESULT_LABEL || actual != expected {
-                    return Err("stopped result admitted a different semantic closure".into());
-                }
-                validate_artifact_admission(ctx, &run, source, &DurableArtifactAdmission { artifact, movement_seq: seq })?;
+        let broker = CodexTurnControlBroker::new(Some(source));
+        driver.as_ref().expect("connected pending recovery transport").restore_pending_control(&broker, continuity).await;
+        active_controls.lock().await.insert(run.to_string(), broker);
+        return Ok(());
+    }
+    if withdrawn {
+        let broker = CodexTurnControlBroker::new(Some(source));
+        broker.finish();
+        active_controls.lock().await.insert(run.to_string(), broker);
+        return Ok(());
+    }
+    if source >= committed_before { return Ok(()); }
+    let (recovery, outcomes) = handoff.recover_completed_source_with_outcomes().await?;
+    if try_settle_completed_interrupted_result(ctx, descriptor, run, &turn, &handoff, interrupted).await? { return Ok(()); }
+    if recovery != ProviderSourceRecovery::Completed { return Ok(()); }
+    let record = handoff.current_run_record_bytes().await;
+    let context = handoff.current_session_context_artifacts().await;
+    let Some(proof) = crate::handler::stopped_result::prove(descriptor, &turn.envelope, source, &record, &context, &outcomes)
+        .map_err(|error| error.to_string())? else {
+            let broker = CodexTurnControlBroker::new(Some(source));
+            retain_completed_source_control(ctx, descriptor, auth, driver, &broker, interrupted, run, &turn, &handoff, &outcomes).await?;
+            if !broker.is_finished() { active_controls.lock().await.insert(run.to_string(), broker); }
+            return Ok(());
+        };
+    validate_stopped_result_control(ctx, descriptor, run, &proof)?;
+    if driver.is_none() {
+        *driver = Some(connect_declared_interface_driver(ctx, descriptor, auth, Some(&turn.envelope)).await.map_err(|error| error.message)?);
+    }
+    let closure = driver.as_ref().expect("connected recovery transport").stopped_result_settlement(
+        &proof, &turn.envelope, &ctx.interface_var_dir().join("emitted"),
+        &codex_context_output_labels(descriptor).map_err(|error| error.to_string())?,
+    ).await.map_err(|error| error.to_string())?;
+    let expected: serde_json::Value = serde_json::from_slice(&closure.artifact.read_payload_bytes().map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    match handoff.hand_completed_source_settlement(&proof.predecessor, proof.context_generation(), closure).await? {
+        ProviderHandoffOutcome::Admitted { seq, artifact } => {
+            let (manifest, bytes) = read_pinned_provider_artifact(ctx, &artifact, "stopped result settlement")?;
+            let mut actual: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            actual.as_object_mut().ok_or("stopped result settlement is not an object")?.remove("session_context");
+            if manifest.label != TURN_INTERRUPTED_RESULT_LABEL || actual != expected {
+                return Err("stopped result admitted a different semantic closure".into());
             }
-            ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. } => {
-                return Err(format!("stopped result settlement failed: {failure_class} at {failure_seq}"));
-            }
+            validate_artifact_admission(ctx, run, source, &DurableArtifactAdmission { artifact, movement_seq: seq })?;
+        }
+        ProviderHandoffOutcome::TerminalFailure { failure_seq, failure_class, .. } => {
+            return Err(format!("stopped result settlement failed: {failure_class} at {failure_seq}"));
         }
     }
     Ok(())

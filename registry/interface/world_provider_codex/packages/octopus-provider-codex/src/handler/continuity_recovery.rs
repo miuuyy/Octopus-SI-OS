@@ -141,6 +141,84 @@ pub(crate) fn recover_provider_result_continuity(
 }
 
 
+pub(crate) fn completed_result_context_receipt(
+    ctx: &octopus_interface_transport::InterfaceLiftContext,
+    descriptor: &InterfaceDescriptor,
+    run: &octopus_descriptors::RunId,
+    input: &InterfaceInvocationEnvelope,
+    source_seq: u64,
+    outcomes: &[octopus_run_authoring::ProviderHandoffOutcome],
+    generation: u64,
+    session: &[SessionContextArtifact],
+) -> Result<Option<ProviderEmission>, InterfaceDriverError> {
+    use octopus_run_authoring::ProviderHandoffOutcome;
+    let [ProviderHandoffOutcome::Admitted { seq, artifact }] = outcomes else { return Ok(None); };
+    let [.., prior, result, closure] = session else { return Ok(None); };
+    if closure.label != TURN_INTERRUPTED_RESULT_LABEL || closure.source_artifact != *artifact
+        || closure.source_movement_seq != Some(*seq) || result.source_artifact != input.artifact
+        || result.source_movement_seq != Some(source_seq) || *seq <= source_seq
+    {
+        return Ok(None);
+    }
+    let Some(reported) = closure.payload.get(CODEX_CONTINUITY_FIELD)
+        .and_then(|state| state["context_generation"].as_u64()) else { return Ok(None); };
+    if generation.checked_add(1) != Some(reported) {
+        return Ok(None);
+    }
+    let runtime = invocation_runtime_metadata(input)?;
+    if runtime.run != *run || runtime.interface != descriptor.id || ctx.interface != runtime.interface
+        || prior.source_movement_seq.is_none_or(|prior_seq| prior_seq >= *seq)
+    {
+        return Err(InterfaceDriverError::FailedClosed("late result recovery crossed its admitted coordinates".into()));
+    }
+    let labels = codex_context_output_labels(descriptor)?;
+    let Some(prior_raw) = prior.payload.get(CODEX_CONTINUITY_FIELD) else { return Ok(None); };
+    let prior_state = parse_codex_continuity(prior_raw, &descriptor.id, run.as_str())?;
+    if !labels.contains(&prior.label) || !labels.contains(TURN_INTERRUPTED_RESULT_LABEL)
+        || prior_state.context_generation.checked_add(1) != Some(generation)
+    {
+        return Ok(None);
+    }
+    let (manifest, bytes) = crate::life::read_pinned_provider_artifact(ctx, artifact, "completed late result")
+        .map_err(InterfaceDriverError::FailedClosed)?;
+    let payload: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| InterfaceDriverError::Protocol(err.to_string()))?;
+    let stream = &payload["preceding_stream"];
+    let result_body: serde_json::Value = serde_json::from_slice(&input.read_artifact_payload()?)
+        .map_err(|err| InterfaceDriverError::Protocol(err.to_string()))?;
+    if manifest.label != closure.label || payload.get(CODEX_CONTINUITY_FIELD) != closure.payload.get(CODEX_CONTINUITY_FIELD)
+        || stream["source_movement_seq"].as_u64().is_none_or(|previous| previous >= source_seq)
+        || stream["payload_blake3"].as_str().and_then(octopus_ledger::ContentHash::from_hex).is_none()
+        || payload.get("retained_native_outputs").is_some() || payload.get("native_terminal_events").is_some()
+        || result_body.get("ok").and_then(serde_json::Value::as_bool).is_none()
+        || payload.get("ok") != result_body.get("ok") || payload.get("correlation_id") != result_body.get("correlation_id")
+    {
+        return Ok(None);
+    }
+    let mut interrupted = prior_state.clone();
+    if interrupted.interrupted_pending.is_none() { interrupted.interrupted_pending = interrupted.pending.take(); }
+    if !exact_interrupted_result_source(input, &interrupted).map_err(InterfaceDriverError::FailedClosed)?
+        || interrupted_result_closure_payload(&manifest.label, &bytes, &prior_state, &input.artifact, &labels)
+            .map_err(InterfaceDriverError::FailedClosed)?.is_none()
+    {
+        return Ok(None);
+    }
+    let receipt = serde_json::json!({
+        "label": INTERFACE_CONTEXT_UPDATED_LABEL,
+        "code": "late_result_context_reconciled",
+        "source_movement_seq": source_seq,
+        "source_artifact": input.artifact,
+        "result_movement_seq": seq,
+        "result_artifact": artifact,
+        "checked_context_generation": generation,
+        "reported_context_generation": reported,
+        "message": "The provider counted the tool result and its receipt twice in one context update. The original result is already admitted."
+    });
+    let artifact = materialize_codex_emitted_artifact(&ctx.interface_var_dir().join("emitted"), INTERFACE_CONTEXT_UPDATED_LABEL,
+        &serde_json::to_vec(&receipt).map_err(|err| InterfaceDriverError::Protocol(err.to_string()))?)?;
+    Ok(Some(ProviderEmission { artifact, route: ProviderEmissionRoute::ClientProjection }))
+}
+
 pub(crate) fn completed_source_pending_continuity(
     ctx: &octopus_interface_transport::InterfaceLiftContext,
     descriptor: &InterfaceDescriptor,

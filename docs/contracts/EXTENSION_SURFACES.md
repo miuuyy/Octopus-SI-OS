@@ -156,6 +156,13 @@ never from memory, and a turn it cannot finish ends as `turn.error` on the run's
 declared route. An output larger than the host's `max_payload_bytes` fails
 closed with both sizes.
 
+Startup recovery reports failures against the admitted input that triggered them.
+If its declared route cannot deliver `turn.error`, the runtime records the
+failure against that input in the movement ledger. When the provider counted
+a late tool result twice, recovery checks the admitted result and its preceding
+context. It emits one `interface.context.updated` receipt for the correction.
+The remaining calls keep their identities and the completed tool is not run again.
+
 ### Providers served through OpenCodex
 
 Most providers are one entry in the Codex provider's OpenCodex bridge,
