@@ -581,18 +581,16 @@ pub(crate) async fn prepare_deferred_provider_turn(
                         deferred.turn.seq
                     ));
                 }
-                let (rebased, continuity) =
-                    rebase_deferred_provider_turn(ctx, descriptor, run, &deferred.turn, release)?;
-                if !codex_continuity_successor_is_settled(
-                    source_continuity.as_ref(),
-                    continuity.as_ref(),
-                )? {
-                    return Err(format!(
+                return match rebase_deferred_provider_turn(ctx, descriptor, run, &deferred.turn, release, source_continuity.as_ref())? {
+                    DeferredSessionRebase::Settled(turn) => Ok(DeferredTurnReadiness::Ready(turn)),
+                    DeferredSessionRebase::NonSuccessor => Err(
+                        "deferred operator turn release is not a monotonic successor of its source continuity".into()
+                    ),
+                    DeferredSessionRebase::Pending => Err(format!(
                         "deferred provider turn {} persisted a release whose continuity is still pending",
                         deferred.turn.seq
-                    ));
-                }
-                return Ok(DeferredTurnReadiness::Ready(rebased));
+                    )),
+                };
             }
             DeferredProviderTurnRelease::OriginalEnvelope {
                 control_id,
@@ -636,9 +634,9 @@ pub(crate) async fn prepare_deferred_provider_turn(
         let release = DeferredProviderTurnRelease::SessionRebase {
             source_session_carrier: source_session_carrier.clone(), rebased_session_carrier,
         };
-        let (rebased, continuity) = rebase_deferred_provider_turn(ctx, descriptor, run, &deferred.turn, &release)?;
-        if matches!(crate::handler::codex_continuity_relation(source_continuity.as_ref(), continuity.as_ref())?,
-            crate::handler::CodexContinuityRelation::Settled) {
+        if let DeferredSessionRebase::Settled(rebased) =
+            rebase_deferred_provider_turn(ctx, descriptor, run, &deferred.turn, &release, source_continuity.as_ref())?
+        {
             persist_deferred_provider_turn_release(ctx, descriptor, run, &deferred.turn, &release)?;
             return Ok(DeferredTurnReadiness::Ready(rebased));
         }
@@ -922,7 +920,7 @@ pub(crate) fn bound_operator_session_snapshot(
     turn: &QueuedTurn,
 ) -> Result<Option<(ArtifactRef, ProviderInvocationSessionSnapshot)>, String> {
     let labels = codex_session_snapshot_labels(descriptor).map_err(|error| error.to_string())?;
-    let mut matched = None;
+    let mut selected: Option<ProviderInvocationSessionSnapshot> = None;
     let record = octopus_run_record::RunRecord::from_bytes(&ctx.pinned_run_record_bytes(&turn.envelope)?)
         .map_err(|error| error.to_string())?;
     let payloads = octopus_run_authoring::context_artifact_payloads(
@@ -954,30 +952,34 @@ pub(crate) fn bound_operator_session_snapshot(
             &labels,
             &ctx.interface,
         )?;
-        let snapshot = ProviderInvocationSessionSnapshot {
+        if let Some(current) = &selected
+            && !octopus_run_authoring::bound_snapshot_extends(&current.artifacts, &artifacts)?
+        {
+            continue;
+        }
+        selected = Some(ProviderInvocationSessionSnapshot {
             carrier: bound.artifact.clone(),
             artifacts: Arc::new(artifacts),
-        };
-        if matched
-            .replace((bound.artifact.clone(), snapshot))
-            .is_some()
-        {
-            return Err(format!(
-                "deferred provider turn {} carries multiple current session snapshots",
-                turn.seq
-            ));
-        }
+        });
     }
-    Ok(matched)
+    Ok(selected.map(|snapshot| (snapshot.carrier.clone(), snapshot)))
 }
 
-pub(crate) fn rebase_deferred_provider_turn(
+enum DeferredSessionRebase {
+    Pending,
+    NonSuccessor,
+    Settled(QueuedTurn),
+}
+
+fn rebase_deferred_provider_turn(
     ctx: &InterfaceLiftContext,
     descriptor: &InterfaceDescriptor,
     run: &RunId,
     turn: &QueuedTurn,
     release: &DeferredProviderTurnRelease,
-) -> Result<(QueuedTurn, Option<crate::handler::CodexContinuityState>), String> {
+    source: Option<&crate::handler::CodexContinuityState>,
+) -> Result<DeferredSessionRebase, String> {
+    use crate::handler::{CODEX_CONTINUITY_FIELD, CodexContinuityRelation, codex_continuity_relation};
     let DeferredProviderTurnRelease::SessionRebase {
         source_session_carrier,
         rebased_session_carrier,
@@ -1000,6 +1002,13 @@ pub(crate) fn rebase_deferred_provider_turn(
         &labels,
         &ctx.interface,
     )?;
+    if let Some(raw) = artifacts.last().and_then(|head| head.payload.get(CODEX_CONTINUITY_FIELD)) {
+        let candidate = crate::handler::parse_codex_continuity(raw, &ctx.interface, run.as_str())
+            .map_err(|error| error.to_string())?;
+        if matches!(codex_continuity_relation(source, Some(&candidate))?, CodexContinuityRelation::NonSuccessor) {
+            return Ok(DeferredSessionRebase::NonSuccessor);
+        }
+    }
     let snapshot = ProviderInvocationSessionSnapshot {
         carrier: rebased_session_carrier.artifact.clone(),
         artifacts: Arc::new(artifacts),
@@ -1022,13 +1031,11 @@ pub(crate) fn rebase_deferred_provider_turn(
     )?;
     let continuity = recover_provider_turn_continuity(descriptor, &envelope, Some(&snapshot), run, &ctx.pinned_run_record_bytes(&envelope)?)
         .map_err(|error| error.to_string())?;
-    Ok((
-        QueuedTurn {
-            envelope,
-            seq: turn.seq,
-        },
-        continuity,
-    ))
+    Ok(match codex_continuity_relation(source, continuity.as_ref())? {
+        CodexContinuityRelation::Settled => DeferredSessionRebase::Settled(QueuedTurn { envelope, seq: turn.seq }),
+        CodexContinuityRelation::Pending => DeferredSessionRebase::Pending,
+        CodexContinuityRelation::NonSuccessor => DeferredSessionRebase::NonSuccessor,
+    })
 }
 
 pub(crate) fn rebase_deferred_session_bindings(

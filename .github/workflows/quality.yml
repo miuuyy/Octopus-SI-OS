@@ -307,6 +307,9 @@ jobs:
       - name: Late tool results and provider recovery on Linux
         run: cargo nextest run --locked -p octopus-provider-codex --lib -E 'test(a_recorded_late_result_reconciles_its_context_once) | test(a_late_parallel_result_preserves_the_next_wait_across_restart) | test(a_late_tool_result_is_admitted_after_an_earlier_source_sealed_the_turn)'
 
+      - name: Provider history on ordinary and queued inputs
+        run: cargo nextest run --locked -p octopus-run-authoring -p octopus-provider-codex --lib -E 'test(bound_snapshot_history_is_reconstructed_once_in_either_order) | test(bound_history_already_in_the_checked_snapshot_is_used_once) | test(deferred_message_uses_the_same_snapshot_chain_after_restart)'
+
       - name: Standalone mcp-identity-guard contracts
         run: cargo test --manifest-path examples/mcp-identity-guard/Cargo.toml --locked
 

@@ -453,20 +453,26 @@ pub(crate) fn collect_bound_context_from_cache(
             session_snapshot_labels,
             provider,
         )?;
-        let prefix_agrees = |prefix: &[SessionContextArtifact], full: &[SessionContextArtifact]| {
-            prefix.len() <= full.len() && prefix.iter().zip(full).all(|(a, b)| session_context_entries_agree(a, b))
-        };
-        if let Some(head) = session_snapshot_head.as_ref() {
+        let explicit = if let Some(head) = session_snapshot_head.as_ref() {
             let selected = session_context.artifacts.get(..=head.covered_artifact_count)
                 .ok_or("selected session snapshot exceeds its resolved history")?;
-            if artifact != &head.artifact && prefix_agrees(&resolved_artifacts, selected) {
+            if !bound_snapshot_extends(selected, &resolved_artifacts)? {
                 return Ok(());
             }
-            if artifact == &head.artifact || !prefix_agrees(&session_context.artifacts, &resolved_artifacts) {
-                return Err("provider invocation carries multiple current session snapshots with conflicting histories".into());
+            &session_context.artifacts[selected.len()..]
+        } else {
+            &session_context.artifacts[..]
+        };
+        if !explicit.is_empty() {
+            let covered = resolved_artifacts.iter()
+                .map(|entry| (artifact_ref_key(&entry.source_artifact), entry))
+                .collect::<BTreeMap<_, _>>();
+            for entry in explicit {
+                let pinned = covered.get(&artifact_ref_key(&entry.source_artifact));
+                if pinned.is_none_or(|item| item.label != entry.label || item.payload != entry.payload) {
+                    return Err(format!("bound context '{}' before the snapshot is absent or differs from its history", entry.source_artifact.id));
+                }
             }
-        } else if !prefix_agrees(&session_context.artifacts, &resolved_artifacts) {
-            return Err("provider invocation places unrelated dynamic context before its current session snapshot".into());
         }
         let covered_artifact_count = resolved_artifacts.len().saturating_sub(1);
         let covered_fingerprint =
@@ -705,6 +711,23 @@ pub(crate) fn session_context_entries_agree(
         && existing.payload == recovered.payload
         && !matches!((existing.source_movement_seq, recovered.source_movement_seq),
             (Some(left), Some(right)) if left != right)
+}
+
+/// Select the descendant when an invocation binds two snapshots of the same provider.
+/// Both histories include their own carrier as the last entry.
+pub fn bound_snapshot_extends(
+    selected: &[SessionContextArtifact],
+    candidate: &[SessionContextArtifact],
+) -> Result<bool, String> {
+    let selected_head = selected.last().ok_or("selected snapshot has no carrier")?;
+    let candidate_head = candidate.last().ok_or("candidate snapshot has no carrier")?;
+    if selected_head.source_artifact == candidate_head.source_artifact {
+        return Err("provider invocation repeats one current session snapshot".into());
+    }
+    if !selected.iter().zip(candidate).all(|(left, right)| session_context_entries_agree(left, right)) {
+        return Err("provider invocation carries multiple current session snapshots with conflicting histories".into());
+    }
+    Ok(candidate.len() > selected.len())
 }
 
 pub(crate) fn reconcile_recovered_session_snapshot(

@@ -160,12 +160,17 @@ Startup recovery reports failures against the admitted input that triggered them
 If its declared route cannot deliver `turn.error`, the runtime records the
 failure against that input in the movement ledger. When the provider counted
 a late tool result twice, recovery checks the admitted result and its preceding
-context. It emits one `interface.context.updated` receipt for the correction.
+context. The original receipt must confirm that the input changed that context.
+Recovery emits one `interface.context.updated` receipt for the correction.
 The remaining calls keep their identities and the completed tool is not run again.
 
 When a binding names a saved context and some of its older snapshots, the
-provider reads their common history once. It accepts the newer snapshot only
-when the older history is its exact prefix. Conflicting histories stop recovery.
+provider reads their common history once. An artifact bound separately and
+already present in that history keeps its recorded position. Immediate and
+queued inputs use the same rule when choosing a snapshot. Each older history
+must be an exact prefix of the newest one. If the histories conflict while a
+queued input is being resumed, the provider reports the failure against that
+input and retains it for recovery.
 
 ### Providers served through OpenCodex
 

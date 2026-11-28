@@ -731,12 +731,12 @@
         let label = "interface.artifact.output";
         let labels = BTreeSet::from([label.to_owned()]);
         let limits = InterfaceHostIoLimits { max_control_frame_bytes: 65536, max_stderr_bytes: 1024, max_manifest_bytes: 65536, max_payload_bytes: 65536 };
-        let write = |text: &str, parent: Option<&SessionContextArtifact>, seq: u64| {
+        let write = |text: &str, parent: Option<&SessionContextArtifact>, tail: &[SessionContextArtifact], seq: u64| {
             let value = serde_json::json!({"label":label, "text":text});
             let mut payload = value.clone();
             payload["session_context"] = serde_json::json!({
                 "schema_version":3, "provider_interface":provider,
-                "parent":parent.map(|entry| &entry.source_artifact), "artifacts":parent.into_iter().collect::<Vec<_>>()
+                "parent":parent.map(|entry| &entry.source_artifact), "artifacts":parent.into_iter().chain(tail).collect::<Vec<_>>()
             });
             let bytes = serde_json::to_vec(&payload).unwrap();
             let file = InterfaceArtifactFile::write(&temp.path().join("emitted"), label, &bytes).unwrap();
@@ -745,10 +745,18 @@
             };
             (entry, bytes)
         };
-        let parent = write("first", None, 30);
-        let head = write("next", Some(&parent.0), 45);
-        let sibling = write("different next", Some(&parent.0), 60);
-        for order in [[&head, &parent], [&parent, &head]] {
+        let input_label = "operator.message";
+        let input_value = serde_json::json!({"label": input_label, "text": "continue"});
+        let input_bytes = serde_json::to_vec(&input_value).unwrap();
+        let input_file = InterfaceArtifactFile::write(&temp.path().join("inbox"), input_label, &input_bytes).unwrap();
+        let input = (SessionContextArtifact {
+            label: input_label.into(), payload: input_value, source_artifact: pin_artifact(&input_file, &blobs),
+            source_movement_seq: Some(35),
+        }, input_bytes);
+        let parent = write("first", None, &[], 30);
+        let head = write("next", Some(&parent.0), std::slice::from_ref(&input.0), 45);
+        let sibling = write("different next", Some(&parent.0), &[], 60);
+        for order in [[&head, &parent, &input], [&parent, &input, &head], [&input, &head, &parent]] {
             let mut fixed = Vec::new();
             let mut selected = None;
             let mut context = ResolvedSessionContext { provider_interface: provider.clone(), artifacts: vec![] };
@@ -759,7 +767,7 @@
             }
             assert_eq!(selected.as_ref().unwrap().artifact, head.0.source_artifact);
             assert_eq!(context.artifacts.iter().map(|entry| &entry.source_artifact).collect::<Vec<_>>(),
-                vec![&parent.0.source_artifact, &head.0.source_artifact]);
+                vec![&parent.0.source_artifact, &input.0.source_artifact, &head.0.source_artifact]);
             assert!(collect_bound_context_from_cache(&blobs, limits, &mut fixed, &mut context, &mut selected,
                 &sibling.0.source_artifact, &sibling.1, BoundArtifactProvenance { movement_seq:Some(60), provider_arrival_seq:Some(60) },
                 &labels, &provider).is_err());

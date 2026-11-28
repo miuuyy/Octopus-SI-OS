@@ -77,8 +77,8 @@ include!("retained_native_delivery.rs");
 #[test]
 fn a_recorded_late_result_reconciles_its_context_once() {
     std::thread::Builder::new().stack_size(16 * 1024 * 1024).spawn(|| {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
-            .block_on(native_terminal_handoff_cases(Some(33)));
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        for phase in [33, 34] { runtime.block_on(native_terminal_handoff_cases(Some(phase))); }
     }).unwrap().join().unwrap();
 }
 include!("late_call_continuation.rs");
@@ -1230,7 +1230,8 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let authoring_id=InterfaceId::new(authoring);
         let socket=octopus_app_server_interface::interface_control_socket_path_from_root(&root.join("control"),&authoring_id);
         std::fs::create_dir_all(socket.parent().unwrap()).unwrap(); let listener=tokio::net::UnixListener::bind(socket).unwrap();
-        let parallel_late_result = matches!(settlement_phase, Some(32 | 33));
+        let recorded_late_result = matches!(settlement_phase, Some(33 | 34));
+        let parallel_late_result = settlement_phase == Some(32) || recorded_late_result;
         let terminal_has_answer = with_answer || parallel_late_result;
         let native=serde_json::to_value(octopus_appserver_proto::Turn { id:"turn-a".into(),items:if terminal_has_answer {vec![octopus_appserver_proto::ThreadItem::AgentMessage{delivery:None,id:"answer-a".into(),text:"Retained native answer".into(),phase:Some(octopus_protocol::models::MessagePhase::FinalAnswer)}]} else {vec![]},items_view:octopus_appserver_proto::TurnItemsView::Full,status:if terminal_has_answer {octopus_appserver_proto::TurnStatus::Completed} else if native_interrupted {octopus_appserver_proto::TurnStatus::Interrupted} else {octopus_appserver_proto::TurnStatus::Failed},error:None,started_at:Some(10),completed_at:Some(20),duration_ms:Some(10_000) }).unwrap();
         let before_context=record.interface_state[&descriptor.id]["context_generation"].as_u64().unwrap();
@@ -1402,7 +1403,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
             Box::pin(earlier_parallel_result_case(&ctx,root,&plan.run_write.path,&descriptor,&run,&record,&initial,&authoring_id,&listener,&mut receiver,phase)).await;
             return;
         }
-        if let Some(phase)=settlement_phase.filter(|phase| !matches!(phase, 31..=33)) {
+        if let Some(phase)=settlement_phase.filter(|phase| !matches!(phase, 31..=34)) {
             settlement_case(&ctx,root,&plan.run_write.path,&plan.worker_interface_id,&descriptor,&run,&record,
                 &initial,state,before_context,native,phase,&authoring_id,&listener,&mut receiver,selected_file.as_ref()).await;
             return;
@@ -1442,7 +1443,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 "kind":"dynamic_tool", "turn_id":"turn-a", "call_id":"call-c", "tool":"coder.exec"
             })).unwrap()).unwrap();
         }
-        let (initial, record) = if settlement_phase == Some(33) {
+        let (initial, record) = if recorded_late_result {
             let checkpoint = record.checkpoints.iter().find(|cp| record.active_checkpoints.contains(&cp.id)
                 && cp.outbound_interfaces().any(|id| id == &descriptor.id)
                 && cp.interface_binding.as_ref().is_some_and(|binding| binding.admits("operator.message"))).unwrap();
@@ -1468,7 +1469,7 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
         let cp=record.checkpoints.iter().find(|cp|record.active_checkpoints.contains(&cp.id)
             && cp.inbound_interface()==Some(&InterfaceId::new(&plan.worker_interface_id))
             && cp.outbound_interfaces().any(|id|id==&descriptor.id)).unwrap();
-        let prior_source = if matches!(settlement_phase, Some(31..=33)) {
+        let prior_source = if matches!(settlement_phase, Some(31..=34)) {
             let earlier = artifact(&root.join("earlier-result"), "coder.exec.result",
                 json!({"label":"coder.exec.result","tool":"coder.exec","correlation_id":"call-b","ok":true,"body":{"value":2}}));
             let row = edge(&ctx, &initial, cp, &earlier, MovementKind::InterfaceOutbound, descriptor.id.clone());
@@ -1535,10 +1536,11 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 retained_outputs
             };
             let outgoing = group();
-            if settlement_phase == Some(33) {
+            if recorded_late_result {
                 let [closure] = outgoing.as_slice() else { panic!("expected one late result"); };
                 let mut value: serde_json::Value = serde_json::from_slice(&closure.artifact.read_payload_bytes().unwrap()).unwrap();
                 value["codex_continuity"]["context_generation"] = json!(authored_context + 2);
+                if settlement_phase == Some(34) { value["native_terminal_input_context"] = json!(false); }
                 let saved = artifact(&output_root.join("reported"), TURN_INTERRUPTED_RESULT_LABEL, value);
                 let hand = Box::pin(handoff.hand_final(ProviderEmission { artifact: saved, route: ProviderEmissionRoute::ClientProjection }));
                 let gate = pump(&ctx, root, &plan.run_write.path, &authoring_id, &listener, &mut receiver, &result_ref, 0, 1, false, 33, true);
@@ -1552,7 +1554,12 @@ async fn native_terminal_handoff_cases(selected_phase: Option<usize>) {
                 assert_eq!(generation, authored_context + 1);
                 let entries = recovered.current_session_context_artifacts().await;
                 let receipt = crate::handler::completed_result_context_receipt(&ctx, &descriptor, &run, &envelope, source_seq,
-                    &outcomes, generation, &entries).unwrap().expect("the exact prior state and result account for the discrepancy");
+                    &outcomes, generation, &entries).unwrap();
+                if settlement_phase == Some(34) {
+                    assert!(receipt.is_none(), "a result that did not consume input cannot have counted the input twice");
+                    return;
+                }
+                let receipt = receipt.expect("the exact prior state and result account for the discrepancy");
                 assert!(crate::handler::completed_result_context_receipt(&ctx, &descriptor, &run, &envelope, source_seq + 1,
                     &outcomes, generation, &entries).unwrap().is_none());
                 let send = Box::pin(recovered.hand_completed_source_continuation(vec![receipt]));

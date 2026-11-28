@@ -187,6 +187,8 @@ pub(crate) fn completed_result_context_receipt(
     let result_body: serde_json::Value = serde_json::from_slice(&input.read_artifact_payload()?)
         .map_err(|err| InterfaceDriverError::Protocol(err.to_string()))?;
     if manifest.label != closure.label || payload.get(CODEX_CONTINUITY_FIELD) != closure.payload.get(CODEX_CONTINUITY_FIELD)
+        || payload["native_terminal_input_context"].as_bool() != Some(true)
+        || payload["terminal_evidence_source"].as_str() != Some("thread/read")
         || stream["source_movement_seq"].as_u64().is_none_or(|previous| previous >= source_seq)
         || stream["payload_blake3"].as_str().and_then(octopus_ledger::ContentHash::from_hex).is_none()
         || payload.get("retained_native_outputs").is_some() || payload.get("native_terminal_events").is_some()

@@ -121,11 +121,19 @@ pub(crate) async fn codex_life(
             {
                 continue;
             }
-            match prepare_deferred_provider_turn(&ctx, &descriptor, &deferred.run, &deferred, &active_controls).await? {
-                DeferredTurnReadiness::AwaitingSessionSettlement => {}
-                DeferredTurnReadiness::Ready(turn) => {
+            match prepare_deferred_provider_turn(&ctx, &descriptor, &deferred.run, &deferred, &active_controls).await {
+                Ok(DeferredTurnReadiness::AwaitingSessionSettlement) => {}
+                Ok(DeferredTurnReadiness::Ready(turn)) => {
                     ready_deferred = Some((seq, turn));
                     break;
+                }
+                Err(error) => {
+                    if !ctx.cancel.is_cancelled() {
+                        let message = format!("provider could not resume queued movement {seq}: {error}");
+                        report_provider_source_failure(&ctx, &deferred.run, seq, &message).await
+                            .map_err(|failure| format!("{message}; recording the failure also failed: {failure}"))?;
+                    }
+                    return Err(error);
                 }
             }
         }
